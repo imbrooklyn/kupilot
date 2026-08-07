@@ -54,3 +54,9 @@ __debug_bin*
 # Operating-system metadata.
 .DS_Store
 Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
