@@ -122,15 +122,8 @@ projection, sensitive-value, terminal, and model-egress controls.
 
 ## Validation
 
-S05 must freeze safe logging and error projections. S06 must prove that the
-initial schema and migrations contain only allowlisted fields and no generic
-payload escape hatch. S07 and S08 must prove repository eligibility,
-minimal-persistence, retention, deletion, and database/WAL canary behavior.
-S12 and S14 must prove model and Eino adapters do not enable vendor logging,
-tracing, checkpoints, or raw-body persistence. S24 must complete the
-model-request, database, WAL, log, AuditEvent, safe-error, and TUI sink matrix.
-
-Deterministic tests must:
+Deterministic tests across logging, schema, repositories, model and Eino
+adapters, TUI, audit, and persistence must:
 
 1. Place distinct generated canaries in every prohibited raw source, envelope,
    header, error, stream, callback, and failure path.
@@ -145,8 +138,8 @@ Deterministic tests must:
 5. Exercise success, cancellation, timeout, malformed stream, adapter error,
    persistence failure, and process restart without creating a fallback dump.
 
-No Eino, model SDK, SQLite driver, tracing API, or concrete storage behavior is
-claimed verified before its stated Session gate records evidence.
+Every concrete Eino, model SDK, SQLite driver, tracing, and storage integration
+must demonstrate these properties.
 
 ## Revisit triggers
 

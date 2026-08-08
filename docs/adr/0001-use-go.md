@@ -22,10 +22,10 @@ The implementation will use Go's explicit package dependencies and
 [architecture baseline](../architecture.md). Domain and application contracts
 will use project-owned types rather than vendor SDK types.
 
-The minimum supported Go version will be the newest stable common lower bound
-supported by the dependency versions selected for the release. It must be
-derived from official module metadata and verified by compile and platform
-checks. This ADR does not fix a concrete version.
+The minimum supported Go version is Go 1.25.0, the newest stable common lower
+bound required by the selected dependency versions. Any change to that lower
+bound must be supported by official module metadata and verified by compile and
+platform checks.
 
 ## Consequences
 
@@ -79,7 +79,7 @@ The selected toolchain and dependencies must satisfy all of these checks:
 3. The supported platform matrix compiles successfully.
 4. Applicable unit, race, and cross-build checks pass.
 
-All four checks are release gates.
+All four checks are release requirements.
 
 ## Revisit triggers
 

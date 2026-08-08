@@ -117,10 +117,7 @@ every external source are removed or visibly replaced.
 
 ## Validation
 
-S15 must implement transcript, the unique composer, Slash parsing, and initial
-goldens. S16 must complete Picker, resume, footer, streaming, style, and stale
-event behavior. Their reducer/state tests and golden rendering fixtures must
-cover:
+Reducer and state tests plus golden rendering fixtures must cover:
 
 - New Session, explicit resume, scope activation/switch/failure, question,
   streaming, each Tool state, cancellation, timeout, stale scope, final
@@ -137,10 +134,11 @@ cover:
 - Fixed Slash registry, aliases, `//` escaping, unknown command, disabled state,
   and proof that commands do not enter the model or bypass Application.
 - `v0.2` approval spoof, expiry, rejection, replay, degraded audit, request
-  acceptance, unknown outcome, and verification states in S31 through S33 before
-  that version is released.
+  acceptance, unknown outcome, and verification states before that version is
+  released.
 
-Exact Bubble Tea v2 APIs remain subject to ADR-0005's S04/S15 gates.
+Bubble Tea v2 integration must satisfy ADR-0005's compatibility and lifecycle
+requirements.
 
 ## Revisit triggers
 

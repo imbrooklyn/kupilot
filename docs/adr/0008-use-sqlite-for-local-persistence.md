@@ -42,8 +42,8 @@ credentials, raw transport bodies, raw Kubernetes objects, raw container
 output, assembled prompts, stream deltas, or framework values. Unknown or
 corrupt storage is not silently deleted or replaced.
 
-The concrete SQLite driver is deliberately governed by ADR-0018 and must pass
-its S06 gate. SQL mapping assistance is governed by ADR-0030.
+The concrete SQLite driver is governed by ADR-0018 and must satisfy its
+validation requirements. SQL mapping assistance is governed by ADR-0030.
 
 ## Consequences
 
@@ -94,8 +94,7 @@ Every future pre-write audit failure prevents the Kubernetes write.
 
 ## Validation
 
-The storage contract is accepted now. No later than S06, the concrete driver,
-sqlx mapping, and schema spike must prove:
+The concrete driver, sqlx mapping, and schema must prove:
 
 1. Foreign-key enforcement, transaction rollback, busy handling, cancellation,
    and supported journal behavior.
@@ -106,15 +105,15 @@ sqlx mapping, and schema spike must prove:
 5. Deterministic retention and deletion at all cutoff and failure boundaries.
 6. Absence of every prohibited synthetic canary from all durable mappings.
 
-Exact driver APIs, pragmas, and versions are not asserted by this ADR before the
-S06 evidence exists.
+Exact driver APIs, pragmas, and versions must be documented and satisfy these
+requirements.
 
 ## Revisit triggers
 
 - The product introduces multiple processes, shared writers, remote history, or
   multi-user state.
-- No pure-Go driver satisfies the S06 packaging, cancellation, permission, and
-  locking gates.
+- No pure-Go driver satisfies the packaging, cancellation, permission, and
+  locking requirements.
 - A regulated use case requires an encrypted store and a reviewed key-management
   design.
 
@@ -124,5 +123,5 @@ S06 evidence exists.
 - [Data Retention Contract](../data-retention.md)
 - [Security Threat Model](../security.md)
 - [ADR-0002: Use a Local Single Process with No KuPilot Server](0002-local-single-process-no-server.md)
-- [ADR-0018: Select a Pure-Go SQLite Driver Through an S06 Gate](0018-select-a-pure-go-sqlite-driver-through-an-s06-gate.md)
+- [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](0030-use-sqlx-inside-the-sqlite-adapter.md)

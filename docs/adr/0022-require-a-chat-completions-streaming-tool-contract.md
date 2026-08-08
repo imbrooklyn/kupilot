@@ -44,9 +44,8 @@ classification from a content-free capability check.
 
 The user must configure the model identifier; KuPilot does not embed a provider
 default. Temperature is accepted only in the low range from 0 through 0.2, and a
-hard output-token limit is mandatory. Fixtures in S11 and S21 must select any
-concrete default inside that range; this ADR does not claim one has been
-validated.
+hard output-token limit is mandatory. The concrete default must remain inside
+that range and be documented with the model adapter configuration.
 
 Raw provider request, response, stream, error, and usage objects stay in the
 adapter. Application and Agent core see only neutral bounded events and safe
@@ -93,11 +92,9 @@ Raw stream and error bodies are never persisted or ordinarily logged. Stream
 buffers and text deltas pass byte, control-character, and terminal-safety limits
 before any sink.
 
-## Validation gate
+## Validation
 
-S11 must define the neutral contract and content-free compatibility fixtures. No
-later than S12, before selecting exact transport APIs, a local fake endpoint must
-prove:
+Local fake-endpoint and Eino adapter tests must prove:
 
 1. Required structured Tool schema and streaming event representation.
 2. Cancellation and exactly one terminal outcome at every chunk boundary.
@@ -110,10 +107,6 @@ prove:
    output bounds without a hard-coded provider model default.
 7. Absence of raw provider objects and bodies from Application, TUI, logs, and
    SQLite.
-
-S14 must separately prove the locked Eino mapping to the same neutral contract.
-The exact protocol paths and SDK APIs remain unverified until those gates record
-them.
 
 ## Revisit triggers
 

@@ -12,8 +12,7 @@ couple domain identity to one adapter, while local-time strings would create
 ambiguous ordering around timezone and daylight-saving changes.
 
 The accepted product direction is UUIDv7 text for domain identity, UTC Unix
-milliseconds in SQLite, and local-time presentation in the TUI. The exact Go
-UUID implementation and API have not been validated.
+milliseconds in SQLite, and local-time presentation in the TUI.
 
 ## Decision
 
@@ -28,6 +27,12 @@ ClusterScope, ownership, eligibility, retention, or approval from UUID ordering
 or embedded time. External and CLI identifier input must pass strict UUIDv7
 parsing before repository use, and safe errors must not disclose whether a
 well-formed unknown identifier once existed.
+
+The CLI parser accepts only the ASCII UUID layout, version 7, and the RFC
+variant. Valid uppercase hexadecimal input is normalized to lowercase. Empty,
+malformed, non-v7, invalid-variant, overlong, and Unicode-confusable input is
+rejected before repository access. This narrow parser uses no external
+dependency.
 
 Every durable timestamp is stored as a SQLite `INTEGER` containing Unix
 milliseconds for a UTC instant. This includes creation, update, observation,
@@ -51,9 +56,8 @@ Migration versions remain monotonically increasing integers and are not UUIDs.
 Protocol-owned identifiers received from Kubernetes or a model provider remain
 typed external values and are not silently converted into KuPilot domain IDs.
 
-This ADR selects representations and semantics, not a UUID library or API. The
-concrete implementation must pass the S04/S06 gate before the initial migration
-is treated as stable.
+This ADR selects representations and semantics rather than a UUID library or
+vendor API. Any selected library must preserve this contract.
 
 ## Consequences
 
@@ -101,12 +105,9 @@ the product contract needs them. IDs contain no Context, Namespace, resource
 name, user name, endpoint, model name, or credential. UTC storage also prevents
 local timezone data from becoming an unnecessary durable attribute.
 
-## Validation gate
+## Validation
 
-S04 must record the candidate UUIDv7 implementation, its official module
-metadata, minimum Go version, license, and exact dependency role if a dependency
-is needed. No later than S06 and before the initial migration is frozen, tests
-must prove:
+Tests must prove:
 
 1. Generated values have the required UUID version and variant and round-trip
    through the selected textual parser and SQLite `TEXT` columns.
@@ -123,9 +124,9 @@ must prove:
 7. Schema and repository tests use explicit identifier and timestamp columns
    and do not expose SQLite `rowid` as domain state.
 
-The chosen package version, parser/generator calls, and observed monotonic or
-clock-regression behavior must be recorded after the gate. None is claimed
-verified by this ADR.
+The chosen package version, parser and generator calls, and documented
+monotonic or clock-regression behavior remain part of dependency compatibility
+metadata.
 
 ## Revisit triggers
 

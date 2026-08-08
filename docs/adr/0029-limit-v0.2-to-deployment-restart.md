@@ -5,8 +5,8 @@
 
 ## Context
 
-The product roadmap admits one supervised Kubernetes change after the read-only
-MVP: restarting one Deployment. A generic patch, apply, delete, scale, rollback,
+`v0.2` admits one supervised Kubernetes change: restarting one Deployment. A
+generic patch, apply, delete, scale, rollback,
 or command surface would multiply authorization and safety semantics and could
 turn model output into arbitrary mutation.
 
@@ -57,10 +57,9 @@ KuPilot reports request acceptance, observed rollout progress, timeout, failure,
 unavailable Evidence, and verified completion as separate states. It never
 equates an accepted API request with a completed rollout.
 
-The exact client-go mutation method, wire representation, rollout timeout, and
-poll interval are intentionally not selected here. The mutation API must pass
-the S32 gate and rollout parameters must pass the S33 gate while preserving this
-semantic contract.
+The concrete client-go mutation method and wire representation must preserve
+this semantic contract. Rollout timeout and poll interval are fixed, bounded,
+and code-defined rather than model- or user-selected.
 
 ## Consequences
 
@@ -104,13 +103,10 @@ Application code.
 Audit stores safe target and outcome metadata, not raw Deployment or wire bodies.
 Minimal-persistence cannot disable the default 180-day write-audit contract.
 
-## Validation gate
+## Validation
 
-S30 must freeze canonical parameters, digest, nonce, TTL, and state transitions.
-S31 must prove durable approval and pre-write-audit behavior with a fake executor
-while the composition still contains no Kubernetes writer. No later than S32 and
-before a real executor is enabled, a client-go or HTTP-fixture spike must select
-and record the exact mutation API and prove:
+Before a write executor is reachable, fake-executor, client-go, and
+request-recording HTTP fixture tests must prove:
 
 1. The request changes only `kupilot.io/restartedAt` and carries an effective
    optimistic concurrency precondition.
@@ -124,19 +120,19 @@ and record the exact mutation API and prove:
    produces zero writes.
 5. The chosen API and client-go version satisfy ADR-0007's compatibility gate.
 
-No later than S33, fixtures must lock the rollout timeout and poll interval and
-prove bounded verification distinguishes request accepted, progress observed,
-timeout, failure, unknown, and verified completion by using
+Fixtures must prove that the fixed rollout timeout and poll interval distinguish
+request accepted, progress observed, timeout, failure, unknown, and verified
+completion by using
 `observedGeneration` and updated and available replica targets.
 
-No exact patch/update API or transport behavior is claimed verified before this
-spike.
+The selected mutation API and rollout parameters remain documented with their
+compatibility evidence.
 
 ## Revisit triggers
 
 - A second write operation or another workload Kind is proposed.
 - Kubernetes removes or materially changes the admitted Deployment semantics.
-- The S32 gate cannot provide a one-field diff with an effective concurrency
+- The selected API cannot provide a one-field diff with an effective concurrency
   precondition.
 - Product evaluation shows restart is not a safe or useful first supervised
   operation.

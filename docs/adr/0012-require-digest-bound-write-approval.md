@@ -32,9 +32,9 @@ An ApprovalRequest binds a versioned canonical encoding of:
 
 KuPilot computes a versioned operation digest over that encoding. The digest is
 an integrity identifier, not a secret. Any field change creates a different
-proposal; a proposal is never edited or extended in place. S30 must select and
-record the exact digest algorithm and canonical byte representation before the
-state machine is implemented; this ADR does not claim they have been verified.
+proposal; a proposal is never edited or extended in place. The exact digest
+algorithm and canonical byte representation are versioned and fixed before any
+ApprovalRequest is accepted.
 
 The resource version observed while preparing the proposal may be recorded as
 safe observation metadata, but it is not part of the operation digest. Only the
@@ -135,11 +135,8 @@ recording tests must:
 - Keep request acceptance, timeout, unknown outcome, rollout observation, and
   verified completion distinct.
 
-S30 must implement and prove the domain state machine and digest. S31 must prove
-persistence, Application, TUI, and fake-executor boundaries. The concrete
-Kubernetes mutation API is not claimed verified by this ADR and must pass S32
-under ADR-0029 before `v0.2` code is wired; S33 must complete verification and
-end-to-end security tests.
+The concrete Kubernetes mutation mapping and end-to-end rollout verification
+must satisfy ADR-0029 in addition to these boundary tests.
 
 ## Revisit triggers
 
@@ -147,8 +144,8 @@ end-to-end security tests.
 - A process boundary, remote user, or multi-user approval flow is introduced.
 - The selected digest algorithm or canonical encoding no longer satisfies the
   integrity contract.
-- Implementation evidence shows that the target needs a stronger server-side
-  precondition while retaining the fail-closed state machine.
+- The target semantics require a stronger server-side precondition while
+  retaining the fail-closed state machine.
 
 ## References
 

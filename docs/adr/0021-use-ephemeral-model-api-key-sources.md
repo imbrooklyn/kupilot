@@ -78,8 +78,8 @@ Costs and constraints:
 - Reusing the TUI composer or chat prompt for a key was rejected because it would
   enter message and rendering paths. A one-shot bounded standard-input source is
   the only admitted alternative to the environment.
-- OS keychains were deferred because macOS and Linux integrations and headless
-  behavior require a separate cross-platform design.
+- OS keychains were not selected because macOS and Linux integrations and
+  headless behavior require a separate cross-platform design.
 
 ## Security and privacy impact
 
@@ -91,12 +91,9 @@ The key must not implement general formatting or serialization. Error wrapping,
 HTTP tracing, Eino callbacks, test snapshots, and debug logging must be reviewed
 as possible accidental sinks.
 
-## Validation gate
+## Validation
 
-S05 must implement and prove environment read-and-unset, optional safe-input
-handling, configuration denial, child-environment filtering, and safe logging.
-No later than S12 and before the model transport is pinned, transport tests must
-also prove:
+Configuration, transport, and child-process tests must prove:
 
 - Missing, empty, oversized, and repeated values fail before network I/O without
   echoing either source.
@@ -108,8 +105,6 @@ also prove:
 - Formatting, joining, wrapping, configuration serialization, TUI state,
   Application events, audit, and SQLite mappings cannot contain the wrapper or
   value.
-
-No concrete SDK authentication API is claimed verified before the S12 spike.
 
 ## Revisit triggers
 

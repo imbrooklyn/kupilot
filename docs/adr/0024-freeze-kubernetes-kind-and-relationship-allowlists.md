@@ -25,9 +25,9 @@ Kinds:
 - Service
 
 The intended stable API groups are core `v1` for Pod and Service, `apps/v1` for
-Deployment and ReplicaSet, and `batch/v1` for Job. The exact client-go APIs and
-supported Kubernetes skew must pass ADR-0007's S04/S09 gates before implementation;
-this statement does not claim that a library version has been verified.
+Deployment and ReplicaSet, and `batch/v1` for Job. The selected client-go APIs
+must support these resources throughout the Kubernetes version matrix in
+ADR-0007.
 
 Fixed observation sources and relationships are:
 
@@ -100,9 +100,8 @@ blocking, output limits, Evidence rules, and retention eligibility.
 
 ## Validation
 
-S10 must prove the restricted Resource Service and Picker request surface. S17
-through S19 must prove all six Tools, projections, and relationships. Their
-request-recording fake Kubernetes API and projection fixtures must prove:
+Request-recording fake Kubernetes API and projection fixtures for the Resource
+Service, Picker, and all six Tools must prove:
 
 - Exact verbs, group, version, resource, subresource, Namespace, query bounds,
   and maximum calls for every Tool and Picker operation.

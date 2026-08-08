@@ -89,10 +89,8 @@ cross-Namespace resources. `v0.1` contains no mutation Tool.
 
 ## Validation
 
-S13 must freeze the neutral Tool specification and runtime dispatch contract;
-S14 must validate its Eino mapping; and S17 through S19 must prove the six
-handlers and complete catalog. Across those deadlines, deterministic tests must
-prove:
+Deterministic tests of the neutral Tool specification, runtime dispatch, Eino
+mapping, six handlers, and complete catalog must prove:
 
 - Exact acceptance at every boundary and rejection of missing, duplicate,
   unknown, wrong-type, oversized, and extra fields.
@@ -105,8 +103,8 @@ prove:
 - Every Evidence item refers to the current run, invocation, scope, and
   observation time.
 
-The Eino and endpoint-specific schema APIs are subject to their S14 and S12
-gates; this ADR does not claim those APIs have been verified.
+Endpoint-specific schema APIs and the Eino mapping must satisfy the same neutral
+contract without leaking vendor types.
 
 ## Revisit triggers
 

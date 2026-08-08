@@ -4,9 +4,6 @@ KuPilot is a local, single-process Kubernetes TUI Agent that gathers Evidence
 through a small set of constrained, structured, read-only Tools before producing
 a cautious Diagnosis.
 
-> Project status: this repository currently contains the product documentation
-> baseline. It does not yet contain a runnable `v0.1` binary.
-
 ## Why KuPilot exists
 
 Kubernetes diagnosis often depends on knowing which facts to collect, in what
@@ -38,9 +35,9 @@ surface.
 - Cluster data is sent to a configured cloud model only after informed consent
   and only after local projection, bounding, and redaction.
 
-## Intended user journey
+## User journey
 
-When `v0.1` is implemented:
+The `v0.1` user journey is:
 
 1. Starting `kupilot` creates a new Session. History is queried only through an
    explicit `resume` command.
@@ -75,6 +72,19 @@ product direction.
 - [Version scope, Tools, non-goals, and feature gate](docs/scope.md)
 - [Privacy overview](docs/privacy-overview.md)
 - [Glossary](docs/glossary.md)
+
+## Development
+
+KuPilot requires Go 1.25.0 or newer. The standard local checks are:
+
+```sh
+make fmt
+make test
+make vet
+make build
+```
+
+`make build` writes the development binary to `./bin/kupilot`.
 
 ## License
 

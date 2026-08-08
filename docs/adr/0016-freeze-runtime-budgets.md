@@ -94,9 +94,8 @@ Diagnosis.
 
 ## Validation
 
-S13 must implement and prove Agent/model/run counters; S17 through S19 must
-complete Tool, log, item, and relationship budgets. Deterministic fake-clock and
-counting tests must cover zero, exact maximum, and one-over values for every
+Deterministic fake-clock and counting tests must cover zero, exact maximum, and
+one-over values for every Agent, model, run, Tool, log, item, and relationship
 budget. Tests must prove:
 
 - Reservation precedes model and Kubernetes calls.

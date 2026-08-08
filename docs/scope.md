@@ -1,7 +1,7 @@
 # KuPilot Scope
 
-This document freezes the product boundary for the read-only `v0.1` MVP and the
-single controlled change planned for `v0.2`.
+This document freezes the product boundary for the read-only `v0.1` MVP and
+the single controlled change allowed in `v0.2`.
 
 ## `v0.1`: read-only Agent MVP
 
@@ -154,7 +154,7 @@ every applicable gate below:
 Passing the gate does not override the version contract. A proposal must state
 the target diagnostic category, required permissions, data eligible for model
 transfer, output limits, failure modes, non-goals, test fixture, and a clear
-"helps the Agent" conclusion before implementation begins.
+"helps the Agent" conclusion.
 
 Examples:
 

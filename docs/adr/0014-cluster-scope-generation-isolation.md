@@ -115,8 +115,8 @@ channels or barriers rather than timing sleeps to prove:
 - The product accepts concurrent scopes or concurrent AgentRuns.
 - A process boundary is introduced and process-local generation is no longer
   sufficient.
-- Measured implementation evidence exposes a race that requires a stronger
-  lease or capability design while preserving the same fail-closed contract.
+- A reproducible race requires a stronger lease or capability design while
+  preserving the same fail-closed contract.
 
 ## References
 

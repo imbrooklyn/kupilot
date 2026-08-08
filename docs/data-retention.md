@@ -55,9 +55,9 @@ the user's controls for storage outside KuPilot.
 The separate allowlisted local application log is not Session persistence. TUI
 mode uses bounded `info` logging by default and lets the user disable it. The log
 contains no request or response body, Tool arguments, raw object, raw container
-output, credential, or arbitrary error text. S05 must lock and test its exact
-file-count, byte, and age rotation ceilings before the file sink is enabled;
-this contract does not invent those values before that gate.
+output, credential, or arbitrary error text. The file sink remains disabled
+unless its file-count, byte, and age rotation ceilings are fixed, documented,
+and tested.
 
 The 60-second approval execution TTL is not a retention period. It limits when a
 specific proposal may execute; its terminal audit record follows the 180-day
@@ -281,7 +281,7 @@ A cleanup transaction failure rolls back that batch, produces a safe storage
 error, and does not report the affected rows as deleted. KuPilot does not raise
 a retention value silently. Automatic frequent `VACUUM` is prohibited. An
 explicit maintenance command or tested size threshold may be added when driver
-behavior is validated in S06.
+behavior satisfies ADR-0018.
 
 ## 8. User-requested deletion
 
@@ -318,9 +318,9 @@ the same operation.
 
 Row deletion and file removal do not guarantee that old bytes are unrecoverable
 from SQLite free pages, WAL, filesystem journals, snapshots, backups, swap, or
-storage media. `secure_delete` and checkpoint behavior are S06 driver gates and
-must not be described as secure erasure. Users who require stronger protection
-must use operating-system disk encryption and manage backups and snapshots.
+storage media. Driver-specific `secure_delete` and checkpoint behavior must not
+be described as secure erasure. Users who require stronger protection must use
+operating-system disk encryption and manage backups and snapshots.
 
 ## 9. Degraded SQLite policy
 
@@ -333,7 +333,7 @@ not the SQLite adapter, decides whether a use case may continue.
 | --- | --- |
 | State-directory or file validation, database open, schema compatibility, migration, integrity check, or interrupted-run recovery | Mark storage unavailable. Do not return history or silently replace the database. Show a stable safe recovery error. |
 | Mandatory startup cleanup | Mark storage unavailable for new durable work and resume results until a bounded cleanup succeeds; do not pretend expired detail was removed. |
-| BeginRun transaction in standard or minimal mode | Abort before the first model request or Tool call, preserving the S01 architecture start gate. Do not silently change the selected privacy mode. |
+| BeginRun transaction in standard or minimal mode | Abort before the first model request or Tool call, preserving the durable-start invariant. Do not silently change the selected privacy mode. |
 | Standard-persistence write after a run started durably | Roll back that transaction, mark the run `persistence_degraded` where possible, and show a persistent warning. The already-started read-only Diagnosis may finish in memory; its missing durable content is not claimed resumable. |
 | Minimal-persistence terminal or required audit write | Show degraded state and do not claim terminal metadata is durable. The already-started read-only run may finish in memory. |
 | History-only read | Fail the query safely; never return a partial or stale resume list. A new run is independent only if all mandatory startup and BeginRun gates still succeed. |
@@ -389,8 +389,7 @@ fake clock, and failure injection:
   repository inputs, logical rows, database bytes, and WAL inspected by tests.
 
 The pure-Go driver, PRAGMA, sqlx bind type, checkpoint, sidecar, and permission
-behavior must pass the S06 spike. No driver-specific success is claimed by this
-contract before that evidence exists.
+behavior must satisfy ADR-0018 and ADR-0030.
 
 ## 11. Revisit triggers
 
@@ -414,6 +413,6 @@ before:
 - [Privacy Overview](privacy-overview.md)
 - [Scope](scope.md)
 - [ADR-0008: Use SQLite for Local Persistence](adr/0008-use-sqlite-for-local-persistence.md)
-- [ADR-0018: Select a Pure-Go SQLite Driver Through an S06 Gate](adr/0018-select-a-pure-go-sqlite-driver-through-an-s06-gate.md)
+- [ADR-0018: Require One Pure-Go SQLite Driver](adr/0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](adr/0030-use-sqlx-inside-the-sqlite-adapter.md)

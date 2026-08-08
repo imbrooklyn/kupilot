@@ -44,8 +44,8 @@ Runtime requirements are:
   the model.
 - Bound standard error and translate failure into a stable safe class without
   copying vendor text.
-- Never provide interactive terminal access unless the exact client-go mode and
-  TUI behavior pass the S09 gate.
+- Never provide interactive terminal access unless client-go and TUI behavior
+  can remain bounded, cancellable, and deterministic on supported platforms.
 
 KuPilot cannot guarantee or audit network activity performed inside the
 user-configured external program. Safe status and documentation must state that
@@ -96,11 +96,9 @@ An exec plugin is not authorized by prompt text, model output, or Tool syntax.
 Allowing the selected kubeconfig mechanism does not authorize cluster writes or
 widen the selected ClusterScope.
 
-## Validation gate
+## Validation
 
-S05 must implement typed strict-deny configuration and ephemeral API-key removal.
-No later than S09 and before enabling exec authentication, an official client-go
-API and process-control spike must verify:
+Official client-go APIs and process-control tests must verify:
 
 1. Supported exec credential API versions, cache behavior, interactive-mode
    behavior, environment construction, and cancellation hooks.
@@ -113,8 +111,8 @@ API and process-control spike must verify:
 5. Canary absence across model transport, TUI, Application events, logs, safe
    errors, and SQLite.
 
-The exact client-go API and supported interactive behavior must be recorded from
-the spike. This ADR does not claim they are already verified.
+The selected client-go API and supported interactive behavior remain documented
+with the compatibility contract.
 
 ## Revisit triggers
 

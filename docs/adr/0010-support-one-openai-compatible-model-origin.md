@@ -44,8 +44,8 @@ every endpoint using that description works.
 
 The user must configure a model identifier; KuPilot does not hard-code a cloud
 provider default. The precise wire paths, payload fields, streaming event types,
-and concrete client API remain behind the adapter and require the S11/S12
-validation gates.
+and concrete client API remain behind the adapter and must satisfy the
+validation requirements below.
 
 ## Consequences
 
@@ -86,11 +86,9 @@ Eligible cluster data is still sensitive after projection and redaction. A
 supported endpoint does not imply that it is appropriate under the user's
 organizational policy.
 
-## Validation gate
+## Validation
 
-S11 must freeze the neutral model contract and local compatibility fixtures. No
-later than S12 and before any model SDK or HTTP mapping is pinned, a local fake
-endpoint plus official protocol or SDK documentation must verify:
+A local fake endpoint plus official protocol or SDK documentation must verify:
 
 1. Exact request and stream APIs for text, structured Tool definitions, Tool
    selections, usage, finish reasons, cancellation, and errors.
@@ -104,10 +102,10 @@ endpoint plus official protocol or SDK documentation must verify:
 6. Chat Completions-style stream and Tool behavior, with response format and
    usage treated only as optional capabilities.
 7. Compatibility with the selected Eino adapter contract without vendor types
-   escaping its boundary; its concrete Eino mapping remains an S14 gate.
+   escaping its boundary.
 
-The selected version and exact API mapping must be recorded after the spike.
-No concrete endpoint, SDK version, or API is claimed verified here.
+Supported endpoint profiles and exact API mappings remain recorded in
+compatibility documentation.
 
 ## Revisit triggers
 

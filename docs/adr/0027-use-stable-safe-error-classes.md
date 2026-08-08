@@ -126,10 +126,9 @@ Tests must also prove no runtime package outside an adapter branches on raw erro
 text or vendor error types and that retryable classes still obey remaining
 budget, cancellation, generation, and one-repeat rules.
 
-S05 must freeze the base shape and configuration/logging projections before
-adapter implementation. Each later adapter must add deterministic mapping tests;
-S19 must complete the six-Tool catalog mapping and cross-sink canary matrix. No
-vendor error string or unverified API behavior is accepted by this ADR.
+Each adapter must provide deterministic mapping tests, and the complete
+six-Tool catalog must be covered by the cross-sink canary matrix. Vendor error
+strings and unverified API behavior never become runtime contracts.
 
 ## Revisit triggers
 

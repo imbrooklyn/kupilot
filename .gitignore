@@ -2,11 +2,13 @@
 /docs/design/
 /docs/_local/
 
-# Go build outputs.
-/kupilot
-/kupilot.exe
+# Local Go build outputs. The Makefile writes command binaries to /bin.
 /bin/
 /dist/
+
+# Legacy root-level build outputs remain ignored.
+/kupilot
+/kupilot.exe
 *.exe
 *.exe~
 *.dll

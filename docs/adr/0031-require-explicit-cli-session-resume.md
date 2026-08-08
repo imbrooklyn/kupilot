@@ -112,11 +112,10 @@ Deterministic CLI and Application tests must cover:
 - A known minimal-persistence identifier deterministically returns
   `session_not_resumable`, and no resume error falls back to a new Session.
 
-S04 must freeze the CLI parse intents and `help`/`version` short circuit. S07
-must implement retention-aware repository queries, S16 must implement the shared
-picker cancellation states, and S23 must prove end-to-end new, picker, exact-ID,
-`--last`, empty, minimal, and scope-conflict behavior without automatic external
-calls.
+End-to-end tests must cover new, picker, exact-ID, `--last`, empty, minimal, and
+scope-conflict behavior without automatic external calls. CLI tests must also
+prove exact-ID canonicalization, fixed command routing, picker cancellation,
+and the `help` and `version` short circuits.
 
 ## Revisit triggers
 

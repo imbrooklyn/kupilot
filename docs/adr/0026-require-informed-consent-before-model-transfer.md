@@ -124,13 +124,10 @@ enabled.
 
 ## Validation
 
-S15/S16 must freeze deterministic TUI states and English copy for review,
-accept, reject, cancel, stale, and revoked consent without making the TUI the
-policy owner. S24 must implement and prove the complete Application,
-persistence, TUI, and model-egress flow before `v0.1` feature freeze.
-
+Deterministic TUI states and English copy must cover review, accept, reject,
+cancel, stale, and revoked consent without making the TUI the policy owner.
 Using a fake store, fake clock, and request-recording model endpoint, tests must
-cover:
+also cover:
 
 1. First use, accept, reject, cancel, review, revocation, clear-local-state,
    standard persistence, minimal-persistence, and process restart.
@@ -149,8 +146,8 @@ cover:
    after proposal but before transport.
 
 Every deny, stale, reject, cancel, and race case must observe exactly zero
-model-content requests and a stable safe state. No concrete TUI API, model SDK,
-or transport behavior is claimed verified before its stated Session gate.
+model-content requests and a stable safe state. Every concrete TUI and model
+transport integration must preserve these properties.
 
 ## Revisit triggers
 

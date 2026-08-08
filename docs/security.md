@@ -179,8 +179,7 @@ to the model. The child has a deadline and is terminated with the owning
 Context. KuPilot does not claim to control network activity performed by the
 user-configured external program.
 
-The exact client-go exec API and environment behavior must pass the S09 spike in
-ADR-0020 before implementation is pinned.
+The selected client-go exec API and environment behavior must satisfy ADR-0020.
 
 ### C03: Endpoint and transport confinement
 

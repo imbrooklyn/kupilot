@@ -4,8 +4,8 @@ Status: Accepted architecture baseline for KuPilot `v0.1`.
 
 This document defines the executable in-process boundaries for KuPilot. It is
 normative for package ownership, dependency direction, run and scope isolation,
-data ownership, and adapter contracts. It does not select an unverified SDK
-version or SDK-specific API.
+data ownership, and adapter contracts. Vendor versions and APIs are governed by
+their respective dependency decisions.
 
 The product contract remains the authority for product scope. In particular,
 `v0.1` is a local, single-process, read-only Kubernetes TUI Agent with one

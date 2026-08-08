@@ -11,12 +11,12 @@ all vary by operating system and architecture. Claiming every Go target as
 supported without running those behaviors would create a false compatibility and
 security promise.
 
-The initial project needs a small, explicit platform matrix that a small team can
+KuPilot needs a small, explicit platform matrix that a small team can
 build and test.
 
 ## Decision
 
-The initial supported platform families are macOS and Linux on `amd64` and
+The supported platform families are macOS and Linux on `amd64` and
 `arm64`, running as a local interactive user in a UTF-8-capable terminal.
 
 Windows is experimental and is not part of the formal `v0.1` support or release
@@ -39,13 +39,11 @@ must satisfy:
 - Race-enabled unit/contract tests and release cross-builds.
 
 A CGO-free build using a pure-Go SQLite driver is an accepted constraint. The
-S06 gate selects the concrete driver. If no candidate passes, the session stops
-and platform and packaging consequences require a replacement ADR before CGO is
-introduced.
+driver must satisfy ADR-0018. Introducing CGO requires a replacement ADR that
+accepts the platform and packaging consequences.
 
-This ADR does not select minimum OS releases, terminal brands, Go versions, or
-dependency versions. Those values must be derived from maintained dependencies
-and recorded by the session gates below before release claims are published.
+The minimum Go version is 1.25.0. Minimum OS releases and terminal requirements
+must be derived from maintained dependencies and verified platform behavior.
 
 ## Consequences
 
@@ -65,8 +63,7 @@ Costs and constraints:
 - Four build targets still require continuous testing and release artifacts.
 - Some terminal behavior varies even within supported hosts and needs
   conservative rendering fallbacks.
-- A dependency may force a narrower OS or toolchain lower bound after the S04
-  evidence gate.
+- A dependency may force a narrower OS or toolchain lower bound after review.
 
 ## Alternatives considered
 
@@ -90,12 +87,9 @@ KuPilot still relies on operating-system account isolation and disk protection.
 Platform support does not imply SQLite encryption, sandboxing of a kubeconfig
 exec credential program, or protection from a local administrator.
 
-## Validation gate
+## Validation
 
-S04 must record the Go lower bound and initial cross-builds; S06 must prove the
-pure-Go SQLite targets; S09 and S15 must prove exec/client and terminal behavior;
-and S29 must complete the release cross-build and dry-run matrix. Before formal
-support is published, CI or documented reproducible runs must record:
+Formal support requires CI or documented reproducible runs that record:
 
 1. The selected Go lower bound and exact dependency versions from official
    module metadata.
@@ -109,8 +103,7 @@ support is published, CI or documented reproducible runs must record:
    experimental Windows results if produced, and any explicit minimum OS or
    terminal requirements.
 
-No platform-specific version or driver result is claimed verified before that
-record exists.
+The release support statement must not include a platform without this record.
 
 ## Revisit triggers
 
@@ -124,6 +117,6 @@ record exists.
 
 - [ADR-0001: Use Go](0001-use-go.md)
 - [ADR-0005: Use Bubble Tea v2 for the TUI Runtime](0005-use-bubble-tea-v2.md)
-- [ADR-0018: Select a Pure-Go SQLite Driver Through an S06 Gate](0018-select-a-pure-go-sqlite-driver-through-an-s06-gate.md)
+- [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0020: Contain Kubeconfig Exec Credentials](0020-contain-kubeconfig-exec-credentials.md)
 - [Security Threat Model](../security.md)

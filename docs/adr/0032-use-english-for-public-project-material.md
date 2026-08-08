@@ -15,7 +15,7 @@ arbitrary Unicode. Project language and untrusted data are different concerns.
 
 ## Decision
 
-English is the only authored public project language for the initial product.
+English is the only authored public project language for `v0.1`.
 The following must be written in English:
 
 - README files, public documentation, ADRs, examples, project-authored issue,
@@ -106,11 +106,9 @@ Automated character scans cannot judge English clarity; human review remains
 required. This ADR does not claim a localization API or library has been
 validated.
 
-S03 must establish the repository instruction, S04 must keep CLI/config copy
-English, S14 must test the Agent's question-language preference and English
-fallback, S15 must keep all TUI-owned copy English without i18n, and S28 must
-audit public release documentation. Exact model language quality remains outside
-these deterministic gates.
+Repository instructions, CLI and configuration copy, Agent language behavior,
+TUI-owned text, and release documentation must all satisfy these checks. Exact
+model language quality remains outside deterministic validation.
 
 ## Revisit triggers
 

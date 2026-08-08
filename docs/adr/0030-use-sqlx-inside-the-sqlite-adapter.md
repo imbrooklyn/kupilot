@@ -12,8 +12,8 @@ harder. A full ORM would introduce implicit schema, relationship, query, and
 mutation behavior that conflicts with explicit retention and repository
 contracts.
 
-The current sqlx version and exact APIs have not been validated with the
-eventual SQLite driver.
+The sqlx and SQLite driver versions must remain jointly compatible under the
+validation requirements below.
 
 ## Decision
 
@@ -43,8 +43,8 @@ The adapter prohibits `SELECT *`, `Unsafe()`, `Must*` helpers, queries without a
 explicit column lists, short transactions, and the pure-Go driver selected under
 ADR-0018.
 
-The exact sqlx release and API usage are selected only after the S06 driver and
-mapping spike. This ADR accepts the role, not an unverified version.
+The selected sqlx release is pinned and jointly validated with the SQLite
+driver.
 
 ## Consequences
 
@@ -72,7 +72,7 @@ Costs and constraints:
 - A full ORM was rejected because implicit queries, associations, migrations,
   and persistence hooks make data eligibility and transaction behavior harder
   to prove.
-- Generated query code was deferred because the initial schema is small and a
+- Generated query code was not selected because the schema is small and a
   generation tool would add its own version and build workflow.
 - Exposing sqlx rows to Application was rejected because storage shape is not a
   domain contract.
@@ -87,10 +87,9 @@ Bound values prevent SQL syntax injection only when SQL identifiers and clauses
 stay code-defined. Tests must prove adversarial external text cannot select a
 statement, table, column, pragma, migration, or order expression.
 
-## Validation gate
+## Validation
 
-No later than S06 and before repository implementation, the chosen sqlx and
-SQLite driver versions must jointly prove:
+The selected sqlx and SQLite driver versions must jointly prove:
 
 1. Minimum Go and license compatibility from official module metadata.
 2. Context-aware query and transaction behavior through the selected driver.
@@ -101,8 +100,8 @@ SQLite driver versions must jointly prove:
 5. Fixed named/positional binding for adversarial Unicode and SQL-shaped text.
 6. Race-enabled behavior and connection closure on macOS and Linux.
 
-The chosen version and API calls must be recorded after the spike. None is
-claimed verified by this ADR.
+The chosen version and API calls remain recorded in dependency and compatibility
+metadata.
 
 ## Revisit triggers
 
@@ -115,6 +114,6 @@ claimed verified by this ADR.
 ## References
 
 - [ADR-0008: Use SQLite for Local Persistence](0008-use-sqlite-for-local-persistence.md)
-- [ADR-0018: Select a Pure-Go SQLite Driver Through an S06 Gate](0018-select-a-pure-go-sqlite-driver-through-an-s06-gate.md)
+- [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [Data Retention Contract](../data-retention.md)
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)

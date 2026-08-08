@@ -12,8 +12,7 @@ Kubernetes, model, or SQLite I/O from rendering code.
 
 Bubble Tea has the required message-and-command model, but framework types and
 lifecycle behavior are vendor contracts that must not leak into KuPilot's
-Application or Domain packages. The v2 API and a concrete module version have
-not yet been validated in this repository.
+Application or Domain packages.
 
 ## Decision
 
@@ -36,8 +35,11 @@ The TUI will:
 No Bubble Tea model, message, command, callback, renderer, or key type crosses
 an Application port. The TUI design itself is constrained further by ADR-0023.
 
-This ADR selects the v2 major line, not an exact release, import path, or
-unverified API signature.
+The compatibility set is `charm.land/bubbletea/v2 v2.0.8`,
+`charm.land/bubbles/v2 v2.1.1`, and `charm.land/lipgloss/v2 v2.0.5`. These
+modules require Go 1.25.0 and use the MIT license. Bubbles v2.1.1 declares
+Bubble Tea v2.0.7 and Lip Gloss v2.0.4; the selected newer patches remain in the
+same compatible v2 lines.
 
 ## Consequences
 
@@ -59,9 +61,8 @@ Costs and constraints:
 
 ## Alternatives considered
 
-- Bubble Tea v1 was rejected as the starting line because the project has not
-  shipped a compatibility surface and the accepted direction is to validate v2
-  before implementation.
+- Bubble Tea v1 was rejected because the selected v2 line provides the intended
+  compatibility surface without a legacy public contract.
 - A custom terminal event loop was rejected because it would add substantial
   input, resize, rendering, and shutdown work without differentiating the
   product.
@@ -82,12 +83,9 @@ or raw Kubernetes data in debug output. Alternate-screen and terminal-state
 cleanup are availability and terminal-integrity requirements, not cosmetic
 behavior.
 
-## Validation gate
+## Validation
 
-S04 must use official module metadata and a compile probe to lock a Bubble Tea
-v2 version, module path, compatible Bubbles/Lip Gloss set, and minimum Go
-requirement. No later than S15 and before implementing TUI state, repository
-fixtures must additionally verify:
+Compatibility and lifecycle tests must verify:
 
 1. The current Bubble Tea v2 module path, stable release, and minimum supported
    Go version.
@@ -99,14 +97,12 @@ fixtures must additionally verify:
    queued.
 5. Supported-platform behavior for macOS and Linux terminals.
 
-The spike result must record the selected version and APIs in the dependency
-lock or a follow-up compatibility note. This ADR does not claim that any
-specific v2 release or API has already passed.
+The selected versions and APIs remain recorded in dependency metadata and must
+continue to satisfy these requirements after an upgrade.
 
 ## Revisit triggers
 
-- The S04 or S15 gate shows that the v2 line cannot satisfy the supported Go or
-  platform contract.
+- The v2 line cannot satisfy the supported Go or platform contract.
 - Framework lifecycle behavior makes Application-owned cancellation or
   deterministic tests infeasible.
 - The product stops being a terminal application.

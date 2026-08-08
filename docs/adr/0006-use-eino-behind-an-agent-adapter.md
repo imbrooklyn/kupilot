@@ -11,9 +11,9 @@ primitive locally would add transport and orchestration work, while allowing a
 framework to define domain values or use cases would make security policy depend
 on vendor behavior.
 
-Eino is the accepted Agent framework direction. Its current version, model
-component APIs, streaming ownership, Tool schema APIs, and error behavior have
-not been validated in this repository.
+Eino is the accepted Agent framework direction. Its model component APIs,
+streaming ownership, Tool schema APIs, and error behavior remain confined to a
+dedicated adapter.
 
 ## Decision
 
@@ -31,9 +31,9 @@ The adapter may use Eino for:
 KuPilot, not Eino, owns the Agent loop limits, Tool authorization, scope
 generation checks, Tool dispatch, Evidence creation, Diagnosis validation,
 persistence intent, and Application event acceptance. Eino types do not cross
-the adapter. The S14 spike may choose the smallest stable ChatModelAgent, ReAct,
-or Graph implementation path inside the adapter. KuPilot will not expose a
-general graph workflow or adopt RAG, retrievers, Multi-Agent orchestration,
+the adapter. The adapter uses the smallest stable ChatModelAgent, ReAct, or
+Graph implementation path that satisfies the neutral contract. KuPilot will not
+expose a general graph workflow or adopt RAG, retrievers, Multi-Agent orchestration,
 dynamic Tool registration, memory persistence, or a framework checkpoint/resume
 mechanism in `v0.1`.
 
@@ -64,16 +64,14 @@ Costs and constraints:
 
 ## Alternatives considered
 
-- Calling a model HTTP API directly was rejected for the initial implementation
-  because it would duplicate structured streaming and Tool protocol work before
-  the product contract is evaluated.
+- Calling a model HTTP API directly was rejected because it would duplicate
+  structured streaming and Tool protocol work.
 - Exposing Eino message and Tool types throughout the codebase was rejected
   because vendor contracts would leak into Application, Domain, Tools, and TUI.
 - Using Eino to own the whole Agent loop was rejected because budgets, scope,
   Evidence, persistence, and policy must remain deterministic KuPilot controls.
 - Adopting general graph workflows, RAG, or Multi-Agent features was rejected as
-  outside `v0.1`; this does not preselect the minimal internal API path evaluated
-  in S14.
+  outside `v0.1`; the internal API choice does not expand that boundary.
 
 ## Security and privacy impact
 
@@ -86,12 +84,9 @@ The adapter must close model streams, bound buffers, remove raw vendor error
 bodies, and prevent model requests or responses from entering SQLite or ordinary
 logs. Framework callbacks cannot receive credentials or a Kubernetes client.
 
-## Validation gate
+## Validation
 
-S04 must record a candidate locked Eino version and its official minimum Go
-requirement so the repository can select one Go lower bound. No later than S14
-and before building the Eino Agent adapter, a repository spike must verify from
-official module metadata, documentation, and compile tests:
+Official module metadata, documentation, and adapter tests must verify:
 
 1. The current stable module and its minimum supported Go version.
 2. Streaming text and structured Tool-call event ordering, chunk ownership, and
@@ -104,13 +99,12 @@ official module metadata, documentation, and compile tests:
 6. Compatibility with the single OpenAI-compatible adapter contract in
    ADR-0022.
 
-The selected version and exact API mappings must be recorded after the spike.
-This ADR makes no claim that a specific Eino release has passed.
+The selected version and exact API mappings remain recorded in dependency and
+compatibility metadata.
 
 ## Revisit triggers
 
-- The S14 gate cannot provide strict structured Tool events or bounded stream
-  ownership.
+- Eino cannot provide strict structured Tool events or bounded stream ownership.
 - Eino requires policy, persistence, or vendor types to escape the adapter.
 - Measured maintenance cost of the adapter exceeds the avoided protocol work.
 

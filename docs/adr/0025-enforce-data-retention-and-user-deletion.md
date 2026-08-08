@@ -44,7 +44,7 @@ in a picker or `--last`; exact-ID resume returns `session_not_resumable`.
 Automatic purge runs at validated startup and during bounded idle batches. It
 uses category timestamps and explicit relationships. It does not run frequent
 automatic `VACUUM`; checkpoint, `secure_delete`, sidecar, and compaction behavior
-must first pass the S06 driver gate.
+must satisfy ADR-0018's driver requirements.
 
 Deleting one Session cascades through Messages, runs, model metadata,
 ToolInvocations, Evidence, Diagnoses, approval records, and linked read/write
@@ -56,7 +56,7 @@ paths. A failed deletion transaction is reported as not deleted.
 Storage failure behavior remains asymmetric:
 
 - A BeginRun transaction failure stops before model or Tool I/O, preserving the
-  accepted S01 start gate.
+  durable-start invariant.
 - A later persistence failure may let the already-started read-only Diagnosis
   finish in memory with prominent `persistence_degraded` state and no false
   resume claim.
@@ -113,11 +113,8 @@ the loss clear.
 
 ## Validation
 
-S06 must prove driver, migration, transaction, foreign-key, permission, and
-sidecar behavior. S08 must complete repository retention and audit tests. S24
-must prove integrated degraded behavior, and S37 must add the user-facing
-retention/minimal/deletion controls. Deterministic tests across those deadlines
-must cover:
+Deterministic driver, repository, integration, and user-interface tests must
+cover:
 
 - Exact 30-, 90-, and 180-day boundaries and a zero or longer detail setting.
 - Standard content retained until explicit deletion.
@@ -129,8 +126,7 @@ must cover:
   the required model, Tool, and executor call counts.
 - Database and WAL canary absence for every prohibited category.
 
-No concrete driver, PRAGMA, or checkpoint behavior is claimed verified before
-S06 records its evidence.
+Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 
 ## Revisit triggers
 
@@ -147,4 +143,4 @@ S06 records its evidence.
 - [Privacy Overview](../privacy-overview.md)
 - [ADR-0008: Use SQLite for Local Persistence](0008-use-sqlite-for-local-persistence.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
-- [ADR-0018: Select a Pure-Go SQLite Driver Through an S06 Gate](0018-select-a-pure-go-sqlite-driver-through-an-s06-gate.md)
+- [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)

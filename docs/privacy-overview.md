@@ -97,7 +97,7 @@ be resumed across processes.
 ## No product telemetry
 
 KuPilot has no product telemetry, usage analytics, remote crash reporting,
-server-side account, or KuPilot-operated control plane in the planned `v0.1`.
+server-side account, or KuPilot-operated control plane in `v0.1`.
 Normal requests to the user-configured model endpoint and Kubernetes API are the
 only product network paths required for a Diagnosis.
 
