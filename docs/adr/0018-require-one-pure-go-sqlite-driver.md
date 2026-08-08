@@ -16,6 +16,26 @@ adapter convenience.
 KuPilot will use exactly one pinned pure-Go SQLite driver through
 `database/sql`, confined to `internal/persistence/sqlite`.
 
+The selected driver is `modernc.org/sqlite`. The initial compatibility baseline
+pins `modernc.org/sqlite` v1.56.0 with `github.com/jmoiron/sqlx` v1.4.0 and the
+repository minimum Go version 1.25.0. The driver registers the fixed
+`database/sql` name `sqlite`. Because sqlx v1.4.0 does not include that name in
+its default bind table, the adapter explicitly and idempotently registers
+`sqlite` as `sqlx.QUESTION` before constructing its private sqlx handle. Neither
+the driver name nor the bind type is configurable.
+
+The selected driver is a BSD-3-Clause, CGo-free SQLite port. Its matching
+`modernc.org/libc` version remains pinned by the module graph because the
+driver's generated SQLite code and libc runtime are jointly versioned. Driver
+and libc upgrades are one compatibility change and must pass the complete
+storage contract together.
+
+sqlx's upstream module metadata lists several database drivers used by its own
+compatibility tests, so Go checksum metadata may include those modules. KuPilot
+does not import, register, or link any of them. Dependency guards must prove
+that the package build and test closure contains `modernc.org/sqlite` and does
+not contain another SQLite driver or `runtime/cgo`.
+
 Pure Go is an accepted constraint. Adding a CGO driver requires a replacement
 ADR that explicitly accepts the toolchain, platform, packaging, and security
 consequences. There is no silent fallback to CGO and no second interchangeable
@@ -40,6 +60,8 @@ Costs and constraints:
 - A driver that fails any required behavior is rejected and can block a release.
 - Supporting only one driver means a regression cannot use a dynamic fallback.
 - Driver upgrades require compatibility, storage, and security regression tests.
+- The generated SQLite implementation and its pure-Go runtime increase module
+  and binary size compared with a system SQLite linkage.
 
 ## Alternatives considered
 
