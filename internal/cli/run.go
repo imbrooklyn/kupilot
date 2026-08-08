@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 )
@@ -34,8 +35,12 @@ Commands:
   help     Show help for a command.
 
 Options:
-  --help     Show root help.
-  --version  Print non-sensitive build information.
+  --config PATH     Use an explicit non-sensitive YAML configuration file.
+  --context NAME    Select the initial Kubernetes Context.
+  --namespace NAME  Select the initial Kubernetes Namespace.
+  --no-color        Disable color output.
+  --help            Show root help.
+  --version         Print non-sensitive build information.
 `
 
 const resumeHelp = `Usage:
@@ -142,11 +147,32 @@ func Run(
 			return ExitUnavailable
 		}
 
+		var safe interface{ SafeMessage() string }
+		if errors.As(err, &safe) {
+			message := safe.SafeMessage()
+			if validSafeMessage(message) {
+				writeSafe(stderr, "Error: "+message+"\n")
+				return ExitFailure
+			}
+		}
+
 		writeSafe(stderr, "KuPilot could not start.\n")
 		return ExitFailure
 	}
 
 	return ExitOK
+}
+
+func validSafeMessage(value string) bool {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, current := range value {
+		if current < 0x20 || current > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func writeContext(ctx context.Context, dst io.Writer, value string) error {

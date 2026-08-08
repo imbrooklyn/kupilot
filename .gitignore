@@ -37,6 +37,8 @@ __debug_bin*
 /config.local.yaml
 /config.local.yml
 /config.local.toml
+/config.yaml
+/config.yml
 
 # Local KuPilot runtime data. Tests must use temporary directories instead.
 /.kupilot/

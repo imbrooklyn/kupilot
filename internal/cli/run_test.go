@@ -68,7 +68,9 @@ func TestRunShortCircuitsHelpAndVersion(t *testing.T) {
 		wantContent string
 	}{
 		{name: "root help", args: []string{"help"}, wantContent: "Running kupilot without a subcommand starts a new Session."},
+		{name: "root help with configuration option", args: []string{"--config", "/missing/config.yaml", "--help"}, wantContent: "Running kupilot without a subcommand starts a new Session."},
 		{name: "resume help", args: []string{"resume", "--help"}, wantContent: "kupilot resume [SESSION_ID | --last]"},
+		{name: "resume help with scope options", args: []string{"resume", "--context", "development", "--namespace=team-a", "--help"}, wantContent: "kupilot resume [SESSION_ID | --last]"},
 		{name: "version help", args: []string{"help", "version"}, wantContent: "Print non-sensitive build information."},
 		{name: "help help", args: []string{"help", "help"}, wantContent: "Show help for a command."},
 		{name: "version", args: []string{"version"}, wantContent: "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.25.0 platform=linux/arm64\n"},
@@ -110,6 +112,11 @@ func TestRootHelpListsOnlyFixedCommands(t *testing.T) {
 	for _, want := range []string{"  resume ", "  version", "  help   "} {
 		if !strings.Contains(help, want) {
 			t.Errorf("root help does not contain command entry %q", want)
+		}
+	}
+	for _, want := range []string{"--config", "--context", "--namespace", "--no-color"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("root help does not contain startup option %q", want)
 		}
 	}
 
@@ -212,6 +219,45 @@ func TestRunUsesStableErrorExitCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunPrintsOnlyApprovedSafeStartupErrors(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		nil,
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		func(context.Context, StartIntent) error {
+			return safeStartupError{message: "Model API key is required; set KUPILOT_MODEL_API_KEY before starting KuPilot. (model_api_key_missing)"}
+		},
+	)
+	if code != ExitFailure {
+		t.Fatalf("Run() exit code = %d, want %d", code, ExitFailure)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	want := "Error: Model API key is required; set KUPILOT_MODEL_API_KEY before starting KuPilot. (model_api_key_missing)\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
+type safeStartupError struct {
+	message string
+}
+
+func (failure safeStartupError) Error() string {
+	return "raw startup failure"
+}
+
+func (failure safeStartupError) SafeMessage() string {
+	return failure.message
 }
 
 func TestRunHonorsCancelledContext(t *testing.T) {

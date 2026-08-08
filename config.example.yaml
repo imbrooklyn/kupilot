@@ -1,0 +1,31 @@
+# KuPilot accepts only this typed, non-sensitive schema.
+version: 1
+
+context: development
+namespace: default
+no_color: false
+
+# Omit paths to use the documented platform defaults. Every override must be
+# absolute, normalized, and outside the filesystem root.
+paths:
+  state_dir: /var/tmp/kupilot-example/state
+  cache_dir: /var/tmp/kupilot-example/cache
+  log_dir: /var/tmp/kupilot-example/logs
+
+model:
+  provider_kind: openai_compatible
+  endpoint: https://model.example.invalid/v1
+  model: diagnostic-model
+  api_key_source: environment
+  temperature: 0.1
+  max_output_tokens: 2048
+  request_timeout_seconds: 45
+  streaming: true
+  tool_calling_required: true
+
+kubernetes:
+  exec_credentials: allow
+
+logging:
+  enabled: true
+  level: info

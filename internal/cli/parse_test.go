@@ -69,6 +69,64 @@ func TestParseAcceptedIntents(t *testing.T) {
 	}
 }
 
+func TestParseNonSensitiveStartupOptions(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a10"
+	configPath := "/tmp/kupilot/config.yaml"
+	wantOptions := StartOptions{
+		ConfigFile:    configPath,
+		ConfigFileSet: true,
+		Context:       "development",
+		ContextSet:    true,
+		Namespace:     "team-a",
+		NamespaceSet:  true,
+		NoColor:       true,
+		NoColorSet:    true,
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		kind IntentKind
+	}{
+		{
+			name: "new Session",
+			args: []string{"--config", configPath, "--context", "development", "--namespace", "team-a", "--no-color"},
+			kind: IntentNew,
+		},
+		{
+			name: "resume picker",
+			args: []string{"resume", "--config", configPath, "--context", "development", "--namespace", "team-a", "--no-color"},
+			kind: IntentResumePicker,
+		},
+		{
+			name: "resume ID with flags before command",
+			args: []string{"--config=" + configPath, "--context=development", "--namespace=team-a", "--no-color", "resume", sessionID},
+			kind: IntentResumeID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Parse(tt.args)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, tt.kind)
+			}
+			if got.Options != wantOptions {
+				t.Errorf("Options = %#v, want %#v", got.Options, wantOptions)
+			}
+			if tt.kind == IntentResumeID && got.SessionID != sessionID {
+				t.Errorf("SessionID = %q, want %q", got.SessionID, sessionID)
+			}
+		})
+	}
+}
+
 func TestParseRejectsInvalidArguments(t *testing.T) {
 	t.Parallel()
 

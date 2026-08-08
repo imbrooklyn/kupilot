@@ -35,6 +35,19 @@ type StartIntent struct {
 	Kind      IntentKind
 	SessionID string
 	HelpTopic HelpTopic
+	Options   StartOptions
+}
+
+// StartOptions contains only admitted non-sensitive startup overrides.
+type StartOptions struct {
+	ConfigFile    string
+	ConfigFileSet bool
+	Context       string
+	ContextSet    bool
+	Namespace     string
+	NamespaceSet  bool
+	NoColor       bool
+	NoColorSet    bool
 }
 
 type parseFailure struct {
@@ -102,21 +115,51 @@ func parseShortcut(args []string) (StartIntent, bool, error) {
 	if helpIndex == -1 {
 		return StartIntent{}, false, nil
 	}
-	if len(args) == 1 && helpIndex == 0 {
-		return StartIntent{Kind: IntentHelp, HelpTopic: HelpRoot}, true, nil
+	if helpIndex != len(args)-1 {
+		return StartIntent{}, true, errors.New("--help does not accept arguments")
 	}
-	if len(args) == 2 && helpIndex == 1 {
-		topic, ok := helpTopicByName(args[0])
-		if ok {
-			return StartIntent{Kind: IntentHelp, HelpTopic: topic}, true, nil
-		}
-		return StartIntent{}, true, errors.New("help is unavailable for that command")
+	topic, err := helpTopicBeforeOption(args[:helpIndex])
+	if err != nil {
+		return StartIntent{}, true, err
 	}
+	return StartIntent{Kind: IntentHelp, HelpTopic: topic}, true, nil
+}
 
-	return StartIntent{}, true, errors.New("--help does not accept arguments")
+func helpTopicBeforeOption(args []string) (HelpTopic, error) {
+	topic := HelpRoot
+	commandSeen := false
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		switch {
+		case argument == "--config" || argument == "--context" || argument == "--namespace":
+			index++
+			if index >= len(args) {
+				return HelpRoot, errors.New("--help does not accept arguments")
+			}
+			continue
+		case strings.HasPrefix(argument, "--config=") || strings.HasPrefix(argument, "--context=") || strings.HasPrefix(argument, "--namespace="):
+			continue
+		case argument == "--no-color" || strings.HasPrefix(argument, "--no-color="):
+			continue
+		case strings.HasPrefix(argument, "-"):
+			return HelpRoot, errors.New("--help does not accept arguments")
+		}
+
+		if commandSeen {
+			return HelpRoot, errors.New("--help does not accept arguments")
+		}
+		var ok bool
+		topic, ok = helpTopicByName(argument)
+		if !ok {
+			return HelpRoot, errors.New("help is unavailable for that command")
+		}
+		commandSeen = true
+	}
+	return topic, nil
 }
 
 func newRootCommand(intent *StartIntent) *cobra.Command {
+	startup := new(startupFlags)
 	root := &cobra.Command{
 		Use:                "kupilot",
 		Short:              "Diagnose Kubernetes issues through bounded Evidence",
@@ -129,11 +172,15 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 			}
 			return nil
 		},
-		Run: func(*cobra.Command, []string) {
-			*intent = StartIntent{Kind: IntentNew}
+		Run: func(command *cobra.Command, _ []string) {
+			*intent = StartIntent{Kind: IntentNew, Options: startup.options(command)}
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
+	root.PersistentFlags().StringVar(&startup.configFile, "config", "", "Use an explicit non-sensitive YAML configuration file")
+	root.PersistentFlags().StringVar(&startup.context, "context", "", "Select the initial Kubernetes Context")
+	root.PersistentFlags().StringVar(&startup.namespace, "namespace", "", "Select the initial Kubernetes Namespace")
+	root.PersistentFlags().BoolVar(&startup.noColor, "no-color", false, "Disable color output")
 	root.SetFlagErrorFunc(func(*cobra.Command, error) error {
 		return &parseFailure{message: "unknown option"}
 	})
@@ -144,7 +191,7 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 	helpCommand := newHelpCommand(intent)
 	root.AddCommand(
 		helpCommand,
-		newResumeCommand(intent),
+		newResumeCommand(intent, startup),
 		newVersionCommand(intent),
 	)
 	root.SetHelpCommand(helpCommand)
@@ -152,7 +199,28 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 	return root
 }
 
-func newResumeCommand(intent *StartIntent) *cobra.Command {
+type startupFlags struct {
+	configFile string
+	context    string
+	namespace  string
+	noColor    bool
+}
+
+func (flags *startupFlags) options(command *cobra.Command) StartOptions {
+	persistent := command.Root().PersistentFlags()
+	return StartOptions{
+		ConfigFile:    flags.configFile,
+		ConfigFileSet: persistent.Changed("config"),
+		Context:       flags.context,
+		ContextSet:    persistent.Changed("context"),
+		Namespace:     flags.namespace,
+		NamespaceSet:  persistent.Changed("namespace"),
+		NoColor:       flags.noColor,
+		NoColorSet:    persistent.Changed("no-color"),
+	}
+}
+
+func newResumeCommand(intent *StartIntent, startup *startupFlags) *cobra.Command {
 	var last bool
 	var sessionID string
 	command := &cobra.Command{
@@ -175,14 +243,15 @@ func newResumeCommand(intent *StartIntent) *cobra.Command {
 			}
 			return nil
 		},
-		Run: func(_ *cobra.Command, args []string) {
+		Run: func(command *cobra.Command, args []string) {
+			options := startup.options(command)
 			switch {
 			case last:
-				*intent = StartIntent{Kind: IntentResumeLast}
+				*intent = StartIntent{Kind: IntentResumeLast, Options: options}
 			case len(args) == 1:
-				*intent = StartIntent{Kind: IntentResumeID, SessionID: sessionID}
+				*intent = StartIntent{Kind: IntentResumeID, SessionID: sessionID, Options: options}
 			default:
-				*intent = StartIntent{Kind: IntentResumePicker}
+				*intent = StartIntent{Kind: IntentResumePicker, Options: options}
 			}
 		},
 	}
