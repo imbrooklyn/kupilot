@@ -100,3 +100,67 @@ model traffic, raw Tool results, arbitrary patches, or framework objects.
 Token-count metadata is numeric usage information and never authentication
 material. JSON columns are purpose-specific bounded projections; they do not
 make an otherwise prohibited source eligible for storage.
+ResourceRef projections are limited to the fixed `v0.1` direct-target
+API-version and Kind pairs, and their Namespace must match the associated
+historic scope snapshot.
+
+## Repository contracts
+
+Session-history ports are owned by the `internal/session` consumer and use only
+project-owned Domain values and bounded request and result DTOs. The SQLite
+adapter implements separate Session, Message, and AgentRun repositories. SQL,
+sqlx handles, transactions, row mappings, `db` tags, nullable driver values, and
+JSON encoding stay inside the adapter.
+
+The Session repository supports create, exact-ID read, optimistic title rename,
+and complete deletion. Rename changes only a standard-persistence Session,
+requires the expected version, rejects a regressing update time, and advances
+the version. Session deletion issues one parent delete in a short transaction;
+foreign-key cascades remove the complete Session-owned graph or the transaction
+rolls back.
+
+The Message repository stores only bounded content that the caller has already
+made eligible and safe. A Message write checks that its Session is active and
+uses standard persistence, inserts the Message, and advances Session activity
+in one short transaction. Minimal-persistence Sessions reject durable Message
+content. Committed history is read in bounded ascending pages ordered by
+`created_at_ms, id`.
+
+The AgentRun repository atomically stores a committed user Message and its
+`running` AgentRun before model or Tool work may begin. The same transaction
+rejects a second durable `running` AgentRun. A terminal update checks the
+stored immutable run identity and the `running` state; a final validated
+assistant Message, terminal run metadata, and Session activity may be committed
+together. No transaction spans model, Kubernetes, terminal, or user I/O.
+
+Every repository statement has a fixed parameterized form and an explicit
+column list. Reads use strict adapter-private mappings and reject invalid null
+combinations, malformed bounded JSON projections, invalid Domain identifiers,
+and invalid state values without returning a partial result. Repository errors
+use code-defined safe text and never include SQL, bound values, driver text, or
+local paths.
+
+## Resume and startup recovery
+
+Resume eligibility is derived rather than stored. A candidate must be active,
+use standard persistence, and retain at least one committed safe Message.
+Picker pages are global and use the exclusive descending keyset
+`updated_at_ms, id`, with a maximum of 50 rows. `--last` is the first row under
+the same ordering. There is no directory, repository, Context, Namespace, or
+environment filter.
+
+An exact resume first reads the Session metadata and then a bounded committed
+Message page. A known minimal-persistence Session returns the stable
+`session_not_resumable` outcome. Missing, archived, malformed, or otherwise
+ineligible history uses a non-disclosing unavailable outcome. Resume returns
+historic scope and ResourceRef values only as unverified candidates; it creates
+no live generation and performs no model, Tool, Kubernetes, approval, or
+executor operation.
+
+The startup recovery operation validates every durable `running` AgentRun and
+changes all valid rows to `interrupted` in one short transaction. It records a
+stable termination reason and a UTC finish time no earlier than the stored
+start time. Recovery is idempotent, honors Context cancellation, returns only a
+count, and never reconstructs or replays Agent, model, Tool, scope, approval, or
+write state. A validation or update failure rolls back the complete recovery
+operation and prevents resume results from being treated as available.
