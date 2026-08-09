@@ -6,21 +6,29 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 )
 
 const (
+	// MaxToolResultBytes is the complete serialized ceiling for one ToolResult.
+	MaxToolResultBytes = 64 * 1024
+	// MaxEvidenceItemsPerResult is the Evidence item ceiling for one ToolResult.
+	MaxEvidenceItemsPerResult = 100
+
 	maxToolVersionBytes       = 128
 	maxToolPurposeBytes       = 1024
 	maxToolArgumentsBytes     = 8192
 	maxSafeSummaryBytes       = 4096
 	maxSafeErrorBytes         = 4096
 	maxSafeErrorClassBytes    = 64
-	maxToolResultBytes        = 65536
-	maxEvidencePerInvocation  = 100
+	maxToolResultBytes        = MaxToolResultBytes
+	maxEvidencePerInvocation  = MaxEvidenceItemsPerResult
 	maxModelIdentifierBytes   = 128
 	maxProviderRequestIDBytes = 256
+	maxToolResultWarnings     = 50
+	maxToolWarningCodeBytes   = 64
 )
 
 var (
@@ -28,6 +36,8 @@ var (
 	ErrInvalidToolInvocation = errors.New("ToolInvocation data is invalid")
 	// ErrInvalidModelRequestMetadata reports invalid metadata without exposing model content.
 	ErrInvalidModelRequestMetadata = errors.New("model request metadata is invalid")
+	// ErrInvalidToolResult reports an invalid ephemeral safe Tool result.
+	ErrInvalidToolResult = errors.New("ToolResult data is invalid")
 )
 
 // ToolInvocationID is an opaque application-generated UUIDv7 identifier.
@@ -163,13 +173,146 @@ type ToolInvocation struct {
 	FinishedAt      *time.Time
 }
 
+// ToolResultStatus is the outcome of one bounded read-only Tool call.
+type ToolResultStatus string
+
+const (
+	ToolResultStatusSuccess ToolResultStatus = "success"
+	ToolResultStatusPartial ToolResultStatus = "partial"
+	ToolResultStatusError   ToolResultStatus = "error"
+	ToolResultStatusDenied  ToolResultStatus = "denied"
+)
+
+// ToolResultError is a stable safe failure projection. It contains no raw cause.
+type ToolResultError struct {
+	Class       SafeErrorClass `json:"class"`
+	Retryable   bool           `json:"retryable"`
+	SafeMessage string         `json:"safe_message"`
+}
+
+func (toolError ToolResultError) valid() bool {
+	if !toolError.Class.Valid() || !validSafeToolText(toolError.SafeMessage, maxSafeErrorBytes) {
+		return false
+	}
+	if !toolError.Retryable {
+		return true
+	}
+	switch toolError.Class {
+	case SafeErrorClassConflict, SafeErrorClassRateLimited, SafeErrorClassUnavailable, SafeErrorClassTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// ToolResultWarning is one bounded code-defined warning with safe text.
+type ToolResultWarning struct {
+	Code        string `json:"code"`
+	SafeMessage string `json:"safe_message"`
+}
+
+func (warning ToolResultWarning) valid() bool {
+	return validSafeToolToken(warning.Code, maxToolWarningCodeBytes) &&
+		validSafeToolText(warning.SafeMessage, maxSafeErrorBytes)
+}
+
+// ToolResultTruncation reports only bounded counts and a safe reason. It never
+// contains discarded content.
+type ToolResultTruncation struct {
+	Truncated     bool   `json:"truncated"`
+	Reason        string `json:"reason,omitempty"`
+	OriginalCount *int   `json:"original_count,omitempty"`
+	ReturnedCount int    `json:"returned_count"`
+	ReturnedBytes int    `json:"returned_bytes"`
+}
+
+func (truncation ToolResultTruncation) valid() bool {
+	if truncation.ReturnedCount < 0 || truncation.ReturnedBytes < 0 || truncation.ReturnedBytes > MaxToolResultBytes ||
+		truncation.OriginalCount != nil && *truncation.OriginalCount < truncation.ReturnedCount {
+		return false
+	}
+	if truncation.Truncated {
+		return validSafeToolToken(truncation.Reason, maxToolWarningCodeBytes)
+	}
+	return truncation.Reason == "" && truncation.OriginalCount == nil
+}
+
+// ToolResult is an ephemeral, project-owned safe envelope. DataJSON is the
+// canonical serialization of a Tool-specific safe DTO, not a raw source object
+// and never a persistence payload.
+type ToolResult struct {
+	InvocationID ToolInvocationID
+	Name         ToolName
+	Version      string
+	Scope        ScopeSnapshot
+	ObservedAt   time.Time
+	Status       ToolResultStatus
+	DataJSON     string
+	Evidence     []Evidence
+	Warnings     []ToolResultWarning
+	Truncation   ToolResultTruncation
+	Error        *ToolResultError
+}
+
+// Validate checks the safe ToolResult envelope and all Evidence provenance that
+// can be decided without the owning AgentRun registry.
+func (result ToolResult) Validate() error {
+	if !result.InvocationID.Valid() || !result.Name.Valid() ||
+		!validModelToken(result.Version, maxToolVersionBytes) ||
+		!validToolScopeSnapshot(result.Scope) || !validPersistenceTime(result.ObservedAt) ||
+		!validCanonicalSafeJSONObject(result.DataJSON, MaxToolResultBytes) ||
+		len(result.Evidence) > MaxEvidenceItemsPerResult || len(result.Warnings) > maxToolResultWarnings ||
+		!result.Truncation.valid() {
+		return ErrInvalidToolResult
+	}
+	switch result.Status {
+	case ToolResultStatusSuccess:
+		if result.Error != nil || result.Truncation.Truncated {
+			return ErrInvalidToolResult
+		}
+	case ToolResultStatusPartial:
+		if result.Error != nil && !result.Error.valid() {
+			return ErrInvalidToolResult
+		}
+	case ToolResultStatusError, ToolResultStatusDenied:
+		if result.Error == nil || !result.Error.valid() || len(result.Evidence) != 0 {
+			return ErrInvalidToolResult
+		}
+	default:
+		return ErrInvalidToolResult
+	}
+	seenEvidence := make(map[EvidenceID]struct{}, len(result.Evidence))
+	for _, evidence := range result.Evidence {
+		if evidence.Validate() != nil || evidence.InvocationID != result.InvocationID ||
+			evidence.Scope != result.Scope || evidence.ObservedAt.After(result.ObservedAt) {
+			return ErrInvalidToolResult
+		}
+		if _, exists := seenEvidence[evidence.ID]; exists {
+			return ErrInvalidToolResult
+		}
+		seenEvidence[evidence.ID] = struct{}{}
+	}
+	for _, warning := range result.Warnings {
+		if !warning.valid() {
+			return ErrInvalidToolResult
+		}
+	}
+	return nil
+}
+
+// Retryable reports the stable Tool error classification only. It never
+// schedules a retry.
+func (result ToolResult) Retryable() bool {
+	return result.Error != nil && result.Error.Retryable
+}
+
 // Validate checks the complete persistence-safe ToolInvocation shape.
 func (invocation ToolInvocation) Validate() error {
 	if !invocation.ID.Valid() || !invocation.RunID.Valid() ||
 		invocation.Sequence < 1 || invocation.Sequence > maxToolCalls ||
 		!invocation.Name.Valid() ||
-		!validBoundedText(invocation.Version, 1, maxToolVersionBytes) ||
-		invocation.Scope.Validate() != nil ||
+		!validModelToken(invocation.Version, maxToolVersionBytes) ||
+		!validToolScopeSnapshot(invocation.Scope) ||
 		!validCanonicalToolArguments(invocation.ArgumentsJSON) ||
 		invocation.ArgumentsDigest != SHA256Hex(invocation.ArgumentsJSON) ||
 		invocation.ReturnedBytes < 0 || invocation.ReturnedBytes > maxToolResultBytes ||
@@ -177,9 +320,9 @@ func (invocation ToolInvocation) Validate() error {
 		invocation.StartedAt == nil || !validPersistenceTime(*invocation.StartedAt) {
 		return ErrInvalidToolInvocation
 	}
-	if invocation.Purpose != nil && !validBoundedText(*invocation.Purpose, 1, maxToolPurposeBytes) ||
-		invocation.SafeError != nil && !validBoundedText(*invocation.SafeError, 1, maxSafeErrorBytes) ||
-		invocation.ResultSummary != nil && !validBoundedText(*invocation.ResultSummary, 1, maxSafeSummaryBytes) ||
+	if invocation.Purpose != nil && !validModelText(*invocation.Purpose, maxToolPurposeBytes, false) ||
+		invocation.SafeError != nil && !validModelText(*invocation.SafeError, maxSafeErrorBytes, false) ||
+		invocation.ResultSummary != nil && !validModelText(*invocation.ResultSummary, maxSafeSummaryBytes, false) ||
 		invocation.ErrorClass != nil && !invocation.ErrorClass.Valid() {
 		return ErrInvalidToolInvocation
 	}
@@ -331,20 +474,130 @@ func validCanonicalToolArguments(value string) bool {
 	if err := json.Compact(&compact, []byte(value)); err != nil || compact.String() != value {
 		return false
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(value), &fields); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return false
+	}
+	fields, ok := decoded.(map[string]any)
+	if !ok {
 		return false
 	}
 	canonical, err := json.Marshal(fields)
 	if err != nil || string(canonical) != value {
 		return false
 	}
-	for name := range fields {
-		switch strings.ToLower(name) {
-		case "context", "namespace", "scope", "endpoint", "credential", "credentials",
-			"api_key", "token", "kubeconfig", "deadline", "timeout", "limit", "max_bytes", "max_items":
-			return false
+	items := 0
+	return !containsToolAuthorityField(fields) && validSafeJSONValue(fields, 0, &items)
+}
+
+func containsToolAuthorityField(value any) bool {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if containsToolAuthorityField(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for name, item := range typed {
+			switch strings.ToLower(name) {
+			case "context", "namespace", "scope", "endpoint", "credential", "credentials",
+				"api_key", "token", "kubeconfig", "deadline", "timeout", "gvr",
+				"group_version_resource", "raw_selector", "max_bytes", "max_items",
+				"max_result_bytes", "max_evidence_items":
+				return true
+			}
+			if containsToolAuthorityField(item) {
+				return true
+			}
 		}
 	}
+	return false
+}
+
+func validCanonicalSafeJSONObject(value string, maximumBytes int) bool {
+	if !validBoundedText(value, 2, maximumBytes) || !json.Valid([]byte(value)) || value[0] != '{' || value[len(value)-1] != '}' {
+		return false
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(value)); err != nil || compact.String() != value {
+		return false
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return false
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return false
+	}
+	canonical, err := json.Marshal(object)
+	if err != nil || string(canonical) != value {
+		return false
+	}
+	items := 0
+	return validSafeJSONValue(object, 0, &items)
+}
+
+func validSafeJSONValue(value any, depth int, items *int) bool {
+	if depth > 16 || *items >= 10_000 {
+		return false
+	}
+	(*items)++
+	switch typed := value.(type) {
+	case nil, bool, json.Number:
+		return true
+	case string:
+		return validModelText(typed, MaxToolResultBytes, true)
+	case []any:
+		for _, item := range typed {
+			if !validSafeJSONValue(item, depth+1, items) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		for key, item := range typed {
+			if !validModelText(key, 256, false) || !validSafeJSONValue(item, depth+1, items) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func validSafeToolText(value string, maximumBytes int) bool {
+	return validModelText(value, maximumBytes, false)
+}
+
+func validSafeToolToken(value string, maximumBytes int) bool {
+	if value == "" || len(value) > maximumBytes {
+		return false
+	}
+	for _, current := range value {
+		if current >= 'a' && current <= 'z' || current >= '0' && current <= '9' || current == '_' || current == '-' {
+			continue
+		}
+		return false
+	}
 	return true
+}
+
+func validToolScopeSnapshot(scope ScopeSnapshot) bool {
+	return scope.Validate() == nil && ValidContextName(scope.Context) &&
+		ValidNamespaceName(scope.Namespace) && scope.Generation >= 1
 }

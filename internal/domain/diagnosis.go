@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"time"
+	"unicode"
 )
 
 const (
@@ -118,7 +119,7 @@ func (diagnosis Diagnosis) Validate() error {
 		len(diagnosis.ConfirmedFacts) > maxDiagnosisItems || len(diagnosis.Hypotheses) > maxDiagnosisItems ||
 		len(diagnosis.MissingInformation) > maxDiagnosisItems || len(diagnosis.RecommendedActions) > maxDiagnosisItems ||
 		len(diagnosis.ValidationWarnings) > maxDiagnosisItems ||
-		!validBoundedText(diagnosis.AnswerMarkdown, 1, maxDiagnosisBytes) ||
+		!validDiagnosisText(diagnosis.AnswerMarkdown, 1, maxDiagnosisBytes) ||
 		!validPersistenceTime(diagnosis.CreatedAt) ||
 		diagnosis.EvidenceDetailsState != "" && !diagnosis.EvidenceDetailsState.Valid() {
 		return ErrInvalidDiagnosis
@@ -133,35 +134,35 @@ func (diagnosis Diagnosis) Validate() error {
 		return ErrInvalidDiagnosis
 	}
 	for _, fact := range diagnosis.ConfirmedFacts {
-		if !validBoundedText(fact.Statement, 1, maxDiagnosisTextBytes) || !validEvidenceIDs(fact.EvidenceIDs, true) {
+		if !validDiagnosisText(fact.Statement, 1, maxDiagnosisTextBytes) || !validEvidenceIDs(fact.EvidenceIDs, true) {
 			return ErrInvalidDiagnosis
 		}
 	}
 	for _, hypothesis := range diagnosis.Hypotheses {
-		if !validBoundedText(hypothesis.Statement, 1, maxDiagnosisTextBytes) ||
+		if !validDiagnosisText(hypothesis.Statement, 1, maxDiagnosisTextBytes) ||
 			!validEvidenceIDs(hypothesis.SupportingEvidenceIDs, false) ||
 			!hypothesis.Confidence.valid() ||
-			!validBoundedText(hypothesis.Falsifier, 1, maxDiagnosisTextBytes) {
+			!validDiagnosisText(hypothesis.Falsifier, 1, maxDiagnosisTextBytes) {
 			return ErrInvalidDiagnosis
 		}
 	}
 	for _, missing := range diagnosis.MissingInformation {
-		if !missing.Kind.valid() || !validBoundedText(missing.Detail, 1, maxDiagnosisTextBytes) || !validBoundedText(missing.Impact, 1, maxDiagnosisTextBytes) {
+		if !missing.Kind.valid() || !validDiagnosisText(missing.Detail, 1, maxDiagnosisTextBytes) || !validDiagnosisText(missing.Impact, 1, maxDiagnosisTextBytes) {
 			return ErrInvalidDiagnosis
 		}
 	}
 	for _, action := range diagnosis.RecommendedActions {
-		if action.Executed || !validBoundedText(action.Action, 1, maxDiagnosisTextBytes) || !validBoundedText(action.Risk, 1, maxDiagnosisTextBytes) || len(action.Prerequisites) > maxDiagnosisItems {
+		if action.Executed || !validDiagnosisText(action.Action, 1, maxDiagnosisTextBytes) || !validDiagnosisText(action.Risk, 1, maxDiagnosisTextBytes) || len(action.Prerequisites) > maxDiagnosisItems {
 			return ErrInvalidDiagnosis
 		}
 		for _, prerequisite := range action.Prerequisites {
-			if !validBoundedText(prerequisite, 1, maxDiagnosisTextBytes) {
+			if !validDiagnosisText(prerequisite, 1, maxDiagnosisTextBytes) {
 				return ErrInvalidDiagnosis
 			}
 		}
 	}
 	for _, warning := range diagnosis.ValidationWarnings {
-		if !validBoundedText(warning, 1, maxDiagnosisWarningBytes) {
+		if !validDiagnosisText(warning, 1, maxDiagnosisWarningBytes) {
 			return ErrInvalidDiagnosis
 		}
 	}
@@ -230,4 +231,19 @@ func diagnosisPayloadBytes(diagnosis Diagnosis) (int, error) {
 		total += len(encoded)
 	}
 	return total, nil
+}
+
+func validDiagnosisText(value string, minimumBytes, maximumBytes int) bool {
+	if !validBoundedText(value, minimumBytes, maximumBytes) {
+		return false
+	}
+	for _, current := range value {
+		if current == '\n' || current == '\t' {
+			continue
+		}
+		if unicode.IsControl(current) || isModelBidirectionalControl(current) {
+			return false
+		}
+	}
+	return true
 }

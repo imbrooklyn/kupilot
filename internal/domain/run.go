@@ -6,12 +6,26 @@ import (
 )
 
 const (
+	// MaxAgentRunDuration is the non-expandable wall-clock ceiling for one run.
+	MaxAgentRunDuration = 90 * time.Second
+	// MaxAgentSteps is the non-expandable single-Agent loop ceiling.
+	MaxAgentSteps = 8
+	// MaxAgentToolCalls is the non-expandable Tool-call ceiling for one run.
+	MaxAgentToolCalls = 10
+	// MaxAgentModelCalls is the non-expandable model-call ceiling for one run.
+	MaxAgentModelCalls = 3
+	// MaxAgentRunToolResultBytes is the non-expandable cumulative ToolResult ceiling.
+	MaxAgentRunToolResultBytes = 384 * 1024
+	// MaxAgentNoProgressSteps stops collection after this many consecutive steps
+	// add no accepted Evidence.
+	MaxAgentNoProgressSteps = 2
+
 	maxPromptVersionBytes      = 128
 	maxToolCatalogVersionBytes = 128
 	maxTerminationReasonBytes  = 1024
-	maxAgentSteps              = 8
-	maxToolCalls               = 10
-	maxModelRequests           = 3
+	maxAgentSteps              = MaxAgentSteps
+	maxToolCalls               = MaxAgentToolCalls
+	maxModelRequests           = MaxAgentModelCalls
 
 	// InterruptedByRestartReason is the stable reason used by startup recovery.
 	InterruptedByRestartReason = "process_interrupted"

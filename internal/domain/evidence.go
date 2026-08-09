@@ -100,14 +100,16 @@ type Evidence struct {
 // Validate checks provenance, scope, safe field bounds, and fingerprints.
 func (evidence Evidence) Validate() error {
 	if !evidence.ID.Valid() || !evidence.RunID.Valid() || !evidence.InvocationID.Valid() ||
-		!evidence.Category.Valid() || evidence.Scope.Validate() != nil || evidence.Resource.Validate() != nil ||
+		!evidence.Category.Valid() || evidence.Scope.Validate() != nil ||
+		!ValidContextName(evidence.Scope.Context) || !ValidNamespaceName(evidence.Scope.Namespace) || evidence.Scope.Generation < 1 ||
+		ValidateLiveResourceRef(evidence.Resource) != nil ||
 		evidence.Resource.Namespace != evidence.Scope.Namespace ||
-		!validBoundedText(evidence.Fact, 1, maxEvidenceFactBytes) ||
+		!validModelText(evidence.Fact, maxEvidenceFactBytes, false) ||
 		evidence.RedactionCount < 0 || !validSHA256Hex(evidence.Fingerprint) ||
 		!validPersistenceTime(evidence.ObservedAt) {
 		return ErrInvalidEvidence
 	}
-	if evidence.SourcePath != nil && !validBoundedText(*evidence.SourcePath, 1, maxEvidenceSourcePathBytes) ||
+	if evidence.SourcePath != nil && !validModelText(*evidence.SourcePath, maxEvidenceSourcePathBytes, false) ||
 		evidence.Severity != nil && !evidence.Severity.Valid() {
 		return ErrInvalidEvidence
 	}
