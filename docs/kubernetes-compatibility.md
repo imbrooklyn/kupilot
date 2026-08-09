@@ -17,9 +17,9 @@ KuPilot supports the following Kubernetes API server minors:
 
 | Kubernetes API server | KuPilot contract with client-go v0.35.7 |
 | --- | --- |
-| 1.34.x | Supported for the stable, code-allowlisted API paths shared with 1.35. |
+| 1.34.x | Supported for code-allowlisted stable APIs shared with 1.35. |
 | 1.35.x | Supported; this is the exact client-go minor match. |
-| 1.36.x | Supported for the stable, code-allowlisted API paths shared with 1.35. |
+| 1.36.x | Supported for code-allowlisted stable APIs shared with 1.35. |
 
 Older and newer server minors are outside the supported matrix. Patch versions
 within a supported minor do not change KuPilot's resource, relationship,
@@ -78,6 +78,64 @@ state, and closes idle connections.
 The bundle contains only a private typed clientset. It exposes no REST client,
 dynamic client, discovery client, generic resource interface, request builder,
 Watch, informer, or write-capable consumer method.
+
+## Scope activation and bounded reads
+
+Application owns the live scope generation and receives only an opaque client
+lifecycle handle plus project-owned DTOs. A Context activation first validates
+the exact local candidate, commits generation invalidation, cancels the active
+run, clears selected-resource and same-generation list caches, calls the fixed
+scope-invalidation hook, and closes the old bundle before creating the target
+bundle. It then verifies the target Context's effective Namespace with one exact
+core `v1` Namespace `GET`. A failed Context construction or Namespace
+verification leaves the new generation unavailable and never restores the old
+bundle implicitly.
+
+A Namespace candidate is checked with one exact core `v1` Namespace `GET`
+before its commit point. A failed or forbidden check leaves the current scope
+unchanged. A successful change advances generation, performs the same local
+invalidation, and reuses the current Context bundle. Namespace picker reads use
+one core `v1` Namespace `LIST`, request at most 50 items, and return sorted names
+only. Empty Namespace input is never interpreted as all Namespaces.
+
+The directly readable target surface is fixed:
+
+| Target Kind | Stable typed API | Current-Namespace requests |
+| --- | --- | --- |
+| Pod | core `v1` | Exact `GET` and bounded `LIST` of `pods` |
+| Service | core `v1` | Exact `GET` and bounded `LIST` of `services` |
+| Deployment | `apps/v1` | Exact `GET` and bounded `LIST` of `deployments` |
+| ReplicaSet | `apps/v1` | Exact `GET` and bounded `LIST` of `replicasets` |
+| Job | `batch/v1` | Exact `GET` and bounded `LIST` of `jobs` |
+
+Each list accepts a code-validated limit from 1 through 50, sends that limit to
+the API server, applies the same ceiling again after return, and accepts no raw
+label selector, field selector, continuation token, or all-Namespace option.
+Same-generation Namespace and resource-list results may be held in ephemeral
+Picker caches; every generation change clears them. Exact resource reads are
+not object-body cache entries.
+
+The public projection contains only the fixed ResourceRef, optional creation
+time, bounded phase or reason, applicable non-negative readiness and workload
+counts, Service type, and at most one allowlisted controller owner reference.
+It excludes labels, annotations, selectors, messages, container environment,
+volume details, addresses, managed fields, and raw Kubernetes objects.
+
+EndpointSlice remains package-internal to the fixed Service relationship. Its
+only admitted read is a namespaced `discovery.k8s.io/v1` list with the
+code-constructed `kubernetes.io/service-name` selector, at most 50 slices, and a
+local ceiling of 1,000 endpoint entries. Only ready and not-ready counts survive;
+addresses never enter the result. A Pod's existing `apps/v1` StatefulSet
+controller reference may be projected as `reference_only`; no StatefulSet
+`GET` or `LIST` exists.
+
+Secret, ConfigMap, EndpointSlice as a direct target, StatefulSet as a direct
+target, every unknown Kind, cross-Context, cross-Namespace, empty-Namespace,
+invalid-limit, and foreign-client requests are rejected before a resource
+client action whenever locally decidable. Scope-managed reads compare the
+complete bound Context, Namespace, and generation before invocation and after
+every return; a mismatch produces `stale_scope` and discards the candidate
+result.
 
 ## Exec credential contract
 

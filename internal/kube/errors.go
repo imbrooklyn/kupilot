@@ -7,25 +7,30 @@ import (
 	"errors"
 	"net"
 
+	"github.com/imbrooklyn/kupilot/internal/domain"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// ErrorClass is a stable, non-sensitive Kubernetes adapter failure category.
-type ErrorClass string
+// ErrorClass is the project-owned stable failure class used by this adapter.
+type ErrorClass = domain.SafeErrorClass
 
 const (
-	ClassConfigurationInvalid    ErrorClass = "configuration_invalid"
-	ClassAuthenticationFailed    ErrorClass = "authentication_failed"
-	ClassPermissionDenied        ErrorClass = "permission_denied"
-	ClassNotFound                ErrorClass = "not_found"
-	ClassUnsupported             ErrorClass = "unsupported"
-	ClassPolicyDenied            ErrorClass = "policy_denied"
-	ClassRateLimited             ErrorClass = "rate_limited"
-	ClassUnavailable             ErrorClass = "unavailable"
-	ClassTimeout                 ErrorClass = "timeout"
-	ClassCancelled               ErrorClass = "cancelled"
-	ClassInvalidExternalResponse ErrorClass = "invalid_external_response"
-	ClassInternal                ErrorClass = "internal"
+	ClassInvalidInput            ErrorClass = domain.SafeErrorClassInvalidInput
+	ClassConfigurationInvalid    ErrorClass = domain.SafeErrorClassConfigurationInvalid
+	ClassAuthenticationFailed    ErrorClass = domain.SafeErrorClassAuthenticationFailed
+	ClassPermissionDenied        ErrorClass = domain.SafeErrorClassPermissionDenied
+	ClassNotFound                ErrorClass = domain.SafeErrorClassNotFound
+	ClassUnsupported             ErrorClass = domain.SafeErrorClassUnsupported
+	ClassPolicyDenied            ErrorClass = domain.SafeErrorClassPolicyDenied
+	ClassStaleScope              ErrorClass = domain.SafeErrorClassStaleScope
+	ClassBudgetExhausted         ErrorClass = domain.SafeErrorClassBudgetExhausted
+	ClassRateLimited             ErrorClass = domain.SafeErrorClassRateLimited
+	ClassUnavailable             ErrorClass = domain.SafeErrorClassUnavailable
+	ClassTimeout                 ErrorClass = domain.SafeErrorClassTimeout
+	ClassCancelled               ErrorClass = domain.SafeErrorClassCancelled
+	ClassSensitiveOutputBlocked  ErrorClass = domain.SafeErrorClassSensitiveOutputBlocked
+	ClassInvalidExternalResponse ErrorClass = domain.SafeErrorClassInvalidExternalResponse
+	ClassInternal                ErrorClass = domain.SafeErrorClassInternal
 )
 
 // SafeError contains only code-defined fields suitable for delivery and logs.

@@ -14,9 +14,11 @@ func TestExportedKubeBoundaryContainsNoClientGoTypes(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(kube.NewConfigLoader),
 		reflect.TypeOf(kube.NewClientFactory),
+		reflect.TypeOf(kube.NewGateway),
 		reflect.TypeOf((*kube.ConfigLoader)(nil)),
 		reflect.TypeOf((*kube.ClientFactory)(nil)),
 		reflect.TypeOf((*kube.ClientBundle)(nil)),
+		reflect.TypeOf((*kube.Gateway)(nil)),
 		reflect.TypeOf(kube.ContextInfo{}),
 		reflect.TypeOf((*kube.SafeError)(nil)),
 	}
