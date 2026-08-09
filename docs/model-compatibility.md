@@ -32,6 +32,36 @@ ordered assembly, fixed-name validation, canonical strict arguments, the
 `tool_calls` finish reason, and the independent Agent runtime checks for schema,
 scope, generation, budgets, and dispatch.
 
+## Transport implementation and lifecycle
+
+The production model transport uses
+`github.com/cloudwego/eino-ext/components/model/openai` v0.1.13 with
+`github.com/cloudwego/eino` v0.9.13. Both the component and its hardened
+`net/http` wrapper are contained in `internal/llm/openaicompat`; Eino, provider,
+HTTP, SSE, and transport error types do not cross the neutral `Model` port.
+
+The component owns Chat Completions request integration and stream decoding.
+KuPilot supplies a fixed request-payload modifier so the serialized body remains
+the exact six-Tool contract, and wraps the response body before the component
+can read it to enforce raw wire-byte, data-record, and record-size limits. A
+response-chunk modifier rejects ambiguous choice envelopes, while the adapter
+maps decoded text, indexed Tool-call fragments, finish reasons, and usage into
+project-owned events. KuPilot does not maintain a second SSE or provider JSON
+decoder.
+
+Construction validates configuration and credential availability locally,
+clones an independent HTTP transport, and performs no network request. A
+successfully constructed adapter owns the opaque credential. The composition
+root cancels and waits for owning model work before closing the adapter; close
+then rejects new requests, releases idle connections, and destroys the owned
+credential. There is no package-global client or credential.
+
+KuPilot installs no Eino global callbacks. Each model call replaces any
+caller-provided callback context before giving data to the component. The
+component performs no application retry, fallback, tracing, or persistence.
+Every returned Eino stream and its tracked HTTP response body are closed on all
+terminal paths.
+
 ## Model configuration
 
 `ModelConfiguration` contains only validated, non-sensitive values:
@@ -90,6 +120,17 @@ fields remain unambiguous and within all limits.
 Only validated final usage and provider request identifiers may be projected
 into the existing safe `ModelRequestMetadata`. Raw chunks, headers, request or
 response bodies, partial output, and provider objects are never metadata.
+
+## Capability validation strategy
+
+Adapter construction is deliberately network-free and does not send a
+speculative capability probe. After Application has admitted the transfer, the
+first bounded `Model.Stream` request validates the complete required wire
+profile. An incompatible media type, stream shape, Tool-call behavior, or finish
+state returns a stable `unsupported` or `invalid_external_response` failure.
+KuPilot does not retry that failure automatically, downgrade to non-streaming or
+prose-parsed Tools, route to another origin, or retain partial output as a
+successful result.
 
 ## Capability matrix
 
@@ -185,13 +226,25 @@ arguments, messages, resumed history, and Kubernetes content cannot change it.
 HTTPS uses normal certificate and hostname verification. Plain HTTP is accepted
 only for an explicit loopback endpoint. User information, query parameters,
 fragments, insecure TLS overrides, and cross-origin redirects are rejected.
+Private HTTPS endpoints are supported only when their certificate chain and
+hostname validate against the process trust store. At most three same-origin
+redirects are followed, and only when the redirect preserves the authenticated
+POST and body; method-changing or otherwise ambiguous redirects are rejected.
 
 The model API key is a transport-only credential from the approved one-shot
-source. Authorization is attached only to the validated origin. It is never a
-configuration field, model message, request body, event, safe error, ordinary
-log field, audit field, or persistence value. Request and logger capture tests
-may inspect a generated synthetic value in memory, but logs never record
-Authorization or request/response bodies.
+source. The Eino component receives a fixed non-secret placeholder; the guarded
+HTTP transport replaces it with the real Authorization value only after
+validating the exact origin, request method, content type, and bounded body.
+The placeholder is restored before redirect processing, and Authorization is
+attached only to the validated origin. The key is never a configuration field,
+model message, request body, event, safe error, ordinary log field, callback,
+audit field, or persistence value. Request and logger capture tests may inspect
+a generated synthetic value in memory, but logs never record Authorization or
+request/response bodies.
+The adapter also fails closed before a request or neutral event can carry the
+transport credential as configuration, content, metadata, text, or Tool-call
+data. Endpoint error bodies are read only to the fixed discard limit and are
+never decoded into an error or metadata value.
 
 ## Deterministic compatibility fixtures
 
@@ -212,6 +265,9 @@ synthetic English content and loopback `httptest` servers.
 | `stream-limits.json` | One-over event, total-stream, and event-count limits |
 | Blocking cancel and timeout routes | Context propagation and bounded termination |
 | Cross-origin redirect route | Zero target requests and no Authorization forwarding |
+| Verified private HTTPS and same-origin redirect routes | Normal certificate verification and authenticated POST preservation |
+| Generated credential, endpoint-error, and caller-callback canaries | Header-only credential use and safe sink confinement |
+| Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 
 <!-- markdownlint-enable MD013 -->
 

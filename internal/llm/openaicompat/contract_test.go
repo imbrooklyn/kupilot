@@ -634,7 +634,8 @@ func TestInvalidNeutralRequestFailsBeforeHTTP(t *testing.T) {
 
 	server := newFixtureServer(t, "")
 	var logBuffer bytes.Buffer
-	model := newReferenceModel(
+	model := newFixtureAdapter(
+		t,
 		fixtureConfiguration(server.endpoint("normal"), time.Second),
 		strings.Repeat("d", 41)+"-generated",
 		fixtureLogger(&logBuffer),
@@ -698,7 +699,7 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 			server := newFixtureServer(t, "")
 			configuration := fixtureConfiguration(server.endpoint(current.scenario), time.Second)
 			var logBuffer bytes.Buffer
-			model := newReferenceModel(configuration, apiCanary, fixtureLogger(&logBuffer))
+			model := newFixtureAdapter(t, configuration, apiCanary, fixtureLogger(&logBuffer))
 			request := fixtureModelRequest()
 			var events []domain.ModelStreamEvent
 			modelError := model.Stream(context.Background(), request, func(event domain.ModelStreamEvent) {
@@ -733,6 +734,9 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 			if got := events[len(events)-1].Completion.FinishReason; got != current.wantFinish {
 				t.Fatalf("finish reason = %q, want %q", got, current.wantFinish)
 			}
+			if strings.Contains(sprintEvents(events), apiCanary) {
+				t.Fatal("neutral stream events contain the transport credential")
+			}
 			assertRequestAndSinkSafety(t, server, apiCanary, "", logBuffer.String(), nil)
 		})
 	}
@@ -759,7 +763,7 @@ func TestHTTPErrorFixturesMapToSafeClassesWithoutBodyLeakage(t *testing.T) {
 			errorCanary := strings.Repeat("e", 43) + "-generated"
 			server := newFixtureServer(t, errorCanary)
 			var logBuffer bytes.Buffer
-			model := newReferenceModel(fixtureConfiguration(server.endpoint(current.scenario), time.Second), apiCanary, fixtureLogger(&logBuffer))
+			model := newFixtureAdapter(t, fixtureConfiguration(server.endpoint(current.scenario), time.Second), apiCanary, fixtureLogger(&logBuffer))
 			var events []domain.ModelStreamEvent
 			modelError := model.Stream(context.Background(), fixtureModelRequest(), func(event domain.ModelStreamEvent) {
 				events = append(events, event)
@@ -793,7 +797,7 @@ func TestMalformedAndOversizeFixturesHaveOneClassifiedTerminalError(t *testing.T
 
 			server := newFixtureServer(t, "")
 			var logBuffer bytes.Buffer
-			model := newReferenceModel(fixtureConfiguration(server.endpoint(current.scenario), time.Second), strings.Repeat("b", 39)+"-generated", fixtureLogger(&logBuffer))
+			model := newFixtureAdapter(t, fixtureConfiguration(server.endpoint(current.scenario), time.Second), strings.Repeat("b", 39)+"-generated", fixtureLogger(&logBuffer))
 			var events []domain.ModelStreamEvent
 			modelError := model.Stream(context.Background(), fixtureModelRequest(), func(event domain.ModelStreamEvent) {
 				events = append(events, event)
@@ -826,7 +830,7 @@ func TestCancellationAndTimeoutCancelTheFixtureRequest(t *testing.T) {
 
 			server := newFixtureServer(t, "")
 			var logBuffer bytes.Buffer
-			model := newReferenceModel(fixtureConfiguration(server.endpoint(current.scenario), time.Second), strings.Repeat("c", 41)+"-generated", fixtureLogger(&logBuffer))
+			model := newFixtureAdapter(t, fixtureConfiguration(server.endpoint(current.scenario), time.Second), strings.Repeat("c", 41)+"-generated", fixtureLogger(&logBuffer))
 			ctx, cancelParent := context.WithCancelCause(context.Background())
 			trigger := func() { cancelParent(context.Canceled) }
 			triggerReady := make(chan func(), 1)
@@ -866,7 +870,7 @@ func TestCrossOriginRedirectIsDeniedBeforeAuthorizationCanMove(t *testing.T) {
 	source := newFixtureServer(t, "")
 	source.setRedirectTarget(target.endpoint("normal") + "/chat/completions")
 	var logBuffer bytes.Buffer
-	model := newReferenceModel(fixtureConfiguration(source.endpoint("redirect"), time.Second), apiCanary, fixtureLogger(&logBuffer))
+	model := newFixtureAdapter(t, fixtureConfiguration(source.endpoint("redirect"), time.Second), apiCanary, fixtureLogger(&logBuffer))
 	var events []domain.ModelStreamEvent
 	modelError := model.Stream(context.Background(), fixtureModelRequest(), func(event domain.ModelStreamEvent) {
 		events = append(events, event)
@@ -903,7 +907,7 @@ func TestSerializedRequestBoundaryIsExactAndFailsBeforeHTTP(t *testing.T) {
 			configuration := fixtureConfiguration(server.endpoint("normal"), time.Second)
 			request := requestWithWireSize(t, configuration, current.wireBytes)
 			var logBuffer bytes.Buffer
-			model := newReferenceModel(configuration, strings.Repeat("q", 41)+"-generated", fixtureLogger(&logBuffer))
+			model := newFixtureAdapter(t, configuration, strings.Repeat("q", 41)+"-generated", fixtureLogger(&logBuffer))
 			var events []domain.ModelStreamEvent
 			modelError := model.Stream(context.Background(), request, func(event domain.ModelStreamEvent) {
 				events = append(events, event)
