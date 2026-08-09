@@ -1,0 +1,35 @@
+{
+  "confirmed_facts": [
+    {
+      "statement": "The projected Pod condition is not Ready.",
+      "evidence_ids": [
+        "00000000-0000-7000-8000-000000008006"
+      ]
+    }
+  ],
+  "hypotheses": [
+    {
+      "statement": "The application may still be starting.",
+      "supporting_evidence_ids": [
+        "00000000-0000-7000-8000-000000008006"
+      ],
+      "confidence": "low",
+      "falsifier": "A later bounded observation reports the Pod Ready."
+    }
+  ],
+  "missing_information": [
+    {
+      "kind": "absent",
+      "detail": "Recent Events were not collected.",
+      "impact": "The reason for the readiness state remains uncertain."
+    }
+  ],
+  "recommended_actions": [
+    {
+      "action": "Review the readiness probe and application startup state.",
+      "risk": "Configuration changes can restart Pods.",
+      "prerequisites": [],
+      "executed": false
+    }
+  ]
+}

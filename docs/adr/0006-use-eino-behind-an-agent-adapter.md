@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended: 2026-08-09
+- Amended: 2026-08-10
 
 ## Context
 
@@ -48,11 +48,28 @@ replaces caller callback contexts, and KuPilot registers no Eino global
 callbacks. It performs no automatic retry, fallback, tracing, or persistence
 and closes both the returned Eino stream and its tracked HTTP response body.
 
-Future Agent-runtime integration uses Eino only inside
+Agent-runtime integration uses Eino only inside
 `internal/agent/einoadapter` to implement the Application-owned `AgentRunner`.
-It consumes the existing neutral `Model` port and must not construct another
-OpenAI component, provider client, or HTTP transport. The Agent adapter may use
-Eino for:
+It consumes the existing neutral `Model` port and does not construct another
+OpenAI component, provider client, or HTTP transport. The locked runtime path
+is `flow/agent/react.NewAgent` with a project-owned bridge implementing
+`model.ToolCallingChatModel`. The bridge's immutable `WithTools` accepts only
+the fixed catalog; each `Generate` or `Stream` operation maps to exactly one
+neutral `Model.Stream` call.
+
+The six fixed specifications are exposed to ReAct as run-local
+`InvokableTool` values. `compose.ToolsNodeConfig.ExecuteSequentially` is true,
+and each wrapper uses `compose.GetToolCallID` to recover the structured call
+identity. The complete selected batch is validated and bound before handler
+execution. KuPilot reserves and accounts for every Tool call immediately
+before synchronous dispatch. Neutral deltas are emitted through the KuPilot
+EventSink while the model call is active; the bridge returns one complete Eino
+message chunk only after the neutral completion is valid. Every Eino output
+stream is drained and closed. The adapter latches the first Tool-wrapper error
+so later entries visited by the sequential Tools node return before reservation
+or handler dispatch.
+
+The Agent adapter uses Eino for:
 
 - Bounded single-Agent runtime composition over project-owned Model and Tool
   ports.
@@ -60,6 +77,13 @@ Eino for:
 - Mapping the fixed KuPilot Tool specifications into the isolated runtime.
 - Propagating cancellation and terminal state without owning model transport
   policy.
+
+The ReAct `MaxStep` setting is a secondary failsafe only. KuPilot budgets,
+repeat and no-progress state, scope checks, and terminal ownership remain
+authoritative. The adapter clears inherited Eino callback context and installs
+no handler. It enables no process-global callback, model retry, fallback,
+memory, checkpoint, resume, tracing, Tool-return-directly behavior, or dynamic
+Tool option.
 
 KuPilot, not Eino, owns Agent-loop limits, Tool authorization, scope-generation
 checks, Tool dispatch, Evidence creation, Diagnosis validation, persistence
@@ -112,6 +136,12 @@ Costs and constraints:
   because vendor contracts would leak into Application, Domain, Tools, and TUI.
 - Using Eino to own the whole Agent loop was rejected because budgets, scope,
   Evidence, persistence, and policy must remain deterministic KuPilot controls.
+- Eino ADK `ChatModelAgent` was rejected because its session, checkpoint,
+  resume, transfer, and asynchronous event surface exceeds the admitted
+  single-run contract.
+- A direct `compose.Graph` implementation was rejected because it would
+  duplicate ReAct message accumulation, branching, and loop behavior without
+  adding an admitted capability.
 
 ## Security and privacy impact
 
@@ -141,8 +171,8 @@ Official module metadata, source, and adapter tests must verify:
 5. Neutral error, usage, and request-metadata mapping without retaining raw
    request or response bodies.
 6. Compatibility with the single OpenAI-compatible transport contract in
-   ADR-0022, including confinement of Eino, provider, and HTTP types inside the
-   model adapter.
+   ADR-0022, including confinement of Agent-runtime Eino types inside the Agent
+   adapter and provider and HTTP types inside the model adapter.
 
 The selected versions and exact API mappings remain recorded in dependency and
 compatibility metadata.

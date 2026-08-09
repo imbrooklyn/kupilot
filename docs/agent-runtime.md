@@ -37,6 +37,43 @@ the existing neutral `Model` port and these policy contracts. It must not create
 another model component, HTTP transport, provider client, production Agent
 loop, dynamic Tool registry, or framework checkpoint and resume path.
 
+## Pinned Eino composition
+
+The production adapter uses `github.com/cloudwego/eino` v0.9.13 and the
+dedicated `flow/agent/react.NewAgent` single-Agent path. Its model bridge
+implements the immutable `model.ToolCallingChatModel` contract: `WithTools`
+accepts only the exact fixed catalog, while `Generate` and `Stream` translate
+Eino messages into one neutral `ModelRequest`. Every admitted Eino model node
+invocation therefore makes exactly one call through the existing neutral
+`Model.Stream` port. The adapter creates no provider component, client, HTTP
+request, retry, or fallback.
+
+The six fixed Tool specifications are mapped to run-local Eino
+`InvokableTool` values. The ReAct Tools node uses
+`ExecuteSequentially: true`, and the wrapper recovers the structured call ID
+through `compose.GetToolCallID`. A complete model-selected batch is validated
+and bound before any handler can run. Admitted calls then reserve budget and
+execute synchronously in model order; a failed reservation prevents that call
+and every subsequent model or Tool call. Because the framework visits each
+entry in a sequential batch even after one wrapper reports an error, the
+adapter also latches the first wrapper failure; later entries return that safe
+failure before scope reservation, budget reservation, or handler dispatch.
+
+Neutral model deltas are validated and published as KuPilot events while the
+neutral call is active. Only after the neutral stream has one valid completion
+does the bridge expose one complete Eino message chunk, so ReAct branching
+never interprets partial JSON or Tool-like prose. The adapter drains and closes
+every returned Eino stream. Its `MaxStep` is only a secondary graph failsafe;
+`RunBudget` remains the authoritative call and progress policy.
+
+The adapter replaces inherited Eino callback context and registers no global
+callback. It configures no memory, checkpoint, resume, tracing, retry,
+fallback, Tool-return-directly, middleware, or dynamic Tool option. Eino's ADK
+`ChatModelAgent` is not used because its session, checkpoint, resume, transfer,
+and asynchronous event surface exceeds the single-run contract. A direct
+`compose.Graph` is also not used because it would duplicate the maintained
+ReAct accumulation and branch loop without adding admitted behavior.
+
 ## Versioned System Prompt and language
 
 `kupilot-agent-policy-v1` is a deterministic English System Prompt. It defines
@@ -80,7 +117,8 @@ Schema with `additionalProperties: false`. A structured selection is decoded
 strictly, normalized with code-defined defaults, and re-serialized canonically
 before its digest is calculated. Unknown Tools, extra or duplicate fields,
 wrong types, invalid Kinds or names, and prohibited authority fields are denied
-before handler resolution.
+before handler resolution. If any selection in one model batch is invalid, no
+handler from that batch is invoked.
 
 Model arguments contain no Context, Namespace, ClusterScope, generic GVR,
 endpoint, credential, kubeconfig, deadline, or hard ceiling. A
@@ -132,6 +170,13 @@ A frozen configuration may reduce a value but cannot raise it. Child call
 reservations return the smaller of their request ceiling and remaining run
 time.
 
+When a length, call, byte, repeated-call, or no-progress policy stop occurs
+after a run has started, the runtime performs no further external call and may
+produce a local gap-only Diagnosis from Evidence already accepted. That result
+passes the same Diagnosis validator and cannot create a confirmed fact or an
+execution claim. Cancellation, deadline, stale scope, malformed external data,
+and internal failures remain non-completed terminal outcomes.
+
 Repeated-call identity is the fixed Tool name, Tool version, and digest of all
 canonical model-supplied arguments. Scope is excluded because it is immutable
 for the run. The first call is admitted normally. One identical second call is
@@ -155,6 +200,11 @@ A model Diagnosis is an untrusted four-part draft:
 - `hypotheses`
 - `missing_information`
 - `recommended_actions`
+
+The final model message must be one bare JSON object containing exactly these
+four fields. Unknown or duplicate keys, missing or null collections, trailing
+content, and malformed JSON are rejected. Parsing never recognizes a Tool call
+from text.
 
 Final validation performs these deterministic operations:
 
@@ -198,6 +248,12 @@ transport I/O. It imports no Eino or provider type. Scope freshness checks,
 Application event acceptance, consent, source projection, redaction, and
 sensitive-value blocking remain independent mandatory boundaries around these
 contracts.
+
+The production adapter checks the exact immutable scope before reserving each
+external call, again immediately before the call, and after the return before
+accepting any output. The Application-owned EventSink remains the independent
+acceptance gate for every neutral event. A stale result cannot become Tool
+context, Evidence, Diagnosis input, or a later call.
 
 System Prompts, raw model traffic, streaming deltas, complete ToolResults, and
 invalid Diagnosis drafts are ephemeral and never persistence payloads. Durable

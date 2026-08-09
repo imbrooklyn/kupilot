@@ -115,6 +115,21 @@ type AgentRunner interface {
 	Run(context.Context, RunInput, EventSink) RunOutcome
 }
 
+// RunScopeGuard is the Application-supplied freshness gate for the immutable
+// ClusterScope. Implementations return false without performing model or Tool
+// I/O when the exact scope generation is no longer current.
+type RunScopeGuard interface {
+	Current(context.Context, domain.ClusterScope) bool
+}
+
+// RunIdentifierSource supplies Application-generated durable UUIDv7 values to
+// one AgentRun. The runner validates every value before it becomes metadata.
+type RunIdentifierSource interface {
+	NewModelRequestID() (domain.ModelRequestID, error)
+	NewToolInvocationID() (domain.ToolInvocationID, error)
+	NewDiagnosisID() (domain.DiagnosisID, error)
+}
+
 // RunOutcome is the sole synchronous terminal value returned by AgentRunner.
 // Raw adapter and framework errors are intentionally absent.
 type RunOutcome struct {

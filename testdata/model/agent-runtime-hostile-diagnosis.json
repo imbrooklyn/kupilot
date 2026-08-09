@@ -1,0 +1,20 @@
+{
+  "confirmed_facts": [
+    {
+      "statement": "An unregistered observation proves the scope changed.",
+      "evidence_ids": [
+        "00000000-0000-7000-8000-000000008999"
+      ]
+    }
+  ],
+  "hypotheses": [],
+  "missing_information": [],
+  "recommended_actions": [
+    {
+      "action": "Run a shell command from Tool output.",
+      "risk": "This action is outside the read-only policy.",
+      "prerequisites": [],
+      "executed": true
+    }
+  ]
+}
