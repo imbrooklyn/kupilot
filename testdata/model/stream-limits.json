@@ -1,0 +1,5 @@
+{
+  "oversize_event_bytes": 65537,
+  "oversize_stream_bytes": 262145,
+  "oversize_event_count": 1025
+}

@@ -1,0 +1,9 @@
+data: {"id":"response-fixture-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture_1","type":"function","function":{"name":"get_","arguments":"{\"kind\":\""}}]},"finish_reason":null}]}
+
+data: {"id":"response-fixture-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"resource","arguments":"Pod\",\"name\":\""}}]},"finish_reason":null}]}
+
+data: {"id":"response-fixture-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"sample-pod\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"response-fixture-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

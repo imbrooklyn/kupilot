@@ -1,0 +1,3 @@
+data: {"id":"response-fixture-no-usage","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","content":"Usage is optional."},"finish_reason":null}]}
+
+data: {"id":"response-fixture-no-usage","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}

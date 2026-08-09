@@ -75,16 +75,36 @@ product direction.
 
 ## Development
 
-KuPilot requires Go 1.25.0 or newer. The standard local checks are:
+KuPilot requires Go 1.25.0 or newer. Run the standard local gate with:
+
+```sh
+make check
+```
+
+`make check` verifies Go formatting without changing source files, runs
+uncached tests and `go vet`, and builds the current platform binary. The full
+local gate adds race-enabled tests and CGO-free builds for the supported macOS
+and Linux architecture matrix:
+
+```sh
+make check-all
+```
+
+The individual targets are also available:
 
 ```sh
 make fmt
+make fmt-check
 make test
+make test-race
 make vet
 make build
+make cross-build
 ```
 
-`make build` writes the development binary to `./bin/kupilot`.
+`make fmt` updates Go source formatting. `make build` writes the development
+binary to `./bin/kupilot`; `make cross-build` writes macOS and Linux `amd64` and
+`arm64` binaries under `./bin/cross`.
 
 ## License
 
