@@ -18,8 +18,11 @@ become a general command Tool or a model-selected capability.
 ## Decision
 
 KuPilot will support the standard kubeconfig exec credential mechanism only when
-it is required by the explicitly selected local Context and only through the
-validated client-go path.
+it is required by the explicitly selected local Context. Kubeconfig resolution,
+ExecCredential schemas and codecs, and Kubernetes transport construction use
+client-go. The Kubernetes adapter owns the bounded process invocation so that
+Context cancellation and environment filtering do not depend on client-go's
+process-global exec authenticator.
 
 Typed configuration provides a strict-deny mode. When enabled, KuPilot rejects a
 Context that requires exec authentication before launching the program. The
@@ -31,6 +34,8 @@ Runtime requirements are:
 
 - Launch the resolved program directly, never through a shell or a command
   string.
+- Accept only `client.authentication.k8s.io/v1` and `v1beta1` credentials in
+  non-interactive mode. Reject `Always` interactive mode before launch.
 - Take executable, arguments, protocol API version, and declared exec environment
   only from the selected kubeconfig after local validation. The model, user
   question, Session, Tool, and Kubernetes data cannot modify them.
@@ -42,8 +47,9 @@ Runtime requirements are:
 - Feed protocol output only to the credential decoder. Never render, log,
   persist, include in safe errors, or send standard output or standard error to
   the model.
-- Bound standard error and translate failure into a stable safe class without
-  copying vendor text.
+- Bound standard output before decoding, bound standard error without exposing
+  it, and translate failure into a stable safe class without copying vendor
+  text.
 - Never provide interactive terminal access unless client-go and TUI behavior
   can remain bounded, cancellable, and deterministic on supported platforms.
 
@@ -100,8 +106,8 @@ widen the selected ClusterScope.
 
 Official client-go APIs and process-control tests must verify:
 
-1. Supported exec credential API versions, cache behavior, interactive-mode
-   behavior, environment construction, and cancellation hooks.
+1. Supported exec credential API versions, bundle-local cache behavior,
+   non-interactive policy, environment construction, and cancellation hooks.
 2. Strict-deny behavior before launch and safe identification of an exec-related
    Context without exposing sensitive fields.
 3. Direct launch without a shell, removal of the model key environment source,
@@ -126,5 +132,6 @@ with the compatibility contract.
 ## References
 
 - [Security Threat Model](../security.md)
+- [Kubernetes Compatibility](../kubernetes-compatibility.md)
 - [ADR-0007: Use client-go Behind Narrow Kubernetes Ports](0007-use-client-go-behind-narrow-kubernetes-ports.md)
 - [ADR-0021: Use Ephemeral Model API Key Sources](0021-use-ephemeral-model-api-key-sources.md)

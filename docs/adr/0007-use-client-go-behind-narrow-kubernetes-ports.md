@@ -119,6 +119,7 @@ admitted.
 ## References
 
 - [Architecture](../architecture.md)
+- [Kubernetes Compatibility](../kubernetes-compatibility.md)
 - [Scope](../scope.md)
 - [Security Threat Model](../security.md)
 - [ADR-0020: Contain Kubeconfig Exec Credentials](0020-contain-kubeconfig-exec-credentials.md)
