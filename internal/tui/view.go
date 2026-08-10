@@ -1,17 +1,17 @@
 package tui
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
 
 // View deterministically renders transcript, composer, suggestions, then footer.
 func (model Model) View() tea.View {
 	view := tea.NewView(model.render())
 	view.AltScreen = true
-	view.ReportFocus = false
+	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
 	return view
 }
@@ -21,101 +21,52 @@ func (model Model) render() string {
 		model.transcript.View(),
 		model.composer.View(),
 	}
-	if model.slashMenu.Open() {
+	if model.pickerOpen() {
+		sections = append(sections, model.pickerView())
+	} else if model.slashMenu.Open() {
 		sections = append(sections, model.slashMenu.View())
 	}
 	sections = append(sections, model.footerView())
 	main := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	main = lipgloss.Place(model.width, model.height, lipgloss.Left, lipgloss.Top, main)
-	if !model.dialog.Open() {
+
+	overlay := ""
+	switch {
+	case model.scopeConflict.Open():
+		overlay = model.scopeConflict.View(model.width)
+	case model.dialog.Open():
+		overlay = model.dialog.View(model.width)
+	}
+	if overlay == "" {
 		return main
 	}
 
-	dialog := model.dialog.View(model.width)
-	x := max(0, (model.width-lipgloss.Width(dialog))/2)
-	y := max(0, (model.height-lipgloss.Height(dialog))/2)
+	x := max(0, (model.width-lipgloss.Width(overlay))/2)
+	y := max(0, (model.height-lipgloss.Height(overlay))/2)
 	baseLayer := lipgloss.NewLayer(main).Z(0)
-	dialogLayer := lipgloss.NewLayer(dialog).X(x).Y(y).Z(1)
-	return lipgloss.NewCompositor(baseLayer, dialogLayer).Render()
+	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
+	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
 }
 
 func (model Model) footerView() string {
-	contextName := model.scope.Context
-	if contextName == "" {
-		contextName = "unavailable"
+	resource := ""
+	if model.resource.Kind != "" && model.resource.Name != "" {
+		resource = "res/" + model.resource.Kind + "/" + model.resource.Name
 	}
-	namespace := model.scope.Namespace
-	if namespace == "" {
-		namespace = "unavailable"
-	}
-	access := "scope unverified"
-	if model.scope.ReadOnly {
-		access = "read-only"
-	}
-	run := ""
+	run := "run/idle"
 	if model.run.Active {
-		run = " · run active"
+		run = "run/active"
+	} else if model.run.Status != "" {
+		run = "run/" + model.run.Status
 	}
-
-	fixedWidth := lipgloss.Width("ctx/ · ns/ · " + access + run)
-	nameBudget := max(4, model.width-fixedWidth)
-	contextBudget := max(2, nameBudget/2)
-	namespaceBudget := max(2, nameBudget-contextBudget)
-	line := "ctx/" + middleElide(contextName, contextBudget) +
-		" · ns/" + middleElide(namespace, namespaceBudget) + " · " + access + run
-	if lipgloss.Width(line) > model.width {
-		line = "ctx/" + middleElide(contextName, 3) + " · ns/" + middleElide(namespace, 3) + " · " + shortAccess(access)
+	modelStatus := "model/unconfigured"
+	if model.modelName != "" {
+		modelStatus = "model/" + model.modelName
 	}
-	return model.styles.footer.MaxWidth(model.width).Render(line)
-}
-
-func middleElide(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(value) <= width {
-		return value
-	}
-	if width == 1 {
-		return "…"
-	}
-	left := (width - 1) / 2
-	right := width - left - 1
-	return prefixColumns(value, left) + "…" + suffixColumns(value, right)
-}
-
-func prefixColumns(value string, width int) string {
-	var result strings.Builder
-	used := 0
-	for _, current := range value {
-		currentWidth := lipgloss.Width(string(current))
-		if used+currentWidth > width {
-			break
-		}
-		result.WriteRune(current)
-		used += currentWidth
-	}
-	return result.String()
-}
-
-func suffixColumns(value string, width int) string {
-	runes := []rune(value)
-	used := 0
-	start := len(runes)
-	for start > 0 {
-		currentWidth := lipgloss.Width(string(runes[start-1]))
-		if used+currentWidth > width {
-			break
-		}
-		start--
-		used += currentWidth
-	}
-	return string(runes[start:])
-}
-
-func shortAccess(value string) string {
-	if strings.Contains(value, "read-only") {
-		return "RO"
-	}
-	return "unverified"
+	return model.footer.View(model.width, components.FooterStatus{
+		Context: model.scope.Context, Namespace: model.scope.Namespace,
+		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
+		Resource: resource, Run: run, Model: modelStatus,
+		Privacy: "privacy/" + string(model.privacyMode),
+	})
 }

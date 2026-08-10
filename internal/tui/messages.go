@@ -25,6 +25,36 @@ type ApplicationCommandMsg struct {
 	Command application.UICommand
 }
 
+// ApplicationQueryMsg is a deferred typed completion query for an adapter.
+type ApplicationQueryMsg struct {
+	Query application.UICompletionQuery
+}
+
+// ApplicationResumeMsg is a deferred explicit Session resume request.
+type ApplicationResumeMsg struct {
+	Request application.UIResumeRequest
+}
+
+// CompletionResultMsg carries one bounded typed Picker result.
+type CompletionResultMsg struct {
+	Result application.UICompletionResult
+}
+
+// ResumeResultMsg carries one safe resumed Session container result.
+type ResumeResultMsg struct {
+	Result application.UIResumeResult
+}
+
+// ScopeResultMsg carries one request-bound fake scope activation result.
+type ScopeResultMsg struct {
+	Result application.UIScopeResult
+}
+
+// ResourceSelectionResultMsg carries one request-bound ResourceRef result.
+type ResourceSelectionResultMsg struct {
+	Result application.UIResourceSelectionResult
+}
+
 func sanitizeExternalText(value string, limit int) string {
 	value = strings.ToValidUTF8(value, "�")
 	value = strings.ReplaceAll(value, "\r\n", "\n")

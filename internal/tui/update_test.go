@@ -176,7 +176,6 @@ func TestUpdateSlashSelectionDispatchAndDenials(t *testing.T) {
 		wantCommand bool
 		wantDialog  bool
 	}{
-		{name: "typed context intent", draft: "/context dev", wantKind: application.UICommandSelectContext, wantText: "dev", wantCommand: true},
 		{name: "literal slash is chat", draft: "//help", wantKind: application.UICommandSubmitQuestion, wantText: "/help", wantCommand: true},
 		{name: "multiline slash is chat", draft: "/help\nexplain", wantKind: application.UICommandSubmitQuestion, wantText: "/help\nexplain", wantCommand: true},
 		{name: "unknown slash", draft: "/does-not-exist", wantDialog: true},
@@ -229,8 +228,12 @@ func TestUpdateSlashMenuFiltersNavigatesAndCompletes(t *testing.T) {
 		t.Fatal("direction keys did not change selection")
 	}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyTab})
-	if cmd != nil {
-		t.Fatal("Tab returned an external action")
+	if cmd == nil {
+		t.Fatal("Tab did not request typed Resource completion")
+	}
+	message, ok := cmd().(ApplicationQueryMsg)
+	if !ok || message.Query.Kind != application.UICompletionResource {
+		t.Fatalf("Tab command = %#v", cmd())
 	}
 	if got := model.composer.Value(); got != "/resource " {
 		t.Fatalf("completed draft = %q", got)

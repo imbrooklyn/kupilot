@@ -26,15 +26,19 @@ const (
 	UICommandRenameSession   UICommandKind = "rename_session"
 	UICommandShowPrivacy     UICommandKind = "show_privacy"
 	UICommandCancelRun       UICommandKind = "cancel_run"
+	UICommandActivateScope   UICommandKind = "activate_scope"
 )
 
 // UICommand contains only the typed intent data needed by the current TUI.
 // It carries no Bubble Tea value, callback, client, credential, or write path.
 type UICommand struct {
 	Kind                    UICommandKind
+	RequestID               uint64
 	Text                    string
 	RunID                   domain.AgentRunID
 	ExpectedScopeGeneration int64
+	Scope                   *domain.ScopeCandidate
+	Resource                *domain.ResourceRef
 }
 
 // Validate checks payload exclusivity and bounded delivery data.
@@ -44,23 +48,49 @@ func (command UICommand) Validate() error {
 	}
 	switch command.Kind {
 	case UICommandSubmitQuestion:
-		if command.RunID != "" || command.ExpectedScopeGeneration < 1 || !validUICommandText(command.Text, MaxQuestionBytes) {
+		if command.RequestID != 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || command.Resource != nil || !validUICommandText(command.Text, MaxQuestionBytes) {
 			return ErrInvalidUICommand
 		}
-	case UICommandSelectNamespace, UICommandSelectResource:
-		if command.RunID != "" || command.ExpectedScopeGeneration < 1 || len(command.Text) > 1024 || !utf8.ValidString(command.Text) {
+	case UICommandSelectContext:
+		if command.RequestID == 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
+			!validUICommandText(command.Text, 253) {
 			return ErrInvalidUICommand
 		}
-	case UICommandSelectContext, UICommandResumeSession, UICommandRenameSession:
-		if command.RunID != "" || len(command.Text) > 1024 || !utf8.ValidString(command.Text) {
+	case UICommandSelectNamespace:
+		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || command.Resource != nil || !validUICommandText(command.Text, 63) {
+			return ErrInvalidUICommand
+		}
+	case UICommandSelectResource:
+		clear := command.Text == "clear" && command.Resource == nil
+		selectCandidate := command.Text == "" && command.Resource != nil && command.Resource.Validate() == nil
+		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || (!clear && !selectCandidate) {
+			return ErrInvalidUICommand
+		}
+	case UICommandActivateScope:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.Resource != nil ||
+			command.Scope == nil || command.Scope.Validate() != nil {
+			return ErrInvalidUICommand
+		}
+	case UICommandResumeSession:
+		if command.RequestID == 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
+			!domain.SessionID(command.Text).Valid() {
+			return ErrInvalidUICommand
+		}
+	case UICommandRenameSession:
+		if command.RequestID != 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
+			len(command.Text) > 512 || !utf8.ValidString(command.Text) {
 			return ErrInvalidUICommand
 		}
 	case UICommandNewSession, UICommandShowPrivacy:
-		if command.RunID != "" || command.Text != "" {
+		if command.RequestID != 0 || command.RunID != "" || command.Text != "" || command.Scope != nil || command.Resource != nil {
 			return ErrInvalidUICommand
 		}
 	case UICommandCancelRun:
-		if !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 {
+		if command.RequestID != 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || command.Resource != nil {
 			return ErrInvalidUICommand
 		}
 	default:

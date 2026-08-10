@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
@@ -9,11 +11,12 @@ import (
 )
 
 const (
-	MinComposerRows = components.MinComposerRows
-	MaxComposerRows = components.MaxComposerRows
+	MinComposerRows     = components.MinComposerRows
+	MaxComposerRows     = components.MaxComposerRows
+	MaxPickerCandidates = components.MaxPickerCandidates
 )
 
-// Focus identifies the root keyboard-priority owner. Menus keep composer focus.
+// Focus identifies the root keyboard-priority owner. Pickers keep composer focus.
 type Focus uint8
 
 const (
@@ -28,6 +31,29 @@ type ScopeView struct {
 	Namespace  string
 	Generation int64
 	ReadOnly   bool
+	Switching  bool
+}
+
+// ResourceView is one safe current ResourceRef projection.
+type ResourceView struct {
+	APIVersion string
+	Kind       string
+	Namespace  string
+	Name       string
+}
+
+// SessionView distinguishes a new Session from safely resumed history.
+type SessionView struct {
+	ID      domain.SessionID
+	Title   string
+	Resumed bool
+}
+
+// StartupView exposes deterministic startup state without owning startup I/O.
+type StartupView struct {
+	Intent application.UIStartIntent
+	Ready  bool
+	Failed bool
 }
 
 // RunView is the accepted ordered projection for the active or last AgentRun.
@@ -38,30 +64,71 @@ type RunView struct {
 	Active          bool
 	Terminal        bool
 	StreamedText    string
+	Status          string
 }
 
-// Config supplies pure initial UI state; it contains no I/O dependency.
+// Config supplies pure initial UI state; it contains no infrastructure client.
 type Config struct {
 	Width          int
 	Height         int
 	Theme          ThemeMode
 	DarkBackground bool
+	NoColor        bool
+	StartIntent    application.UIStartIntent
 	Scope          ScopeView
+	Resource       ResourceView
+	ModelName      string
+	PrivacyMode    domain.PrivacyMode
 }
+
+type resumeOrigin uint8
+
+const (
+	resumeOriginNone resumeOrigin = iota
+	resumeOriginTopLevel
+	resumeOriginInTUI
+)
 
 // Model is the root Bubble Tea state and owns exactly one editable composer.
 type Model struct {
-	width      int
-	height     int
-	focus      Focus
-	scope      ScopeView
-	run        RunView
-	composer   components.Composer
-	transcript components.Transcript
-	slashMenu  components.SlashMenu
-	dialog     components.ErrorDialog
-	styles     styleSet
-	keymap     KeyMap
+	width       int
+	height      int
+	focus       Focus
+	scope       ScopeView
+	resource    ResourceView
+	session     SessionView
+	startup     StartupView
+	run         RunView
+	modelName   string
+	privacyMode domain.PrivacyMode
+
+	composer        components.Composer
+	transcript      components.Transcript
+	slashMenu       components.SlashMenu
+	contextPicker   components.ContextPicker
+	namespacePicker components.NamespacePicker
+	resourcePicker  components.ResourcePicker
+	sessionPicker   components.SessionPicker
+	dialog          components.ErrorDialog
+	scopeConflict   components.ScopeConflictDialog
+	footer          components.Footer
+
+	activePicker      application.UICompletionKind
+	pendingCompletion application.UICompletionQuery
+	pendingResume     application.UIResumeRequest
+	pendingResumed    *application.UIResumedSession
+	resumeOrigin      resumeOrigin
+	nextRequestID     uint64
+	initialQuery      application.UICompletionQuery
+	initialResume     application.UIResumeRequest
+	pendingScopeID    uint64
+	pendingResourceID uint64
+	pendingResource   ResourceView
+	quitAfterCancel   bool
+	terminalFocused   bool
+
+	styles styleSet
+	keymap KeyMap
 }
 
 // NewModel constructs a pure TUI core with no Application or infrastructure I/O.
@@ -74,39 +141,108 @@ func NewModel(config Config) Model {
 	if height <= 0 {
 		height = 24
 	}
-	styles := newStyleSet(config.Theme, config.DarkBackground)
-	model := Model{
-		width:      width,
-		height:     height,
-		focus:      FocusComposer,
-		scope:      sanitizedScope(config.Scope),
-		composer:   components.NewComposer(styles.composer, application.MaxQuestionBytes),
-		transcript: components.NewTranscript(styles.transcript, styles.toolSteps),
-		slashMenu:  components.NewSlashMenu(styles.slashMenu),
-		dialog:     components.NewErrorDialog(styles.dialog),
-		styles:     styles,
-		keymap:     DefaultKeyMap(),
+	theme := config.Theme
+	if config.NoColor {
+		theme = ThemeNoColor
 	}
+	styles := newStyleSet(theme, config.DarkBackground)
+	privacy := config.PrivacyMode
+	if privacy != domain.PrivacyModeStandard && privacy != domain.PrivacyModeMinimal {
+		privacy = domain.PrivacyModeStandard
+	}
+	model := Model{
+		width: width, height: height, focus: FocusComposer,
+		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
+		modelName: sanitizeExternalText(config.ModelName, 256), privacyMode: privacy,
+		composer:        components.NewComposer(styles.composer, application.MaxQuestionBytes),
+		transcript:      components.NewTranscript(styles.transcript, styles.toolSteps),
+		slashMenu:       components.NewSlashMenu(styles.slashMenu),
+		contextPicker:   components.NewContextPicker(styles.picker),
+		namespacePicker: components.NewNamespacePicker(styles.picker),
+		resourcePicker:  components.NewResourcePicker(styles.picker),
+		sessionPicker:   components.NewSessionPicker(styles.picker),
+		dialog:          components.NewErrorDialog(styles.dialog),
+		scopeConflict:   components.NewScopeConflictDialog(styles.scopeConflict),
+		footer:          components.NewFooter(styles.footer),
+		styles:          styles, keymap: DefaultKeyMap(), terminalFocused: true,
+	}
+	model.configureStartup(config.StartIntent)
 	model.reflow()
 	return model
 }
 
 func sanitizedScope(scope ScopeView) ScopeView {
-	scope.Context = sanitizeExternalText(scope.Context, 256)
-	scope.Namespace = sanitizeExternalText(scope.Namespace, 256)
+	scope.Context = sanitizeExternalText(scope.Context, 253)
+	scope.Namespace = sanitizeExternalText(scope.Namespace, 63)
 	if scope.Generation < 0 {
 		scope.Generation = 0
 	}
 	return scope
 }
 
-// Init performs no I/O; the composer is focused during construction.
-func (model Model) Init() tea.Cmd { return nil }
+func sanitizedResource(resource ResourceView) ResourceView {
+	resource.APIVersion = sanitizeExternalText(resource.APIVersion, 253)
+	resource.Kind = sanitizeExternalText(resource.Kind, 63)
+	resource.Namespace = sanitizeExternalText(resource.Namespace, 63)
+	resource.Name = sanitizeExternalText(resource.Name, 253)
+	if resource == (ResourceView{}) {
+		return resource
+	}
+	reference := domain.ResourceRef{
+		APIVersion: resource.APIVersion, Kind: resource.Kind,
+		Namespace: resource.Namespace, Name: resource.Name,
+	}
+	if reference.Validate() != nil {
+		return ResourceView{}
+	}
+	return resource
+}
+
+func (model *Model) configureStartup(intent application.UIStartIntent) {
+	if intent.Kind == "" {
+		intent = application.UIStartIntent{Kind: application.UIStartNew}
+	}
+	model.startup.Intent = intent
+	if intent.Validate() != nil {
+		model.startup.Failed = true
+		model.showDialog("Startup unavailable", "The Session start intent could not be accepted safely.")
+		return
+	}
+	switch intent.Kind {
+	case application.UIStartNew:
+		model.startup.Ready = true
+	case application.UIStartResumePicker:
+		model.resumeOrigin = resumeOriginTopLevel
+		model.composer.SetValue("/resume ")
+		query := model.openCompletion(application.UICompletionSession, "", resumeOriginTopLevel)
+		model.initialQuery = model.pendingCompletion
+		_ = query
+	case application.UIStartResumeID:
+		request := model.beginResume(application.UIResumeExact, intent.SessionID, resumeOriginTopLevel)
+		model.initialResume = model.pendingResume
+		_ = request
+	case application.UIStartResumeLast:
+		request := model.beginResume(application.UIResumeLast, "", resumeOriginTopLevel)
+		model.initialResume = model.pendingResume
+		_ = request
+	}
+}
+
+// Init emits only the typed Application request selected during construction.
+func (model Model) Init() tea.Cmd {
+	if model.initialQuery.RequestID != 0 {
+		return applicationQuery(model.initialQuery)
+	}
+	if model.initialResume.RequestID != 0 {
+		return applicationResume(model.initialResume)
+	}
+	return nil
+}
 
 // EditorCount is the structural one-editor invariant.
 func (model Model) EditorCount() int { return 1 }
 
-// FocusedEditorCount reports zero under a modal and one otherwise.
+// FocusedEditorCount reports zero under a modal or terminal blur and one otherwise.
 func (model Model) FocusedEditorCount() int {
 	if model.composer.Focused() {
 		return 1
@@ -114,10 +250,34 @@ func (model Model) FocusedEditorCount() int {
 	return 0
 }
 
+func (model *Model) nextUIRequestID() uint64 {
+	model.nextRequestID++
+	if model.nextRequestID == 0 {
+		model.nextRequestID++
+	}
+	return model.nextRequestID
+}
+
 func (model *Model) reflow() {
+	composerRows := MaxComposerRows
+	if model.height < 20 {
+		composerRows = max(MinComposerRows, model.height/3)
+	}
+	model.composer.SetMaxRows(composerRows)
 	model.composer.SetWidth(model.width)
-	availableSuggestions := max(1, model.height-model.composer.FrameHeight()-2)
-	model.slashMenu.SetMaxVisible(min(MaxSlashCandidates, availableSuggestions))
-	transcriptHeight := model.height - model.composer.FrameHeight() - model.slashMenu.Height() - 1
+	model.slashMenu.SetWidth(model.width)
+	model.contextPicker.SetWidth(model.width)
+	model.namespacePicker.SetWidth(model.width)
+	model.resourcePicker.SetWidth(model.width)
+	model.sessionPicker.SetWidth(model.width)
+	footerHeight := 1 + strings.Count(model.footerView(), "\n")
+	availableSuggestions := max(1, model.height-model.composer.FrameHeight()-footerHeight-1)
+	visible := min(MaxPickerCandidates, availableSuggestions)
+	model.slashMenu.SetMaxVisible(visible)
+	model.contextPicker.SetMaxVisible(visible)
+	model.namespacePicker.SetMaxVisible(visible)
+	model.resourcePicker.SetMaxVisible(visible)
+	model.sessionPicker.SetMaxVisible(visible)
+	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight
 	model.transcript.SetSize(model.width, max(1, transcriptHeight))
 }

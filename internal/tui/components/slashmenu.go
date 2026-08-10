@@ -31,12 +31,13 @@ type SlashMenu struct {
 	candidates []SlashCandidate
 	selected   int
 	maxVisible int
+	width      int
 	styles     SlashMenuStyles
 }
 
 // NewSlashMenu creates a closed menu with no input control of its own.
 func NewSlashMenu(styles SlashMenuStyles) SlashMenu {
-	return SlashMenu{maxVisible: MaxSlashCandidates, styles: styles}
+	return SlashMenu{maxVisible: MaxSlashCandidates, width: 80, styles: styles}
 }
 
 // SetCandidates opens the menu and defensively copies at most eight rows.
@@ -58,6 +59,9 @@ func (menu *SlashMenu) SetMaxVisible(limit int) {
 		menu.candidates = menu.candidates[:menu.maxVisible]
 	}
 }
+
+// SetWidth bounds each candidate row without creating horizontal scrolling.
+func (menu *SlashMenu) SetWidth(width int) { menu.width = max(1, width) }
 
 // Close removes the candidate region without changing composer text.
 func (menu *SlashMenu) Close() {
@@ -136,7 +140,7 @@ func (menu SlashMenu) View() string {
 				line += " — " + candidate.DisabledReason
 			}
 		}
-		lines = append(lines, style.Render(line))
+		lines = append(lines, style.Render(middleElideColumns(line, menu.width)))
 	}
 	return strings.Join(lines, "\n")
 }

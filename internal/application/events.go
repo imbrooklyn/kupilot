@@ -6,6 +6,64 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
+// UIScopeResult is one request-bound scope activation projection.
+type UIScopeResult struct {
+	RequestID          uint64
+	ExpectedGeneration int64
+	ScopeGeneration    int64
+	Context            string
+	Namespace          string
+	ReadOnly           bool
+	Failure            UIQueryFailureCode
+}
+
+// Validate checks success and fail-closed scope result shapes.
+func (result UIScopeResult) Validate() error {
+	if result.RequestID == 0 || result.ExpectedGeneration < 0 || result.ScopeGeneration <= result.ExpectedGeneration {
+		return ErrInvalidUIEvent
+	}
+	if result.Failure != "" {
+		if !result.Failure.valid() || result.Context != "" || result.Namespace != "" || result.ReadOnly {
+			return ErrInvalidUIEvent
+		}
+		return nil
+	}
+	candidate := domain.ScopeCandidate{Context: result.Context, Namespace: result.Namespace}
+	if candidate.Validate() != nil || !result.ReadOnly {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// UIResourceSelectionResult accepts or rejects one request-bound ResourceRef.
+type UIResourceSelectionResult struct {
+	RequestID       uint64
+	ScopeGeneration int64
+	Resource        *domain.ResourceRef
+	Cleared         bool
+	Failure         UIQueryFailureCode
+}
+
+// Validate checks scope binding and exclusive selected, cleared, or failed state.
+func (result UIResourceSelectionResult) Validate() error {
+	if result.RequestID == 0 || result.ScopeGeneration < 1 {
+		return ErrInvalidUIEvent
+	}
+	if result.Failure != "" {
+		if !result.Failure.valid() || result.Resource != nil || result.Cleared {
+			return ErrInvalidUIEvent
+		}
+		return nil
+	}
+	if result.Cleared == (result.Resource != nil) {
+		return ErrInvalidUIEvent
+	}
+	if result.Resource != nil && result.Resource.Validate() != nil {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
 // ErrInvalidUIEvent reports an invalid UI projection without echoing its data.
 var ErrInvalidUIEvent = errors.New("UI event data is invalid")
 

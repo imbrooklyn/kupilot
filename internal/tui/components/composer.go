@@ -103,6 +103,15 @@ func (composer *Composer) SetWidth(width int) {
 	composer.input.SetWidth(max(1, width-4))
 }
 
+// SetMaxRows tightens the editor for a small terminal while preserving 3-8 rows.
+func (composer *Composer) SetMaxRows(rows int) {
+	rows = max(MinComposerRows, min(rows, MaxComposerRows))
+	composer.input.MaxHeight = rows
+	if composer.input.Height() > rows {
+		composer.input.SetHeight(rows)
+	}
+}
+
 // Value returns the current draft.
 func (composer Composer) Value() string { return composer.input.Value() }
 

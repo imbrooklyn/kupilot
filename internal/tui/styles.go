@@ -75,13 +75,15 @@ func SemanticPaletteFor(mode ThemeMode, darkBackground bool) SemanticPalette {
 }
 
 type styleSet struct {
-	palette    SemanticPalette
-	composer   components.ComposerStyles
-	transcript components.TranscriptStyles
-	toolSteps  components.ToolStepStyles
-	slashMenu  components.SlashMenuStyles
-	dialog     components.DialogStyles
-	footer     lipgloss.Style
+	palette       SemanticPalette
+	composer      components.ComposerStyles
+	transcript    components.TranscriptStyles
+	toolSteps     components.ToolStepStyles
+	slashMenu     components.SlashMenuStyles
+	picker        components.PickerStyles
+	dialog        components.DialogStyles
+	scopeConflict components.ScopeConflictStyles
+	footer        components.FooterStyles
 }
 
 func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
@@ -147,6 +149,17 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			Body:  base,
 			Hint:  muted,
 		},
-		footer: muted,
+		picker: components.PickerStyles{
+			Normal: base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
+			Muted: muted, Danger: lipgloss.NewStyle().Foreground(palette.Danger),
+		},
+		scopeConflict: components.ScopeConflictStyles{
+			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),
+			Title: lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
+			Body:  base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true), Muted: muted,
+		},
+		footer: components.FooterStyles{
+			Primary: base, Secondary: muted, Warning: lipgloss.NewStyle().Foreground(palette.Warning),
+		},
 	}
 }

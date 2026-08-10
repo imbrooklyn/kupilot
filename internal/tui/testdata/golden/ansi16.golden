@@ -1,0 +1,18 @@
+palette enabled=true base=#c0c0c0 muted=#808080 surface=#000000 border=#808080 accent=#0000ff success=#008000 warning=#808000 danger=#800000
+╭──────────────────────────────────────────────────────────────────╮
+│ Why is payment-api unavailable?                                  │
+╰──────────────────────────────────────────────────────────────────╯
+<blank rows=1>
+The Deployment has no available replicas.
+└─ ✓ get_resource · succeeded · Inspect the selected Deployment. · No av
+ailable replicas. · 2 evidence
+<blank rows=6>
+╭──────────────────────────────────────────────────────────────────╮
+│ /resource pay                                                    │
+│                                                                  │
+│                                                                  │
+╰──────────────────────────────────────────────────────────────────╯
+› Deployment/payment-api · ns/payments · Unavailable
+  Pod/payment-api-7d9 · ns/payments · Pending
+ctx/development · ns/payments · read-only
+res/Deployment/payment-api · run/completed · model/diagnostic-model

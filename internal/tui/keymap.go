@@ -15,6 +15,7 @@ type KeyMap struct {
 	Close          key.Binding
 	TranscriptUp   key.Binding
 	TranscriptDown key.Binding
+	Cancel         key.Binding
 	Quit           key.Binding
 }
 
@@ -32,6 +33,7 @@ func DefaultKeyMap() KeyMap {
 		Close:          key.NewBinding(key.WithKeys("esc")),
 		TranscriptUp:   key.NewBinding(key.WithKeys("pgup")),
 		TranscriptDown: key.NewBinding(key.WithKeys("pgdown")),
+		Cancel:         key.NewBinding(key.WithKeys("ctrl+x")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c")),
 	}
 }

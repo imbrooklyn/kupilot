@@ -46,5 +46,5 @@ func (dialog ErrorDialog) View(width int) string {
 	content := dialog.styles.Title.Render(dialog.title) + "\n\n" +
 		dialog.styles.Body.Render(dialog.body) + "\n\n" +
 		dialog.styles.Hint.Render("Esc or Enter to close")
-	return dialog.styles.Frame.Width(max(20, min(width-8, 72))).Render(content)
+	return dialog.styles.Frame.Width(max(1, min(width-6, 72))).Render(content)
 }

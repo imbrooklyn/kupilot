@@ -31,15 +31,45 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		model.width = max(1, message.Width)
 		model.height = max(1, message.Height)
-		model.syncSlashMenu()
 		model.reflow()
 		return model, nil
 	case ApplicationEventMsg:
 		model.acceptApplicationEvent(message.Event)
 		model.reflow()
+		if model.quitAfterCancel && !model.run.Active && model.run.Terminal {
+			model.quitAfterCancel = false
+			return model, quitCommand()
+		}
+		return model, nil
+	case CompletionResultMsg:
+		model.acceptCompletionResult(message.Result)
+		model.reflow()
+		return model, nil
+	case ResumeResultMsg:
+		model.acceptResumeResult(message.Result)
+		model.reflow()
+		return model, nil
+	case ScopeResultMsg:
+		model.acceptScopeResult(message.Result)
+		model.reflow()
+		return model, nil
+	case ResourceSelectionResultMsg:
+		model.acceptResourceSelectionResult(message.Result)
+		model.reflow()
+		return model, nil
+	case tea.BlurMsg:
+		model.terminalFocused = false
+		model.composer.Blur()
+		return model, nil
+	case tea.FocusMsg:
+		model.terminalFocused = true
+		if !model.dialog.Open() && !model.scopeConflict.Open() {
+			_ = model.composer.Focus()
+			model.focus = FocusComposer
+		}
 		return model, nil
 	case tea.PasteMsg:
-		if model.dialog.Open() {
+		if model.dialog.Open() || model.scopeConflict.Open() || !model.terminalFocused {
 			return model, nil
 		}
 		return model.updatePaste(message)
@@ -65,13 +95,26 @@ func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	model.composer = updated
-	model.syncSlashMenu()
+	queryCmd := model.syncSuggestionsAfterEdit()
 	model.reflow()
-	return model, cmd
+	return model, combineCommands(cmd, queryCmd)
 }
 
 func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	message.Text = sanitizeExternalText(message.Text, 0)
+	if !model.terminalFocused {
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Quit) {
+		if model.run.Active {
+			model.quitAfterCancel = true
+			return model, model.cancelRunCommand()
+		}
+		return model, quitCommand()
+	}
+	if model.scopeConflict.Open() {
+		return model.updateScopeConflictKey(message)
+	}
 	if model.dialog.Open() {
 		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
 			model.closeDialog()
@@ -79,19 +122,39 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 
-	if key.Matches(message, model.keymap.Quit) {
-		if model.run.Active {
-			model.showDialog("Run active", "Cancel the active AgentRun before exiting.")
-			return model, nil
-		}
-		return model, quitCommand()
-	}
 	if key.Matches(message, model.keymap.Close) {
+		if model.pickerOpen() {
+			return model.cancelPicker()
+		}
 		if model.slashMenu.Open() {
 			model.slashMenu.Close()
 			model.reflow()
 		}
 		return model, nil
+	}
+	if key.Matches(message, model.keymap.Cancel) {
+		if model.run.Active {
+			return model, model.cancelRunCommand()
+		}
+		return model, nil
+	}
+	if model.pickerOpen() {
+		switch {
+		case key.Matches(message, model.keymap.Reverse), key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.PreviousAlt):
+			model.movePicker(-1)
+			return model, nil
+		case key.Matches(message, model.keymap.Next), key.Matches(message, model.keymap.NextAlt):
+			model.movePicker(1)
+			return model, nil
+		case key.Matches(message, model.keymap.Complete):
+			model.completePickerSelection()
+			model.reflow()
+			return model, nil
+		case key.Matches(message, model.keymap.Submit):
+			cmd := model.selectPickerCandidate()
+			model.reflow()
+			return model, cmd
+		}
 	}
 	if model.slashMenu.Open() {
 		switch {
@@ -103,8 +166,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return model, nil
 		case key.Matches(message, model.keymap.Complete):
 			model.completeSlashSelection()
+			queryCmd := model.syncSuggestionsAfterEdit()
 			model.reflow()
-			return model, nil
+			return model, queryCmd
 		}
 	}
 	if key.Matches(message, model.keymap.Complete) {
@@ -123,14 +187,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if key.Matches(message, model.keymap.Previous) && model.composer.HistoryEligible() {
 		model.composer.PreviousHistory()
-		model.syncSlashMenu()
+		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
-		return model, nil
+		return model, queryCmd
 	}
 	if key.Matches(message, model.keymap.Next) && model.composer.NextHistory() {
-		model.syncSlashMenu()
+		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
-		return model, nil
+		return model, queryCmd
 	}
 
 	updated, cmd, err := model.composer.Update(message)
@@ -139,9 +203,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	model.composer = updated
-	model.syncSlashMenu()
+	queryCmd := model.syncSuggestionsAfterEdit()
 	model.reflow()
-	return model, cmd
+	return model, combineCommands(cmd, queryCmd)
 }
 
 func (model Model) submitDraft() (tea.Model, tea.Cmd) {
@@ -162,8 +226,9 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 		if model.slashMenu.Open() {
 			if _, ok := model.slashMenu.SelectedCandidate(); ok {
 				model.completeSlashSelection()
+				queryCmd := model.syncSuggestionsAfterEdit()
 				model.reflow()
-				return model, nil
+				return model, queryCmd
 			}
 		}
 		model.showDialog("Unknown command", "Unknown Slash command. Type /help for available commands.")
@@ -171,8 +236,9 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	case DraftSlash:
 		if parsed.Command == nil {
 			model.completeSlashSelection()
+			queryCmd := model.syncSuggestionsAfterEdit()
 			model.reflow()
-			return model, nil
+			return model, queryCmd
 		}
 		return model.executeSlash(*parsed.Command, parsed.Argument)
 	case DraftEscapedChat:
@@ -181,6 +247,18 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 
 	if model.run.Active {
 		model.showDialog("Run active", "Cancel the active AgentRun before sending another question.")
+		return model, nil
+	}
+	if model.scope.Switching {
+		model.showDialog("Scope switching", "Wait for scope activation to finish before sending a question.")
+		return model, nil
+	}
+	if model.scope.Generation < 1 || !model.scope.ReadOnly {
+		model.showDialog("Scope required", "Select and verify one Context and Namespace before sending a question.")
+		return model, nil
+	}
+	if !model.startup.Ready {
+		model.showDialog("Session loading", "Finish or cancel the explicit Session resume before sending a question.")
 		return model, nil
 	}
 	command := application.UICommand{
@@ -208,6 +286,32 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 	if enabled, reason := model.slashAvailability(command); !enabled {
 		model.showDialog("Command unavailable", reason)
 		return model, nil
+	}
+	if command.Name == "resource" && argument == "clear" {
+		requestID := model.nextUIRequestID()
+		intent := application.UICommand{
+			Kind: application.UICommandSelectResource, RequestID: requestID,
+			Text: "clear", ExpectedScopeGeneration: model.scope.Generation,
+		}
+		if intent.Validate() != nil {
+			model.showDialog("Cannot continue", "The Resource selection could not be cleared safely.")
+			return model, nil
+		}
+		model.pendingResourceID = requestID
+		model.pendingResource = ResourceView{}
+		model.composer.Reset()
+		model.slashMenu.Close()
+		return model, applicationCommand(intent)
+	}
+	if kind := completionKindForCommand(command.Name); kind != "" {
+		prefix := "/" + command.Name + " "
+		model.composer.SetValue(prefix + argument)
+		origin := resumeOriginNone
+		if kind == application.UICompletionSession {
+			origin = resumeOriginInTUI
+		}
+		queryCmd := model.openCompletion(kind, argument, origin)
+		return model, queryCmd
 	}
 
 	switch command.action {
@@ -252,6 +356,12 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 }
 
 func (model Model) slashAvailability(command SlashCommand) (bool, string) {
+	if model.scope.Switching {
+		switch command.Name {
+		case "context", "namespace", "resource":
+			return false, "Wait for the current scope activation to finish."
+		}
+	}
 	switch command.Name {
 	case "cancel":
 		if !model.run.Active {
@@ -299,7 +409,6 @@ func (model *Model) completeSlashSelection() {
 		value += " "
 	}
 	model.composer.SetValue(value)
-	model.syncSlashMenu()
 }
 
 func (model *Model) showDialog(title, body string) {
@@ -310,7 +419,9 @@ func (model *Model) showDialog(title, body string) {
 
 func (model *Model) closeDialog() {
 	model.dialog.Close()
-	_ = model.composer.Focus()
+	if model.terminalFocused {
+		_ = model.composer.Focus()
+	}
 	model.focus = FocusComposer
 }
 
@@ -334,17 +445,114 @@ func quitCommand() tea.Cmd {
 	return func() tea.Msg { return tea.Quit() }
 }
 
+func combineCommands(commands ...tea.Cmd) tea.Cmd {
+	filtered := make([]tea.Cmd, 0, len(commands))
+	for _, command := range commands {
+		if command != nil {
+			filtered = append(filtered, command)
+		}
+	}
+	switch len(filtered) {
+	case 0:
+		return nil
+	case 1:
+		return filtered[0]
+	default:
+		return tea.Batch(filtered...)
+	}
+}
+
+func (model Model) cancelRunCommand() tea.Cmd {
+	command := application.UICommand{
+		Kind: application.UICommandCancelRun, RunID: model.run.RunID,
+		ExpectedScopeGeneration: model.run.ScopeGeneration,
+	}
+	if command.Validate() != nil {
+		return nil
+	}
+	return applicationCommand(command)
+}
+
+func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
+	isSession := model.activePicker == application.UICompletionSession
+	topLevel := isSession && model.resumeOrigin == resumeOriginTopLevel && !model.startup.Ready
+	model.closePickers()
+	if isSession {
+		model.composer.Reset()
+		model.resumeOrigin = resumeOriginNone
+		if !topLevel {
+			model.startup.Ready = true
+		}
+	}
+	model.reflow()
+	if topLevel {
+		return model, quitCommand()
+	}
+	return model, nil
+}
+
+func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(message, model.keymap.Close):
+		topLevel := model.resumeOrigin == resumeOriginTopLevel
+		model.scopeConflict.Close()
+		model.pendingResumed = nil
+		model.composer.Reset()
+		model.resumeOrigin = resumeOriginNone
+		if model.terminalFocused {
+			_ = model.composer.Focus()
+		}
+		model.focus = FocusComposer
+		if topLevel {
+			return model, quitCommand()
+		}
+		model.startup.Ready = true
+		return model, nil
+	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
+		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
+		key.Matches(message, model.keymap.Complete), key.Matches(message, model.keymap.Reverse):
+		model.scopeConflict.Move(1)
+		return model, nil
+	case key.Matches(message, model.keymap.Submit):
+		if model.pendingResumed == nil {
+			return model, nil
+		}
+		resumed := *model.pendingResumed
+		useSaved := model.scopeConflict.UseSavedScope()
+		model.applyResumedSession(resumed)
+		if !useSaved || resumed.SavedScope == nil {
+			return model, nil
+		}
+		scope := *resumed.SavedScope
+		requestID := model.nextUIRequestID()
+		command := application.UICommand{
+			Kind: application.UICommandActivateScope, RequestID: requestID,
+			ExpectedScopeGeneration: model.scope.Generation, Scope: &scope,
+		}
+		if command.Validate() != nil {
+			model.showDialog("Scope unavailable", "The saved scope could not be activated safely.")
+			return model, nil
+		}
+		model.pendingScopeID = requestID
+		model.scope.Switching = true
+		model.resource = ResourceView{}
+		return model, applicationCommand(command)
+	default:
+		return model, nil
+	}
+}
+
 func (model *Model) acceptApplicationEvent(event application.UIEvent) {
-	if event.Validate() != nil || event.ScopeGeneration != model.scope.Generation {
+	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation {
 		return
 	}
 	if event.Kind == application.UIEventRunStarted {
-		if event.Sequence != 1 || model.run.Active {
+		if event.Sequence != 1 || model.run.Active || !model.startup.Ready || !model.scope.ReadOnly {
 			return
 		}
 		model.run = RunView{
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
-			LastSequence: event.Sequence, Active: true,
+			LastSequence: event.Sequence, Active: true, Status: "active",
 		}
 		model.transcript.StartAgent()
 		return
@@ -392,6 +600,14 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) {
 		model.run.StreamedText = text
 		model.run.Active = false
 		model.run.Terminal = true
+		switch event.Kind {
+		case application.UIEventRunCompleted:
+			model.run.Status = "completed"
+		case application.UIEventRunCancelled:
+			model.run.Status = "cancelled"
+		default:
+			model.run.Status = "failed"
+		}
 		model.transcript.FinishAgent(text)
 	default:
 		return
