@@ -37,6 +37,20 @@ func TestStructuredUICommandsRejectMixedOrUnboundPickerData(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name:    "empty rename",
+			command: UICommand{Kind: UICommandRenameSession},
+		},
+		{
+			name:    "blank rename",
+			command: UICommand{Kind: UICommandRenameSession, Text: " "},
+			wantErr: true,
+		},
+		{
+			name:    "status carrying generation",
+			command: UICommand{Kind: UICommandShowStatus, ExpectedScopeGeneration: 7},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -59,7 +73,7 @@ func TestUIResumeAndSelectionResultsValidateExclusiveSafeShapes(t *testing.T) {
 	}
 	result := UIResumeResult{
 		RequestID: 1, Mode: UIResumeExact,
-		Session: &UIResumedSession{Session: UISessionCandidate{
+		Session: &UIResumedSession{ResumeRequestID: 1, Session: UISessionCandidate{
 			ID: sessionID, UpdatedAtUnixMillis: 1, PrivacyMode: domain.PrivacyModeStandard,
 		}},
 	}
@@ -79,8 +93,12 @@ func TestUIResumeAndSelectionResultsValidateExclusiveSafeShapes(t *testing.T) {
 		t.Fatalf("scope result validation error = %v", err)
 	}
 	scopeResult.ScopeGeneration = scopeResult.ExpectedGeneration
+	if scopeResult.Validate() != nil {
+		t.Fatal("scope result rejected a verified no-op generation")
+	}
+	scopeResult.ScopeGeneration--
 	if scopeResult.Validate() == nil {
-		t.Fatal("scope result accepted a non-advancing generation")
+		t.Fatal("scope result accepted a regressing generation")
 	}
 
 	resource := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "payments", Name: "payment-api"}

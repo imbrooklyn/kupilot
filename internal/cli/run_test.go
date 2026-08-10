@@ -21,10 +21,10 @@ func TestRunDispatchesStartIntents(t *testing.T) {
 		wantIntent StartIntent
 		wantError  string
 	}{
-		{name: "new Session", wantIntent: StartIntent{Kind: IntentNew}, wantError: "Starting a new Session is unavailable in this development build.\n"},
-		{name: "resume picker", args: []string{"resume"}, wantIntent: StartIntent{Kind: IntentResumePicker}, wantError: "Session resume is unavailable in this development build.\n"},
-		{name: "resume exact ID", args: []string{"resume", sessionID}, wantIntent: StartIntent{Kind: IntentResumeID, SessionID: sessionID}, wantError: "Session resume is unavailable in this development build.\n"},
-		{name: "resume last", args: []string{"resume", "--last"}, wantIntent: StartIntent{Kind: IntentResumeLast}, wantError: "Session resume is unavailable in this development build.\n"},
+		{name: "new Session", wantIntent: StartIntent{Kind: IntentNew}, wantError: "Starting a new Session is unavailable.\n"},
+		{name: "resume picker", args: []string{"resume"}, wantIntent: StartIntent{Kind: IntentResumePicker}, wantError: "Session resume is unavailable.\n"},
+		{name: "resume exact ID", args: []string{"resume", sessionID}, wantIntent: StartIntent{Kind: IntentResumeID, SessionID: sessionID}, wantError: "Session resume is unavailable.\n"},
+		{name: "resume last", args: []string{"resume", "--last"}, wantIntent: StartIntent{Kind: IntentResumeLast}, wantError: "Session resume is unavailable.\n"},
 	}
 
 	for _, tt := range tests {

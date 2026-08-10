@@ -1,8 +1,10 @@
 package application
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -74,6 +76,9 @@ const (
 	UICommandShowPrivacy     UICommandKind = "show_privacy"
 	UICommandCancelRun       UICommandKind = "cancel_run"
 	UICommandActivateScope   UICommandKind = "activate_scope"
+	UICommandAcceptResume    UICommandKind = "accept_resume"
+	UICommandCancelResume    UICommandKind = "cancel_resume"
+	UICommandShowStatus      UICommandKind = "show_status"
 )
 
 // UICommand contains only the typed intent data needed by the current TUI.
@@ -121,18 +126,31 @@ func (command UICommand) Validate() error {
 			command.Scope == nil || command.Scope.Validate() != nil {
 			return ErrInvalidUICommand
 		}
+	case UICommandAcceptResume:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.Resource != nil ||
+			(command.Scope != nil && command.Scope.Validate() != nil) {
+			return ErrInvalidUICommand
+		}
+	case UICommandCancelResume:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil {
+			return ErrInvalidUICommand
+		}
 	case UICommandResumeSession:
-		if command.RequestID == 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
+		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil ||
 			!domain.SessionID(command.Text).Valid() {
 			return ErrInvalidUICommand
 		}
 	case UICommandRenameSession:
 		if command.RequestID != 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
-			len(command.Text) > 512 || !utf8.ValidString(command.Text) {
+			command.ExpectedScopeGeneration != 0 ||
+			(command.Text != "" && !validUICommandText(command.Text, 512)) {
 			return ErrInvalidUICommand
 		}
-	case UICommandNewSession, UICommandShowPrivacy:
-		if command.RequestID != 0 || command.RunID != "" || command.Text != "" || command.Scope != nil || command.Resource != nil {
+	case UICommandNewSession, UICommandShowPrivacy, UICommandShowStatus:
+		if command.RequestID != 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil {
 			return ErrInvalidUICommand
 		}
 	case UICommandCancelRun:
@@ -148,4 +166,18 @@ func (command UICommand) Validate() error {
 
 func validUICommandText(value string, limit int) bool {
 	return len(value) > 0 && len(value) <= limit && utf8.ValidString(value) && strings.TrimSpace(value) != ""
+}
+
+// RenameSessionRecord is the optimistic title write owned by Application.
+type RenameSessionRecord struct {
+	SessionID       domain.SessionID
+	Title           string
+	ExpectedVersion int64
+	UpdatedAt       time.Time
+}
+
+// SessionTitleStore persists one bounded title change without exposing a
+// repository or database type.
+type SessionTitleStore interface {
+	Rename(context.Context, RenameSessionRecord) error
 }

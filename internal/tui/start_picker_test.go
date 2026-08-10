@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
@@ -91,18 +93,143 @@ func TestDirectResumeStartIntentsReachReadyOnlyAfterMatchingFakeResult(t *testin
 			if request.Mode != tt.wantMode || model.startup.Ready {
 				t.Fatalf("initial resume state = request %#v ready %v", request, model.startup.Ready)
 			}
-			model, _ = updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+			resumed := application.UIResumedSession{ResumeRequestID: request.RequestID, Session: application.UISessionCandidate{
+				ID: tt.resultID, Title: "Recovered diagnosis", UpdatedAtUnixMillis: 1,
+				Context: "current", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
+			}}
+			model, cmd := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
 				RequestID: request.RequestID, Mode: request.Mode,
-				Session: &application.UIResumedSession{Session: application.UISessionCandidate{
-					ID: tt.resultID, Title: "Recovered diagnosis", UpdatedAtUnixMillis: 1,
-					Context: "current", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
-				}},
+				Session: &resumed,
+			}})
+			accept := applicationCommandFromCmd(t, cmd)
+			if accept.Kind != application.UICommandAcceptResume || model.startup.Ready {
+				t.Fatalf("resume acceptance command = %#v, ready = %v", accept, model.startup.Ready)
+			}
+			model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+				Command: application.UICommandAcceptResume, RequestID: request.RequestID,
+				Session: &application.UISessionState{
+					ID: tt.resultID, Title: "Recovered diagnosis", PrivacyMode: domain.PrivacyModeStandard, Resumed: true,
+				},
+				Resumed: &resumed,
+				Scope: &application.UIScopeResult{
+					RequestID: request.RequestID, ExpectedGeneration: 7, ScopeGeneration: 7,
+					Context: "current", Namespace: "default", ReadOnly: true,
+				},
 			}})
 			if !model.startup.Ready || !model.session.Resumed || model.session.ID != tt.resultID || model.scopeConflict.Open() {
 				t.Fatalf("resumed state = startup %#v session %#v", model.startup, model.session)
 			}
 			assertSingleEditor(t, model)
 		})
+	}
+}
+
+func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		StartIntent: application.UIStartIntent{
+			Kind: application.UIStartResumeID, SessionID: testSessionID, ExplicitScope: true,
+			ConfiguredContext: "explicit-context",
+		},
+		Scope: ScopeView{Context: "explicit-context", Namespace: "explicit-namespace", Generation: 7, ReadOnly: true},
+	})
+	request := resumeRequestFromCmd(t, model.Init())
+	resumed := application.UIResumedSession{
+		ResumeRequestID: request.RequestID,
+		Session: application.UISessionCandidate{
+			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "saved-context", Namespace: "saved-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		SavedScope: &domain.ScopeCandidate{Context: "saved-context", Namespace: "saved-namespace"},
+	}
+	model, cmd := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
+	}})
+	command := applicationCommandFromCmd(t, cmd)
+	if model.scopeConflict.Open() || command.Kind != application.UICommandAcceptResume || command.Scope != nil ||
+		command.ExpectedScopeGeneration != model.scope.Generation {
+		t.Fatalf("explicit-scope resume state = conflict %v command %#v", model.scopeConflict.Open(), command)
+	}
+}
+
+func TestTopLevelResumeBindsUnverifiedLocalScopeChoice(t *testing.T) {
+	t.Parallel()
+
+	newModel := func() Model {
+		return NewModel(Config{
+			Width: 80, Height: 24, Theme: ThemeNoColor,
+			StartIntent: application.UIStartIntent{Kind: application.UIStartResumeID, SessionID: testSessionID},
+			Scope:       ScopeView{Context: "current-context", Namespace: "default"},
+		})
+	}
+	resumeResult := func(t *testing.T, model Model, saved domain.ScopeCandidate) (Model, tea.Cmd) {
+		t.Helper()
+		request := resumeRequestFromCmd(t, model.Init())
+		resumed := application.UIResumedSession{
+			ResumeRequestID: request.RequestID,
+			Session: application.UISessionCandidate{
+				ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+				Context: saved.Context, Namespace: saved.Namespace, PrivacyMode: domain.PrivacyModeStandard,
+			},
+			SavedScope: &saved,
+		}
+		return updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+			RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
+		}})
+	}
+
+	same, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "current-context", Namespace: "default"})
+	accept := applicationCommandFromCmd(t, command)
+	if same.scopeConflict.Open() || accept.Scope == nil || accept.Scope.Context != "current-context" ||
+		accept.ExpectedScopeGeneration != 0 {
+		t.Fatalf("same-scope acceptance = conflict %v command %#v", same.scopeConflict.Open(), accept)
+	}
+
+	different, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"})
+	if command != nil || !different.scopeConflict.Open() {
+		t.Fatal("different unverified scope did not require confirmation")
+	}
+	different, command = updateModel(t, different, tea.KeyPressMsg{Code: tea.KeyEnter})
+	accept = applicationCommandFromCmd(t, command)
+	if accept.Scope == nil || accept.Scope.Context != "current-context" || accept.Scope.Namespace != "default" {
+		t.Fatalf("keep-current acceptance = %#v", accept)
+	}
+}
+
+func TestResumeFailureDismissalExitsOnlyTopLevelFlow(t *testing.T) {
+	t.Parallel()
+
+	topLevel := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		StartIntent: application.UIStartIntent{Kind: application.UIStartResumeLast},
+	})
+	topRequest := resumeRequestFromCmd(t, topLevel.Init())
+	topLevel, _ = updateModel(t, topLevel, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: topRequest.RequestID, Mode: topRequest.Mode, Failure: application.UIQueryUnavailable,
+	}})
+	if !topLevel.dialog.Open() || !topLevel.startup.Failed {
+		t.Fatal("top-level resume failure was not visible")
+	}
+	topLevel, cmd := updateModel(t, topLevel, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !commandQuits(cmd) || topLevel.startup.Ready {
+		t.Fatal("top-level resume failure did not exit after dismissal")
+	}
+
+	inTUI := newTestModel()
+	inTUI.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	request := resumeRequestFromCmd(t, inTUI.beginResume(
+		application.UIResumeExact,
+		domain.SessionID("0198a46e-7d2a-7d34-9b6f-2df5f45a2a24"),
+		resumeOriginInTUI,
+	))
+	inTUI, _ = updateModel(t, inTUI, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: request.RequestID, Mode: request.Mode, Failure: application.UIQueryNotResumable,
+	}})
+	inTUI, cmd = updateModel(t, inTUI, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || !inTUI.startup.Ready || inTUI.session.ID != testSessionID {
+		t.Fatalf("in-TUI resume failure changed current Session: %#v", inTUI.session)
 	}
 }
 

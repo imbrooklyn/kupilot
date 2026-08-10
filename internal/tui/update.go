@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
 
@@ -46,15 +47,33 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case ResumeResultMsg:
-		model.acceptResumeResult(message.Result)
+		cmd := model.stageResumeResult(message.Result)
 		model.reflow()
-		return model, nil
+		return model, cmd
 	case ScopeResultMsg:
-		model.acceptScopeResult(message.Result)
+		model.applyScopeResult(message.Result)
 		model.reflow()
 		return model, nil
 	case ResourceSelectionResultMsg:
 		model.acceptResourceSelectionResult(message.Result)
+		model.reflow()
+		return model, nil
+	case CommandResultMsg:
+		model.acceptCommandOutcome(message.Result)
+		model.reflow()
+		return model, nil
+	case ApplicationFailureMsg:
+		if !model.acceptApplicationFailure(message) {
+			return model, nil
+		}
+		body := sanitizeExternalText(message.Message, 512)
+		if body == "" {
+			body = "The requested operation could not be completed safely."
+		}
+		model.showDialog("Operation unavailable", body)
+		if model.resumeOrigin == resumeOriginTopLevel && !model.startup.Ready {
+			model.startup.Failed = true
+		}
 		model.reflow()
 		return model, nil
 	case tea.BlurMsg:
@@ -87,6 +106,70 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
+	switch {
+	case message.Query != "":
+		if model.pendingCompletion.RequestID == 0 || message.RequestID != model.pendingCompletion.RequestID ||
+			message.Query != model.pendingCompletion.Kind || message.ScopeGeneration != model.pendingCompletion.ScopeGeneration ||
+			message.ScopeGeneration != model.scope.Generation || message.Query != model.activePicker {
+			return false
+		}
+		model.pendingCompletion = application.UICompletionQuery{}
+		model.setPickerFailed(message.Query)
+	case message.Resume != "":
+		if model.pendingResume.RequestID == 0 || message.RequestID != model.pendingResume.RequestID ||
+			message.Resume != model.pendingResume.Mode {
+			return false
+		}
+		model.pendingResume = application.UIResumeRequest{}
+		model.pendingResumed = nil
+		if model.resumeOrigin == resumeOriginInTUI {
+			model.startup.Ready = true
+		}
+	case message.Command != "":
+		switch message.Command {
+		case application.UICommandAcceptResume, application.UICommandSelectContext,
+			application.UICommandSelectNamespace, application.UICommandActivateScope:
+			if model.pendingScopeID == 0 || message.RequestID != model.pendingScopeID ||
+				message.ScopeGeneration != model.scope.Generation {
+				return false
+			}
+			model.pendingScopeID = 0
+			model.scope.Switching = false
+			if message.Command == application.UICommandAcceptResume {
+				model.pendingResumed = nil
+				if model.resumeOrigin == resumeOriginInTUI {
+					model.startup.Ready = true
+				}
+			}
+		case application.UICommandSelectResource:
+			if model.pendingResourceID == 0 || message.RequestID != model.pendingResourceID ||
+				message.ScopeGeneration != model.scope.Generation {
+				return false
+			}
+			model.pendingResourceID = 0
+			model.pendingResource = ResourceView{}
+		case application.UICommandSubmitQuestion:
+			if message.ScopeGeneration != model.scope.Generation {
+				return false
+			}
+		case application.UICommandCancelRun:
+			if !model.run.Active || message.RunID != model.run.RunID || message.ScopeGeneration != model.run.ScopeGeneration {
+				return false
+			}
+		case application.UICommandNewSession, application.UICommandRenameSession,
+			application.UICommandShowPrivacy, application.UICommandShowStatus:
+		case application.UICommandCancelResume, application.UICommandResumeSession:
+			return false
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	message.Content = sanitizeExternalText(message.Content, 0)
 	updated, cmd, err := model.composer.Update(message)
@@ -117,7 +200,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if model.dialog.Open() {
 		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+			quitFailedResume := model.resumeOrigin == resumeOriginTopLevel && model.startup.Failed && !model.startup.Ready
 			model.closeDialog()
+			if quitFailedResume {
+				return model, quitCommand()
+			}
+			if model.resumeOrigin == resumeOriginInTUI && model.startup.Ready {
+				model.resumeOrigin = resumeOriginNone
+			}
 		}
 		return model, nil
 	}
@@ -321,11 +411,10 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		model.showDialog("Help", helpText)
 		return model, nil
 	case slashStatus:
-		model.transcript.AppendNotice(model.safeStatus())
 		model.composer.Reset()
 		model.slashMenu.Close()
 		model.reflow()
-		return model, nil
+		return model, applicationCommand(application.UICommand{Kind: application.UICommandShowStatus})
 	case slashQuit:
 		model.composer.Reset()
 		model.slashMenu.Close()
@@ -340,6 +429,10 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 			intent.RunID = model.run.RunID
 			intent.Text = ""
 			intent.ExpectedScopeGeneration = model.run.ScopeGeneration
+		}
+		if command.commandKind == application.UICommandNewSession || command.commandKind == application.UICommandRenameSession ||
+			command.commandKind == application.UICommandShowPrivacy {
+			intent.ExpectedScopeGeneration = 0
 		}
 		if intent.Validate() != nil {
 			model.showDialog("Cannot continue", "The command could not be dispatched safely.")
@@ -425,22 +518,6 @@ func (model *Model) closeDialog() {
 	model.focus = FocusComposer
 }
 
-func (model Model) safeStatus() string {
-	contextName := model.scope.Context
-	if contextName == "" {
-		contextName = "unavailable"
-	}
-	namespace := model.scope.Namespace
-	if namespace == "" {
-		namespace = "unavailable"
-	}
-	access := "scope unverified"
-	if model.scope.ReadOnly {
-		access = "read-only"
-	}
-	return fmt.Sprintf("Context: %s · Namespace: %s · %s", contextName, namespace, access)
-}
-
 func quitCommand() tea.Cmd {
 	return func() tea.Msg { return tea.Quit() }
 }
@@ -495,6 +572,10 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 	switch {
 	case key.Matches(message, model.keymap.Close):
 		topLevel := model.resumeOrigin == resumeOriginTopLevel
+		requestID := uint64(0)
+		if model.pendingResumed != nil {
+			requestID = model.pendingResumed.ResumeRequestID
+		}
 		model.scopeConflict.Close()
 		model.pendingResumed = nil
 		model.composer.Reset()
@@ -507,7 +588,10 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 			return model, quitCommand()
 		}
 		model.startup.Ready = true
-		return model, nil
+		if requestID == 0 {
+			return model, nil
+		}
+		return model, applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
 	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
 		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
 		key.Matches(message, model.keymap.Complete), key.Matches(message, model.keymap.Reverse):
@@ -518,28 +602,239 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 			return model, nil
 		}
 		resumed := *model.pendingResumed
+		topLevel := model.resumeOrigin == resumeOriginTopLevel
 		useSaved := model.scopeConflict.UseSavedScope()
-		model.applyResumedSession(resumed)
-		if !useSaved || resumed.SavedScope == nil {
-			return model, nil
-		}
-		scope := *resumed.SavedScope
-		requestID := model.nextUIRequestID()
+		requestID := resumed.ResumeRequestID
 		command := application.UICommand{
-			Kind: application.UICommandActivateScope, RequestID: requestID,
-			ExpectedScopeGeneration: model.scope.Generation, Scope: &scope,
+			Kind: application.UICommandAcceptResume, RequestID: requestID,
+			ExpectedScopeGeneration: model.scope.Generation,
+		}
+		if useSaved && resumed.SavedScope != nil {
+			scope := *resumed.SavedScope
+			command.Scope = &scope
+		} else if topLevel && !model.scope.ReadOnly && model.scope.Context != "" && model.scope.Namespace != "" {
+			scope := domain.ScopeCandidate{Context: model.scope.Context, Namespace: model.scope.Namespace}
+			command.Scope = &scope
 		}
 		if command.Validate() != nil {
-			model.showDialog("Scope unavailable", "The saved scope could not be activated safely.")
+			model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 			return model, nil
 		}
 		model.pendingScopeID = requestID
 		model.scope.Switching = true
-		model.resource = ResourceView{}
+		model.scopeConflict.Close()
 		return model, applicationCommand(command)
 	default:
 		return model, nil
 	}
+}
+
+func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd {
+	if result.Validate() != nil || model.pendingResume.RequestID == 0 ||
+		result.RequestID != model.pendingResume.RequestID || result.Mode != model.pendingResume.Mode ||
+		result.Mode == application.UIResumeExact && result.Session != nil && result.Session.Session.ID != model.pendingResume.SessionID {
+		return nil
+	}
+	model.pendingResume = application.UIResumeRequest{}
+	if result.Failure != "" {
+		topLevel := model.resumeOrigin == resumeOriginTopLevel
+		model.startup.Failed = topLevel
+		if !topLevel {
+			model.startup.Ready = true
+		}
+		model.showDialog("Resume unavailable", resumeUIFailureText(result.Failure))
+		return nil
+	}
+	resumed := sanitizedResumedSession(*result.Session)
+	model.pendingResumed = &resumed
+	explicitTopLevelScope := model.resumeOrigin == resumeOriginTopLevel && model.startup.Intent.ExplicitScope
+	if !explicitTopLevelScope && resumed.SavedScope != nil &&
+		(resumed.SavedScope.Context != model.scope.Context || resumed.SavedScope.Namespace != model.scope.Namespace) {
+		model.scopeConflict.Show(scopeLabel(model.scope.Context, model.scope.Namespace), scopeLabel(resumed.SavedScope.Context, resumed.SavedScope.Namespace))
+		model.composer.Blur()
+		model.focus = FocusModal
+		return nil
+	}
+	command := application.UICommand{
+		Kind: application.UICommandAcceptResume, RequestID: resumed.ResumeRequestID,
+		ExpectedScopeGeneration: model.scope.Generation,
+	}
+	if resumed.SavedScope != nil && !explicitTopLevelScope {
+		scope := *resumed.SavedScope
+		command.Scope = &scope
+	}
+	if command.Validate() != nil {
+		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
+		return nil
+	}
+	model.pendingScopeID = command.RequestID
+	model.scope.Switching = true
+	return applicationCommand(command)
+}
+
+func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
+	if result.Validate() != nil {
+		return
+	}
+	switch result.Command {
+	case application.UICommandAcceptResume:
+		if model.pendingResumed == nil || model.pendingResumed.ResumeRequestID != result.RequestID ||
+			model.pendingScopeID != result.RequestID {
+			return
+		}
+		if result.Failure != "" {
+			model.pendingScopeID = 0
+			model.scope.Switching = false
+			model.pendingResumed = nil
+			model.showDialog("Resume unavailable", resumeUIFailureText(result.Failure))
+			return
+		}
+		model.applyAcceptedResume(*result.Resumed)
+		model.applyScopeResult(*result.Scope)
+		if result.Scope.Failure == "" && result.Resource != nil {
+			model.pendingResourceID = result.Resource.RequestID
+			model.acceptResourceSelectionResult(*result.Resource)
+		}
+	case application.UICommandSelectContext, application.UICommandSelectNamespace, application.UICommandActivateScope:
+		model.applyScopeResult(*result.Scope)
+	case application.UICommandSelectResource:
+		model.acceptResourceSelectionResult(*result.Resource)
+	case application.UICommandNewSession:
+		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title}
+		model.resource = ResourceView{}
+		model.pendingResumed = nil
+		model.resumeOrigin = resumeOriginNone
+		model.startup.Ready = true
+		model.resetTranscript()
+		model.transcript.AppendNotice("A new Session was started. The verified scope remains active; no model request was sent.")
+	case application.UICommandRenameSession:
+		if result.Failure != "" {
+			model.showDialog("Rename unavailable", "The current Session title could not be updated safely.")
+			return
+		}
+		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title, Resumed: result.Session.Resumed}
+		model.transcript.AppendNotice("The current Session title was updated.")
+	case application.UICommandShowStatus:
+		model.transcript.AppendNotice(statusText(*result.Status))
+	case application.UICommandSubmitQuestion:
+		model.showDialog("Model transfer unavailable", "Model transfer remains blocked until data-sharing consent is confirmed.")
+	case application.UICommandShowPrivacy, application.UICommandResumeSession:
+		model.showDialog("Command unavailable", "The command is not available in the current flow.")
+	}
+}
+
+func resumeUIFailureText(code application.UIQueryFailureCode) string {
+	if code == application.UIQueryNotResumable {
+		return "This Session uses minimal persistence and cannot be resumed."
+	}
+	return resumeFailureText(code)
+}
+
+func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
+	model.session = SessionView{ID: resumed.Session.ID, Title: resumed.Session.Title, Resumed: true}
+	model.startup.Ready = true
+	model.startup.Failed = false
+	model.resource = ResourceView{}
+	model.pendingResourceID = 0
+	model.pendingResource = ResourceView{}
+	model.pendingResumed = nil
+	model.resumeOrigin = resumeOriginNone
+	model.closePickers()
+	model.composer.Reset()
+	model.scopeConflict.Close()
+	model.resetTranscript()
+	for _, message := range resumed.History {
+		text := sanitizeExternalText(message.Content, application.MaxQuestionBytes)
+		if text == "" {
+			continue
+		}
+		switch message.Role {
+		case domain.MessageRoleUser:
+			model.transcript.AppendUser(text)
+		case domain.MessageRoleAssistant:
+			model.transcript.StartAgent()
+			model.transcript.FinishAgent(text)
+		default:
+			model.transcript.AppendNotice(text)
+		}
+	}
+	model.transcript.AppendNotice("Session resumed. Historic Evidence is display-only and cannot support facts in a new AgentRun.")
+	if model.terminalFocused {
+		_ = model.composer.Focus()
+	}
+	model.focus = FocusComposer
+}
+
+func (model *Model) resetTranscript() {
+	model.transcript = components.NewTranscript(model.styles.transcript, model.styles.toolSteps)
+}
+
+func (model *Model) applyScopeResult(result application.UIScopeResult) {
+	if result.Validate() != nil || model.pendingScopeID == 0 || result.RequestID != model.pendingScopeID ||
+		result.ExpectedGeneration != model.scope.Generation {
+		return
+	}
+	model.pendingScopeID = 0
+	model.scope.Switching = false
+	changed := result.ScopeGeneration > result.ExpectedGeneration
+	if result.Failure != "" {
+		if changed {
+			model.finishRunForScopeChange()
+			model.resource = ResourceView{}
+			model.pendingResourceID = 0
+			model.pendingResource = ResourceView{}
+			model.closePickers()
+			model.scope = ScopeView{Generation: result.ScopeGeneration}
+		}
+		model.showDialog("Scope unavailable", scopeFailureText(result.Failure))
+		return
+	}
+	if changed {
+		model.finishRunForScopeChange()
+		model.resource = ResourceView{}
+		model.pendingResourceID = 0
+		model.pendingResource = ResourceView{}
+		model.closePickers()
+	}
+	model.scope = ScopeView{
+		Context: sanitizeExternalText(result.Context, 253), Namespace: sanitizeExternalText(result.Namespace, 63),
+		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
+	}
+	if changed {
+		model.transcript.AppendNotice("Scope changed. The selected Resource and old-generation Picker results were cleared.")
+	}
+}
+
+func (model *Model) finishRunForScopeChange() {
+	if !model.run.Active {
+		return
+	}
+	const cancellation = "The AgentRun was cancelled because the scope changed."
+	model.run.Active = false
+	model.run.Terminal = true
+	model.run.Status = "cancelled"
+	model.run.StreamedText = cancellation
+	model.transcript.FinishAgent(cancellation)
+}
+
+func statusText(status application.UIStatusResult) string {
+	contextName := status.Context
+	if contextName == "" {
+		contextName = "unavailable"
+	}
+	namespace := status.Namespace
+	if namespace == "" {
+		namespace = "unavailable"
+	}
+	access := "scope unverified"
+	if status.ReadOnly {
+		access = "read-only"
+	}
+	run := "idle"
+	if status.RunActive {
+		run = "run active"
+	}
+	return fmt.Sprintf("Context: %s · Namespace: %s · %s · %s", contextName, namespace, access, run)
 }
 
 func (model *Model) acceptApplicationEvent(event application.UIEvent) {

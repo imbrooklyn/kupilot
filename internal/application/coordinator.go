@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +49,17 @@ type CoordinatorConfig struct {
 	Now                func() time.Time
 	BudgetLimits       agent.RunBudgetLimits
 	PersistenceTimeout time.Duration
+	UI                 *CoordinatorUIConfig
+}
+
+// CoordinatorUIConfig supplies the existing Session and startup consumers
+// needed by CLI/TUI composition. Core run tests may omit it when no delivery
+// use case is exercised.
+type CoordinatorUIConfig struct {
+	Sessions SessionResumeStore
+	Titles   SessionTitleStore
+	Startup  StartupMaintenance
+	Scopes   *ScopeManager
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -60,7 +73,8 @@ type RunResult struct {
 // Coordinator is the sole process-local Session and AgentRun orchestrator. It
 // owns at most one run goroutine, its cancellation function, and its wait path.
 type Coordinator struct {
-	mu sync.Mutex
+	mu        sync.Mutex
+	startupMu sync.Mutex
 
 	sessions         SessionPersistence
 	runs             RunPersistence
@@ -76,6 +90,15 @@ type Coordinator struct {
 	now              func() time.Time
 	budgetLimits     agent.RunBudgetLimits
 	persistenceLimit time.Duration
+	resumeSessions   SessionResumeStore
+	titles           SessionTitleStore
+	startup          StartupMaintenance
+	uiScopes         *ScopeManager
+	startupPrepared  bool
+	currentSession   *domain.Session
+	currentResumed   bool
+	pendingResume    *pendingResume
+	startupResume    *startupResumeState
 
 	closed              bool
 	persistenceDegraded bool
@@ -110,6 +133,19 @@ type pendingTool struct {
 	evidence  []domain.Evidence
 	persisted bool
 	audit     auditSpec
+}
+
+type pendingResume struct {
+	request          UIResumeRequest
+	record           ResumedSessionRecord
+	projection       UIResumedSession
+	explicitScope    bool
+	currentCandidate *domain.ScopeCandidate
+}
+
+type startupResumeState struct {
+	intent           UIStartIntent
+	currentCandidate *domain.ScopeCandidate
 }
 
 type persistenceActionKind uint8
@@ -156,6 +192,19 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
 		return nil, ErrCoordinatorDependency
 	}
+	if config.UI != nil && (config.UI.Sessions == nil || config.UI.Titles == nil || config.UI.Startup == nil) {
+		return nil, ErrCoordinatorDependency
+	}
+	var resumeSessions SessionResumeStore
+	var titles SessionTitleStore
+	var startup StartupMaintenance
+	var uiScopes *ScopeManager
+	if config.UI != nil {
+		resumeSessions = config.UI.Sessions
+		titles = config.UI.Titles
+		startup = config.UI.Startup
+		uiScopes = config.UI.Scopes
+	}
 	return &Coordinator{
 		sessions: config.Sessions, runs: config.Runs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
@@ -163,7 +212,923 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
+		resumeSessions: resumeSessions, titles: titles, startup: startup,
+		uiScopes: uiScopes,
 	}, nil
+}
+
+// StartUI performs mandatory startup maintenance and applies exactly one fixed
+// Session start intent. Resume intents remain queries until delivery emits the
+// corresponding explicit request.
+func (coordinator *Coordinator) StartUI(
+	ctx context.Context,
+	intent UIStartIntent,
+	privacyMode domain.PrivacyMode,
+) (UIStartResult, error) {
+	if coordinator == nil || ctx == nil || intent.Validate() != nil ||
+		(privacyMode != domain.PrivacyModeStandard && privacyMode != domain.PrivacyModeMinimal) {
+		return UIStartResult{}, ErrCoordinatorDependency
+	}
+	if err := coordinator.prepareStartup(ctx); err != nil {
+		return UIStartResult{}, err
+	}
+	result := UIStartResult{Intent: intent}
+	var currentCandidate *domain.ScopeCandidate
+	if intent.Kind != UIStartNew && !intent.ExplicitScope && coordinator.uiScopes != nil {
+		candidate, resolveErr := coordinator.resolveStartupScopeCandidate(ctx, intent)
+		if resolveErr == nil {
+			currentCandidate = &candidate
+			result.ScopeCandidate = cloneScopeCandidate(currentCandidate)
+		} else if contextErr := ctx.Err(); contextErr != nil {
+			return UIStartResult{}, contextErr
+		}
+	}
+	coordinator.mu.Lock()
+	if intent.Kind == UIStartResumePicker || intent.Kind == UIStartResumeID || intent.Kind == UIStartResumeLast {
+		coordinator.startupResume = &startupResumeState{
+			intent: intent, currentCandidate: cloneScopeCandidate(currentCandidate),
+		}
+	} else {
+		coordinator.startupResume = nil
+	}
+	coordinator.mu.Unlock()
+	if intent.Kind == UIStartNew {
+		session, err := coordinator.CreateSession(ctx, CreateSessionCommand{PrivacyMode: privacyMode})
+		if err != nil {
+			return UIStartResult{}, err
+		}
+		result.Session = &UISessionState{
+			ID: session.ID, Title: session.Title, PrivacyMode: session.PrivacyMode,
+		}
+	}
+	if result.Validate() != nil {
+		return UIStartResult{}, ErrCoordinatorDependency
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) resolveStartupScopeCandidate(
+	ctx context.Context,
+	intent UIStartIntent,
+) (domain.ScopeCandidate, error) {
+	candidates, err := coordinator.uiScopes.ListContexts(ctx)
+	if err != nil {
+		return domain.ScopeCandidate{}, err
+	}
+	contextName := intent.ConfiguredContext
+	var selected *ContextCandidate
+	for index := range candidates {
+		candidate := candidates[index]
+		if (contextName != "" && candidate.Name == contextName) || (contextName == "" && candidate.Current) {
+			selected = &candidate
+			break
+		}
+	}
+	if selected == nil {
+		return domain.ScopeCandidate{}, ErrScopeUnavailable
+	}
+	namespace := intent.ConfiguredNamespace
+	if namespace == "" {
+		namespace = selected.DefaultNamespace
+	}
+	result := domain.ScopeCandidate{Context: selected.Name, Namespace: namespace}
+	if result.Validate() != nil || !domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace) {
+		return domain.ScopeCandidate{}, ErrScopeUnavailable
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) prepareStartup(ctx context.Context) error {
+	if coordinator.startup == nil {
+		return ErrCoordinatorDependency
+	}
+	coordinator.startupMu.Lock()
+	defer coordinator.startupMu.Unlock()
+	if coordinator.startupPrepared {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	now := coordinator.now()
+	if !validCoordinatorTime(now) {
+		return ErrCoordinatorDependency
+	}
+	if err := coordinator.startup.RecoverInterrupted(ctx, now); err != nil {
+		coordinator.markGlobalPersistenceDegraded()
+		return fmt.Errorf("%w: startup recovery failed", ErrPersistenceUnavailable)
+	}
+	if err := coordinator.startup.CleanupRetention(ctx, now); err != nil {
+		coordinator.markGlobalPersistenceDegraded()
+		return fmt.Errorf("%w: startup retention failed", ErrPersistenceUnavailable)
+	}
+	coordinator.startupPrepared = true
+	return nil
+}
+
+// QueryUI executes one bounded typed completion query. Session history is read
+// only for the explicit Session completion kind.
+func (coordinator *Coordinator) QueryUI(ctx context.Context, query UICompletionQuery) (UICompletionResult, error) {
+	if coordinator == nil || ctx == nil || query.Validate() != nil {
+		return UICompletionResult{}, ErrInvalidUIQuery
+	}
+	if err := ctx.Err(); err != nil {
+		return UICompletionResult{}, err
+	}
+	if query.Kind == UICompletionSession {
+		if err := coordinator.beginUIOperation(true); err != nil {
+			return UICompletionResult{}, err
+		}
+		defer coordinator.finishOperation()
+		if err := coordinator.prepareStartup(ctx); err != nil {
+			return UICompletionResult{}, err
+		}
+	}
+	result := UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+	}
+	switch query.Kind {
+	case UICompletionSession:
+		if coordinator.resumeSessions == nil {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		records, err := coordinator.resumeSessions.ListResumable(ctx, query.Limit)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return UICompletionResult{}, contextErr
+			}
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		result.Sessions = make([]UISessionCandidate, 0, min(len(records), query.Limit))
+		for _, record := range records {
+			if !record.valid() {
+				result.Sessions = nil
+				result.Failure = UIQueryUnavailable
+				break
+			}
+			if !sessionRecordMatches(record, query.Filter) {
+				continue
+			}
+			result.Sessions = append(result.Sessions, projectSessionCandidate(record))
+			if len(result.Sessions) == query.Limit {
+				break
+			}
+		}
+	case UICompletionContext:
+		if coordinator.uiScopes == nil {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		candidates, err := coordinator.uiScopes.ListContexts(ctx)
+		if err != nil {
+			result.Failure = uiFailureCode(err)
+			break
+		}
+		active := coordinator.uiScopes.View()
+		result.Contexts = make([]UIContextCandidate, 0, min(len(candidates), query.Limit))
+		for _, candidate := range candidates {
+			if !uiTextMatches(candidate.Name, query.Filter) {
+				continue
+			}
+			current := candidate.Current
+			if active.Scope != nil {
+				current = active.Scope.Context == candidate.Name
+			}
+			result.Contexts = append(result.Contexts, UIContextCandidate{Name: candidate.Name, Current: current})
+			if len(result.Contexts) == query.Limit {
+				break
+			}
+		}
+	case UICompletionNamespace:
+		if coordinator.uiScopes == nil {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		view := coordinator.uiScopes.View()
+		if view.State != ScopeStateActive || view.Scope == nil || view.Generation != query.ScopeGeneration {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		list, err := coordinator.uiScopes.ListNamespaces(ctx, *view.Scope, query.Limit)
+		if err != nil {
+			result.Failure = uiFailureCode(err)
+			break
+		}
+		items := append([]domain.NamespaceSummary(nil), list.Items...)
+		if len(items) > query.Limit {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		sort.Slice(items, func(left, right int) bool { return items[left].Name < items[right].Name })
+		for _, item := range items {
+			if uiTextMatches(item.Name, query.Filter) {
+				result.Namespaces = append(result.Namespaces, UINamespaceCandidate{Name: item.Name})
+				if len(result.Namespaces) == query.Limit {
+					break
+				}
+			}
+		}
+	case UICompletionResource:
+		if coordinator.uiScopes == nil {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		view := coordinator.uiScopes.View()
+		if view.State != ScopeStateActive || view.Scope == nil || view.Generation != query.ScopeGeneration {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		kinds := []domain.ResourceKind{query.ResourceKind}
+		if query.ResourceKind == "" {
+			kinds = []domain.ResourceKind{
+				domain.ResourceKindPod, domain.ResourceKindDeployment, domain.ResourceKindReplicaSet,
+				domain.ResourceKindJob, domain.ResourceKindService,
+			}
+		}
+		readCount := 0
+		for _, kind := range kinds {
+			remaining := query.Limit - readCount
+			if remaining == 0 {
+				break
+			}
+			list, err := coordinator.uiScopes.ListResources(ctx, *view.Scope, kind, remaining)
+			if err != nil {
+				result.Resources = nil
+				result.Failure = uiFailureCode(err)
+				break
+			}
+			if len(list.Items) > remaining {
+				result.Resources = nil
+				result.Failure = UIQueryUnavailable
+				break
+			}
+			readCount += len(list.Items)
+			for _, item := range list.Items {
+				candidate := projectUIResourceSummary(item)
+				if uiResourceMatches(candidate, query.Filter) {
+					result.Resources = append(result.Resources, candidate)
+				}
+			}
+		}
+		sort.Slice(result.Resources, func(left, right int) bool {
+			if result.Resources[left].Kind == result.Resources[right].Kind {
+				return result.Resources[left].Name < result.Resources[right].Name
+			}
+			return result.Resources[left].Kind < result.Resources[right].Kind
+		})
+		if len(result.Resources) > query.Limit {
+			result.Resources = result.Resources[:query.Limit]
+		}
+	}
+	if result.Validate() != nil {
+		return UICompletionResult{}, ErrInvalidUIQueryResult
+	}
+	return result, nil
+}
+
+// ResumeUI reconstructs safe history into a request-bound pending candidate.
+// It performs no model, Tool, Kubernetes, scope, or current-Session action.
+func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRequest) (UIResumeResult, error) {
+	if coordinator == nil || ctx == nil || request.Validate() != nil || coordinator.resumeSessions == nil {
+		return UIResumeResult{}, ErrInvalidUIQuery
+	}
+	if err := ctx.Err(); err != nil {
+		return UIResumeResult{}, err
+	}
+	if err := coordinator.beginUIOperation(true); err != nil {
+		return UIResumeResult{}, err
+	}
+	defer coordinator.finishOperation()
+	if err := coordinator.prepareStartup(ctx); err != nil {
+		return UIResumeResult{}, err
+	}
+	coordinator.mu.Lock()
+	explicitScope := false
+	var currentCandidate *domain.ScopeCandidate
+	if coordinator.startupResume != nil {
+		if !resumeRequestMatchesStart(request, coordinator.startupResume.intent) {
+			coordinator.mu.Unlock()
+			return UIResumeResult{}, ErrInvalidUIQuery
+		}
+		explicitScope = coordinator.startupResume.intent.ExplicitScope
+		currentCandidate = cloneScopeCandidate(coordinator.startupResume.currentCandidate)
+		coordinator.startupResume = nil
+	}
+	coordinator.mu.Unlock()
+
+	var (
+		record ResumedSessionRecord
+		err    error
+	)
+	if request.Mode == UIResumeExact {
+		record, err = coordinator.resumeSessions.ResumeByID(ctx, request.SessionID)
+	} else {
+		record, err = coordinator.resumeSessions.ResumeLatest(ctx)
+	}
+	result := UIResumeResult{RequestID: request.RequestID, Mode: request.Mode}
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return UIResumeResult{}, contextErr
+		}
+		switch {
+		case errors.Is(err, ErrSessionNotResumable):
+			result.Failure = UIQueryNotResumable
+		case errors.Is(err, ErrSessionResumeUnavailable), errors.Is(err, ErrNoResumableSession):
+			result.Failure = UIQueryUnavailable
+		default:
+			result.Failure = UIQueryUnavailable
+		}
+		return result, nil
+	}
+	if !record.valid() || request.Mode == UIResumeExact && record.Session.ID != request.SessionID {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	projection := projectResumedSession(request.RequestID, record)
+	result.Session = &projection
+	if result.Validate() != nil {
+		return UIResumeResult{}, ErrInvalidUIQueryResult
+	}
+	coordinator.mu.Lock()
+	if coordinator.closed || coordinator.starting || coordinator.active != nil {
+		coordinator.mu.Unlock()
+		return UIResumeResult{}, ErrCoordinatorBusy
+	}
+	if coordinator.pendingResume == nil || request.RequestID > coordinator.pendingResume.request.RequestID {
+		coordinator.pendingResume = &pendingResume{
+			request: request, record: record, projection: projection,
+			explicitScope: explicitScope, currentCandidate: currentCandidate,
+		}
+	}
+	coordinator.mu.Unlock()
+	return result, nil
+}
+
+// CurrentUISession returns a defensive delivery projection. A pending resume
+// is intentionally excluded until the user accepts it.
+func (coordinator *Coordinator) CurrentUISession() *UISessionState {
+	if coordinator == nil {
+		return nil
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.currentSession == nil {
+		return nil
+	}
+	return &UISessionState{
+		ID: coordinator.currentSession.ID, Title: coordinator.currentSession.Title,
+		PrivacyMode: coordinator.currentSession.PrivacyMode, Resumed: coordinator.currentResumed,
+	}
+}
+
+// ExecuteUICommand coordinates one fixed delivery intent. Scope and resume
+// mutations remain request- and generation-bound. Question transfer stays
+// fail-closed until the separate privacy flow admits it.
+func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	if coordinator == nil || ctx == nil || command.Validate() != nil {
+		return UICommandOutcome{}, ErrInvalidUICommand
+	}
+	if err := ctx.Err(); err != nil {
+		return UICommandOutcome{}, err
+	}
+	switch command.Kind {
+	case UICommandNewSession:
+		session, err := coordinator.CreateSession(ctx, CreateSessionCommand{PrivacyMode: coordinator.currentPrivacyMode()})
+		if err != nil {
+			return UICommandOutcome{}, err
+		}
+		if coordinator.uiScopes != nil {
+			if scope, current := coordinator.uiScopes.CurrentScope(); current {
+				clearScopeResource(coordinator.uiScopes, scope)
+			}
+		}
+		return UICommandOutcome{Command: command.Kind, Session: projectUISession(session, false)}, nil
+	case UICommandCancelRun:
+		err := coordinator.CancelRun(ctx, CancelRunCommand{RunID: command.RunID, ScopeGeneration: command.ExpectedScopeGeneration})
+		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
+	case UICommandSubmitQuestion:
+		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+	}
+
+	requireIdle := command.Kind == UICommandAcceptResume
+	if err := coordinator.beginUIOperation(requireIdle); err != nil {
+		return UICommandOutcome{}, err
+	}
+	defer coordinator.finishOperation()
+
+	switch command.Kind {
+	case UICommandAcceptResume:
+		return coordinator.executeResumeAcceptance(ctx, command), nil
+	case UICommandCancelResume:
+		return coordinator.executeResumeCancellation(command), nil
+	case UICommandSelectContext, UICommandSelectNamespace, UICommandActivateScope:
+		result := coordinator.executeScopeCommand(ctx, command)
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Scope: &result}, nil
+	case UICommandSelectResource:
+		result := coordinator.executeResourceCommand(command)
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Resource: &result}, nil
+	case UICommandRenameSession:
+		return coordinator.executeRenameCommand(ctx, command)
+	case UICommandShowStatus:
+		status := coordinator.uiStatus()
+		return UICommandOutcome{Command: command.Kind, Status: &status}, nil
+	case UICommandShowPrivacy, UICommandResumeSession:
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
+	default:
+		return UICommandOutcome{}, ErrInvalidUICommand
+	}
+}
+
+func (coordinator *Coordinator) beginUIOperation(requireIdle bool) error {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.closed {
+		return ErrCoordinatorClosed
+	}
+	if requireIdle && (coordinator.starting || coordinator.active != nil) {
+		return ErrRunAlreadyActive
+	}
+	if coordinator.operations != 0 {
+		return ErrCoordinatorBusy
+	}
+	coordinator.operationsDone = make(chan struct{})
+	coordinator.operations++
+	return nil
+}
+
+func (coordinator *Coordinator) currentPrivacyMode() domain.PrivacyMode {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.currentSession != nil && coordinator.currentSession.PrivacyMode == domain.PrivacyModeMinimal {
+		return domain.PrivacyModeMinimal
+	}
+	return domain.PrivacyModeStandard
+}
+
+func projectUISession(session domain.Session, resumed bool) *UISessionState {
+	return &UISessionState{ID: session.ID, Title: session.Title, PrivacyMode: session.PrivacyMode, Resumed: resumed}
+}
+
+func (coordinator *Coordinator) executeResumeCancellation(command UICommand) UICommandOutcome {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.pendingResume != nil && coordinator.pendingResume.request.RequestID == command.RequestID {
+		coordinator.pendingResume = nil
+	}
+	return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+}
+
+func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, command UICommand) UICommandOutcome {
+	outcome := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingResume
+	if pending == nil || pending.request.RequestID != command.RequestID {
+		coordinator.mu.Unlock()
+		outcome.Failure = UIQueryUnavailable
+		return outcome
+	}
+	record := pending.record
+	projection := pending.projection
+	explicitScope := pending.explicitScope
+	currentCandidate := cloneScopeCandidate(pending.currentCandidate)
+	coordinator.mu.Unlock()
+
+	if coordinator.uiScopes == nil {
+		outcome.Failure = UIQueryUnavailable
+		return outcome
+	}
+	view := coordinator.uiScopes.View()
+	if view.Generation != command.ExpectedScopeGeneration {
+		outcome.Failure = UIQueryUnavailable
+		return outcome
+	}
+	savedScope, savedResource := resumeSavedState(record)
+	if explicitScope && command.Scope != nil {
+		outcome.Failure = UIQueryUnavailable
+		return outcome
+	}
+	if command.Scope != nil {
+		matchesSaved := savedScope != nil && *command.Scope == *savedScope
+		matchesCurrent := currentCandidate != nil && *command.Scope == *currentCandidate
+		if !matchesSaved && !matchesCurrent {
+			outcome.Failure = UIQueryUnavailable
+			return outcome
+		}
+	}
+
+	scopeResult := coordinator.resumeScopeResult(ctx, command)
+	outcome.Scope = &scopeResult
+	liveView := coordinator.uiScopes.View()
+	if liveView.State == ScopeStateActive && liveView.Scope != nil {
+		clearScopeResource(coordinator.uiScopes, *liveView.Scope)
+		resourceResult := coordinator.revalidateResumedResource(ctx, command.RequestID, *liveView.Scope, savedScope, savedResource)
+		outcome.Resource = &resourceResult
+	}
+
+	coordinator.mu.Lock()
+	if coordinator.pendingResume == nil || coordinator.pendingResume.request.RequestID != command.RequestID {
+		coordinator.mu.Unlock()
+		outcome.Failure = UIQueryUnavailable
+		return outcome
+	}
+	copy := record.Session
+	coordinator.currentSession = &copy
+	coordinator.currentResumed = true
+	coordinator.pendingResume = nil
+	coordinator.mu.Unlock()
+	outcome.Session = projectUISession(record.Session, true)
+	projectionCopy := projection
+	outcome.Resumed = &projectionCopy
+	return outcome
+}
+
+func resumeRequestMatchesStart(request UIResumeRequest, intent UIStartIntent) bool {
+	switch intent.Kind {
+	case UIStartResumePicker:
+		return request.Mode == UIResumeExact
+	case UIStartResumeID:
+		return request.Mode == UIResumeExact && request.SessionID == intent.SessionID
+	case UIStartResumeLast:
+		return request.Mode == UIResumeLast
+	default:
+		return false
+	}
+}
+
+func (coordinator *Coordinator) resumeScopeResult(
+	ctx context.Context,
+	command UICommand,
+) UIScopeResult {
+	if command.Scope != nil {
+		return coordinator.executeScopeCommand(ctx, UICommand{
+			Kind: UICommandActivateScope, RequestID: command.RequestID,
+			ExpectedScopeGeneration: command.ExpectedScopeGeneration, Scope: command.Scope,
+		})
+	}
+	view := coordinator.uiScopes.View()
+	if view.State != ScopeStateActive || view.Scope == nil {
+		return failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
+	}
+	return successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, *view.Scope)
+}
+
+func resumeSavedState(record ResumedSessionRecord) (*domain.ScopeCandidate, *domain.ResourceRef) {
+	scope := cloneScopeCandidate(record.Session.LastScope)
+	resource := cloneResource(record.Session.SelectedResource)
+	for _, message := range record.Messages {
+		if message.Scope != nil {
+			scope = &domain.ScopeCandidate{Context: message.Scope.Context, Namespace: message.Scope.Namespace}
+		}
+		if message.Resource != nil {
+			resource = cloneResource(message.Resource)
+		}
+	}
+	return scope, resource
+}
+
+func (coordinator *Coordinator) revalidateResumedResource(
+	ctx context.Context,
+	requestID uint64,
+	scope domain.ClusterScope,
+	savedScope *domain.ScopeCandidate,
+	reference *domain.ResourceRef,
+) UIResourceSelectionResult {
+	result := UIResourceSelectionResult{RequestID: requestID, ScopeGeneration: scope.Generation, Cleared: true}
+	if reference == nil {
+		return result
+	}
+	if savedScope == nil || savedScope.Context != scope.Context || savedScope.Namespace != scope.Namespace ||
+		reference.Namespace != scope.Namespace {
+		result.Cleared = false
+		result.Failure = UIQueryUnavailable
+		return result
+	}
+	actual, err := coordinator.uiScopes.GetResource(ctx, scope, *reference)
+	if err != nil {
+		result.Cleared = false
+		result.Failure = uiFailureCode(err)
+		return result
+	}
+	if reference.UID != "" && actual.Reference.UID != reference.UID {
+		result.Cleared = false
+		result.Failure = UIQueryUnavailable
+		return result
+	}
+	if err := coordinator.uiScopes.SelectResource(scope, actual.Reference); err != nil {
+		result.Cleared = false
+		result.Failure = uiFailureCode(err)
+		return result
+	}
+	result.Cleared = false
+	selected := actual.Reference
+	result.Resource = &selected
+	return result
+}
+
+func (coordinator *Coordinator) executeScopeCommand(ctx context.Context, command UICommand) UIScopeResult {
+	if coordinator.uiScopes == nil {
+		return UIScopeResult{
+			RequestID: command.RequestID, ExpectedGeneration: command.ExpectedScopeGeneration,
+			ScopeGeneration: command.ExpectedScopeGeneration, Failure: UIQueryUnavailable,
+		}
+	}
+	view := coordinator.uiScopes.View()
+	if view.Generation != command.ExpectedScopeGeneration {
+		return failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
+	}
+	var (
+		scope domain.ClusterScope
+		err   error
+	)
+	switch command.Kind {
+	case UICommandSelectContext:
+		if view.State == ScopeStateActive && view.Scope != nil && view.Scope.Context == command.Text {
+			scope = *view.Scope
+		} else {
+			scope, err = coordinator.uiScopes.SwitchContext(ctx, command.Text, command.ExpectedScopeGeneration)
+		}
+	case UICommandSelectNamespace:
+		scope, err = coordinator.uiScopes.SwitchNamespace(ctx, command.Text, command.ExpectedScopeGeneration)
+	case UICommandActivateScope:
+		scope, err = coordinator.activateExactScope(ctx, *command.Scope, command.ExpectedScopeGeneration)
+	default:
+		err = ErrInvalidUICommand
+	}
+	if err != nil {
+		current := coordinator.uiScopes.View()
+		return failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, current, uiFailureCode(err))
+	}
+	return successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, scope)
+}
+
+func (coordinator *Coordinator) activateExactScope(
+	ctx context.Context,
+	target domain.ScopeCandidate,
+	expectedGeneration int64,
+) (domain.ClusterScope, error) {
+	view := coordinator.uiScopes.View()
+	if view.State == ScopeStateActive && view.Scope != nil && view.Scope.Context == target.Context {
+		if view.Scope.Namespace == target.Namespace {
+			return *view.Scope, nil
+		}
+		return coordinator.uiScopes.SwitchNamespace(ctx, target.Namespace, expectedGeneration)
+	}
+	scope, err := coordinator.uiScopes.SwitchContext(ctx, target.Context, expectedGeneration)
+	if err != nil || scope.Namespace == target.Namespace {
+		return scope, err
+	}
+	result, namespaceErr := coordinator.uiScopes.SwitchNamespace(ctx, target.Namespace, scope.Generation)
+	if namespaceErr == nil {
+		return result, nil
+	}
+	_ = invalidatePartialUIScope(coordinator.uiScopes, scope.Generation)
+	return domain.ClusterScope{}, namespaceErr
+}
+
+func successfulUIScopeResult(requestID uint64, expectedGeneration int64, scope domain.ClusterScope) UIScopeResult {
+	return UIScopeResult{
+		RequestID: requestID, ExpectedGeneration: expectedGeneration, ScopeGeneration: scope.Generation,
+		Context: scope.Context, Namespace: scope.Namespace, ReadOnly: true,
+	}
+}
+
+func failedUIScopeResult(
+	requestID uint64,
+	expectedGeneration int64,
+	view ScopeView,
+	failure UIQueryFailureCode,
+) UIScopeResult {
+	generation := max(expectedGeneration, view.Generation)
+	return UIScopeResult{
+		RequestID: requestID, ExpectedGeneration: expectedGeneration,
+		ScopeGeneration: generation, Failure: failure,
+	}
+}
+
+func invalidatePartialUIScope(manager *ScopeManager, expectedGeneration int64) error {
+	manager.switchMu.Lock()
+	defer manager.switchMu.Unlock()
+	if err := manager.checkExpectedGeneration(expectedGeneration); err != nil {
+		return err
+	}
+	generation, client, cancel, err := manager.beginInvalidation()
+	if err != nil {
+		return err
+	}
+	manager.finishLocalInvalidation(generation, cancel)
+	hookErr := manager.invalidateHook(generation)
+	if client != nil {
+		client.Close()
+	}
+	manager.markUnavailable(generation)
+	return hookErr
+}
+
+func clearScopeResource(manager *ScopeManager, scope domain.ClusterScope) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !manager.currentScopeLocked(scope) {
+		return false
+	}
+	manager.selectedResource = nil
+	return true
+}
+
+func (coordinator *Coordinator) executeResourceCommand(command UICommand) UIResourceSelectionResult {
+	result := UIResourceSelectionResult{
+		RequestID: command.RequestID, ScopeGeneration: max(1, command.ExpectedScopeGeneration),
+	}
+	if coordinator.uiScopes == nil {
+		result.Failure = UIQueryUnavailable
+		return result
+	}
+	view := coordinator.uiScopes.View()
+	if view.State != ScopeStateActive || view.Scope == nil || view.Generation != command.ExpectedScopeGeneration {
+		result.Failure = UIQueryUnavailable
+		return result
+	}
+	result.ScopeGeneration = view.Generation
+	if command.Text == "clear" {
+		if !clearScopeResource(coordinator.uiScopes, *view.Scope) {
+			result.Failure = UIQueryUnavailable
+			return result
+		}
+		result.Cleared = true
+		return result
+	}
+	if err := coordinator.uiScopes.SelectResource(*view.Scope, *command.Resource); err != nil {
+		result.Failure = uiFailureCode(err)
+		return result
+	}
+	selected := *command.Resource
+	result.Resource = &selected
+	return result
+}
+
+func (coordinator *Coordinator) executeRenameCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	if coordinator.titles == nil {
+		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+	}
+	processed, err := coordinator.questions.Process(command.Text, 512)
+	if err != nil || (command.Text != "" && processed.Value == "") {
+		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+	}
+	coordinator.mu.Lock()
+	if coordinator.currentSession == nil {
+		coordinator.mu.Unlock()
+		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+	}
+	current := *coordinator.currentSession
+	coordinator.mu.Unlock()
+	updatedAt := coordinator.now()
+	if !validCoordinatorTime(updatedAt) {
+		return UICommandOutcome{}, ErrCoordinatorDependency
+	}
+	err = coordinator.persist(ctx, func(operationContext context.Context) error {
+		return coordinator.titles.Rename(operationContext, RenameSessionRecord{
+			SessionID: current.ID, Title: processed.Value, ExpectedVersion: current.Version, UpdatedAt: updatedAt,
+		})
+	})
+	if err != nil {
+		coordinator.markGlobalPersistenceDegraded()
+		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+	}
+	current.Title = processed.Value
+	current.Version++
+	current.UpdatedAt = updatedAt
+	coordinator.mu.Lock()
+	coordinator.currentSession = &current
+	resumed := coordinator.currentResumed
+	coordinator.mu.Unlock()
+	return UICommandOutcome{Command: command.Kind, Session: projectUISession(current, resumed)}, nil
+}
+
+func (coordinator *Coordinator) uiStatus() UIStatusResult {
+	result := UIStatusResult{Session: coordinator.CurrentUISession()}
+	if coordinator.uiScopes != nil {
+		view := coordinator.uiScopes.View()
+		result.ScopeGeneration = view.Generation
+		if view.State == ScopeStateActive && view.Scope != nil {
+			result.Context = view.Scope.Context
+			result.Namespace = view.Scope.Namespace
+			result.ReadOnly = true
+		}
+	}
+	coordinator.mu.Lock()
+	if coordinator.active != nil && !coordinator.active.terminal {
+		result.RunID = coordinator.active.run.ID
+		result.RunActive = true
+	}
+	coordinator.mu.Unlock()
+	return result
+}
+
+func projectSessionCandidate(record ResumeSessionRecord) UISessionCandidate {
+	result := UISessionCandidate{
+		ID: record.ID, Title: record.Title, UpdatedAtUnixMillis: record.UpdatedAt.UTC().UnixMilli(),
+		PrivacyMode: record.PrivacyMode,
+	}
+	if record.LastScope != nil {
+		result.Context = record.LastScope.Context
+		result.Namespace = record.LastScope.Namespace
+	}
+	return result
+}
+
+func projectResumedSession(requestID uint64, record ResumedSessionRecord) UIResumedSession {
+	metadata := ResumeSessionRecord{
+		ID: record.Session.ID, Title: record.Session.Title, UpdatedAt: record.Session.UpdatedAt,
+		PrivacyMode: record.Session.PrivacyMode, LastScope: cloneScopeCandidate(record.Session.LastScope),
+	}
+	result := UIResumedSession{
+		ResumeRequestID: requestID, Session: projectSessionCandidate(metadata),
+		SavedScope: cloneScopeCandidate(record.Session.LastScope),
+		History:    make([]UIHistoryMessage, 0, len(record.Messages)),
+	}
+	if record.Session.SelectedResource != nil {
+		result.SavedResource = projectUIResourceCandidate(*record.Session.SelectedResource)
+	}
+	for _, message := range record.Messages {
+		result.History = append(result.History, UIHistoryMessage{
+			Role: message.Role, Format: message.Format, Content: message.Content,
+		})
+		if message.Scope != nil {
+			result.SavedScope = &domain.ScopeCandidate{Context: message.Scope.Context, Namespace: message.Scope.Namespace}
+		}
+		if message.Resource != nil {
+			result.SavedResource = projectUIResourceCandidate(*message.Resource)
+		}
+	}
+	if result.SavedScope != nil {
+		result.Session.Context = result.SavedScope.Context
+		result.Session.Namespace = result.SavedScope.Namespace
+	}
+	return result
+}
+
+func cloneScopeCandidate(value *domain.ScopeCandidate) *domain.ScopeCandidate {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func projectUIResourceCandidate(reference domain.ResourceRef) *UIResourceCandidate {
+	kind, ok := domain.ResourceKindForReference(reference)
+	if !ok {
+		return nil
+	}
+	return &UIResourceCandidate{
+		APIVersion: reference.APIVersion, Kind: kind, Namespace: reference.Namespace, Name: reference.Name,
+	}
+}
+
+func projectUIResourceSummary(summary domain.ResourceSummary) UIResourceCandidate {
+	kind, _ := domain.ResourceKindForReference(summary.Reference)
+	status := summary.Status.Phase
+	if status == "" {
+		status = summary.Status.Reason
+	}
+	if status == "" {
+		status = summary.Status.ServiceType
+	}
+	return UIResourceCandidate{
+		APIVersion: summary.Reference.APIVersion,
+		Kind:       kind,
+		Namespace:  summary.Reference.Namespace,
+		Name:       summary.Reference.Name,
+		Status:     status,
+	}
+}
+
+func uiTextMatches(value, filter string) bool {
+	return filter == "" || strings.Contains(strings.ToLower(value), strings.ToLower(filter))
+}
+
+func uiResourceMatches(candidate UIResourceCandidate, filter string) bool {
+	return uiTextMatches(candidate.Name, filter) || uiTextMatches(string(candidate.Kind)+"/"+candidate.Name, filter) ||
+		(candidate.Status != "" && uiTextMatches(candidate.Status, filter))
+}
+
+func uiFailureCode(err error) UIQueryFailureCode {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return UIQueryTimeout
+	}
+	var classified interface{ Class() domain.SafeErrorClass }
+	if !errors.As(err, &classified) {
+		return UIQueryUnavailable
+	}
+	switch classified.Class() {
+	case domain.SafeErrorClassPermissionDenied, domain.SafeErrorClassPolicyDenied:
+		return UIQueryForbidden
+	case domain.SafeErrorClassTimeout:
+		return UIQueryTimeout
+	default:
+		return UIQueryUnavailable
+	}
 }
 
 // CreateSession persists one new shell and its fixed audit record. It never
@@ -229,6 +1194,13 @@ func (coordinator *Coordinator) CreateSession(ctx context.Context, command Creat
 		coordinator.markGlobalPersistenceDegraded()
 		return domain.Session{}, ErrPersistenceUnavailable
 	}
+	coordinator.mu.Lock()
+	copy := session
+	coordinator.currentSession = &copy
+	coordinator.currentResumed = false
+	coordinator.pendingResume = nil
+	coordinator.startupResume = nil
+	coordinator.mu.Unlock()
 	return session, nil
 }
 

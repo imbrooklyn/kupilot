@@ -21,11 +21,11 @@ type UIScopeResult struct {
 
 // Validate checks success and fail-closed scope result shapes.
 func (result UIScopeResult) Validate() error {
-	if result.RequestID == 0 || result.ExpectedGeneration < 0 || result.ScopeGeneration <= result.ExpectedGeneration {
+	if result.RequestID == 0 || result.ExpectedGeneration < 0 || result.ScopeGeneration < result.ExpectedGeneration {
 		return ErrInvalidUIEvent
 	}
 	if result.Failure != "" {
-		if !result.Failure.valid() || result.Context != "" || result.Namespace != "" || result.ReadOnly {
+		if !result.Failure.validOperational() || result.Context != "" || result.Namespace != "" || result.ReadOnly {
 			return ErrInvalidUIEvent
 		}
 		return nil
@@ -35,6 +35,137 @@ func (result UIScopeResult) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	return nil
+}
+
+// UIStatusResult is the current safe in-memory status projection. Historic
+// scope metadata and pending resume candidates are intentionally excluded.
+type UIStatusResult struct {
+	Session         *UISessionState
+	Context         string
+	Namespace       string
+	ScopeGeneration int64
+	ReadOnly        bool
+	RunID           domain.AgentRunID
+	RunActive       bool
+}
+
+// UICommandOutcome contains only the typed result shapes used by delivery.
+// Exactly which fields are populated is determined by Command.
+type UICommandOutcome struct {
+	Command   UICommandKind
+	RequestID uint64
+	Session   *UISessionState
+	Resumed   *UIResumedSession
+	Scope     *UIScopeResult
+	Resource  *UIResourceSelectionResult
+	Status    *UIStatusResult
+	RunID     domain.AgentRunID
+	Failure   UIQueryFailureCode
+}
+
+// Validate checks command/result correlation and exclusive payload shapes.
+func (result UICommandOutcome) Validate() error {
+	if result.Failure != "" && (!result.Failure.valid() ||
+		result.Failure == UIQueryNotResumable && result.Command != UICommandResumeSession) {
+		return ErrInvalidUIEvent
+	}
+	switch result.Command {
+	case UICommandAcceptResume:
+		if result.RequestID == 0 {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+				result.Status != nil || result.RunID != "" {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.Session == nil || !result.Session.validate() || !result.Session.Resumed ||
+			result.Resumed == nil || !validUIResumedSession(*result.Resumed, result.RequestID) ||
+			result.Resumed.Session.ID != result.Session.ID || result.Scope == nil || result.Scope.RequestID != result.RequestID ||
+			result.Scope.Validate() != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+		if result.Resource != nil {
+			if result.Resource.RequestID != result.RequestID || result.Resource.ScopeGeneration != result.Scope.ScopeGeneration ||
+				result.Resource.Validate() != nil {
+				return ErrInvalidUIEvent
+			}
+		}
+	case UICommandCancelResume:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandSelectContext, UICommandSelectNamespace, UICommandActivateScope:
+		if result.RequestID == 0 || result.Scope == nil || result.Scope.RequestID != result.RequestID || result.Scope.Validate() != nil ||
+			result.Session != nil || result.Resumed != nil || result.Resource != nil || result.Status != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandSelectResource:
+		if result.RequestID == 0 || result.Resource == nil || result.Resource.RequestID != result.RequestID || result.Resource.Validate() != nil ||
+			result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Status != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandNewSession:
+		if result.RequestID != 0 || result.Session == nil || !result.Session.validate() || result.Resumed != nil ||
+			result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandRenameSession:
+		if result.RequestID != 0 || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+			result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if result.Session != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.Session == nil || !result.Session.validate() {
+			return ErrInvalidUIEvent
+		}
+	case UICommandShowStatus:
+		if result.RequestID != 0 || result.Status == nil || !result.Status.valid() || result.Session != nil || result.Resumed != nil ||
+			result.Scope != nil || result.Resource != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandSubmitQuestion:
+		if result.RequestID != 0 || result.Failure == "" || result.RunID != "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandCancelRun:
+		if result.RequestID != 0 || !result.RunID.Valid() || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandShowPrivacy:
+		if result.RequestID != 0 || result.Failure == "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandResumeSession:
+		if result.RequestID == 0 || result.Failure == "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	default:
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+func (result UIStatusResult) valid() bool {
+	if result.Session != nil && !result.Session.validate() || result.ScopeGeneration < 0 ||
+		(result.Context == "") != (result.Namespace == "") || result.ReadOnly != (result.Context != "") ||
+		result.Context != "" && (!domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace)) ||
+		result.RunActive != result.RunID.Valid() {
+		return false
+	}
+	return true
 }
 
 // UIResourceSelectionResult accepts or rejects one request-bound ResourceRef.
@@ -52,7 +183,7 @@ func (result UIResourceSelectionResult) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	if result.Failure != "" {
-		if !result.Failure.valid() || result.Resource != nil || result.Cleared {
+		if !result.Failure.validOperational() || result.Resource != nil || result.Cleared {
 			return ErrInvalidUIEvent
 		}
 		return nil

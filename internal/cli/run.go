@@ -47,7 +47,7 @@ const resumeHelp = `Usage:
   kupilot resume [SESSION_ID | --last]
 
 Resume an eligible Session by picker, exact Session ID, or --last.
-Session resume is unavailable in this development build.
+Resume never starts a model request, Tool call, or Kubernetes read automatically.
 `
 
 const versionHelp = `Usage:
@@ -67,8 +67,7 @@ Show help for a command.
 // StartFunc accepts a parsed Session start intent from the delivery adapter.
 type StartFunc func(context.Context, StartIntent) error
 
-// UnavailableError reports that the requested start path is not implemented in
-// the current development build.
+// UnavailableError reports that the requested start path cannot be initialized.
 type UnavailableError struct{}
 
 func (UnavailableError) Error() string {
@@ -140,9 +139,9 @@ func Run(
 		var unavailable UnavailableError
 		if errors.As(err, &unavailable) {
 			if intent.Kind == IntentNew {
-				writeSafe(stderr, "Starting a new Session is unavailable in this development build.\n")
+				writeSafe(stderr, "Starting a new Session is unavailable.\n")
 			} else {
-				writeSafe(stderr, "Session resume is unavailable in this development build.\n")
+				writeSafe(stderr, "Session resume is unavailable.\n")
 			}
 			return ExitUnavailable
 		}

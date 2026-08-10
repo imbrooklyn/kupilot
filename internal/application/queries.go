@@ -1,7 +1,10 @@
 package application
 
 import (
+	"context"
 	"errors"
+	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -21,6 +24,13 @@ var (
 	ErrInvalidUIQuery = errors.New("UI query data is invalid")
 	// ErrInvalidUIQueryResult reports an invalid bounded query projection.
 	ErrInvalidUIQueryResult = errors.New("UI query result is invalid")
+	// ErrSessionResumeUnavailable is the non-disclosing missing, corrupt, or
+	// otherwise ineligible exact-resume outcome.
+	ErrSessionResumeUnavailable = errors.New("the Session is unavailable for resume")
+	// ErrSessionNotResumable is the stable minimal-persistence outcome.
+	ErrSessionNotResumable = errors.New("the Session cannot be resumed (session_not_resumable)")
+	// ErrNoResumableSession reports an empty global resume set.
+	ErrNoResumableSession = errors.New("no resumable Session is available")
 )
 
 // UIStartKind identifies the four Session start paths admitted by the product.
@@ -35,12 +45,92 @@ const (
 
 // UIStartIntent is the delivery-neutral startup state consumed by the TUI.
 type UIStartIntent struct {
-	Kind      UIStartKind
-	SessionID domain.SessionID
+	Kind                UIStartKind
+	SessionID           domain.SessionID
+	ExplicitScope       bool
+	ConfiguredContext   string
+	ConfiguredNamespace string
+}
+
+// UISessionState is the bounded current Session projection used by delivery.
+type UISessionState struct {
+	ID          domain.SessionID
+	Title       string
+	PrivacyMode domain.PrivacyMode
+	Resumed     bool
+}
+
+func (state UISessionState) validate() bool {
+	return state.ID.Valid() && validUIBoundedText(state.Title, 0, 512) &&
+		(state.PrivacyMode == domain.PrivacyModeStandard || state.PrivacyMode == domain.PrivacyModeMinimal)
+}
+
+// UIStartResult is the side-effect result of one fixed CLI start intent.
+type UIStartResult struct {
+	Intent         UIStartIntent
+	Session        *UISessionState
+	ScopeCandidate *domain.ScopeCandidate
+}
+
+// Validate checks that only a new start creates a Session immediately.
+func (result UIStartResult) Validate() error {
+	if result.Intent.Validate() != nil {
+		return ErrInvalidUIQueryResult
+	}
+	if result.Intent.Kind == UIStartNew {
+		if result.Session == nil || !result.Session.validate() || result.Session.Resumed || result.ScopeCandidate != nil {
+			return ErrInvalidUIQueryResult
+		}
+		return nil
+	}
+	if result.Session != nil {
+		return ErrInvalidUIQueryResult
+	}
+	if result.ScopeCandidate != nil && result.ScopeCandidate.Validate() != nil {
+		return ErrInvalidUIQueryResult
+	}
+	return nil
+}
+
+// ResumeSessionRecord is safe global picker metadata returned by a history
+// adapter before UI filtering.
+type ResumeSessionRecord struct {
+	ID          domain.SessionID
+	Title       string
+	UpdatedAt   time.Time
+	PrivacyMode domain.PrivacyMode
+	LastScope   *domain.ScopeCandidate
+}
+
+// ResumedSessionRecord contains only a validated standard Session and bounded
+// committed safe history. Historic values never carry live authority.
+type ResumedSessionRecord struct {
+	Session  domain.Session
+	Messages []domain.Message
+}
+
+// SessionResumeStore owns the three explicit history reads admitted by the
+// product. Bare startup has no method that can query history implicitly.
+type SessionResumeStore interface {
+	ListResumable(context.Context, int) ([]ResumeSessionRecord, error)
+	ResumeByID(context.Context, domain.SessionID) (ResumedSessionRecord, error)
+	ResumeLatest(context.Context) (ResumedSessionRecord, error)
+}
+
+// StartupMaintenance owns mandatory bounded recovery and retention work. It
+// performs no model, Tool, or Kubernetes action.
+type StartupMaintenance interface {
+	RecoverInterrupted(context.Context, time.Time) error
+	CleanupRetention(context.Context, time.Time) error
 }
 
 // Validate checks that only exact-ID resume carries a Session identifier.
 func (intent UIStartIntent) Validate() error {
+	if (intent.ConfiguredContext != "" && !domain.ValidContextName(intent.ConfiguredContext)) ||
+		(intent.ConfiguredNamespace != "" && !domain.ValidNamespaceName(intent.ConfiguredNamespace)) ||
+		intent.ExplicitScope && intent.ConfiguredContext == "" && intent.ConfiguredNamespace == "" {
+		return ErrInvalidUIStartIntent
+	}
 	switch intent.Kind {
 	case UIStartNew, UIStartResumePicker, UIStartResumeLast:
 		if intent.SessionID != "" {
@@ -105,12 +195,17 @@ func (query UICompletionQuery) Validate() error {
 type UIQueryFailureCode string
 
 const (
-	UIQueryUnavailable UIQueryFailureCode = "unavailable"
-	UIQueryForbidden   UIQueryFailureCode = "forbidden"
-	UIQueryTimeout     UIQueryFailureCode = "timeout"
+	UIQueryUnavailable  UIQueryFailureCode = "unavailable"
+	UIQueryForbidden    UIQueryFailureCode = "forbidden"
+	UIQueryTimeout      UIQueryFailureCode = "timeout"
+	UIQueryNotResumable UIQueryFailureCode = "session_not_resumable"
 )
 
 func (code UIQueryFailureCode) valid() bool {
+	return code == UIQueryUnavailable || code == UIQueryForbidden || code == UIQueryTimeout || code == UIQueryNotResumable
+}
+
+func (code UIQueryFailureCode) validOperational() bool {
 	return code == UIQueryUnavailable || code == UIQueryForbidden || code == UIQueryTimeout
 }
 
@@ -169,7 +264,7 @@ func (result UICompletionResult) Validate() error {
 		return ErrInvalidUIQueryResult
 	}
 	if result.Failure != "" {
-		if !result.Failure.valid() || count != 0 {
+		if !result.Failure.validOperational() || count != 0 {
 			return ErrInvalidUIQueryResult
 		}
 		return nil
@@ -301,9 +396,25 @@ func (request UIResumeRequest) Validate() error {
 
 // UIResumedSession is safe history metadata with no live scope authority.
 type UIResumedSession struct {
-	Session       UISessionCandidate
-	SavedScope    *domain.ScopeCandidate
-	SavedResource *UIResourceCandidate
+	ResumeRequestID uint64
+	Session         UISessionCandidate
+	SavedScope      *domain.ScopeCandidate
+	SavedResource   *UIResourceCandidate
+	History         []UIHistoryMessage
+}
+
+// UIHistoryMessage is bounded committed conversation content. It is historic
+// display only and contains no Evidence object or live run authority.
+type UIHistoryMessage struct {
+	Role    domain.MessageRole
+	Format  domain.MessageFormat
+	Content string
+}
+
+func (message UIHistoryMessage) valid() bool {
+	return (message.Role == domain.MessageRoleUser || message.Role == domain.MessageRoleAssistant || message.Role == domain.MessageRoleSystemNotice) &&
+		(message.Format == domain.MessageFormatPlain || message.Format == domain.MessageFormatMarkdown) &&
+		validUIBoundedText(message.Content, 1, MaxQuestionBytes)
 }
 
 // UIResumeResult returns either one eligible Session or one fixed failure.
@@ -325,17 +436,55 @@ func (result UIResumeResult) Validate() error {
 		}
 		return nil
 	}
-	if result.Session == nil || !validSessionCandidates([]UISessionCandidate{result.Session.Session}) {
+	if result.Session == nil || !validUIResumedSession(*result.Session, result.RequestID) {
 		return ErrInvalidUIQueryResult
-	}
-	if result.Session.SavedScope != nil && result.Session.SavedScope.Validate() != nil {
-		return ErrInvalidUIQueryResult
-	}
-	if result.Session.SavedResource != nil {
-		if result.Session.SavedScope == nil || result.Session.SavedResource.Namespace != result.Session.SavedScope.Namespace ||
-			!validResourceCandidates([]UIResourceCandidate{*result.Session.SavedResource}) {
-			return ErrInvalidUIQueryResult
-		}
 	}
 	return nil
+}
+
+func validUIResumedSession(session UIResumedSession, requestID uint64) bool {
+	if session.ResumeRequestID != requestID ||
+		!validSessionCandidates([]UISessionCandidate{session.Session}) || len(session.History) > 100 {
+		return false
+	}
+	for _, message := range session.History {
+		if !message.valid() {
+			return false
+		}
+	}
+	if session.SavedScope != nil && session.SavedScope.Validate() != nil {
+		return false
+	}
+	if session.SavedResource != nil {
+		if session.SavedScope == nil || session.SavedResource.Namespace != session.SavedScope.Namespace ||
+			!validResourceCandidates([]UIResourceCandidate{*session.SavedResource}) {
+			return false
+		}
+	}
+	return true
+}
+
+func (record ResumeSessionRecord) valid() bool {
+	if !record.ID.Valid() || record.PrivacyMode != domain.PrivacyModeStandard ||
+		!validUIBoundedText(record.Title, 0, 512) || record.UpdatedAt.IsZero() || record.UpdatedAt.UnixMilli() < 0 {
+		return false
+	}
+	return record.LastScope == nil || record.LastScope.Validate() == nil
+}
+
+func (record ResumedSessionRecord) valid() bool {
+	if record.Session.Validate() != nil || !record.Session.HasResumableMetadata() ||
+		len(record.Messages) == 0 || len(record.Messages) > 100 {
+		return false
+	}
+	for _, message := range record.Messages {
+		if message.Validate() != nil || message.SessionID != record.Session.ID || message.Status != domain.MessageStatusCommitted {
+			return false
+		}
+	}
+	return true
+}
+
+func sessionRecordMatches(record ResumeSessionRecord, filter string) bool {
+	return filter == "" || strings.Contains(strings.ToLower(record.Title), strings.ToLower(filter))
 }

@@ -258,6 +258,33 @@ func TestUpdateDisabledSlashHasZeroAction(t *testing.T) {
 	}
 }
 
+func TestSessionAndStatusSlashCommandsDispatchTypedApplicationIntents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		draft    string
+		wantKind application.UICommandKind
+		wantText string
+	}{
+		{draft: "/new", wantKind: application.UICommandNewSession},
+		{draft: "/rename", wantKind: application.UICommandRenameSession},
+		{draft: "/rename Incident review", wantKind: application.UICommandRenameSession, wantText: "Incident review"},
+		{draft: "/status", wantKind: application.UICommandShowStatus},
+	}
+	for _, test := range tests {
+		t.Run(test.draft, func(t *testing.T) {
+			t.Parallel()
+			model := newTestModel()
+			model, _ = updateModel(t, model, tea.PasteMsg{Content: test.draft})
+			_, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+			command := applicationCommandFromCmd(t, cmd)
+			if command.Kind != test.wantKind || command.Text != test.wantText {
+				t.Fatalf("command = %#v", command)
+			}
+		})
+	}
+}
+
 func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 	t.Parallel()
 

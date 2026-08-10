@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/cli"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 )
 
@@ -32,13 +34,13 @@ func TestCompositionRoot(t *testing.T) {
 		{
 			name:      "new Session unavailable",
 			wantCode:  cli.ExitUnavailable,
-			wantError: "Starting a new Session is unavailable in this development build.\n",
+			wantError: "Starting a new Session is unavailable.\n",
 		},
 		{
 			name:      "resume unavailable",
 			args:      []string{"resume"},
 			wantCode:  cli.ExitUnavailable,
-			wantError: "Session resume is unavailable in this development build.\n",
+			wantError: "Session resume is unavailable.\n",
 		},
 		{
 			name:       "help short circuit",
@@ -76,6 +78,40 @@ func TestCompositionRoot(t *testing.T) {
 			}
 			if stderr.String() != tt.wantError {
 				t.Fatalf("stderr = %q, want %q", stderr.String(), tt.wantError)
+			}
+		})
+	}
+}
+
+func TestApplicationStartIntentPreservesOnlyExplicitScopeAuthority(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a25"
+	tests := []struct {
+		name         string
+		input        cli.StartIntent
+		want         application.UIStartIntent
+		wantActivate bool
+	}{
+		{name: "new", input: cli.StartIntent{Kind: cli.IntentNew}, want: application.UIStartIntent{Kind: application.UIStartNew}, wantActivate: true},
+		{name: "picker", input: cli.StartIntent{Kind: cli.IntentResumePicker}, want: application.UIStartIntent{Kind: application.UIStartResumePicker}},
+		{name: "exact", input: cli.StartIntent{Kind: cli.IntentResumeID, SessionID: sessionID}, want: application.UIStartIntent{Kind: application.UIStartResumeID, SessionID: domain.SessionID(sessionID)}},
+		{name: "last", input: cli.StartIntent{Kind: cli.IntentResumeLast}, want: application.UIStartIntent{Kind: application.UIStartResumeLast}},
+		{
+			name:  "resume with explicit Namespace",
+			input: cli.StartIntent{Kind: cli.IntentResumeLast, Options: cli.StartOptions{Namespace: "payments", NamespaceSet: true}},
+			want: application.UIStartIntent{
+				Kind: application.UIStartResumeLast, ExplicitScope: true, ConfiguredNamespace: "payments",
+			},
+			wantActivate: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := applicationStartIntent(test.input)
+			if err != nil || got != test.want || shouldActivateInitialScope(got) != test.wantActivate {
+				t.Fatalf("applicationStartIntent() = %#v, %v; activate = %v", got, err, shouldActivateInitialScope(got))
 			}
 		})
 	}

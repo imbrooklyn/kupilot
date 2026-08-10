@@ -116,6 +116,7 @@ func TestResumeScopeConflictHasZeroScopeActionUntilExplicitChoice(t *testing.T) 
 		model, _ = updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
 			RequestID: request.RequestID, Mode: request.Mode,
 			Session: &application.UIResumedSession{
+				ResumeRequestID: request.RequestID,
 				Session: application.UISessionCandidate{
 					ID: resumedID, Title: "Resumed Session", UpdatedAtUnixMillis: 1,
 					Context: "saved", Namespace: "payments", PrivacyMode: domain.PrivacyModeStandard,
@@ -135,8 +136,10 @@ func TestResumeScopeConflictHasZeroScopeActionUntilExplicitChoice(t *testing.T) 
 		t.Fatal("fake Application started with a scope action")
 	}
 	keepCurrent, cmd := updateModel(t, keepCurrent, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil || fake.scopeActions != 0 || !keepCurrent.session.Resumed || keepCurrent.scope.Switching {
-		t.Fatal("default keep-current choice dispatched a scope action")
+	keepCommand := fake.consumeApplicationCommand(t, cmd)
+	if keepCommand.Kind != application.UICommandAcceptResume || keepCommand.Scope != nil || fake.scopeActions != 0 ||
+		keepCurrent.session.Resumed || !keepCurrent.scope.Switching {
+		t.Fatal("default keep-current choice was not deferred to Application")
 	}
 
 	useSaved := newConflictModel(t)
@@ -146,7 +149,7 @@ func TestResumeScopeConflictHasZeroScopeActionUntilExplicitChoice(t *testing.T) 
 	}
 	useSaved, cmd = updateModel(t, useSaved, tea.KeyPressMsg{Code: tea.KeyEnter})
 	command := fake.consumeApplicationCommand(t, cmd)
-	if command.Kind != application.UICommandActivateScope || command.Scope == nil ||
+	if command.Kind != application.UICommandAcceptResume || command.Scope == nil ||
 		command.Scope.Context != "saved" || fake.scopeActions != 1 || !useSaved.scope.Switching {
 		t.Fatalf("saved-scope command = %#v, actions = %d", command, fake.scopeActions)
 	}
@@ -307,6 +310,10 @@ func (fake *fakeApplication) consumeApplicationCommand(t *testing.T, cmd tea.Cmd
 	switch command.Kind {
 	case application.UICommandSelectContext, application.UICommandSelectNamespace, application.UICommandActivateScope:
 		fake.scopeActions++
+	case application.UICommandAcceptResume:
+		if command.Scope != nil {
+			fake.scopeActions++
+		}
 	}
 	return command
 }

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 // Msg and Cmd keep Bubble Tea types confined to the TUI delivery package.
@@ -53,6 +54,23 @@ type ScopeResultMsg struct {
 // ResourceSelectionResultMsg carries one request-bound ResourceRef result.
 type ResourceSelectionResultMsg struct {
 	Result application.UIResourceSelectionResult
+}
+
+// CommandResultMsg carries one validated Application command outcome.
+type CommandResultMsg struct {
+	Result application.UICommandOutcome
+}
+
+// ApplicationFailureMsg carries code-authored delivery-safe text and the
+// applicable request identity needed to reject stale asynchronous failures.
+type ApplicationFailureMsg struct {
+	Message         string
+	RequestID       uint64
+	ScopeGeneration int64
+	RunID           domain.AgentRunID
+	Command         application.UICommandKind
+	Query           application.UICompletionKind
+	Resume          application.UIResumeMode
 }
 
 func sanitizeExternalText(value string, limit int) string {
