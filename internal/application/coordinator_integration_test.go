@@ -56,6 +56,12 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	auditRepository := sqlite.NewAuditRepository(database)
 
 	clock := newIntegrationClock()
+	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+		Store: sqlite.NewPrivacyRepository(database), Origin: "https://model.example", Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
 	identifiers := newIntegrationIDs()
 	scope := newIntegrationScope()
 	kubernetes := &integrationKube{canary: canary}
@@ -92,7 +98,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scope,
 		Runner: agentAdapter, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: redactor, UIEvents: uiEvents, Observer: observer, Now: clock.Now,
+		Questions: redactor, Privacy: privacyManager, UIEvents: uiEvents, Observer: observer, Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
@@ -104,6 +110,31 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
+	}
+	blockedCommand := application.StartRunCommand{
+		SessionID: session.ID, Question: "Why is the selected Pod not Ready? token=" + canary,
+		Resource: &domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+		},
+	}
+	if _, err := coordinator.StartRun(context.Background(), blockedCommand); !errors.Is(err, application.ErrConsentRequired) {
+		t.Fatalf("StartRun(before consent) error = %v", err)
+	}
+	if len(model.Requests()) != 0 || kubernetes.resourceCalls() != 0 {
+		t.Fatalf("pre-consent model/Kubernetes calls = %d/%d", len(model.Requests()), kubernetes.resourceCalls())
+	}
+	privacyOutcome, err := coordinator.ExecuteUICommand(context.Background(), application.UICommand{
+		Kind: application.UICommandShowPrivacy, RequestID: 41,
+	})
+	if err != nil || privacyOutcome.Privacy == nil || privacyOutcome.Privacy.Origin != "https://model.example" ||
+		privacyOutcome.Privacy.PolicyVersion != application.PrivacyPolicyVersion {
+		t.Fatalf("privacy review = %#v, %v", privacyOutcome, err)
+	}
+	if _, err := coordinator.ExecuteUICommand(context.Background(), application.UICommand{
+		Kind: application.UICommandAcceptPrivacy, RequestID: 41,
+		PrivacyRevision: privacyOutcome.Privacy.Revision,
+	}); err != nil {
+		t.Fatalf("accept privacy error = %v", err)
 	}
 	runID, err := coordinator.StartRun(context.Background(), application.StartRunCommand{
 		SessionID: session.ID,

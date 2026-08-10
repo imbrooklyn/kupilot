@@ -114,6 +114,12 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	toolRepository := sqlite.NewToolInvocationRepository(database)
 	auditRepository := sqlite.NewAuditRepository(database)
 	retentionRepository := sqlite.NewRetentionRepository(database)
+	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+		Store: sqlite.NewPrivacyRepository(database), Origin: validatedModel.Origin, Now: utcNow,
+	})
+	if err != nil {
+		return err
+	}
 	sessionService := sessioncontract.NewService(
 		sessionRepository, sessionRepository, messageRepository, runRepository, runRepository,
 	)
@@ -154,7 +160,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		},
 		Logs: tools.LogToolDependencies{
 			Reader: runtimeGateway, ScopeGuard: scopeManager,
-			EvidenceIDs: identifiers, Text: redactor, Policy: denyLogDataPolicy{}, Now: now,
+			EvidenceIDs: identifiers, Text: redactor, Policy: privacyLogDataPolicy{privacy: privacyManager}, Now: now,
 		},
 		Related: tools.RelatedToolDependencies{
 			Reader: runtimeGateway, ScopeGuard: scopeManager,
@@ -191,7 +197,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		Runner: agentAdapter, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: redactor, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
+		Questions: redactor, Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now,
 		UI: &application.CoordinatorUIConfig{
 			Sessions: sessionApplication, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
@@ -263,7 +269,6 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	shutdownContext, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), domain.MaxAgentRunDuration+15*time.Second)
 	shutdownErr := coordinator.Shutdown(shutdownContext)
 	cancelShutdown()
-	close(uiEventSink.events)
 	close(deliveryStop)
 	cancelEvents()
 	workers.Wait()
@@ -611,10 +616,22 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 	return errors.Join(closeErrors...)
 }
 
-type denyLogDataPolicy struct{}
+type privacyLogDataPolicy struct {
+	privacy *application.PrivacyManager
+}
 
-func (denyLogDataPolicy) AuthorizeLogRead(context.Context, tools.LogPolicyRequest) tools.LogPolicyDecision {
-	return tools.LogPolicyDenied
+func (policy privacyLogDataPolicy) AuthorizeLogRead(ctx context.Context, _ tools.LogPolicyRequest) tools.LogPolicyDecision {
+	if policy.privacy == nil {
+		return tools.LogPolicyDenied
+	}
+	switch policy.privacy.AuthorizeLogs(ctx) {
+	case application.PrivacyLogAllowed:
+		return tools.LogPolicyAllowed
+	case application.PrivacyLogConsentRequired:
+		return tools.LogPolicyConsentRequired
+	default:
+		return tools.LogPolicyDenied
+	}
 }
 
 type slogRunObserver struct {

@@ -59,6 +59,7 @@ type UICommandOutcome struct {
 	Scope     *UIScopeResult
 	Resource  *UIResourceSelectionResult
 	Status    *UIStatusResult
+	Privacy   *PrivacyReview
 	RunID     domain.AgentRunID
 	Failure   UIQueryFailureCode
 }
@@ -68,6 +69,13 @@ func (result UICommandOutcome) Validate() error {
 	if result.Failure != "" && (!result.Failure.valid() ||
 		result.Failure == UIQueryNotResumable && result.Command != UICommandResumeSession) {
 		return ErrInvalidUIEvent
+	}
+	if result.Privacy != nil {
+		if result.Privacy.Validate() != nil ||
+			result.Command != UICommandShowPrivacy && result.Command != UICommandToggleLogs &&
+				!(result.Command == UICommandSubmitQuestion && result.Failure == UIQueryConsentRequired) {
+			return ErrInvalidUIEvent
+		}
 	}
 	switch result.Command {
 	case UICommandAcceptResume:
@@ -133,8 +141,19 @@ func (result UICommandOutcome) Validate() error {
 			return ErrInvalidUIEvent
 		}
 	case UICommandSubmitQuestion:
-		if result.RequestID != 0 || result.Failure == "" || result.RunID != "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
 			result.Resource != nil || result.Status != nil {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure == "" {
+			if !result.RunID.Valid() || result.Privacy != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.RunID != "" || result.Failure != UIQueryConsentRequired && result.Failure != UIQueryUnavailable ||
+			result.Failure == UIQueryConsentRequired && result.Privacy == nil ||
+			result.Failure != UIQueryConsentRequired && result.Privacy != nil {
 			return ErrInvalidUIEvent
 		}
 	case UICommandCancelRun:
@@ -143,8 +162,18 @@ func (result UICommandOutcome) Validate() error {
 			return ErrInvalidUIEvent
 		}
 	case UICommandShowPrivacy:
-		if result.RequestID != 0 || result.Failure == "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
-			result.Resource != nil || result.Status != nil || result.RunID != "" {
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Session != nil ||
+			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandToggleLogs:
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Session != nil ||
+			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandAcceptPrivacy, UICommandRejectPrivacy, UICommandRevokePrivacy, UICommandCancelPrivacy:
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy != nil || result.Session != nil ||
+			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
 	case UICommandResumeSession:

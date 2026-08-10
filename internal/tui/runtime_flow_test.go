@@ -1,14 +1,100 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.T) {
+	manager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+		Store: new(tuiPrivacyStore), Origin: "https://model.example",
+		Now: func() time.Time { return time.UnixMilli(30_000).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	review, err := manager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	blocked := newTestModel()
+	blocked, _ = updateModel(t, blocked, tea.PasteMsg{Content: "Why is the Pod pending?"})
+	blocked, cmd := updateModel(t, blocked, tea.KeyPressMsg{Code: tea.KeyEnter})
+	submit := applicationCommandFromCmd(t, cmd)
+	blocked, _ = updateModel(t, blocked, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandSubmitQuestion, RequestID: submit.RequestID,
+		Failure: application.UIQueryConsentRequired, Privacy: &review,
+	}})
+	if !blocked.dialog.Open() || blocked.pendingPrivacyID != submit.RequestID ||
+		!strings.Contains(blocked.render(), "https://model.example") {
+		t.Fatal("first transfer was not blocked on the exact privacy review")
+	}
+	blocked, cmd = updateModel(t, blocked, tea.KeyPressMsg{Code: tea.KeyEscape})
+	cancelReview := applicationCommandFromCmd(t, cmd)
+	if cancelReview.Kind != application.UICommandCancelPrivacy || cancelReview.RequestID != submit.RequestID {
+		t.Fatalf("privacy cancellation command = %#v", cancelReview)
+	}
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/privacy"})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	show := applicationCommandFromCmd(t, cmd)
+	if show.Kind != application.UICommandShowPrivacy || show.RequestID == 0 {
+		t.Fatalf("privacy show command = %#v", show)
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandShowPrivacy, RequestID: show.RequestID, Privacy: &review,
+	}})
+	frame := model.render()
+	for _, want := range []string{"https://model.example", application.PrivacyPolicyVersion, "user_question", "redacted_container_output", "Never eligible"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("privacy frame missing %q", want)
+		}
+	}
+	if strings.Contains(frame, "api-key-sink-canary") {
+		t.Fatal("privacy frame contained a credential canary")
+	}
+
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'l'})
+	toggle := applicationCommandFromCmd(t, cmd)
+	if toggle.Kind != application.UICommandToggleLogs || toggle.LogsEnabled == nil || !*toggle.LogsEnabled ||
+		toggle.PrivacyRevision != review.Revision {
+		t.Fatalf("privacy toggle command = %#v", toggle)
+	}
+	updated, err := manager.Decide(context.Background(), application.PrivacyActionToggleLogs, review.Revision, toggle.LogsEnabled)
+	if err != nil {
+		t.Fatalf("ToggleLogs() error = %v", err)
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandToggleLogs, RequestID: show.RequestID, Privacy: &updated,
+	}})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'a'})
+	accept := applicationCommandFromCmd(t, cmd)
+	if accept.Kind != application.UICommandAcceptPrivacy || accept.PrivacyRevision != updated.Revision {
+		t.Fatalf("privacy accept command = %#v", accept)
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandAcceptPrivacy, RequestID: show.RequestID,
+	}})
+	if model.dialog.Open() || model.privacyReview != nil || model.pendingPrivacyID != 0 {
+		t.Fatal("accepted privacy review remained authoritative in the TUI")
+	}
+}
+
+type tuiPrivacyStore struct{}
+
+func (*tuiPrivacyStore) LoadPrivacy(context.Context) (application.PrivacyRecord, bool, error) {
+	return application.PrivacyRecord{}, false, nil
+}
+
+func (*tuiPrivacyStore) SavePrivacy(context.Context, application.PrivacyRecord) error { return nil }
 
 func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing.T) {
 	t.Parallel()

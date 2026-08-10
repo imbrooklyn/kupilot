@@ -1,0 +1,159 @@
+package application
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestPrivacyConsentLifecycleBindsOriginCategoriesAndPolicy(t *testing.T) {
+	store := new(privacyTestStore)
+	now := privacyTestClock()
+	manager := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, now)
+	review, err := manager.Review(context.Background())
+	if err != nil || review.Validate() != nil || review.Decision != PrivacyDecisionPending || review.LogsEnabled {
+		t.Fatalf("initial Review() = %#v, %v", review, err)
+	}
+	if allowed, err := manager.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("pre-consent AuthorizeModel() = %v, %v", allowed, err)
+	}
+	if manager.AuthorizeLogs(context.Background()) != PrivacyLogDenied {
+		t.Fatal("disabled logs were not denied before any Tool action")
+	}
+
+	accepted, err := manager.Decide(context.Background(), PrivacyActionAccept, review.Revision, nil)
+	if err != nil || accepted.Decision != PrivacyDecisionAccepted {
+		t.Fatalf("Accept() = %#v, %v", accepted, err)
+	}
+	if allowed, err := manager.AuthorizeModel(context.Background()); err != nil || !allowed {
+		t.Fatalf("accepted AuthorizeModel() = %v, %v", allowed, err)
+	}
+	record := store.snapshot()
+	if record.OriginHash == "" || strings.Contains(record.OriginHash, "model.example") ||
+		len(record.Categories) != len(privacyCategoryCatalog)-1 {
+		t.Fatalf("stored consent = %#v", record)
+	}
+
+	restarted := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, now)
+	if allowed, err := restarted.AuthorizeModel(context.Background()); err != nil || !allowed {
+		t.Fatalf("restart AuthorizeModel() = %v, %v", allowed, err)
+	}
+	review, _ = restarted.Review(context.Background())
+	enableLogs := true
+	pending, err := restarted.Decide(context.Background(), PrivacyActionToggleLogs, review.Revision, &enableLogs)
+	if err != nil || pending.Decision != PrivacyDecisionPending || !pending.LogsEnabled {
+		t.Fatalf("ToggleLogs() = %#v, %v", pending, err)
+	}
+	if allowed, _ := restarted.AuthorizeModel(context.Background()); allowed ||
+		restarted.AuthorizeLogs(context.Background()) != PrivacyLogConsentRequired {
+		t.Fatal("category change inherited stale consent")
+	}
+	accepted, err = restarted.Decide(context.Background(), PrivacyActionAccept, pending.Revision, nil)
+	if err != nil || !accepted.LogsEnabled || restarted.AuthorizeLogs(context.Background()) != PrivacyLogAllowed {
+		t.Fatalf("log-category Accept() = %#v, %v", accepted, err)
+	}
+
+	changedOrigin := newPrivacyTestManager(t, store, "https://other.example", PrivacyPolicyVersion, now)
+	if allowed, _ := changedOrigin.AuthorizeModel(context.Background()); allowed {
+		t.Fatal("changed origin reused consent")
+	}
+	changedPolicy := newPrivacyTestManager(t, store, "https://model.example", "2026-08-10.v2", now)
+	if allowed, _ := changedPolicy.AuthorizeModel(context.Background()); allowed {
+		t.Fatal("changed policy version reused consent")
+	}
+}
+
+func TestPrivacyDecisionsRejectStaleCancelledAndFailedWrites(t *testing.T) {
+	store := new(privacyTestStore)
+	manager := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, privacyTestClock())
+	review, _ := manager.Review(context.Background())
+	if _, err := manager.Decide(context.Background(), PrivacyActionAccept, strings.Repeat("0", 64), nil); !errors.Is(err, ErrPrivacyReviewStale) || store.saveCalls != 0 {
+		t.Fatalf("stale decision error/calls = %v/%d", err, store.saveCalls)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := manager.Decide(cancelled, PrivacyActionAccept, review.Revision, nil); !errors.Is(err, context.Canceled) || store.saveCalls != 0 {
+		t.Fatalf("cancelled decision error/calls = %v/%d", err, store.saveCalls)
+	}
+	store.saveErr = errors.New("synthetic privacy store failure")
+	if _, err := manager.Decide(context.Background(), PrivacyActionAccept, review.Revision, nil); !errors.Is(err, ErrPrivacyPersistence) {
+		t.Fatalf("failed decision error = %v", err)
+	}
+	manager.FailClosed()
+	if allowed, err := manager.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("fail-closed AuthorizeModel() = %v, %v", allowed, err)
+	}
+}
+
+type privacyTestStore struct {
+	mu        sync.Mutex
+	record    PrivacyRecord
+	found     bool
+	loadErr   error
+	saveErr   error
+	loadCalls int
+	saveCalls int
+}
+
+func (store *privacyTestStore) LoadPrivacy(ctx context.Context) (PrivacyRecord, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.loadCalls++
+	if err := ctx.Err(); err != nil {
+		return PrivacyRecord{}, false, err
+	}
+	return clonePrivacyRecord(store.record), store.found, store.loadErr
+}
+
+func (store *privacyTestStore) SavePrivacy(ctx context.Context, record PrivacyRecord) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store.saveCalls++
+	if store.saveErr != nil {
+		return store.saveErr
+	}
+	store.record = clonePrivacyRecord(record)
+	store.found = true
+	return nil
+}
+
+func (store *privacyTestStore) snapshot() PrivacyRecord {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return clonePrivacyRecord(store.record)
+}
+
+func privacyTestClock() func() time.Time {
+	var mu sync.Mutex
+	next := time.UnixMilli(10_000).UTC()
+	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		value := next
+		next = next.Add(time.Millisecond)
+		return value
+	}
+}
+
+func newPrivacyTestManager(
+	t *testing.T,
+	store PrivacyStore,
+	origin string,
+	policyVersion string,
+	now func() time.Time,
+) *PrivacyManager {
+	t.Helper()
+	manager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: store, Origin: origin, PolicyVersion: policyVersion, Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	return manager
+}

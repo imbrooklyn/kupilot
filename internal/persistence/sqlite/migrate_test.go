@@ -106,7 +106,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 2, "000002_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 3, "000003_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -285,6 +285,7 @@ func assertInitialSchema(t *testing.T, db *sql.DB) {
 		"evidence_items",
 		"messages",
 		"model_requests",
+		"privacy_consents",
 		"schema_migrations",
 		"sessions",
 		"settings",
@@ -298,28 +299,37 @@ func assertInitialSchema(t *testing.T, db *sql.DB) {
 
 func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion string) {
 	t.Helper()
-	var version int
-	var name string
-	var checksum string
-	var appliedAt int64
-	var applicationVersion string
-	err := db.QueryRowContext(context.Background(), `
+	rows, err := db.QueryContext(context.Background(), `
 		SELECT version, name, checksum, applied_at_ms, app_version
 		FROM schema_migrations
 		ORDER BY version
-	`).Scan(&version, &name, &checksum, &appliedAt, &applicationVersion)
+	`)
 	if err != nil {
 		t.Fatalf("migration record query error = %v", err)
 	}
-	if version != 1 || name != "000001_initial.sql" || len(checksum) != 64 || appliedAt <= 0 || applicationVersion != wantApplicationVersion {
-		t.Fatalf("migration record = (%d, %q, checksum=%d bytes, %d, %q)", version, name, len(checksum), appliedAt, applicationVersion)
+	defer rows.Close()
+	wantNames := []string{"000001_initial.sql", "000002_privacy_consent.sql"}
+	count := 0
+	for rows.Next() {
+		var version int
+		var name string
+		var checksum string
+		var appliedAt int64
+		var applicationVersion string
+		if err := rows.Scan(&version, &name, &checksum, &appliedAt, &applicationVersion); err != nil {
+			t.Fatalf("migration record scan error = %v", err)
+		}
+		if count >= len(wantNames) || version != count+1 || name != wantNames[count] || len(checksum) != 64 ||
+			appliedAt <= 0 || applicationVersion != wantApplicationVersion {
+			t.Fatalf("migration record = (%d, %q, checksum=%d bytes, %d, %q)", version, name, len(checksum), appliedAt, applicationVersion)
+		}
+		count++
 	}
-	var count int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(version) FROM schema_migrations`).Scan(&count); err != nil {
-		t.Fatalf("migration count error = %v", err)
+	if err := rows.Err(); err != nil {
+		t.Fatalf("migration record rows error = %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("migration count = %d, want 1", count)
+	if count != len(wantNames) {
+		t.Fatalf("migration count = %d, want %d", count, len(wantNames))
 	}
 }
 

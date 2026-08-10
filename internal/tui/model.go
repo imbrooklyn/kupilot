@@ -125,6 +125,10 @@ type Model struct {
 	pendingScopeID    uint64
 	pendingResourceID uint64
 	pendingResource   ResourceView
+	pendingSubmitID   uint64
+	pendingPrivacyID  uint64
+	privacyReview     *application.PrivacyReview
+	privacyPending    bool
 	quitAfterCancel   bool
 	terminalFocused   bool
 

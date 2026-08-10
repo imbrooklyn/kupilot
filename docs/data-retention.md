@@ -47,7 +47,7 @@ the user's controls for storage outside KuPilot.
 | Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. Configuration may select 0 days, which keeps detail only in process memory, or an explicit longer period. |
 | Ordinary `v0.1` read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
 | `v0.2` approval, decision, pre-write intent, write-attempt, and verification AuditEvents | 180 days | Measured from the relevant event time; user Session deletion or clear-all may remove them earlier because KuPilot is not a compliance ledger. |
-| Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, decision time, endpoint-origin hash, and eligible-category flags. Any origin, category, or policy-version change requires confirmation again. |
+| Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
 
 <!-- markdownlint-enable MD013 -->

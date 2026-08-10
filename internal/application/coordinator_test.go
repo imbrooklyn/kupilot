@@ -354,6 +354,52 @@ func TestCoordinatorShutdownCancelsAndWaitsActiveRun(t *testing.T) {
 	}
 }
 
+func TestCoordinatorShutdownOwnsConsentReadDuringRunAdmission(t *testing.T) {
+	t.Parallel()
+	clock := newCoordinatorClock()
+	var runnerCalls atomic.Int64
+	runner := runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
+		runnerCalls.Add(1)
+		return agent.RunOutcome{}
+	})
+	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	store := newBlockingPrivacyStore()
+	privacy, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: store, Origin: "https://model.example", Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	coordinator.privacy = privacy
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, startErr := coordinator.StartRun(context.Background(), StartRunCommand{
+			SessionID: session.ID, Question: "Inspect the selected Pod.",
+		})
+		startDone <- startErr
+	}()
+	<-store.entered
+	shutdownErr := coordinator.Shutdown(context.Background())
+	select {
+	case <-store.cancelled:
+	default:
+		close(store.release)
+		t.Fatalf("Shutdown() returned before cancelling the consent read: %v", shutdownErr)
+	}
+	close(store.release)
+	if shutdownErr != nil {
+		t.Fatalf("Shutdown() error = %v", shutdownErr)
+	}
+	if startErr := <-startDone; !errors.Is(startErr, context.Canceled) {
+		t.Fatalf("StartRun() error = %v", startErr)
+	}
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("Agent calls before consent = %d", runnerCalls.Load())
+	}
+}
+
 type runnerFunc func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome
 
 func (function runnerFunc) Run(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
@@ -625,13 +671,81 @@ func newCoordinatorHarness(
 		Sessions: persistence, Runs: persistence, Tools: persistence,
 		Audits: persistence,
 		Scope:  scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: security.NewRedactor(), UIEvents: ui,
+		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: ui,
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
 	}
 	return coordinator, persistence, scope, ui
+}
+
+type coordinatorPrivacyStore struct {
+	mu     sync.Mutex
+	record PrivacyRecord
+	found  bool
+}
+
+type blockingPrivacyStore struct {
+	entered   chan struct{}
+	release   chan struct{}
+	cancelled chan struct{}
+}
+
+func newBlockingPrivacyStore() *blockingPrivacyStore {
+	return &blockingPrivacyStore{
+		entered: make(chan struct{}), release: make(chan struct{}), cancelled: make(chan struct{}),
+	}
+}
+
+func (store *blockingPrivacyStore) LoadPrivacy(ctx context.Context) (PrivacyRecord, bool, error) {
+	close(store.entered)
+	select {
+	case <-ctx.Done():
+		close(store.cancelled)
+		return PrivacyRecord{}, false, ctx.Err()
+	case <-store.release:
+		return PrivacyRecord{}, false, nil
+	}
+}
+
+func (*blockingPrivacyStore) SavePrivacy(context.Context, PrivacyRecord) error { return nil }
+
+func (store *coordinatorPrivacyStore) LoadPrivacy(context.Context) (PrivacyRecord, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return clonePrivacyRecord(store.record), store.found, nil
+}
+
+func (store *coordinatorPrivacyStore) SavePrivacy(_ context.Context, record PrivacyRecord) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.record = clonePrivacyRecord(record)
+	store.found = true
+	return nil
+}
+
+func newAcceptedCoordinatorPrivacy(t *testing.T) *PrivacyManager {
+	t.Helper()
+	next := int64(1_000)
+	now := func() time.Time {
+		next++
+		return time.UnixMilli(next).UTC()
+	}
+	manager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: new(coordinatorPrivacyStore), Origin: "https://model.example", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	review, err := manager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Privacy Review() error = %v", err)
+	}
+	if _, err := manager.Decide(context.Background(), PrivacyActionAccept, review.Revision, nil); err != nil {
+		t.Fatalf("Privacy Decide() error = %v", err)
+	}
+	return manager
 }
 
 func createCoordinatorSession(t *testing.T, coordinator *Coordinator) domain.Session {

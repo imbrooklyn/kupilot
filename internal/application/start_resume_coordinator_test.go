@@ -745,7 +745,7 @@ func newUIScopeCoordinatorHarness(t *testing.T, manager *ScopeManager, history *
 	coordinator, err := NewCoordinator(CoordinatorConfig{
 		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence,
 		Scope: manager, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: security.NewRedactor(), UIEvents: new(recordingUIEvents),
+		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{
 			Sessions: history, Titles: history, Startup: new(recordingStartupMaintenance), Scopes: manager,
@@ -786,7 +786,7 @@ func newUICoordinatorHarness(
 	coordinator, err := NewCoordinator(CoordinatorConfig{
 		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence,
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: security.NewRedactor(), UIEvents: new(recordingUIEvents),
+		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{Sessions: history, Titles: history, Startup: maintenance},
 	})

@@ -213,10 +213,16 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			if err != nil {
 				t.Fatalf("application.NewIdentifierGenerator() error = %v", err)
 			}
+			privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+				Store: sqlite.NewPrivacyRepository(database), Origin: "https://model.example", Now: func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatalf("application.NewPrivacyManager() error = %v", err)
+			}
 			coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 				Sessions: sessions, Runs: runs, Tools: tools, Audits: audits, Scope: scopeManager,
 				Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
-				Questions: security.NewRedactor(), UIEvents: integrationUIEvents{},
+				Questions: security.NewRedactor(), Privacy: privacyManager, UIEvents: integrationUIEvents{},
 				Observer: application.RunObserverFunc(func(context.Context, application.RunObservation) {}),
 				Now:      func() time.Time { return now },
 				UI: &application.CoordinatorUIConfig{

@@ -44,6 +44,7 @@ type CoordinatorConfig struct {
 	Identifiers        ApplicationIdentifierSource
 	AuditIdentifiers   AuditIdentifierSource
 	Questions          QuestionProcessor
+	Privacy            *PrivacyManager
 	UIEvents           UIEventSink
 	Observer           RunObserver
 	Now                func() time.Time
@@ -85,6 +86,7 @@ type Coordinator struct {
 	identifiers      ApplicationIdentifierSource
 	auditIdentifiers AuditIdentifierSource
 	questions        QuestionProcessor
+	privacy          *PrivacyManager
 	uiEvents         UIEventSink
 	observer         RunObserver
 	now              func() time.Time
@@ -99,6 +101,7 @@ type Coordinator struct {
 	currentResumed   bool
 	pendingResume    *pendingResume
 	startupResume    *startupResumeState
+	privacyChallenge *privacyChallenge
 
 	closed              bool
 	persistenceDegraded bool
@@ -148,6 +151,11 @@ type startupResumeState struct {
 	currentCandidate *domain.ScopeCandidate
 }
 
+type privacyChallenge struct {
+	requestID uint64
+	revision  string
+}
+
 type persistenceActionKind uint8
 
 const (
@@ -188,7 +196,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.Sessions == nil || config.Runs == nil || config.Tools == nil ||
 		config.Audits == nil || config.Scope == nil || config.Runner == nil || config.Identifiers == nil ||
 		config.AuditIdentifiers == nil || config.Questions == nil || config.UIEvents == nil || config.Observer == nil ||
-		config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
+		config.Privacy == nil || config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
 		return nil, ErrCoordinatorDependency
 	}
@@ -210,6 +218,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		audits: config.Audits, scope: config.Scope,
 		runner: config.Runner, identifiers: config.Identifiers,
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
+		privacy:  config.Privacy,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, titles: titles, startup: startup,
@@ -609,7 +618,7 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		err := coordinator.CancelRun(ctx, CancelRunCommand{RunID: command.RunID, ScopeGeneration: command.ExpectedScopeGeneration})
 		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
 	case UICommandSubmitQuestion:
-		return UICommandOutcome{Command: command.Kind, Failure: UIQueryUnavailable}, nil
+		return coordinator.executeQuestionCommand(ctx, command)
 	}
 
 	requireIdle := command.Kind == UICommandAcceptResume
@@ -634,10 +643,140 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	case UICommandShowStatus:
 		status := coordinator.uiStatus()
 		return UICommandOutcome{Command: command.Kind, Status: &status}, nil
-	case UICommandShowPrivacy, UICommandResumeSession:
+	case UICommandShowPrivacy, UICommandAcceptPrivacy, UICommandRejectPrivacy,
+		UICommandRevokePrivacy, UICommandToggleLogs, UICommandCancelPrivacy:
+		return coordinator.executePrivacyCommand(ctx, command)
+	case UICommandResumeSession:
 		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
 	default:
 		return UICommandOutcome{}, ErrInvalidUICommand
+	}
+}
+
+func (coordinator *Coordinator) executeQuestionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	coordinator.mu.Lock()
+	var sessionID domain.SessionID
+	if coordinator.currentSession != nil {
+		sessionID = coordinator.currentSession.ID
+	}
+	coordinator.mu.Unlock()
+	if !sessionID.Valid() {
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
+	}
+	scope, current := coordinator.scope.CurrentScope()
+	if !current || scope.Generation != command.ExpectedScopeGeneration {
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
+	}
+	var resource *domain.ResourceRef
+	if coordinator.uiScopes != nil {
+		selected, err := coordinator.uiScopes.SelectedResource(scope)
+		if err != nil {
+			return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
+		}
+		resource = selected
+	}
+	runID, err := coordinator.StartRun(ctx, StartRunCommand{SessionID: sessionID, Question: command.Text, Resource: resource})
+	if errors.Is(err, ErrConsentRequired) {
+		review, reviewErr := coordinator.openPrivacyChallenge(ctx, command.RequestID)
+		if reviewErr != nil {
+			return UICommandOutcome{}, reviewErr
+		}
+		return UICommandOutcome{
+			Command: command.Kind, RequestID: command.RequestID,
+			Failure: UIQueryConsentRequired, Privacy: &review,
+		}, nil
+	}
+	if errors.Is(err, ErrScopeUnavailable) || errors.Is(err, ErrRunAlreadyActive) || errors.Is(err, ErrCoordinatorBusy) {
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
+	}
+	if err != nil {
+		return UICommandOutcome{}, err
+	}
+	return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, RunID: runID}, nil
+}
+
+func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	if command.Kind == UICommandShowPrivacy {
+		review, err := coordinator.openPrivacyChallenge(ctx, command.RequestID)
+		if err != nil {
+			return UICommandOutcome{}, err
+		}
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Privacy: &review}, nil
+	}
+	coordinator.mu.Lock()
+	challenge := coordinator.privacyChallenge
+	if challenge == nil || challenge.requestID != command.RequestID || challenge.revision != command.PrivacyRevision {
+		coordinator.mu.Unlock()
+		return UICommandOutcome{}, ErrPrivacyReviewStale
+	}
+	coordinator.privacyChallenge = nil
+	var cancel context.CancelFunc
+	if command.Kind == UICommandRejectPrivacy || command.Kind == UICommandRevokePrivacy || command.Kind == UICommandToggleLogs {
+		if coordinator.active != nil {
+			cancel = coordinator.active.cancel
+		} else if coordinator.startingCancel != nil {
+			cancel = coordinator.startingCancel
+		}
+	}
+	coordinator.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if command.Kind == UICommandCancelPrivacy {
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}, nil
+	}
+	action := PrivacyActionAccept
+	switch command.Kind {
+	case UICommandAcceptPrivacy:
+		action = PrivacyActionAccept
+	case UICommandRejectPrivacy:
+		action = PrivacyActionReject
+	case UICommandRevokePrivacy:
+		action = PrivacyActionRevoke
+	case UICommandToggleLogs:
+		action = PrivacyActionToggleLogs
+	default:
+		return UICommandOutcome{}, ErrInvalidUICommand
+	}
+	review, err := coordinator.privacy.Decide(ctx, action, command.PrivacyRevision, command.LogsEnabled)
+	if err != nil {
+		coordinator.privacy.FailClosed()
+		coordinator.markGlobalPersistenceDegraded()
+		coordinator.cancelActiveForPrivacyFailure()
+		return UICommandOutcome{}, err
+	}
+	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+	if command.Kind == UICommandToggleLogs {
+		coordinator.mu.Lock()
+		coordinator.privacyChallenge = &privacyChallenge{requestID: command.RequestID, revision: review.Revision}
+		coordinator.mu.Unlock()
+		result.Privacy = &review
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) openPrivacyChallenge(ctx context.Context, requestID uint64) (PrivacyReview, error) {
+	review, err := coordinator.privacy.Review(ctx)
+	if err != nil {
+		coordinator.privacy.FailClosed()
+		coordinator.markGlobalPersistenceDegraded()
+		return PrivacyReview{}, err
+	}
+	coordinator.mu.Lock()
+	coordinator.privacyChallenge = &privacyChallenge{requestID: requestID, revision: review.Revision}
+	coordinator.mu.Unlock()
+	return review, nil
+}
+
+func (coordinator *Coordinator) cancelActiveForPrivacyFailure() {
+	coordinator.mu.Lock()
+	cancel := coordinator.startingCancel
+	if coordinator.active != nil {
+		cancel = coordinator.active.cancel
+	}
+	coordinator.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -1213,52 +1352,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	processed, err := coordinator.questions.Process(command.Question, MaxQuestionBytes)
-	if err != nil || processed.Value == "" || len(processed.Value) > MaxQuestionBytes {
-		return "", ErrQuestionRejected
-	}
-	scope, current := coordinator.scope.CurrentScope()
-	if !current || scope.Validate() != nil || command.Resource != nil && command.Resource.Namespace != scope.Namespace {
-		return "", ErrScopeUnavailable
-	}
-	runID, runErr := coordinator.identifiers.NewAgentRunID()
-	messageID, messageErr := coordinator.identifiers.NewMessageID()
-	startedAt := coordinator.now()
-	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
-		return "", ErrCoordinatorDependency
-	}
-	input, err := agent.NewRunInput(
-		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits,
-	)
-	if err != nil {
-		return "", ErrCoordinatorDependency
-	}
 	runContext, cancelRun := context.WithCancel(ctx)
-	bridge, err := newEventBridge(runID, scope.Generation, coordinator.uiEvents)
-	if err != nil {
-		cancelRun()
-		return "", ErrCoordinatorDependency
-	}
-	state := &activeRun{
-		input: input, cancel: cancelRun, done: make(chan struct{}), bridge: bridge,
-		tools: make(map[domain.ToolInvocationID]*pendingTool),
-	}
-	requestMessage := domain.Message{
-		ID: messageID, SessionID: command.SessionID, RunID: &runID,
-		Role: domain.MessageRoleUser, Content: processed.Value, Format: domain.MessageFormatPlain,
-		Status: domain.MessageStatusCommitted, Scope: scopeSnapshotPointer(scope.Snapshot()),
-		Resource: cloneResource(command.Resource), Hash: domain.MessageContentHash(processed.Value), CreatedAt: startedAt,
-	}
-	state.run = domain.AgentRun{
-		ID: runID, SessionID: command.SessionID, RequestMessageID: messageID,
-		Status: domain.AgentRunStatusRunning, Scope: scope.Snapshot(), Resource: cloneResource(command.Resource),
-		PromptVersion: input.PromptVersion(), ToolCatalogVersion: input.CatalogVersion(), StartedAt: &startedAt,
-	}
-	if requestMessage.Validate() != nil || state.run.Validate() != nil {
-		cancelRun()
-		return "", ErrCoordinatorDependency
-	}
-
 	coordinator.mu.Lock()
 	if coordinator.closed {
 		coordinator.mu.Unlock()
@@ -1286,6 +1380,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	startingDone := coordinator.startingDone
 	coordinator.mu.Unlock()
 
+	var runID domain.AgentRunID
 	bound := false
 	launched := false
 	defer func() {
@@ -1298,6 +1393,63 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		cancelRun()
 		coordinator.finishStarting(startingDone)
 	}()
+
+	authorized, privacyErr := coordinator.privacy.AuthorizeModel(runContext)
+	if privacyErr != nil {
+		if err := runContext.Err(); err != nil {
+			return "", err
+		}
+		coordinator.privacy.FailClosed()
+		coordinator.markGlobalPersistenceDegraded()
+		return "", ErrPersistenceUnavailable
+	}
+	if !authorized {
+		return "", ErrConsentRequired
+	}
+	processed, err := coordinator.questions.Process(command.Question, MaxQuestionBytes)
+	if err != nil || processed.Value == "" || len(processed.Value) > MaxQuestionBytes {
+		return "", ErrQuestionRejected
+	}
+	scope, current := coordinator.scope.CurrentScope()
+	if !current || scope.Validate() != nil || command.Resource != nil && command.Resource.Namespace != scope.Namespace {
+		return "", ErrScopeUnavailable
+	}
+	runID, runErr := coordinator.identifiers.NewAgentRunID()
+	messageID, messageErr := coordinator.identifiers.NewMessageID()
+	startedAt := coordinator.now()
+	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
+		return "", ErrCoordinatorDependency
+	}
+	input, err := agent.NewRunInput(
+		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits,
+	)
+	if err != nil {
+		return "", ErrCoordinatorDependency
+	}
+	bridge, err := newEventBridge(runID, scope.Generation, coordinator.uiEvents)
+	if err != nil {
+		return "", ErrCoordinatorDependency
+	}
+	state := &activeRun{
+		input: input, cancel: cancelRun, done: make(chan struct{}), bridge: bridge,
+		tools: make(map[domain.ToolInvocationID]*pendingTool),
+	}
+	requestMessage := domain.Message{
+		ID: messageID, SessionID: command.SessionID, RunID: &runID,
+		Role: domain.MessageRoleUser, Content: processed.Value, Format: domain.MessageFormatPlain,
+		Status: domain.MessageStatusCommitted, Scope: scopeSnapshotPointer(scope.Snapshot()),
+		Resource: cloneResource(command.Resource), Hash: domain.MessageContentHash(processed.Value), CreatedAt: startedAt,
+	}
+	state.run = domain.AgentRun{
+		ID: runID, SessionID: command.SessionID, RequestMessageID: messageID,
+		Status: domain.AgentRunStatusRunning, Scope: scope.Snapshot(), Resource: cloneResource(command.Resource),
+		PromptVersion: input.PromptVersion(), ToolCatalogVersion: input.CatalogVersion(), StartedAt: &startedAt,
+	}
+	if requestMessage.Validate() != nil || state.run.Validate() != nil {
+		cancelRun()
+		return "", ErrCoordinatorDependency
+	}
+
 	if err := coordinator.scope.BindRun(scope, runID, cancelRun); err != nil {
 		return "", ErrScopeUnavailable
 	}
@@ -1348,6 +1500,11 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	if coordinator == nil || ctx == nil || event.Validate() != nil {
 		return agent.EventSinkRejected
 	}
+	modelAuthorized := true
+	var privacyErr error
+	if event.Kind == agent.RunEventModelStreamStarted {
+		modelAuthorized, privacyErr = coordinator.privacy.AuthorizeModel(ctx)
+	}
 	coordinator.mu.Lock()
 	state := coordinator.active
 	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
@@ -1359,6 +1516,16 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	state.publishing = true
 	state.lastAgentSequence = event.Sequence
+	if !modelAuthorized || privacyErr != nil {
+		state.cancel()
+		coordinator.mu.Unlock()
+		if privacyErr != nil {
+			coordinator.privacy.FailClosed()
+			_ = coordinator.markRunPersistenceDegraded(ctx, state)
+		}
+		coordinator.finishPublishing(state)
+		return agent.EventSinkRejected
+	}
 	action, err := coordinator.acceptEventLocked(state, event)
 	coordinator.mu.Unlock()
 	if err != nil {
@@ -1366,11 +1533,21 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		return agent.EventSinkRejected
 	}
 
+	bridgeFailed := false
+	retentionFailed := false
+	if event.Terminal() && coordinator.startup != nil && !state.persistenceBad {
+		cleanupErr := coordinator.persist(ctx, func(operationContext context.Context) error {
+			return coordinator.startup.CleanupRetention(operationContext, coordinator.now())
+		})
+		if cleanupErr != nil {
+			retentionFailed = true
+			bridgeFailed = coordinator.markRunPersistenceDegraded(ctx, state) != nil
+		}
+	}
 	persistenceErr := coordinator.performPersistence(ctx, state, action)
 	persistenceFailed := errors.Is(persistenceErr, ErrPersistenceUnavailable)
-	bridgeFailed := false
 	if persistenceFailed {
-		bridgeFailed = coordinator.markRunPersistenceDegraded(ctx, state) != nil
+		bridgeFailed = coordinator.markRunPersistenceDegraded(ctx, state) != nil || bridgeFailed
 	} else if persistenceErr != nil {
 		bridgeFailed = true
 	}
@@ -1388,7 +1565,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	if bridgeFailed {
 		return agent.EventSinkRejected
 	}
-	if persistenceFailed || state.persistenceBad {
+	if retentionFailed || persistenceFailed || state.persistenceBad {
 		return agent.EventSinkDegraded
 	}
 	return agent.EventSinkAccepted

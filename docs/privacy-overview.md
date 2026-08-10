@@ -13,7 +13,7 @@ a claim that redaction can eliminate every possible sensitive value.
 
 Before sending model content, KuPilot must show:
 
-- The configured model endpoint host.
+- The validated canonical origin of the configured model endpoint.
 - The categories of data that may be sent.
 - Whether bounded container log excerpts are enabled.
 - The categories that are excluded from model content.
@@ -22,6 +22,11 @@ The user must confirm this policy. A change to the endpoint origin or an eligibl
 data category requires confirmation again. The user remains responsible for
 checking that the selected model provider, endpoint, and organizational policy
 are appropriate for the cluster data involved.
+
+The container-output category is disabled by default. Enabling or disabling it
+changes the exact category set, invalidates prior consent, and cancels an active
+AgentRun before another model or container-log request can begin. Cancelling the
+review does not grant consent or send the pending question.
 
 ## Data that may be sent to the cloud model
 

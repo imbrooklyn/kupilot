@@ -74,6 +74,11 @@ const (
 	UICommandResumeSession   UICommandKind = "resume_session"
 	UICommandRenameSession   UICommandKind = "rename_session"
 	UICommandShowPrivacy     UICommandKind = "show_privacy"
+	UICommandAcceptPrivacy   UICommandKind = "accept_privacy"
+	UICommandRejectPrivacy   UICommandKind = "reject_privacy"
+	UICommandRevokePrivacy   UICommandKind = "revoke_privacy"
+	UICommandToggleLogs      UICommandKind = "toggle_logs"
+	UICommandCancelPrivacy   UICommandKind = "cancel_privacy"
 	UICommandCancelRun       UICommandKind = "cancel_run"
 	UICommandActivateScope   UICommandKind = "activate_scope"
 	UICommandAcceptResume    UICommandKind = "accept_resume"
@@ -91,6 +96,8 @@ type UICommand struct {
 	ExpectedScopeGeneration int64
 	Scope                   *domain.ScopeCandidate
 	Resource                *domain.ResourceRef
+	PrivacyRevision         string
+	LogsEnabled             *bool
 }
 
 // Validate checks payload exclusivity and bounded delivery data.
@@ -100,68 +107,90 @@ func (command UICommand) Validate() error {
 	}
 	switch command.Kind {
 	case UICommandSubmitQuestion:
-		if command.RequestID != 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
-			command.Scope != nil || command.Resource != nil || !validUICommandText(command.Text, MaxQuestionBytes) {
+		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
+			!validUICommandText(command.Text, MaxQuestionBytes) {
 			return ErrInvalidUICommand
 		}
 	case UICommandSelectContext:
 		if command.RequestID == 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
-			!validUICommandText(command.Text, 253) {
+			command.hasPrivacyPayload() || !validUICommandText(command.Text, 253) {
 			return ErrInvalidUICommand
 		}
 	case UICommandSelectNamespace:
 		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
-			command.Scope != nil || command.Resource != nil || !validUICommandText(command.Text, 63) {
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || !validUICommandText(command.Text, 63) {
 			return ErrInvalidUICommand
 		}
 	case UICommandSelectResource:
 		clear := command.Text == "clear" && command.Resource == nil
 		selectCandidate := command.Text == "" && command.Resource != nil && command.Resource.Validate() == nil
 		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
-			command.Scope != nil || (!clear && !selectCandidate) {
+			command.Scope != nil || command.hasPrivacyPayload() || (!clear && !selectCandidate) {
 			return ErrInvalidUICommand
 		}
 	case UICommandActivateScope:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.Resource != nil ||
-			command.Scope == nil || command.Scope.Validate() != nil {
+			command.Scope == nil || command.Scope.Validate() != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandAcceptResume:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.Resource != nil ||
-			(command.Scope != nil && command.Scope.Validate() != nil) {
+			(command.Scope != nil && command.Scope.Validate() != nil) || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandCancelResume:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
-			command.Scope != nil || command.Resource != nil {
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandResumeSession:
 		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil ||
-			!domain.SessionID(command.Text).Valid() {
+			command.hasPrivacyPayload() || !domain.SessionID(command.Text).Valid() {
 			return ErrInvalidUICommand
 		}
 	case UICommandRenameSession:
 		if command.RequestID != 0 || command.RunID != "" || command.Scope != nil || command.Resource != nil ||
-			command.ExpectedScopeGeneration != 0 ||
+			command.ExpectedScopeGeneration != 0 || command.hasPrivacyPayload() ||
 			(command.Text != "" && !validUICommandText(command.Text, 512)) {
 			return ErrInvalidUICommand
 		}
-	case UICommandNewSession, UICommandShowPrivacy, UICommandShowStatus:
+	case UICommandShowPrivacy:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
+			return ErrInvalidUICommand
+		}
+	case UICommandAcceptPrivacy, UICommandRejectPrivacy, UICommandRevokePrivacy, UICommandCancelPrivacy:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) ||
+			command.LogsEnabled != nil {
+			return ErrInvalidUICommand
+		}
+	case UICommandToggleLogs:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) ||
+			command.LogsEnabled == nil {
+			return ErrInvalidUICommand
+		}
+	case UICommandNewSession, UICommandShowStatus:
 		if command.RequestID != 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
-			command.Scope != nil || command.Resource != nil {
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandCancelRun:
 		if command.RequestID != 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
-			command.Scope != nil || command.Resource != nil {
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	default:
 		return ErrInvalidUICommand
 	}
 	return nil
+}
+
+func (command UICommand) hasPrivacyPayload() bool {
+	return command.PrivacyRevision != "" || command.LogsEnabled != nil
 }
 
 func validUICommandText(value string, limit int) bool {

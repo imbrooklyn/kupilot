@@ -107,6 +107,26 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
+	if message.Command == application.UICommandSubmitQuestion {
+		if model.pendingSubmitID == 0 || message.RequestID != model.pendingSubmitID ||
+			message.ScopeGeneration != model.scope.Generation {
+			return false
+		}
+		model.pendingSubmitID = 0
+		return true
+	}
+	switch message.Command {
+	case application.UICommandShowPrivacy, application.UICommandAcceptPrivacy,
+		application.UICommandRejectPrivacy, application.UICommandRevokePrivacy,
+		application.UICommandToggleLogs, application.UICommandCancelPrivacy:
+		if model.pendingPrivacyID == 0 || message.RequestID != model.pendingPrivacyID {
+			return false
+		}
+		model.pendingPrivacyID = 0
+		model.privacyReview = nil
+		model.privacyPending = false
+		return true
+	}
 	switch {
 	case message.Query != "":
 		if model.pendingCompletion.RequestID == 0 || message.RequestID != model.pendingCompletion.RequestID ||
@@ -149,16 +169,11 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 			}
 			model.pendingResourceID = 0
 			model.pendingResource = ResourceView{}
-		case application.UICommandSubmitQuestion:
-			if message.ScopeGeneration != model.scope.Generation {
-				return false
-			}
 		case application.UICommandCancelRun:
 			if !model.run.Active || message.RunID != model.run.RunID || message.ScopeGeneration != model.run.ScopeGeneration {
 				return false
 			}
-		case application.UICommandNewSession, application.UICommandRenameSession,
-			application.UICommandShowPrivacy, application.UICommandShowStatus:
+		case application.UICommandNewSession, application.UICommandRenameSession, application.UICommandShowStatus:
 		case application.UICommandCancelResume, application.UICommandResumeSession:
 			return false
 		default:
@@ -199,6 +214,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model.updateScopeConflictKey(message)
 	}
 	if model.dialog.Open() {
+		if model.privacyReview != nil {
+			return model.updatePrivacyDialogKey(message)
+		}
 		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
 			quitFailedResume := model.resumeOrigin == resumeOriginTopLevel && model.startup.Failed && !model.startup.Ready
 			model.closeDialog()
@@ -353,6 +371,7 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	}
 	command := application.UICommand{
 		Kind:                    application.UICommandSubmitQuestion,
+		RequestID:               model.nextUIRequestID(),
 		Text:                    draft,
 		ExpectedScopeGeneration: model.scope.Generation,
 	}
@@ -364,6 +383,7 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	model.composer.RecordSubmission(historyDraft)
 	model.composer.Reset()
 	model.slashMenu.Close()
+	model.pendingSubmitID = command.RequestID
 	model.reflow()
 	return model, applicationCommand(command)
 }
@@ -429,6 +449,10 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 			intent.RunID = model.run.RunID
 			intent.Text = ""
 			intent.ExpectedScopeGeneration = model.run.ScopeGeneration
+		}
+		if command.commandKind == application.UICommandShowPrivacy {
+			intent.RequestID = model.nextUIRequestID()
+			model.pendingPrivacyID = intent.RequestID
 		}
 		if command.commandKind == application.UICommandNewSession || command.commandKind == application.UICommandRenameSession ||
 			command.commandKind == application.UICommandShowPrivacy {
@@ -717,10 +741,124 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 	case application.UICommandShowStatus:
 		model.transcript.AppendNotice(statusText(*result.Status))
 	case application.UICommandSubmitQuestion:
-		model.showDialog("Model transfer unavailable", "Model transfer remains blocked until data-sharing consent is confirmed.")
-	case application.UICommandShowPrivacy, application.UICommandResumeSession:
+		if model.pendingSubmitID == 0 || result.RequestID != model.pendingSubmitID {
+			return
+		}
+		model.pendingSubmitID = 0
+		if result.Failure == application.UIQueryConsentRequired && result.Privacy != nil {
+			model.pendingPrivacyID = result.RequestID
+			model.showPrivacyReview(*result.Privacy)
+			return
+		}
+		if result.Failure != "" {
+			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
+		}
+	case application.UICommandShowPrivacy, application.UICommandToggleLogs:
+		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil {
+			return
+		}
+		model.privacyPending = false
+		model.showPrivacyReview(*result.Privacy)
+	case application.UICommandAcceptPrivacy:
+		if !model.finishPrivacyAction(result.RequestID) {
+			return
+		}
+		model.transcript.AppendNotice("Model data-sharing consent was accepted for the displayed destination and categories.")
+	case application.UICommandRejectPrivacy:
+		if !model.finishPrivacyAction(result.RequestID) {
+			return
+		}
+		model.transcript.AppendNotice("Model data sharing remains blocked.")
+	case application.UICommandRevokePrivacy:
+		if !model.finishPrivacyAction(result.RequestID) {
+			return
+		}
+		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active AgentRun was cancelled.")
+	case application.UICommandCancelPrivacy:
+		model.finishPrivacyAction(result.RequestID)
+	case application.UICommandResumeSession:
 		model.showDialog("Command unavailable", "The command is not available in the current flow.")
 	}
+}
+
+func (model *Model) showPrivacyReview(review application.PrivacyReview) {
+	if review.Validate() != nil {
+		model.showDialog("Privacy unavailable", "Model data-sharing information could not be displayed safely.")
+		return
+	}
+	copy := review
+	copy.Categories = append([]application.PrivacyCategoryReview(nil), review.Categories...)
+	copy.NeverEligible = append([]string(nil), review.NeverEligible...)
+	model.privacyReview = &copy
+	model.privacyPending = false
+	model.showDialog("Model data sharing", privacyReviewText(copy))
+}
+
+func (model *Model) finishPrivacyAction(requestID uint64) bool {
+	if model.pendingPrivacyID == 0 || requestID != model.pendingPrivacyID {
+		return false
+	}
+	model.pendingPrivacyID = 0
+	model.privacyReview = nil
+	model.privacyPending = false
+	model.closeDialog()
+	return true
+}
+
+func privacyReviewText(review application.PrivacyReview) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Destination: %s\nConsent policy: %s\nDecision: %s\n\nEligible data categories:\n",
+		sanitizeExternalText(review.Origin, 2048), review.PolicyVersion, review.Decision)
+	for _, category := range review.Categories {
+		state := "disabled"
+		if category.Enabled {
+			state = "enabled"
+		}
+		fmt.Fprintf(&builder, "- [%s] %s: %s\n", state, category.ID, category.Description)
+	}
+	builder.WriteString("\nNever eligible:\n")
+	for _, value := range review.NeverEligible {
+		fmt.Fprintf(&builder, "- %s\n", value)
+	}
+	builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
+	return builder.String()
+}
+
+func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if model.privacyPending || model.privacyReview == nil || model.pendingPrivacyID == 0 {
+		return model, nil
+	}
+	review := *model.privacyReview
+	command := application.UICommand{
+		RequestID: model.pendingPrivacyID, PrivacyRevision: review.Revision,
+	}
+	switch {
+	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Submit):
+		command.Kind = application.UICommandCancelPrivacy
+		model.dialog.Close()
+		model.privacyReview = nil
+	case message.Code == 'a' || message.Code == 'A':
+		command.Kind = application.UICommandAcceptPrivacy
+		model.privacyPending = true
+	case message.Code == 'l' || message.Code == 'L':
+		command.Kind = application.UICommandToggleLogs
+		enabled := !review.LogsEnabled
+		command.LogsEnabled = &enabled
+		model.privacyPending = true
+	case message.Code == 'r' || message.Code == 'R':
+		command.Kind = application.UICommandRejectPrivacy
+		if review.Decision == application.PrivacyDecisionAccepted {
+			command.Kind = application.UICommandRevokePrivacy
+		}
+		model.privacyPending = true
+	default:
+		return model, nil
+	}
+	if command.Validate() != nil {
+		model.privacyPending = false
+		return model, nil
+	}
+	return model, applicationCommand(command)
 }
 
 func resumeUIFailureText(code application.UIQueryFailureCode) string {

@@ -195,14 +195,16 @@ func (query UICompletionQuery) Validate() error {
 type UIQueryFailureCode string
 
 const (
-	UIQueryUnavailable  UIQueryFailureCode = "unavailable"
-	UIQueryForbidden    UIQueryFailureCode = "forbidden"
-	UIQueryTimeout      UIQueryFailureCode = "timeout"
-	UIQueryNotResumable UIQueryFailureCode = "session_not_resumable"
+	UIQueryUnavailable     UIQueryFailureCode = "unavailable"
+	UIQueryForbidden       UIQueryFailureCode = "forbidden"
+	UIQueryTimeout         UIQueryFailureCode = "timeout"
+	UIQueryNotResumable    UIQueryFailureCode = "session_not_resumable"
+	UIQueryConsentRequired UIQueryFailureCode = "consent_required"
 )
 
 func (code UIQueryFailureCode) valid() bool {
-	return code == UIQueryUnavailable || code == UIQueryForbidden || code == UIQueryTimeout || code == UIQueryNotResumable
+	return code == UIQueryUnavailable || code == UIQueryForbidden || code == UIQueryTimeout ||
+		code == UIQueryNotResumable || code == UIQueryConsentRequired
 }
 
 func (code UIQueryFailureCode) validOperational() bool {
