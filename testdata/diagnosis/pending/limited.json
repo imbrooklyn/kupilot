@@ -1,0 +1,117 @@
+{
+  "name": "pending_stale_conflicting_event",
+  "question": "Why is example-pod still Pending?",
+  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect Pod phase and scheduling conditions.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The latest projection reports PodScheduled True.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001411",
+            "category": "resource_status",
+            "fact": "Pod example-pod has phase Pending.",
+            "source_path": "projected.status",
+            "severity": "warning",
+            "supports": ["pod_pending_phase"]
+          },
+          {
+            "id": "00000000-0000-7000-8000-000000001412",
+            "category": "condition",
+            "fact": "Condition PodScheduled is True.",
+            "source_path": "projected.status.conditions",
+            "severity": "info",
+            "supports": ["pod_scheduled_condition", "previous_scheduling_block_cleared_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_events",
+      "arguments_json": "{\"purpose\":\"Inspect recent scheduling Events.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 200,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"An older FailedScheduling Event was projected.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001413",
+            "category": "event",
+            "fact": "Warning Event FailedScheduling for Pod example-pod occurred before the current PodScheduled=True projection.",
+            "source_path": "projected.events",
+            "severity": "warning",
+            "supports": ["historical_failed_scheduling_event", "previous_scheduling_block_cleared_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-3",
+      "name": "get_related_resources",
+      "arguments_json": "{\"include\":[\"owners\"],\"purpose\":\"Inspect the bounded Pod owner relationship.\",\"relation_depth\":1,\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 300,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"One ReplicaSet owner reference was projected.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001414",
+            "category": "owner",
+            "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
+            "source_path": "projected.metadata.controller_owner",
+            "severity": "info",
+            "supports": ["pod_owner_observed"]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "The latest projected Pod phase is Pending.", "evidence_ids": ["00000000-0000-7000-8000-000000001411"]},
+      {"statement": "The latest projected PodScheduled condition is True.", "evidence_ids": ["00000000-0000-7000-8000-000000001412"]},
+      {"statement": "An older FailedScheduling Event was also observed.", "evidence_ids": ["00000000-0000-7000-8000-000000001413"]},
+      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001414"]}
+    ],
+    "hypotheses": [
+      {
+        "statement": "A previous scheduling block may have cleared, leaving a different Pending-stage issue.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001412", "00000000-0000-7000-8000-000000001413"],
+        "confidence": "low",
+        "falsifier": "A fresh bounded observation again reports PodScheduled=False with a current FailedScheduling Event."
+      }
+    ],
+    "missing_information": [
+      {"kind": "stale", "detail": "The FailedScheduling Event predates the latest scheduled condition.", "impact": "It cannot establish the current reason for the Pending phase."},
+      {"kind": "conflicting", "detail": "The older FailedScheduling Event and current PodScheduled=True condition describe different states.", "impact": "A definite current scheduling root cause would overstate the observations."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Collect a fresh bounded Pod and Event observation before changing scheduling configuration.",
+        "risk": "Acting on stale scheduling information may address the wrong stage.",
+        "prerequisites": ["Keep the same active ClusterScope for the new observation."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "pod_pending_phase"},
+      {"index": 1, "assertion": "pod_scheduled_condition"},
+      {"index": 2, "assertion": "historical_failed_scheduling_event"},
+      {"index": 3, "assertion": "pod_owner_observed"}
+    ],
+    "hypotheses": [{"index": 0, "assertion": "previous_scheduling_block_cleared_possible"}],
+    "recommended_actions": [{"index": 0, "assertion": "collect_fresh_scheduling_evidence"}]
+  },
+  "required_confirmed_assertions": ["pod_pending_phase", "pod_scheduled_condition", "historical_failed_scheduling_event", "pod_owner_observed"],
+  "required_missing_kinds": ["stale", "conflicting"],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

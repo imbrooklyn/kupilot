@@ -1,0 +1,33 @@
+{
+  "scenario": "ImagePullBackOff",
+  "minimum_evidence": [
+    "Projected container waiting reason ImagePullBackOff or ErrImagePull.",
+    "Recent FailedPull or BackOff Events when permission allows."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_events"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "container_imagepull_waiting", "meaning": "The projected container is waiting for an image pull."},
+    {"id": "failed_pull_event_observed", "meaning": "A recent FailedPull Event was observed."},
+    {"id": "image_backoff_event_observed", "meaning": "A recent image BackOff Event was observed."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "image_reference_unavailable_possible", "meaning": "The configured image reference may not identify an available manifest."},
+    {"id": "registry_network_or_authorization_possible", "meaning": "Registry reachability or authorization may contribute without identifying a credential defect."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "registry_credential_is_wrong", "meaning": "A registry credential is definitely wrong."},
+    {"id": "secret_value_known", "meaning": "A forbidden Secret value is known or inferred."},
+    {"id": "action_executed", "meaning": "KuPilot changed the image or credential."}
+  ],
+  "recommended_actions": [
+    {"id": "verify_image_reference", "meaning": "Verify the image reference in an authorized external workflow."},
+    {"id": "obtain_event_access", "meaning": "Ask an administrator to review Event access or inspect Events independently."}
+  ],
+  "permission_or_missing_paths": [
+    "If Events are forbidden, confirm only the projected waiting state and leave the pull cause uncertain.",
+    "Secret data remains unavailable and must never be guessed."
+  ]
+}

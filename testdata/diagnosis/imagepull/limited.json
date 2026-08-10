@@ -1,0 +1,72 @@
+{
+  "name": "imagepull_events_forbidden",
+  "question": "Why can example-pod not start its container image?",
+  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect the Pod image waiting state.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"Projected image waiting state.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001311",
+            "category": "container_state",
+            "fact": "Container example-container is waiting, ready=false, restarts=0, reason ImagePullBackOff, image example-image:v2.",
+            "source_path": "projected.status.container_statuses",
+            "severity": "critical",
+            "supports": ["container_imagepull_waiting"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_events",
+      "arguments_json": "{\"purpose\":\"Inspect recent image pull Events.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "denied",
+        "observed_offset_ms": 200,
+        "data_json": "{\"source_trust\":\"untrusted_external_data\"}",
+        "error_class": "permission_denied",
+        "safe_message": "The admitted Event read was denied."
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "The container is waiting in ImagePullBackOff for image example-image:v2.", "evidence_ids": ["00000000-0000-7000-8000-000000001311"]}
+    ],
+    "hypotheses": [
+      {
+        "statement": "The image reference, registry reachability, or authorization may contribute, but none is confirmed.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001311"],
+        "confidence": "low",
+        "falsifier": "A permitted Event observation or authorized external check identifies a different pull outcome."
+      }
+    ],
+    "missing_information": [
+      {"kind": "forbidden", "detail": "Recent image pull Events could not be read.", "impact": "The specific pull failure is unavailable and registry credentials cannot be assessed."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Ask an administrator to review Event access or inspect image pull Events independently.",
+        "risk": "Changing access should remain limited to the required read operation.",
+        "prerequisites": ["Do not disclose registry credential values."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [{"index": 0, "assertion": "container_imagepull_waiting"}],
+    "hypotheses": [{"index": 0, "assertion": "registry_network_or_authorization_possible"}],
+    "recommended_actions": [{"index": 0, "assertion": "obtain_event_access"}]
+  },
+  "required_confirmed_assertions": ["container_imagepull_waiting"],
+  "required_missing_kinds": ["forbidden"],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

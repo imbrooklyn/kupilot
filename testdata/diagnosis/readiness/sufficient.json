@@ -1,0 +1,104 @@
+{
+  "name": "readiness_sufficient",
+  "question": "Why is example-pod not Ready?",
+  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect Pod and container readiness.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"Projected readiness state.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001501",
+            "category": "condition",
+            "fact": "Condition Ready is False with reason ContainersNotReady.",
+            "source_path": "projected.status.conditions",
+            "severity": "warning",
+            "supports": ["pod_not_ready", "application_startup_or_probe_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_events",
+      "arguments_json": "{\"purpose\":\"Inspect recent readiness Events.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 200,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"A readiness Unhealthy Event was projected.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001502",
+            "category": "event",
+            "fact": "Warning Event Unhealthy for Pod example-pod reported a readiness probe failure.",
+            "source_path": "projected.events",
+            "severity": "warning",
+            "supports": ["readiness_probe_event_observed", "application_startup_or_probe_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-3",
+      "name": "get_pod_logs",
+      "arguments_json": "{\"container\":\"example-container\",\"pod_name\":\"example-pod\",\"purpose\":\"Inspect bounded current application logs.\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 300,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The synthetic application is still initializing.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001503",
+            "category": "log_excerpt",
+            "fact": "A bounded current log excerpt was returned for container example-container.",
+            "source_path": "projected.log_excerpt",
+            "severity": "warning",
+            "supports": ["current_log_excerpt_available", "application_startup_or_probe_possible"]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "The projected Pod Ready condition is False.", "evidence_ids": ["00000000-0000-7000-8000-000000001501"]},
+      {"statement": "A recent Unhealthy Event reported a readiness probe failure.", "evidence_ids": ["00000000-0000-7000-8000-000000001502"]}
+    ],
+    "hypotheses": [
+      {
+        "statement": "Application startup timing or probe configuration may contribute to the failed readiness checks.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001501", "00000000-0000-7000-8000-000000001502", "00000000-0000-7000-8000-000000001503"],
+        "confidence": "medium",
+        "falsifier": "A later bounded observation shows the application initialized while the same probe continues to fail."
+      }
+    ],
+    "missing_information": [
+      {"kind": "absent", "detail": "The exact readiness probe configuration was not collected.", "impact": "The Event and application observation do not identify a specific configuration defect."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Review the readiness probe configuration and bounded application startup observations.",
+        "risk": "Changing the probe may alter traffic eligibility or replace Pods.",
+        "prerequisites": ["Validate any configuration change outside KuPilot."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "pod_not_ready"},
+      {"index": 1, "assertion": "readiness_probe_event_observed"}
+    ],
+    "hypotheses": [{"index": 0, "assertion": "application_startup_or_probe_possible"}],
+    "recommended_actions": [{"index": 0, "assertion": "inspect_probe_and_application"}]
+  },
+  "required_confirmed_assertions": ["pod_not_ready", "readiness_probe_event_observed"],
+  "required_missing_kinds": ["absent"],
+  "maximum_hypothesis_confidence": "medium",
+  "expected_evidence_detail_state": "available"
+}

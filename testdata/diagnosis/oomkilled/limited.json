@@ -1,0 +1,104 @@
+{
+  "name": "oomkilled_conflicting_log_phrase",
+  "question": "Was example-pod terminated because of memory pressure?",
+  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect current and previous container state.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"Projected previous termination state.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001211",
+            "category": "container_state",
+            "fact": "Container example-container is running, ready=false, restarts=1; previous state terminated, reason Error, exit_code=1.",
+            "source_path": "projected.status.container_statuses",
+            "severity": "warning",
+            "supports": ["previous_termination_not_oomkilled", "memory_related_failure_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_previous_pod_logs",
+      "arguments_json": "{\"container\":\"example-container\",\"pod_name\":\"example-pod\",\"purpose\":\"Inspect bounded previous logs for supporting context.\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 200,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The synthetic log mentions an out of memory allocation failure.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001212",
+            "category": "log_excerpt",
+            "fact": "A bounded previous log excerpt was returned for container example-container.",
+            "source_path": "projected.log_excerpt",
+            "severity": "warning",
+            "supports": ["previous_log_excerpt_available", "memory_related_failure_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-3",
+      "name": "get_related_resources",
+      "arguments_json": "{\"include\":[\"owners\"],\"purpose\":\"Inspect the bounded Pod owner relationship.\",\"relation_depth\":1,\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 300,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"One ReplicaSet owner reference was projected.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001213",
+            "category": "owner",
+            "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
+            "source_path": "projected.metadata.controller_owner",
+            "severity": "info",
+            "supports": ["pod_owner_observed"]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "Kubernetes reported the previous termination reason as Error with exit code 1.", "evidence_ids": ["00000000-0000-7000-8000-000000001211"]},
+      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001213"]}
+    ],
+    "hypotheses": [
+      {
+        "statement": "A memory-related application failure remains possible, but OOMKilled is not confirmed.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001211", "00000000-0000-7000-8000-000000001212"],
+        "confidence": "low",
+        "falsifier": "A fresh projected termination reason or an independent bounded observation identifies a non-memory failure."
+      }
+    ],
+    "missing_information": [
+      {"kind": "conflicting", "detail": "The projected termination reason is Error while the bounded log excerpt contains memory-related text.", "impact": "The log phrase cannot confirm OOMKilled or its underlying cause."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Collect a fresh termination observation and review memory configuration outside KuPilot.",
+        "risk": "Changing resource configuration may replace Pods or alter scheduling.",
+        "prerequisites": ["Resolve the conflicting observations before changing the workload."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "previous_termination_not_oomkilled"},
+      {"index": 1, "assertion": "pod_owner_observed"}
+    ],
+    "hypotheses": [{"index": 0, "assertion": "memory_related_failure_possible"}],
+    "recommended_actions": [{"index": 0, "assertion": "collect_fresh_termination_state"}]
+  },
+  "required_confirmed_assertions": ["previous_termination_not_oomkilled", "pod_owner_observed"],
+  "required_missing_kinds": ["conflicting"],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

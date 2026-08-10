@@ -1,0 +1,35 @@
+{
+  "scenario": "Readiness Probe Failure",
+  "minimum_evidence": [
+    "Projected Ready condition and container readiness state.",
+    "A recent Unhealthy Event tied to a readiness probe.",
+    "A bounded current log excerpt used only as supporting application context."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_events",
+    "get_pod_logs"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "pod_not_ready", "meaning": "The projected Pod Ready condition is False."},
+    {"id": "readiness_probe_event_observed", "meaning": "A recent readiness probe failure Event was observed."},
+    {"id": "current_log_excerpt_available", "meaning": "A bounded current log excerpt was available."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "application_startup_or_probe_possible", "meaning": "Application startup or probe configuration may contribute."},
+    {"id": "application_health_issue_possible", "meaning": "An application health issue may contribute."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "service_outage_proves_probe_failure", "meaning": "Service unavailability alone proves a probe failure."},
+    {"id": "truncated_log_root_cause", "meaning": "A truncated log excerpt proves the root cause."},
+    {"id": "action_executed", "meaning": "KuPilot changed the probe or restored readiness."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_probe_and_application", "meaning": "Review probe configuration and bounded application observations."},
+    {"id": "collect_complete_bounded_observation", "meaning": "Collect a new bounded observation when the prior result was truncated."}
+  ],
+  "permission_or_missing_paths": [
+    "If the Unhealthy Event is absent, do not infer probe failure from readiness state alone.",
+    "If logs are truncated, report the limit and do not infer unseen content."
+  ]
+}

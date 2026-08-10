@@ -1,0 +1,37 @@
+{
+  "scenario": "CrashLoopBackOff",
+  "minimum_evidence": [
+    "Projected container waiting state, restart count, and last termination state.",
+    "A recent BackOff or restart-related Event.",
+    "A bounded previous or current log excerpt used only with state or Event Evidence.",
+    "A bounded owner relationship when workload context is needed."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_events",
+    "get_previous_pod_logs",
+    "get_related_resources"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "container_crashloop_waiting", "meaning": "The projected container is waiting with reason CrashLoopBackOff."},
+    {"id": "restart_backoff_observed", "meaning": "A recent BackOff Event was observed."},
+    {"id": "previous_log_excerpt_available", "meaning": "A bounded previous log excerpt was available."},
+    {"id": "pod_owner_observed", "meaning": "The Pod carries a bounded owner relationship."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "application_startup_failure_possible", "meaning": "The application may exit during startup."},
+    {"id": "configuration_or_dependency_possible", "meaning": "A configuration or dependency issue may contribute."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "single_log_root_cause", "meaning": "A single log line proves the root cause."},
+    {"id": "action_executed", "meaning": "KuPilot restarted or changed the workload."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_startup_and_previous_logs", "meaning": "Review startup configuration and the bounded previous log evidence."},
+    {"id": "inspect_owner_configuration", "meaning": "Review the owning workload configuration outside KuPilot."}
+  ],
+  "permission_or_missing_paths": [
+    "If previous logs are forbidden or absent, keep the exit explanation uncertain.",
+    "If results are partial or conflicting, report the gap and do not assert a root cause."
+  ]
+}

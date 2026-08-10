@@ -1,0 +1,36 @@
+{
+  "scenario": "OOMKilled",
+  "minimum_evidence": [
+    "Projected previous termination reason and exit code plus restart count.",
+    "A bounded previous log excerpt used as supporting context rather than termination proof.",
+    "A bounded owner relationship for workload context."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_previous_pod_logs",
+    "get_related_resources"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "kubernetes_oomkill_reported", "meaning": "Kubernetes projected the previous termination reason as OOMKilled."},
+    {"id": "previous_termination_not_oomkilled", "meaning": "Kubernetes projected a different previous termination reason."},
+    {"id": "previous_log_excerpt_available", "meaning": "A bounded previous log excerpt was available."},
+    {"id": "pod_owner_observed", "meaning": "The Pod carries a bounded owner relationship."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "memory_limit_or_peak_possible", "meaning": "A memory limit or usage peak may have contributed."},
+    {"id": "memory_related_failure_possible", "meaning": "A memory-related application failure remains possible when sources conflict."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "log_phrase_confirms_oomkill", "meaning": "A memory phrase in a log proves OOMKilled."},
+    {"id": "exact_memory_cause", "meaning": "The exact limit, node pressure, or leak location is known without Evidence."},
+    {"id": "action_executed", "meaning": "KuPilot changed resources or restarted the workload."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_memory_configuration", "meaning": "Review workload memory configuration and external memory trends."},
+    {"id": "collect_fresh_termination_state", "meaning": "Collect a fresh bounded termination observation when sources conflict."}
+  ],
+  "permission_or_missing_paths": [
+    "If the termination reason is absent, a log phrase cannot replace it.",
+    "If termination state and log context conflict, mark the conflict and lower confidence."
+  ]
+}

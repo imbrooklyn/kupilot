@@ -1,0 +1,104 @@
+{
+  "name": "oomkilled_sufficient",
+  "question": "Was example-pod terminated because of memory pressure?",
+  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect current and previous container state.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"Projected previous termination state.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001201",
+            "category": "container_state",
+            "fact": "Container example-container is running, ready=false, restarts=2; previous state terminated, reason OOMKilled, exit_code=137.",
+            "source_path": "projected.status.container_statuses",
+            "severity": "critical",
+            "supports": ["kubernetes_oomkill_reported", "memory_limit_or_peak_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_previous_pod_logs",
+      "arguments_json": "{\"container\":\"example-container\",\"pod_name\":\"example-pod\",\"purpose\":\"Inspect bounded previous logs for supporting context.\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 200,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"A synthetic allocation operation stopped before completion.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001202",
+            "category": "log_excerpt",
+            "fact": "A bounded previous log excerpt was returned for container example-container.",
+            "source_path": "projected.log_excerpt",
+            "severity": "warning",
+            "supports": ["previous_log_excerpt_available", "memory_limit_or_peak_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-3",
+      "name": "get_related_resources",
+      "arguments_json": "{\"include\":[\"owners\"],\"purpose\":\"Inspect the bounded Pod owner relationship.\",\"relation_depth\":1,\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 300,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"One ReplicaSet owner reference was projected.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001203",
+            "category": "owner",
+            "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
+            "source_path": "projected.metadata.controller_owner",
+            "severity": "info",
+            "supports": ["pod_owner_observed"]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "Kubernetes reported OOMKilled with exit code 137 for the previous container instance.", "evidence_ids": ["00000000-0000-7000-8000-000000001201"]},
+      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001203"]}
+    ],
+    "hypotheses": [
+      {
+        "statement": "A workload memory limit or a usage peak may have contributed to the termination.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001201", "00000000-0000-7000-8000-000000001202"],
+        "confidence": "medium",
+        "falsifier": "Workload configuration and external memory observations show adequate headroom at the termination time."
+      }
+    ],
+    "missing_information": [
+      {"kind": "absent", "detail": "Workload memory requests, limits, and usage history were not collected.", "impact": "The underlying reason for the OOMKilled termination is not established."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Review workload memory configuration and external memory trends around the observation time.",
+        "risk": "Changing resource configuration may replace Pods or alter scheduling.",
+        "prerequisites": ["Validate the proposed values outside KuPilot."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "kubernetes_oomkill_reported"},
+      {"index": 1, "assertion": "pod_owner_observed"}
+    ],
+    "hypotheses": [{"index": 0, "assertion": "memory_limit_or_peak_possible"}],
+    "recommended_actions": [{"index": 0, "assertion": "inspect_memory_configuration"}]
+  },
+  "required_confirmed_assertions": ["kubernetes_oomkill_reported", "pod_owner_observed"],
+  "required_missing_kinds": ["absent"],
+  "maximum_hypothesis_confidence": "medium",
+  "expected_evidence_detail_state": "available"
+}

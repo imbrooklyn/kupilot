@@ -1,0 +1,38 @@
+{
+  "scenario": "Pod Pending",
+  "minimum_evidence": [
+    "Projected Pod phase and PodScheduled condition.",
+    "A recent FailedScheduling Event with a bounded constraint summary.",
+    "A bounded owner relationship when workload constraints need context."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_events",
+    "get_related_resources"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "pod_pending_phase", "meaning": "The projected Pod phase is Pending."},
+    {"id": "pod_unscheduled_condition", "meaning": "The projected PodScheduled condition is False."},
+    {"id": "pod_scheduled_condition", "meaning": "The projected PodScheduled condition is True."},
+    {"id": "failed_scheduling_event_observed", "meaning": "A FailedScheduling Event was observed."},
+    {"id": "historical_failed_scheduling_event", "meaning": "An older FailedScheduling Event was observed."},
+    {"id": "pod_owner_observed", "meaning": "The Pod carries a bounded owner relationship."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "scheduling_constraints_possible", "meaning": "Projected scheduling constraints may prevent placement."},
+    {"id": "previous_scheduling_block_cleared_possible", "meaning": "An older scheduling block may have cleared."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "missing_event_proves_capacity_shortage", "meaning": "Missing Events prove a resource shortage."},
+    {"id": "unobserved_node_or_volume_cause", "meaning": "An unobserved Node or volume issue is the confirmed cause."},
+    {"id": "action_executed", "meaning": "KuPilot changed scheduling configuration."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_scheduling_constraints", "meaning": "Review workload scheduling constraints outside KuPilot."},
+    {"id": "collect_fresh_scheduling_evidence", "meaning": "Collect a fresh bounded scheduling observation before concluding."}
+  ],
+  "permission_or_missing_paths": [
+    "If scheduling Events are absent or forbidden, do not infer resource shortage.",
+    "If an older Event conflicts with a newer condition, mark stale and conflicting Evidence."
+  ]
+}
