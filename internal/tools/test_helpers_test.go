@@ -34,6 +34,81 @@ type fakeResourceReader struct {
 	listFn       func(context.Context, ResourceListRequest) (ResourceObservationList, error)
 }
 
+type fakeEventReader struct {
+	mu       sync.Mutex
+	calls    int
+	requests []EventReadRequest
+	readFn   func(context.Context, EventReadRequest) (EventObservationList, error)
+}
+
+func (reader *fakeEventReader) ReadEvents(ctx context.Context, request EventReadRequest) (EventObservationList, error) {
+	reader.mu.Lock()
+	reader.calls++
+	reader.requests = append(reader.requests, request)
+	function := reader.readFn
+	reader.mu.Unlock()
+	if function == nil {
+		return EventObservationList{}, nil
+	}
+	return function(ctx, request)
+}
+
+func (reader *fakeEventReader) count() int {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.calls
+}
+
+type fakePodLogReader struct {
+	mu       sync.Mutex
+	calls    int
+	requests []PodLogReadRequest
+	readFn   func(context.Context, PodLogReadRequest) (PodLogObservation, error)
+}
+
+func (reader *fakePodLogReader) ReadPodLog(ctx context.Context, request PodLogReadRequest) (PodLogObservation, error) {
+	reader.mu.Lock()
+	reader.calls++
+	reader.requests = append(reader.requests, request)
+	function := reader.readFn
+	reader.mu.Unlock()
+	if function == nil {
+		return PodLogObservation{}, nil
+	}
+	return function(ctx, request)
+}
+
+func (reader *fakePodLogReader) count() int {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.calls
+}
+
+func (reader *fakePodLogReader) lastRequest() PodLogReadRequest {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.requests[len(reader.requests)-1]
+}
+
+type staticLogPolicy struct {
+	mu       sync.Mutex
+	decision LogPolicyDecision
+	calls    int
+}
+
+func (policy *staticLogPolicy) AuthorizeLogRead(context.Context, LogPolicyRequest) LogPolicyDecision {
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	policy.calls++
+	return policy.decision
+}
+
+func (policy *staticLogPolicy) count() int {
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	return policy.calls
+}
+
 func (reader *fakeResourceReader) ReadResource(ctx context.Context, request ResourceReadRequest) (ResourceObservation, error) {
 	reader.mu.Lock()
 	reader.getCalls++
@@ -181,6 +256,41 @@ func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.B
 		t.Fatalf("agent.BindToolCall(list_resources) error = %v", err)
 	}
 	return call
+}
+
+func boundEventCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-events-1",
+		Name:          domain.ToolNameGetEvents,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(get_events) error = %v", err)
+	}
+	return call
+}
+
+func boundLogCall(t *testing.T, input agent.RunInput, name domain.ToolName, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-logs-1",
+		Name:          name,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(%s) error = %v", name, err)
+	}
+	return call
+}
+
+func boundedPodLogContent(t *testing.T, value string) PodLogContent {
+	t.Helper()
+	content, err := NewPodLogContent([]byte(value), domain.MaxToolResultBytes)
+	if err != nil {
+		t.Fatalf("NewPodLogContent() error = %v", err)
+	}
+	return content
 }
 
 func resourceObservation(kind domain.ResourceKind, name string) ResourceObservation {

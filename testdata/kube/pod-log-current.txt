@@ -1,0 +1,4 @@
+Application boot completed.
+PROMPT_MARKER
+ANSI_MARKER
+Credential field: TOKEN_MARKER

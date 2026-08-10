@@ -57,6 +57,26 @@ func (*Redactor) Process(value string, maximumBytes int) (TextResult, error) {
 	}, nil
 }
 
+// ProcessLines applies the same fixed policy while preserving normalized line
+// boundaries for bounded container log excerpts.
+func (*Redactor) ProcessLines(value string, maximumBytes int) (TextResult, error) {
+	if maximumBytes < 1 {
+		return TextResult{}, ErrInvalidTextPolicy
+	}
+	normalized := normalizeExternalLogText(value)
+	if containsBlockedSensitiveValue(normalized) {
+		return TextResult{}, ErrSensitiveOutputBlocked
+	}
+	redacted, count := redactSensitiveValues(normalized)
+	bounded, truncated := truncateUTF8(redacted, maximumBytes)
+	return TextResult{
+		Value:           bounded,
+		RedactionCount:  count,
+		Truncated:       truncated,
+		InstructionLike: InstructionLike(bounded),
+	}, nil
+}
+
 func normalizeExternalText(value string) string {
 	value = strings.ToValidUTF8(value, string(utf8.RuneError))
 	value = terminalEscapePattern.ReplaceAllString(value, " ")
@@ -70,6 +90,31 @@ func normalizeExternalText(value string) string {
 		builder.WriteRune(current)
 	}
 	return strings.Join(strings.Fields(builder.String()), " ")
+}
+
+func normalizeExternalLogText(value string) string {
+	value = strings.ToValidUTF8(value, string(utf8.RuneError))
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = terminalEscapePattern.ReplaceAllString(value, " ")
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, current := range value {
+		if current == '\n' {
+			builder.WriteRune(current)
+			continue
+		}
+		if unsafeExternalRune(current) {
+			builder.WriteByte(' ')
+			continue
+		}
+		builder.WriteRune(current)
+	}
+	lines := strings.Split(builder.String(), "\n")
+	for index := range lines {
+		lines[index] = strings.TrimRightFunc(lines[index], unicode.IsSpace)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func truncateUTF8(value string, maximumBytes int) (string, bool) {

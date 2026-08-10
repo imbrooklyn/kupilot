@@ -1,0 +1,2 @@
+Previous application instance started.
+Previous application instance exited after a synthetic failure.

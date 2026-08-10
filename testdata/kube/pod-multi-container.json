@@ -1,0 +1,84 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "sample-pod",
+    "namespace": "team-a",
+    "uid": "generated-pod-uid",
+    "resourceVersion": "17"
+  },
+  "spec": {
+    "initContainers": [
+      {
+        "name": "setup",
+        "image": "registry.invalid/sample/setup:v1"
+      }
+    ],
+    "containers": [
+      {
+        "name": "app",
+        "image": "registry.invalid/sample/app:v1"
+      },
+      {
+        "name": "sidecar",
+        "image": "registry.invalid/sample/sidecar:v1"
+      }
+    ]
+  },
+  "status": {
+    "phase": "Running",
+    "initContainerStatuses": [
+      {
+        "name": "setup",
+        "image": "registry.invalid/sample/setup:v1",
+        "imageID": "",
+        "ready": true,
+        "restartCount": 0,
+        "state": {
+          "terminated": {
+            "exitCode": 0,
+            "reason": "Completed",
+            "startedAt": "2026-01-02T03:03:00Z",
+            "finishedAt": "2026-01-02T03:03:01Z",
+            "containerID": ""
+          }
+        }
+      }
+    ],
+    "containerStatuses": [
+      {
+        "name": "app",
+        "image": "registry.invalid/sample/app:v1",
+        "imageID": "",
+        "ready": false,
+        "restartCount": 1,
+        "state": {
+          "running": {
+            "startedAt": "2026-01-02T03:04:00Z"
+          }
+        },
+        "lastState": {
+          "terminated": {
+            "exitCode": 1,
+            "reason": "Error",
+            "startedAt": "2026-01-02T03:03:30Z",
+            "finishedAt": "2026-01-02T03:03:59Z",
+            "containerID": ""
+          }
+        }
+      },
+      {
+        "name": "sidecar",
+        "image": "registry.invalid/sample/sidecar:v1",
+        "imageID": "",
+        "ready": true,
+        "restartCount": 0,
+        "state": {
+          "running": {
+            "startedAt": "2026-01-02T03:03:00Z"
+          }
+        }
+      }
+    ]
+  }
+}

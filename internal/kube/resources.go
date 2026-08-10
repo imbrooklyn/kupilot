@@ -2,13 +2,17 @@ package kube
 
 import (
 	"context"
+	"io"
 	"sort"
+	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -487,6 +491,360 @@ func (reader *ToolResourceReader) ListResources(
 	return result, nil
 }
 
+// ReadEvents performs one target precheck followed by one fixed namespaced
+// Event LIST. The field selector is constructed internally from the verified
+// target and cannot be supplied by a model call.
+func (reader *ToolResourceReader) ReadEvents(
+	ctx context.Context,
+	request toolcontract.EventReadRequest,
+) (toolcontract.EventObservationList, error) {
+	const operation = "tool_get_events"
+	if err := reader.validateContext(ctx, request.Scope, operation); err != nil {
+		return toolcontract.EventObservationList{}, err
+	}
+	if _, allowed := domain.ResourceKindForReference(request.Reference); !allowed {
+		return toolcontract.EventObservationList{}, resourceKindDeniedError(operation)
+	}
+	if request.Reference.Namespace != request.Scope.Namespace {
+		return toolcontract.EventObservationList{}, newKubeSafeError(
+			ClassPolicyDenied,
+			"kubernetes_cross_namespace_denied",
+			operation,
+			"Cross-Namespace Kubernetes reads are not allowed.",
+		)
+	}
+	if request.Validate() != nil {
+		return toolcontract.EventObservationList{}, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_event_request_invalid",
+			operation,
+			"The Kubernetes Event request is invalid.",
+		)
+	}
+	target, err := reader.ReadResource(ctx, toolcontract.ResourceReadRequest{
+		Scope: request.Scope, Reference: request.Reference, Detail: toolcontract.ResourceDetailSummary,
+	})
+	if err != nil {
+		return toolcontract.EventObservationList{}, err
+	}
+	verified := target.Summary.Reference
+	if request.Reference.UID != "" && request.Reference.UID != verified.UID {
+		return toolcontract.EventObservationList{}, newKubeSafeError(
+			ClassNotFound,
+			"kubernetes_event_target_uid_not_found",
+			operation,
+			"The requested Kubernetes object was not found.",
+		)
+	}
+	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
+	if err != nil {
+		return toolcontract.EventObservationList{}, err
+	}
+	selectorTerms := []fields.Selector{
+		fields.OneTermEqualSelector("involvedObject.kind", verified.Kind),
+		fields.OneTermEqualSelector("involvedObject.name", verified.Name),
+		fields.OneTermEqualSelector("involvedObject.namespace", verified.Namespace),
+	}
+	uidFilterDegraded := verified.UID == ""
+	if !uidFilterDegraded {
+		selectorTerms = append(selectorTerms, fields.OneTermEqualSelector("involvedObject.uid", verified.UID))
+	}
+	selector := fields.AndSelectors(selectorTerms...).String()
+	list, rawErr := bundle.typed.CoreV1().Events(request.Scope.Namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: selector,
+		Limit:         int64(request.Limit),
+	})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return toolcontract.EventObservationList{}, err
+	}
+	if list == nil {
+		return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
+	}
+	result := toolcontract.EventObservationList{
+		Target:            verified,
+		Items:             make([]toolcontract.EventObservation, 0, min(len(list.Items), request.Limit)),
+		UIDFilterDegraded: uidFilterDegraded,
+		Truncated:         list.Continue != "" || len(list.Items) > request.Limit,
+	}
+	for index := 0; index < min(len(list.Items), request.Limit); index++ {
+		item := &list.Items[index]
+		if !eventMatchesTarget(item, verified) {
+			result.Truncated = true
+			continue
+		}
+		projected, projectErr := projectToolEvent(item, verified)
+		if projectErr != nil {
+			return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
+		}
+		if projected.LastObservedAt.Before(request.NotBefore) {
+			continue
+		}
+		result.Items = append(result.Items, projected)
+	}
+	if result.Validate(request) != nil {
+		return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
+	}
+	return result, nil
+}
+
+// ReadPodLog performs one exact Pod precheck and, only after deterministic
+// container selection, one bounded pods/log GET.
+func (reader *ToolResourceReader) ReadPodLog(
+	ctx context.Context,
+	request toolcontract.PodLogReadRequest,
+) (toolcontract.PodLogObservation, error) {
+	const operation = "tool_get_pod_logs"
+	if request.Previous {
+		const previousOperation = "tool_get_previous_pod_logs"
+		return reader.readPodLog(ctx, request, previousOperation)
+	}
+	return reader.readPodLog(ctx, request, operation)
+}
+
+func (reader *ToolResourceReader) readPodLog(
+	ctx context.Context,
+	request toolcontract.PodLogReadRequest,
+	operation string,
+) (toolcontract.PodLogObservation, error) {
+	if err := reader.validateContext(ctx, request.Scope, operation); err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	if request.Validate() != nil {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_log_request_invalid",
+			operation,
+			"The Kubernetes Pod log request is invalid.",
+		)
+	}
+	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
+	if err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	pod, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.PodName, metav1.GetOptions{})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	projectedPod, projectErr := projectPod(pod, request.Scope.Namespace, request.PodName)
+	if projectErr != nil {
+		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	selection, err := selectPodLogContainer(pod, request.Container, operation)
+	if err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	observation := toolcontract.PodLogObservation{
+		Pod:                   projectedPod.Reference,
+		Container:             selection.name,
+		InitContainer:         selection.init,
+		Previous:              request.Previous,
+		Availability:          toolcontract.PodLogAvailable,
+		RestartCount:          selection.restartCount,
+		LastTerminationReason: projectToolText(selection.lastTerminationReason, maxProjectedIdentityBytes),
+	}
+	if request.Previous && !selection.previousAvailable {
+		observation.Availability = toolcontract.PodLogNoPreviousInstance
+		if observation.Validate(request) != nil {
+			return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+		}
+		return observation, nil
+	}
+	if !request.Previous && !selection.currentAvailable {
+		observation.Availability = toolcontract.PodLogContainerNotRunning
+		if observation.Validate(request) != nil {
+			return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+		}
+		return observation, nil
+	}
+	tailLines := int64(request.TailLines)
+	sinceSeconds := int64(request.SinceSeconds)
+	limitBytes := int64(request.LimitBytes)
+	stream, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).GetLogs(request.PodName, &corev1.PodLogOptions{
+		Container:    selection.name,
+		Previous:     request.Previous,
+		TailLines:    &tailLines,
+		SinceSeconds: &sinceSeconds,
+		LimitBytes:   &limitBytes,
+	}).Stream(ctx)
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	payload, readErr := io.ReadAll(io.LimitReader(stream, int64(request.LimitBytes)+1))
+	closeErr := stream.Close()
+	if ctx.Err() != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, ctx.Err(), operation)
+	}
+	if readErr != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, readErr, operation)
+	}
+	if closeErr != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, closeErr, operation)
+	}
+	if len(payload) > request.LimitBytes {
+		payload = payload[:request.LimitBytes]
+		observation.Truncated = true
+	}
+	content, contentErr := toolcontract.NewPodLogContent(payload, request.LimitBytes)
+	if contentErr != nil {
+		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	observation.Content = content
+	if observation.Validate(request) != nil {
+		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	return observation, nil
+}
+
+type selectedPodLogContainer struct {
+	name                  string
+	init                  bool
+	restartCount          int32
+	lastTerminationReason string
+	previousAvailable     bool
+	currentAvailable      bool
+}
+
+func selectPodLogContainer(pod *corev1.Pod, requested, operation string) (selectedPodLogContainer, error) {
+	if pod == nil {
+		return selectedPodLogContainer{}, invalidKubernetesProjectionError(operation)
+	}
+	name := requested
+	initContainer := false
+	if name == "" {
+		if len(pod.Spec.Containers) != 1 {
+			return selectedPodLogContainer{}, newKubeSafeError(
+				ClassInvalidInput,
+				"kubernetes_log_container_required",
+				operation,
+				"A container name is required when the Pod has multiple application containers.",
+			)
+		}
+		name = pod.Spec.Containers[0].Name
+	} else {
+		matches := 0
+		for _, container := range pod.Spec.Containers {
+			if container.Name == name {
+				matches++
+			}
+		}
+		for _, container := range pod.Spec.InitContainers {
+			if container.Name == name {
+				matches++
+				initContainer = true
+			}
+		}
+		if matches == 0 {
+			return selectedPodLogContainer{}, newKubeSafeError(
+				ClassNotFound,
+				"kubernetes_log_container_not_found",
+				operation,
+				"The requested Pod container was not found.",
+			)
+		}
+		if matches != 1 {
+			return selectedPodLogContainer{}, invalidKubernetesProjectionError(operation)
+		}
+	}
+	if !domain.ValidResourceName(name) {
+		return selectedPodLogContainer{}, invalidKubernetesProjectionError(operation)
+	}
+	statuses := pod.Status.ContainerStatuses
+	if initContainer {
+		statuses = pod.Status.InitContainerStatuses
+	}
+	var status *corev1.ContainerStatus
+	for index := range statuses {
+		if statuses[index].Name != name {
+			continue
+		}
+		if status != nil {
+			return selectedPodLogContainer{}, invalidKubernetesProjectionError(operation)
+		}
+		status = &statuses[index]
+	}
+	selection := selectedPodLogContainer{name: name, init: initContainer}
+	if status == nil {
+		return selection, nil
+	}
+	selection.restartCount = status.RestartCount
+	selection.currentAvailable = status.State.Running != nil || status.State.Terminated != nil
+	if status.LastTerminationState.Terminated != nil {
+		selection.lastTerminationReason = status.LastTerminationState.Terminated.Reason
+		selection.previousAvailable = status.RestartCount > 0
+	}
+	return selection, nil
+}
+
+func eventMatchesTarget(event *corev1.Event, target domain.ResourceRef) bool {
+	if event == nil {
+		return false
+	}
+	reference := event.InvolvedObject
+	if reference.APIVersion != target.APIVersion || reference.Kind != target.Kind || reference.Namespace != target.Namespace || reference.Name != target.Name {
+		return false
+	}
+	return target.UID == "" || string(reference.UID) == target.UID
+}
+
+func projectToolEvent(event *corev1.Event, target domain.ResourceRef) (toolcontract.EventObservation, error) {
+	if event == nil {
+		return toolcontract.EventObservation{}, errUnsafeKubernetesProjection
+	}
+	first, last := eventObservationTimes(event)
+	if !validProjectedEventTime(first) || !validProjectedEventTime(last) || last.Before(first) {
+		return toolcontract.EventObservation{}, errUnsafeKubernetesProjection
+	}
+	count := event.Count
+	if event.Series != nil && event.Series.Count > count {
+		count = event.Series.Count
+	}
+	if count < 1 {
+		count = 1
+	}
+	result := toolcontract.EventObservation{
+		Type:                projectToolText(event.Type, maxProjectedIdentityBytes),
+		Reason:              projectToolText(event.Reason, maxProjectedIdentityBytes),
+		Message:             projectToolText(event.Message, maxToolProjectedTextBytes),
+		Involved:            target,
+		ReportingSource:     projectToolText(event.Source.Component, maxProjectedIdentityBytes),
+		ReportingController: projectToolText(event.ReportingController, maxProjectedIdentityBytes),
+		FirstObservedAt:     first,
+		LastObservedAt:      last,
+		Count:               count,
+	}
+	result.Truncated = result.Type.Truncated || result.Reason.Truncated || result.Message.Truncated ||
+		result.ReportingSource.Truncated || result.ReportingController.Truncated
+	return result, nil
+}
+
+func eventObservationTimes(event *corev1.Event) (time.Time, time.Time) {
+	first := event.FirstTimestamp.Time
+	if event.FirstTimestamp.IsZero() {
+		first = event.EventTime.Time
+	}
+	if first.IsZero() {
+		first = event.CreationTimestamp.Time
+	}
+	last := time.Time{}
+	if event.Series != nil && !event.Series.LastObservedTime.IsZero() {
+		last = event.Series.LastObservedTime.Time
+	}
+	if last.IsZero() && !event.LastTimestamp.IsZero() {
+		last = event.LastTimestamp.Time
+	}
+	if last.IsZero() && !event.EventTime.IsZero() {
+		last = event.EventTime.Time
+	}
+	if last.IsZero() {
+		last = first
+	}
+	return first.UTC(), last.UTC()
+}
+
+func validProjectedEventTime(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC && value.UnixMilli() >= 0
+}
+
 func (reader *ToolResourceReader) validateContext(ctx context.Context, scope domain.ClusterScope, operation string) error {
 	if ctx == nil {
 		return newKubeSafeError(ClassInvalidInput, "kubernetes_context_required", operation, "An operation Context is required.")
@@ -515,4 +873,6 @@ var (
 	_ application.ResourceService    = (*Gateway)(nil)
 	_ application.ScopeClient        = (*scopeClient)(nil)
 	_ toolcontract.ResourceReader    = (*ToolResourceReader)(nil)
+	_ toolcontract.EventReader       = (*ToolResourceReader)(nil)
+	_ toolcontract.PodLogReader      = (*ToolResourceReader)(nil)
 )
