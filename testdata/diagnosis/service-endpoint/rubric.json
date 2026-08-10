@@ -1,0 +1,37 @@
+{
+  "scenario": "Service without ready Endpoint",
+  "minimum_evidence": [
+    "Projected Service type and selector key count without exposing selector values.",
+    "Bounded selector-match relationships and matching Pod readiness summaries.",
+    "Address-free EndpointSlice ready and not-ready counts for the Service."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_related_resources"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "service_selector_present", "meaning": "The projected Service has one or more selector keys."},
+    {"id": "service_matching_pod_observed", "meaning": "A bounded selector-match relationship to a Pod was observed."},
+    {"id": "service_pod_unready", "meaning": "A matching Pod has fewer ready containers than desired."},
+    {"id": "service_ready_endpoint_count_zero", "meaning": "The projected EndpointSlice ready count is zero."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "pod_readiness_blocks_backends_possible", "meaning": "The observed matching Pod readiness may explain the lack of ready endpoints."},
+    {"id": "selector_mismatch_possible", "meaning": "A selector mismatch remains possible only when the relationship result is missing or incomplete."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "service_existence_proves_backend", "meaning": "The Service object by itself proves that a ready backend exists."},
+    {"id": "endpoint_address_known", "meaning": "An EndpointSlice address, topology value, or backend network identity is known or inferred."},
+    {"id": "missing_endpoint_count_proves_no_backend", "meaning": "A missing or forbidden EndpointSlice count proves that no ready backend exists."},
+    {"id": "action_executed", "meaning": "KuPilot changed the Service, selector, Pod, or endpoint state."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_matching_pod_readiness", "meaning": "Collect bounded readiness Evidence for matching Pods and review probe configuration outside KuPilot."},
+    {"id": "obtain_service_relationship_access", "meaning": "Obtain permission for the fixed Pod and EndpointSlice relationship read."}
+  ],
+  "permission_or_missing_paths": [
+    "If Pod or EndpointSlice relationship reads are partial or forbidden, do not claim that the ready endpoint count is zero.",
+    "If matching Pod readiness and EndpointSlice counts conflict, preserve both observations and lower the hypothesis.",
+    "EndpointSlice evidence contains counts only; addresses and topology never enter Diagnosis Evidence."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "scenario": "Job failed",
+  "minimum_evidence": [
+    "Projected Job active, succeeded, and failed counts with the Failed condition.",
+    "A bounded owner relationship and status for Pods owned by the Job.",
+    "Recent Job Events when permission allows, without interpreting a failed count as an application root cause."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_related_resources",
+    "get_events"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "job_failed_count_observed", "meaning": "The projected Job failed count is non-zero."},
+    {"id": "job_failed_condition_observed", "meaning": "The projected Job Failed condition is True."},
+    {"id": "job_owned_pod_failed_observed", "meaning": "A bounded owned Pod status is Failed."},
+    {"id": "job_owned_pod_succeeded_observed", "meaning": "A bounded owned Pod status is Succeeded."},
+    {"id": "job_pod_owner_observed", "meaning": "The fixed owner graph connects the Job and observed Pod."},
+    {"id": "job_failure_event_observed", "meaning": "A recent Job failure Event was observed."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "pod_execution_failure_possible", "meaning": "The observed failed Pod execution may contribute without identifying the application cause."},
+    {"id": "controller_retry_exhaustion_possible", "meaning": "The observed Job condition may reflect exhausted retries without proving why attempts failed."},
+    {"id": "observation_timing_or_replacement_possible", "meaning": "Different observation times or Pod attempts may explain inconsistent Job and Pod status."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "failed_count_proves_application_error", "meaning": "A non-zero failed count proves an application defect."},
+    {"id": "unobserved_exit_cause", "meaning": "An unobserved exit reason, signal, or log message is confirmed."},
+    {"id": "action_executed", "meaning": "KuPilot reran, deleted, or changed the Job or Pod."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_failed_pod_evidence", "meaning": "Collect bounded resource, Event, and permitted log Evidence for the failed Pod attempt."},
+    {"id": "collect_fresh_job_and_pod_state", "meaning": "Collect a fresh bounded Job and owned Pod observation to resolve a conflict."}
+  ],
+  "permission_or_missing_paths": [
+    "If owned Pods or Events are partial or forbidden, retain the Job condition as controller state and leave the attempt cause unknown.",
+    "If Job counts and owned Pod phases conflict, declare conflicting Evidence and do not select one observation as the root cause.",
+    "A failed count or Failed condition does not reveal an application exit cause."
+  ]
+}

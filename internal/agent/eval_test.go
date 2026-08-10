@@ -27,7 +27,7 @@ const (
 
 var evalBaseTime = time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 
-type podScenarioExpectation struct {
+type diagnosisScenarioExpectation struct {
 	name                string
 	toolOrder           []domain.ToolName
 	forbiddenAssertions []string
@@ -124,8 +124,8 @@ type scenarioRun struct {
 	requests  []domain.ModelRequest
 }
 
-func TestPodDiagnosisScenarioFixtures(t *testing.T) {
-	for _, expectation := range podScenarioExpectations() {
+func TestDiagnosisScenarioFixtures(t *testing.T) {
+	for _, expectation := range diagnosisScenarioExpectations() {
 		t.Run(expectation.name, func(t *testing.T) {
 			directory := diagnosisFixturePath(expectation.name)
 			policy := readStrictJSONFixture[scenarioPolicy](t, filepath.Join(directory, "rubric.json"))
@@ -214,6 +214,31 @@ func TestDiagnosisRubricRejectsForbiddenUnsupportedAndIncompleteResults(t *testi
 	})
 }
 
+func TestDiagnosisRubricRejectsMismatchedEvidenceObservationTime(t *testing.T) {
+	directory := diagnosisFixturePath("readiness")
+	policy := readStrictJSONFixture[scenarioPolicy](t, filepath.Join(directory, "rubric.json"))
+	fixture := readStrictJSONFixture[conversationFixture](t, filepath.Join(directory, "sufficient.json"))
+	run := runConversationFixture(t, fixture)
+	mutated := run
+	mutated.events = append([]agentcore.RunEvent(nil), run.events...)
+	changed := false
+	for index, event := range mutated.events {
+		if event.Evidence == nil || event.Evidence.ID != "00000000-0000-7000-8000-000000001502" {
+			continue
+		}
+		evidence := *event.Evidence
+		evidence.ObservedAt = evidence.ObservedAt.Add(time.Millisecond)
+		mutated.events[index].Evidence = &evidence
+		changed = true
+	}
+	if !changed {
+		t.Fatal("middle Evidence observation was not found")
+	}
+	if err := evaluateDiagnosisRubric(policy, fixture, mutated); err == nil {
+		t.Fatal("rubric accepted Evidence with an observation time different from its Tool result")
+	}
+}
+
 func TestDiagnosisFixtureCanary(t *testing.T) {
 	root := diagnosisFixturePath("")
 	ipv4 := regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
@@ -229,6 +254,12 @@ func TestDiagnosisFixtureCanary(t *testing.T) {
 		`"api_key"`,
 		`"kind":"Secret"`,
 		`"kind": "Secret"`,
+		`"address":`,
+		`"addresses":`,
+		`\"address\":`,
+		`\"addresses\":`,
+		`"topology":`,
+		`\"topology\":`,
 	}
 	hostileFixtureCount := 0
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -276,8 +307,8 @@ func TestDiagnosisFixtureCanary(t *testing.T) {
 	}
 }
 
-func podScenarioExpectations() []podScenarioExpectation {
-	return []podScenarioExpectation{
+func diagnosisScenarioExpectations() []diagnosisScenarioExpectation {
+	return []diagnosisScenarioExpectation{
 		{
 			name: "crashloop",
 			toolOrder: []domain.ToolName{
@@ -323,6 +354,32 @@ func podScenarioExpectations() []podScenarioExpectation {
 			},
 			forbiddenAssertions: []string{"service_outage_proves_probe_failure", "truncated_log_root_cause", "action_executed"},
 		},
+		{
+			name: "deployment",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameGetResource,
+				domain.ToolNameGetRelatedResources,
+				domain.ToolNameGetEvents,
+			},
+			forbiddenAssertions: []string{"deployment_condition_is_root_cause", "unobserved_pod_cause", "action_executed"},
+		},
+		{
+			name: "job",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameGetResource,
+				domain.ToolNameGetRelatedResources,
+				domain.ToolNameGetEvents,
+			},
+			forbiddenAssertions: []string{"failed_count_proves_application_error", "unobserved_exit_cause", "action_executed"},
+		},
+		{
+			name: "service-endpoint",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameGetResource,
+				domain.ToolNameGetRelatedResources,
+			},
+			forbiddenAssertions: []string{"service_existence_proves_backend", "endpoint_address_known", "missing_endpoint_count_proves_no_backend", "action_executed"},
+		},
 	}
 }
 
@@ -353,7 +410,7 @@ func readStrictJSONFixture[T any](t *testing.T, path string) T {
 	return result
 }
 
-func assertPolicyExpectation(t *testing.T, policy scenarioPolicy, expectation podScenarioExpectation) {
+func assertPolicyExpectation(t *testing.T, policy scenarioPolicy, expectation diagnosisScenarioExpectation) {
 	t.Helper()
 	if policy.Scenario == "" || len(policy.MinimumEvidence) == 0 || len(policy.PermissionOrMissingPaths) == 0 ||
 		!reflect.DeepEqual(policy.ToolOrder, expectation.toolOrder) {
@@ -753,12 +810,21 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 	}
 
 	definitions := make(map[domain.EvidenceID]fixtureEvidence)
-	for _, step := range fixture.Steps {
+	expectedObservedAt := make(map[domain.EvidenceID]time.Time)
+	var previousObservedOffset int64
+	hasPartialResult := false
+	for stepIndex, step := range fixture.Steps {
+		if step.Result.ObservedOffsetMS <= 0 || stepIndex > 0 && step.Result.ObservedOffsetMS <= previousObservedOffset {
+			addProblem("fixture Tool observation offset %d is not strictly increasing", step.Result.ObservedOffsetMS)
+		}
+		previousObservedOffset = step.Result.ObservedOffsetMS
+		observedAt := evalBaseTime.Add(time.Duration(step.Result.ObservedOffsetMS) * time.Millisecond)
 		for _, definition := range step.Result.Evidence {
 			if _, duplicate := definitions[definition.ID]; duplicate {
 				addProblem("fixture repeats Evidence ID %q", definition.ID)
 			}
 			definitions[definition.ID] = definition
+			expectedObservedAt[definition.ID] = observedAt
 		}
 		if step.Result.ErrorClass == domain.SafeErrorClassPermissionDenied &&
 			!containsMissingKind(run.diagnosis.MissingInformation, domain.MissingInformationForbidden) {
@@ -767,6 +833,9 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 		if step.Result.Status == domain.ToolResultStatusPartial &&
 			!containsMissingKind(run.diagnosis.MissingInformation, domain.MissingInformationTruncated) {
 			addProblem("partial result is not represented as truncated missing information")
+		}
+		if step.Result.Status == domain.ToolResultStatusPartial {
+			hasPartialResult = true
 		}
 	}
 	accepted := make(map[domain.EvidenceID]domain.Evidence)
@@ -794,6 +863,9 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 		}
 		if evidence.Category != definition.Category || evidence.Fact != definition.Fact || evidence.Truncated != definition.Truncated {
 			addProblem("accepted Evidence %q differs from its safe fixture projection", id)
+		}
+		if !evidence.ObservedAt.Equal(expectedObservedAt[id]) {
+			addProblem("accepted Evidence %q has observation time %s, want %s", id, evidence.ObservedAt, expectedObservedAt[id])
 		}
 	}
 
@@ -884,6 +956,9 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 	}
 	if run.diagnosis.EvidenceDetailsState != fixture.ExpectedEvidenceDetailState {
 		addProblem("Evidence detail state is %q, want %q", run.diagnosis.EvidenceDetailsState, fixture.ExpectedEvidenceDetailState)
+	}
+	if hasPartialResult && run.diagnosis.EvidenceDetailsState != domain.EvidenceDetailPartial {
+		addProblem("partial Tool result does not produce partial Evidence detail state")
 	}
 	if len(accepted) > 0 {
 		var earliest, latest time.Time

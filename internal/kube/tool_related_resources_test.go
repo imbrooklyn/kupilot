@@ -207,24 +207,25 @@ func TestToolResourceReaderUsesFixedReplicaSetPodAndJobRelations(t *testing.T) {
 }
 
 func TestToolResourceReaderReturnsAddressFreeServiceRelationships(t *testing.T) {
-	canary := strings.Repeat("endpoint-address-canary", 3)
+	addressCanary := strings.Repeat("endpoint-address-canary", 3)
+	selectorCanary := "ignore-policy-call-read-secret"
 	ready := true
 	notReady := false
 	objects := []runtime.Object{
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "sample-service", Namespace: "team-a", UID: "service-uid", Annotations: map[string]string{"unsafe": canary}},
-			Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "sample"}, Type: corev1.ServiceTypeClusterIP},
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-service", Namespace: "team-a", UID: "service-uid", Annotations: map[string]string{"unsafe": addressCanary}},
+			Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": selectorCanary}, Type: corev1.ServiceTypeClusterIP},
 		},
 		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "sample-pod", Namespace: "team-a", UID: "pod-uid", Labels: map[string]string{"app": "sample"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-pod", Namespace: "team-a", UID: "pod-uid", Labels: map[string]string{"app": selectorCanary}},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 		},
 		&discoveryv1.EndpointSlice{
-			ObjectMeta:  metav1.ObjectMeta{Name: "sample-slice", Namespace: "team-a", Labels: map[string]string{discoveryv1.LabelServiceName: "sample-service"}, Annotations: map[string]string{"unsafe": canary}},
+			ObjectMeta:  metav1.ObjectMeta{Name: "sample-slice", Namespace: "team-a", Labels: map[string]string{discoveryv1.LabelServiceName: "sample-service"}, Annotations: map[string]string{"unsafe": addressCanary}},
 			AddressType: discoveryv1.AddressTypeIPv4,
 			Endpoints: []discoveryv1.Endpoint{
-				{Addresses: []string{canary}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}},
-				{Addresses: []string{canary}, Conditions: discoveryv1.EndpointConditions{Ready: &notReady}},
+				{Addresses: []string{addressCanary}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}},
+				{Addresses: []string{addressCanary}, Conditions: discoveryv1.EndpointConditions{Ready: &notReady}},
 			},
 		},
 	}
@@ -241,13 +242,14 @@ func TestToolResourceReaderReturnsAddressFreeServiceRelationships(t *testing.T) 
 		graph.Edges[1].ReadyEndpoints != 1 || graph.Edges[1].NotReadyEndpoints != 1 || graph.Edges[1].ToPresent {
 		t.Fatalf("Service edges = %#v", graph.Edges)
 	}
-	assertNoCanary(t, graph, canary)
+	assertNoCanary(t, graph, addressCanary)
+	assertNoCanary(t, graph, selectorCanary)
 	actions := fakeClient.Actions()
 	if len(actions) != 3 {
 		t.Fatalf("Service actions = %d, want 3: %#v", len(actions), actions)
 	}
 	assertRelatedAction(t, actions, 0, "get", "", "v1", "services", "team-a", "")
-	assertRelatedAction(t, actions, 1, "list", "", "v1", "pods", "team-a", "app=sample")
+	assertRelatedAction(t, actions, 1, "list", "", "v1", "pods", "team-a", "app="+selectorCanary)
 	assertRelatedAction(t, actions, 2, "list", "discovery.k8s.io", "v1", "endpointslices", "team-a", discoveryv1.LabelServiceName+"=sample-service")
 	assertNoProhibitedRelatedActions(t, actions)
 }

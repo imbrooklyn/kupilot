@@ -1,0 +1,39 @@
+{
+  "scenario": "Deployment unavailable",
+  "minimum_evidence": [
+    "Projected Deployment desired, ready, available, updated, and unavailable replica counts with relevant conditions.",
+    "A bounded Deployment to ReplicaSet to Pod owner graph when relationship access is available.",
+    "Recent Deployment Events and related Pod status observations without treating controller conditions as a root cause."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_related_resources",
+    "get_events"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "deployment_zero_available", "meaning": "The projected Deployment has zero available replicas."},
+    {"id": "deployment_available_false", "meaning": "The projected Deployment Available condition is False."},
+    {"id": "deployment_replicaset_observed", "meaning": "A bounded related ReplicaSet status was observed."},
+    {"id": "deployment_pod_pending_observed", "meaning": "A bounded related Pod status is Pending."},
+    {"id": "deployment_owner_chain_observed", "meaning": "The fixed owner graph connects the Deployment, ReplicaSet, and Pod."},
+    {"id": "deployment_progress_event_observed", "meaning": "A recent Deployment progress deadline Event was observed."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "pod_startup_blocks_rollout_possible", "meaning": "An observed related Pod startup problem may prevent available replicas."},
+    {"id": "rollout_progress_stalled_possible", "meaning": "The rollout may be stalled, without treating the condition as the underlying cause."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "deployment_condition_is_root_cause", "meaning": "A Deployment condition by itself proves the underlying cause."},
+    {"id": "unobserved_pod_cause", "meaning": "An unobserved Pod, Node, image, volume, or application cause is confirmed."},
+    {"id": "action_executed", "meaning": "KuPilot restarted or changed the Deployment."}
+  ],
+  "recommended_actions": [
+    {"id": "inspect_related_pod_evidence", "meaning": "Collect bounded Pod status, Event, or log Evidence for the observed related Pod."},
+    {"id": "collect_complete_rollout_graph", "meaning": "Obtain access to the bounded rollout relationship before assigning a Pod cause."}
+  ],
+  "permission_or_missing_paths": [
+    "If the ReplicaSet or Pod branch is partial or forbidden, confirm only directly observed Deployment state and declare the graph gap.",
+    "If Deployment state, related status, or Events conflict, preserve each observation and lower any rollout hypothesis.",
+    "A Deployment condition may identify a stalled rollout but does not guarantee the underlying Pod cause."
+  ]
+}

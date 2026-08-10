@@ -1,0 +1,65 @@
+{
+  "name": "service_relationship_forbidden",
+  "question": "Why does example-service have no ready backend?",
+  "target": {"api_version": "v1", "kind": "Service", "namespace": "example-namespace", "name": "example-service"},
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect the Service selector summary.\",\"resource\":{\"kind\":\"Service\",\"name\":\"example-service\"}}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The Service projection contains one selector key and no selector value.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000001811",
+            "category": "resource_status",
+            "fact": "Service example-service was observed; selector keys 1; service type ClusterIP.",
+            "source_path": "projected.status",
+            "severity": "info",
+            "supports": ["service_selector_present", "selector_mismatch_possible"]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_related_resources",
+      "arguments_json": "{\"include\":[\"pods\",\"service_endpoints\"],\"purpose\":\"Inspect matching Pods and address-free EndpointSlice counts.\",\"relation_depth\":1,\"resource\":{\"kind\":\"Service\",\"name\":\"example-service\"}}",
+      "result": {
+        "status": "denied",
+        "observed_offset_ms": 200,
+        "data_json": "{\"source_trust\":\"untrusted_external_data\"}",
+        "error_class": "permission_denied",
+        "safe_message": "The fixed Service relationship read was denied."
+      }
+    }
+  ],
+  "diagnosis": {
+    "confirmed_facts": [
+      {"statement": "The projected Service has one selector key.", "evidence_ids": ["00000000-0000-7000-8000-000000001811"]}
+    ],
+    "hypotheses": [],
+    "missing_information": [
+      {"kind": "forbidden", "detail": "The fixed matching Pod and EndpointSlice relationship read was denied.", "impact": "No matching Pod readiness or ready endpoint count can be confirmed."}
+    ],
+    "recommended_actions": [
+      {
+        "action": "Obtain permission for the fixed Pod and EndpointSlice relationship read before evaluating backend readiness.",
+        "risk": "Granting read permission changes cluster authorization outside KuPilot.",
+        "prerequisites": ["Do not infer selector matches, endpoint counts, topology, or network identities from the Service object."],
+        "executed": false
+      }
+    ]
+  },
+  "annotations": {
+    "confirmed_facts": [{"index": 0, "assertion": "service_selector_present"}],
+    "hypotheses": [],
+    "recommended_actions": [{"index": 0, "assertion": "obtain_service_relationship_access"}]
+  },
+  "required_confirmed_assertions": ["service_selector_present"],
+  "required_missing_kinds": ["forbidden"],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}
