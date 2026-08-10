@@ -2,20 +2,30 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
-func TestResourceToolSchemasRemainStrictScopeFreeAndPurposeBound(t *testing.T) {
+func TestReadOnlyToolSchemasRemainExactStrictScopeFreeAndPurposeBound(t *testing.T) {
 	t.Parallel()
 
 	specifications := agent.ToolSpecifications()
 	wanted := map[domain.ToolName]bool{
-		domain.ToolNameGetResource:   false,
-		domain.ToolNameListResources: false,
+		domain.ToolNameGetResource:         false,
+		domain.ToolNameListResources:       false,
+		domain.ToolNameGetEvents:           false,
+		domain.ToolNameGetPodLogs:          false,
+		domain.ToolNameGetPreviousPodLogs:  false,
+		domain.ToolNameGetRelatedResources: false,
+	}
+	if len(specifications) != len(wanted) {
+		t.Fatalf("fixed Tool specification count = %d, want %d", len(specifications), len(wanted))
 	}
 	for _, specification := range specifications {
 		if _, relevant := wanted[specification.Name]; !relevant {
@@ -31,7 +41,10 @@ func TestResourceToolSchemasRemainStrictScopeFreeAndPurposeBound(t *testing.T) {
 				t.Fatalf("Tool %q schema is missing %s", specification.Name, required)
 			}
 		}
-		for _, prohibited := range []string{`"context"`, `"namespace"`, `"scope"`, `"gvr"`, `"raw_selector"`, `"hard_limit"`, `"continue"`} {
+		for _, prohibited := range []string{
+			`"context"`, `"namespace"`, `"scope"`, `"gvr"`, `"raw_selector"`, `"hard_limit"`,
+			`"continue"`, `"subresource"`, `"limit_bytes"`, `"watch"`, `"follow"`,
+		} {
 			if strings.Contains(schema, prohibited) {
 				t.Fatalf("Tool %q schema contains prohibited authority field %s", specification.Name, prohibited)
 			}
@@ -41,6 +54,91 @@ func TestResourceToolSchemasRemainStrictScopeFreeAndPurposeBound(t *testing.T) {
 		if !found {
 			t.Fatalf("fixed catalog is missing %q", name)
 		}
+	}
+}
+
+func TestReadOnlyToolCatalogBuildsExactlySixConcreteHandlers(t *testing.T) {
+	t.Parallel()
+
+	resourceReader := &fakeResourceReader{}
+	eventReader := &fakeEventReader{}
+	logReader := &fakePodLogReader{}
+	relatedReader := &fakeRelatedResourceReader{}
+	guard := &sequenceScopeGuard{}
+	handlers, err := NewReadOnlyToolCatalog(ReadOnlyToolCatalogDependencies{
+		Resources: testDependencies(resourceReader, guard),
+		Events:    eventDependencies(eventReader, guard),
+		Logs:      logDependencies(logReader, guard, LogPolicyAllowed),
+		Related:   relatedDependencies(relatedReader, guard),
+	})
+	if err != nil || handlers.Validate() != nil {
+		t.Fatalf("NewReadOnlyToolCatalog() handlers/error = %#v/%v", handlers, err)
+	}
+	want := []domain.ToolName{
+		domain.ToolNameGetResource,
+		domain.ToolNameListResources,
+		domain.ToolNameGetEvents,
+		domain.ToolNameGetPodLogs,
+		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetRelatedResources,
+	}
+	for _, name := range want {
+		if handler, err := handlers.Resolve(name); err != nil || handler == nil {
+			t.Fatalf("Resolve(%q) handler/error = %#v/%v", name, handler, err)
+		}
+	}
+	if _, err := handlers.Resolve(domain.ToolName("run_shell")); err == nil {
+		t.Fatal("fixed handlers resolved an unknown Tool")
+	}
+	invalid := ReadOnlyToolCatalogDependencies{
+		Resources: testDependencies(resourceReader, guard),
+		Events:    eventDependencies(eventReader, guard),
+		Logs:      logDependencies(logReader, guard, LogPolicyAllowed),
+	}
+	if _, err := NewReadOnlyToolCatalog(invalid); err == nil {
+		t.Fatal("catalog accepted a missing related handler dependency")
+	}
+}
+
+func TestSixToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
+	resourceReader := &fakeResourceReader{}
+	eventReader := &fakeEventReader{}
+	logReader := &fakePodLogReader{}
+	relatedReader := &fakeRelatedResourceReader{}
+	guard := &sequenceScopeGuard{}
+	logPolicy := &staticLogPolicy{decision: LogPolicyAllowed}
+	_, err := NewReadOnlyToolCatalog(ReadOnlyToolCatalogDependencies{
+		Resources: testDependencies(resourceReader, guard),
+		Events:    eventDependencies(eventReader, guard),
+		Logs: LogToolDependencies{
+			Reader: logReader, ScopeGuard: guard, EvidenceIDs: &sequenceEvidenceIDs{},
+			Text: security.NewRedactor(), Policy: logPolicy, Now: func() time.Time { return testObservedAt },
+		},
+		Related: relatedDependencies(relatedReader, guard),
+	})
+	if err != nil {
+		t.Fatalf("NewReadOnlyToolCatalog() error = %v", err)
+	}
+	input := testRunInput(t, 0)
+	tests := []domain.ModelToolCall{
+		{ID: "denied-get", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"namespace":"other","purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`},
+		{ID: "denied-list", Name: domain.ToolNameListResources, ArgumentsJSON: `{"kind":"Pod","purpose":"List.","raw_selector":"app=all"}`},
+		{ID: "denied-events", Name: domain.ToolNameGetEvents, ArgumentsJSON: `{"purpose":"Events.","resource":{"kind":"Secret","name":"sample-secret"}}`},
+		{ID: "denied-logs", Name: domain.ToolNameGetPodLogs, ArgumentsJSON: `{"namespace":"other","pod_name":"sample-pod","purpose":"Logs."}`},
+		{ID: "denied-previous", Name: domain.ToolNameGetPreviousPodLogs, ArgumentsJSON: `{"pod_name":"sample-pod","previous":false,"purpose":"Previous logs."}`},
+		{ID: "denied-related", Name: domain.ToolNameGetRelatedResources, ArgumentsJSON: `{"gvr":"v1/secrets","purpose":"Related.","resource":{"kind":"Pod","name":"sample-pod"}}`},
+	}
+	for index, selection := range tests {
+		_, err := agent.BindToolCall(input, domain.ToolInvocationID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 20_000+index)), selection)
+		if err == nil {
+			t.Errorf("BindToolCall(%q) accepted prohibited authority", selection.Name)
+		}
+	}
+	getCalls, listCalls := resourceReader.counts()
+	if getCalls != 0 || listCalls != 0 || eventReader.count() != 0 || logReader.count() != 0 ||
+		relatedReader.count() != 0 || logPolicy.count() != 0 {
+		t.Fatalf("denied matrix actions resource=%d/%d event=%d log=%d related=%d policy=%d",
+			getCalls, listCalls, eventReader.count(), logReader.count(), relatedReader.count(), logPolicy.count())
 	}
 }
 

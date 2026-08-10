@@ -2,13 +2,18 @@ package kube
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,7 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-const maxEndpointEntries = 1000
+const (
+	maxEndpointEntries     = 1000
+	maxRelatedSelectorKeys = 64
+)
 
 // GetResource performs one fixed typed GET in the bound Namespace and returns
 // only a project-owned safe summary.
@@ -845,6 +853,1015 @@ func validProjectedEventTime(value time.Time) bool {
 	return !value.IsZero() && value.Location() == time.UTC && value.UnixMilli() >= 0
 }
 
+// ReadRelatedResources performs only the fixed relationship reads admitted by
+// the root Kind. Every selector is derived from an already-read object, and the
+// result contains project-owned observations rather than Kubernetes objects.
+func (reader *ToolResourceReader) ReadRelatedResources(
+	ctx context.Context,
+	request toolcontract.RelatedReadRequest,
+) (toolcontract.RelatedObservationGraph, error) {
+	const operation = "tool_get_related_resources"
+	if err := reader.validateContext(ctx, request.Scope, operation); err != nil {
+		return toolcontract.RelatedObservationGraph{}, err
+	}
+	if _, allowed := domain.ResourceKindForReference(request.Reference); !allowed {
+		return toolcontract.RelatedObservationGraph{}, resourceKindDeniedError(operation)
+	}
+	if request.Reference.Namespace != request.Scope.Namespace {
+		return toolcontract.RelatedObservationGraph{}, newKubeSafeError(
+			ClassPolicyDenied,
+			"kubernetes_cross_namespace_denied",
+			operation,
+			"Cross-Namespace Kubernetes reads are not allowed.",
+		)
+	}
+	if request.Validate() != nil {
+		return toolcontract.RelatedObservationGraph{}, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_related_request_invalid",
+			operation,
+			"The Kubernetes relationship request is invalid.",
+		)
+	}
+	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
+	if err != nil {
+		return toolcontract.RelatedObservationGraph{}, err
+	}
+	root, err := readRelatedRoot(ctx, bundle, request, operation)
+	if err != nil {
+		return toolcontract.RelatedObservationGraph{}, err
+	}
+	if request.Reference.UID != "" && request.Reference.UID != root.observation.Summary.Reference.UID {
+		return toolcontract.RelatedObservationGraph{}, newKubeSafeError(
+			ClassNotFound,
+			"kubernetes_related_target_uid_not_found",
+			operation,
+			"The requested Kubernetes object was not found.",
+		)
+	}
+	builder := newRelatedGraphBuilder(request, root.observation)
+	switch {
+	case root.deployment != nil:
+		err = reader.expandRelatedDeployment(ctx, bundle, builder, root.deployment, operation)
+	case root.replicaSet != nil:
+		err = reader.expandRelatedReplicaSet(ctx, bundle, builder, root.replicaSet, operation)
+	case root.pod != nil:
+		err = reader.expandRelatedPod(ctx, bundle, builder, root.pod, operation)
+	case root.job != nil:
+		err = reader.expandRelatedJob(ctx, bundle, builder, root.job, operation)
+	case root.service != nil:
+		err = reader.expandRelatedService(ctx, bundle, builder, root.service, operation)
+	default:
+		err = invalidKubernetesProjectionError(operation)
+	}
+	if err != nil {
+		return toolcontract.RelatedObservationGraph{}, err
+	}
+	result := builder.result()
+	if result.Validate(request) != nil {
+		return toolcontract.RelatedObservationGraph{}, invalidKubernetesProjectionError(operation)
+	}
+	return result, nil
+}
+
+type relatedRootObject struct {
+	observation toolcontract.ResourceObservation
+	deployment  *appsv1.Deployment
+	replicaSet  *appsv1.ReplicaSet
+	pod         *corev1.Pod
+	job         *batchv1.Job
+	service     *corev1.Service
+}
+
+func readRelatedRoot(
+	ctx context.Context,
+	bundle *ClientBundle,
+	request toolcontract.RelatedReadRequest,
+	operation string,
+) (relatedRootObject, error) {
+	kind, _ := domain.ResourceKindForReference(request.Reference)
+	switch kind {
+	case domain.ResourceKindDeployment:
+		object, rawErr := bundle.typed.AppsV1().Deployments(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, operation); err != nil {
+			return relatedRootObject{}, err
+		}
+		observation, err := projectToolDeployment(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		return relatedRootObject{observation: observation, deployment: object}, projectionOrError(err, observation, operation)
+	case domain.ResourceKindReplicaSet:
+		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, operation); err != nil {
+			return relatedRootObject{}, err
+		}
+		observation, err := projectToolReplicaSet(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		return relatedRootObject{observation: observation, replicaSet: object}, projectionOrError(err, observation, operation)
+	case domain.ResourceKindPod:
+		object, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, operation); err != nil {
+			return relatedRootObject{}, err
+		}
+		observation, err := projectToolPod(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		return relatedRootObject{observation: observation, pod: object}, projectionOrError(err, observation, operation)
+	case domain.ResourceKindJob:
+		object, rawErr := bundle.typed.BatchV1().Jobs(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, operation); err != nil {
+			return relatedRootObject{}, err
+		}
+		observation, err := projectToolJob(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		return relatedRootObject{observation: observation, job: object}, projectionOrError(err, observation, operation)
+	case domain.ResourceKindService:
+		object, rawErr := bundle.typed.CoreV1().Services(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, operation); err != nil {
+			return relatedRootObject{}, err
+		}
+		observation, err := projectToolService(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		return relatedRootObject{observation: observation, service: object}, projectionOrError(err, observation, operation)
+	default:
+		return relatedRootObject{}, resourceKindDeniedError(operation)
+	}
+}
+
+func projectionOrError(err error, observation toolcontract.ResourceObservation, operation string) error {
+	if err != nil || observation.Validate() != nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	return nil
+}
+
+type relatedGraphBuilder struct {
+	request toolcontract.RelatedReadRequest
+	graph   toolcontract.RelatedObservationGraph
+	nodes   map[string]int
+	edges   map[string]struct{}
+	gaps    map[string]struct{}
+}
+
+func newRelatedGraphBuilder(request toolcontract.RelatedReadRequest, root toolcontract.ResourceObservation) *relatedGraphBuilder {
+	reference := relatedReferenceFromResource(root.Summary.Reference, false)
+	return &relatedGraphBuilder{
+		request: request,
+		graph: toolcontract.RelatedObservationGraph{
+			Root:  reference,
+			Nodes: []toolcontract.RelatedNodeObservation{{Reference: reference, Resource: root, Fetched: true, Hop: 0}},
+			Edges: []toolcontract.RelatedEdgeObservation{},
+			Gaps:  []toolcontract.RelatedGapObservation{},
+		},
+		nodes: map[string]int{relatedReferenceKey(reference): 0},
+		edges: make(map[string]struct{}),
+		gaps:  make(map[string]struct{}),
+	}
+}
+
+func (builder *relatedGraphBuilder) result() toolcontract.RelatedObservationGraph {
+	sort.Slice(builder.graph.Nodes, func(left, right int) bool {
+		return relatedNodeAdapterSortKey(builder.graph.Nodes[left]) < relatedNodeAdapterSortKey(builder.graph.Nodes[right])
+	})
+	sort.Slice(builder.graph.Edges, func(left, right int) bool {
+		return relatedEdgeAdapterSortKey(builder.graph.Edges[left]) < relatedEdgeAdapterSortKey(builder.graph.Edges[right])
+	})
+	sort.Slice(builder.graph.Gaps, func(left, right int) bool {
+		return relatedGapAdapterSortKey(builder.graph.Gaps[left]) < relatedGapAdapterSortKey(builder.graph.Gaps[right])
+	})
+	return builder.graph
+}
+
+func (builder *relatedGraphBuilder) addFetched(
+	from toolcontract.RelatedReference,
+	observation toolcontract.ResourceObservation,
+	relation toolcontract.RelatedRelation,
+	hop int,
+	selector labels.Selector,
+	selectorKeys int,
+) bool {
+	reference := relatedReferenceFromResource(observation.Summary.Reference, false)
+	return builder.addConnectedNode(from, toolcontract.RelatedNodeObservation{
+		Reference: reference, Resource: observation, Fetched: true, Hop: hop,
+	}, relation, hop, selector, selectorKeys)
+}
+
+func (builder *relatedGraphBuilder) addReferenceOnly(
+	from, reference toolcontract.RelatedReference,
+	relation toolcontract.RelatedRelation,
+	hop int,
+) bool {
+	reference.ReferenceOnly = true
+	reference.ResourceVersion = ""
+	return builder.addConnectedNode(from, toolcontract.RelatedNodeObservation{
+		Reference: reference, Fetched: false, Hop: hop,
+	}, relation, hop, nil, 0)
+}
+
+func (builder *relatedGraphBuilder) addConnectedNode(
+	from toolcontract.RelatedReference,
+	node toolcontract.RelatedNodeObservation,
+	relation toolcontract.RelatedRelation,
+	hop int,
+	selector labels.Selector,
+	selectorKeys int,
+) bool {
+	toKey := relatedReferenceKey(node.Reference)
+	if toKey == relatedReferenceKey(builder.graph.Root) {
+		builder.addGap(from, relation, domain.SafeErrorClassPolicyDenied, hop)
+		return false
+	}
+	edgeKey := relatedEdgeAdapterKey(relation, from, node.Reference)
+	if _, duplicate := builder.edges[edgeKey]; duplicate {
+		return true
+	}
+	if len(builder.graph.Edges) >= builder.request.MaxEdges {
+		builder.graph.Truncated = true
+		return false
+	}
+	if _, exists := builder.nodes[toKey]; !exists {
+		if len(builder.graph.Nodes) >= builder.request.MaxNodes {
+			builder.graph.Truncated = true
+			return false
+		}
+		builder.nodes[toKey] = len(builder.graph.Nodes)
+		builder.graph.Nodes = append(builder.graph.Nodes, node)
+	}
+	edge := toolcontract.RelatedEdgeObservation{
+		From: from, To: node.Reference, ToPresent: true, Relation: relation, Hop: hop,
+	}
+	if relation == toolcontract.RelatedRelationSelectorMatch {
+		edge.SelectorKeyCount = selectorKeys
+		edge.SelectorFingerprint = domain.SHA256Hex(selector.String())
+	}
+	builder.edges[edgeKey] = struct{}{}
+	builder.graph.Edges = append(builder.graph.Edges, edge)
+	return true
+}
+
+func (builder *relatedGraphBuilder) addEndpointCounts(
+	service toolcontract.RelatedReference,
+	hop int,
+	counts endpointCounts,
+) bool {
+	edgeKey := relatedEdgeAdapterKey(toolcontract.RelatedRelationServiceEndpoints, service, toolcontract.RelatedReference{})
+	if _, duplicate := builder.edges[edgeKey]; duplicate {
+		return true
+	}
+	if len(builder.graph.Edges) >= builder.request.MaxEdges {
+		builder.graph.Truncated = true
+		return false
+	}
+	builder.edges[edgeKey] = struct{}{}
+	builder.graph.Edges = append(builder.graph.Edges, toolcontract.RelatedEdgeObservation{
+		From: service, Relation: toolcontract.RelatedRelationServiceEndpoints, Hop: hop,
+		ReadyEndpoints: counts.Ready, NotReadyEndpoints: counts.NotReady, Truncated: counts.Truncated,
+	})
+	builder.graph.Truncated = builder.graph.Truncated || counts.Truncated
+	return true
+}
+
+func (builder *relatedGraphBuilder) addGap(
+	from toolcontract.RelatedReference,
+	relation toolcontract.RelatedRelation,
+	class domain.SafeErrorClass,
+	hop int,
+) {
+	key := relatedEdgeAdapterKey(relation, from, toolcontract.RelatedReference{}) + "\x00" + string(class)
+	if _, duplicate := builder.gaps[key]; duplicate {
+		return
+	}
+	if len(builder.graph.Gaps) >= builder.request.MaxEdges {
+		builder.graph.Truncated = true
+		return
+	}
+	builder.gaps[key] = struct{}{}
+	builder.graph.Gaps = append(builder.graph.Gaps, toolcontract.RelatedGapObservation{
+		From: from, Relation: relation, Class: class, Hop: hop,
+	})
+}
+
+func (builder *relatedGraphBuilder) hasCapacityForEdge() bool {
+	if len(builder.graph.Edges) >= builder.request.MaxEdges {
+		builder.graph.Truncated = true
+		return false
+	}
+	return true
+}
+
+func (reader *ToolResourceReader) expandRelatedDeployment(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	deployment *appsv1.Deployment,
+	operation string,
+) error {
+	if !relatedIncludes(builder.request, toolcontract.RelatedIncludeReplicaSets) &&
+		!relatedIncludes(builder.request, toolcontract.RelatedIncludePods) {
+		return nil
+	}
+	root := builder.graph.Root
+	if deployment == nil || deployment.UID == "" {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	selector, _, ok := safeObjectSelector(deployment.Spec.Selector)
+	if !ok {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	limit := relatedListLimit(builder.request)
+	list, rawErr := bundle.typed.AppsV1().ReplicaSets(builder.request.Scope.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(), Limit: limit,
+	})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationOwnerReference, 1, err)
+	}
+	if list == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if list.Continue != "" || len(list.Items) > int(limit) {
+		builder.graph.Truncated = true
+	}
+	sort.Slice(list.Items, func(left, right int) bool { return list.Items[left].Name < list.Items[right].Name })
+	replicaSets := make(map[string]*appsv1.ReplicaSet)
+	references := make(map[string]toolcontract.RelatedReference)
+	previousName := ""
+	for index := range list.Items {
+		item := &list.Items[index]
+		if previousName == item.Name {
+			return invalidKubernetesProjectionError(operation)
+		}
+		previousName = item.Name
+		if !controllerOwnerMatches(item.OwnerReferences, "apps/v1", "Deployment", deployment.Name, string(deployment.UID)) {
+			continue
+		}
+		observation, err := projectToolReplicaSet(item, builder.request.Scope.Namespace, "", toolcontract.ResourceDetailSummary)
+		if err != nil {
+			return invalidKubernetesProjectionError(operation)
+		}
+		if !builder.addFetched(root, observation, toolcontract.RelatedRelationOwnerReference, 1, nil, 0) {
+			break
+		}
+		uid := observation.Summary.Reference.UID
+		if uid == "" {
+			builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+			continue
+		}
+		replicaSets[uid] = item
+		references[uid] = relatedReferenceFromResource(observation.Summary.Reference, false)
+	}
+	if builder.request.Depth < 2 || !relatedIncludes(builder.request, toolcontract.RelatedIncludePods) || len(replicaSets) == 0 {
+		return nil
+	}
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	pods, rawErr := bundle.typed.CoreV1().Pods(builder.request.Scope.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(), Limit: limit,
+	})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationOwnerReference, 2, err)
+	}
+	if pods == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if pods.Continue != "" || len(pods.Items) > int(limit) {
+		builder.graph.Truncated = true
+	}
+	sort.Slice(pods.Items, func(left, right int) bool { return pods.Items[left].Name < pods.Items[right].Name })
+	previousName = ""
+	for index := range pods.Items {
+		pod := &pods.Items[index]
+		if previousName == pod.Name {
+			return invalidKubernetesProjectionError(operation)
+		}
+		previousName = pod.Name
+		ownerUID := controllerOwnerUID(pod.OwnerReferences, "apps/v1", "ReplicaSet")
+		from, owned := references[ownerUID]
+		if !owned {
+			continue
+		}
+		observation, err := projectToolPod(pod, builder.request.Scope.Namespace, "", toolcontract.ResourceDetailSummary)
+		if err != nil {
+			return invalidKubernetesProjectionError(operation)
+		}
+		if !builder.addFetched(from, observation, toolcontract.RelatedRelationOwnerReference, 2, nil, 0) {
+			break
+		}
+	}
+	return nil
+}
+
+func (reader *ToolResourceReader) expandRelatedReplicaSet(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	replicaSet *appsv1.ReplicaSet,
+	operation string,
+) error {
+	root := builder.graph.Root
+	if replicaSet == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if relatedIncludes(builder.request, toolcontract.RelatedIncludeOwners) {
+		if err := reader.followReplicaSetOwner(ctx, bundle, builder, replicaSet, operation); err != nil {
+			return err
+		}
+	}
+	if !relatedIncludes(builder.request, toolcontract.RelatedIncludePods) {
+		return nil
+	}
+	if replicaSet.UID == "" {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	selector, _, ok := safeObjectSelector(replicaSet.Spec.Selector)
+	if !ok {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	return reader.listOwnedPods(ctx, bundle, builder, root, selector, string(replicaSet.UID), "apps/v1", "ReplicaSet", 1, operation)
+}
+
+func (reader *ToolResourceReader) followReplicaSetOwner(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	replicaSet *appsv1.ReplicaSet,
+	operation string,
+) error {
+	root := builder.graph.Root
+	owner, found := fixedControllerOwner(replicaSet.OwnerReferences)
+	if !found {
+		if controllerOwnerCount(replicaSet.OwnerReferences) > 1 {
+			builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassPolicyDenied, 1)
+		}
+		return nil
+	}
+	if owner.APIVersion != "apps/v1" || owner.Kind != "Deployment" || owner.UID == "" {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	reference, ok := relatedOwnerReference(builder.request.Scope.Namespace, owner)
+	if !ok {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	object, rawErr := bundle.typed.AppsV1().Deployments(builder.request.Scope.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		if branchErr := relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationOwnerReference, 1, err); branchErr != nil {
+			return branchErr
+		}
+		builder.addReferenceOnly(root, reference, toolcontract.RelatedRelationOwnerReference, 1)
+		return nil
+	}
+	if object == nil || object.UID != owner.UID {
+		builder.addReferenceOnly(root, reference, toolcontract.RelatedRelationOwnerReference, 1)
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassNotFound, 1)
+		return nil
+	}
+	observation, err := projectToolDeployment(object, builder.request.Scope.Namespace, owner.Name, toolcontract.ResourceDetailSummary)
+	if err != nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	builder.addFetched(root, observation, toolcontract.RelatedRelationOwnerReference, 1, nil, 0)
+	return nil
+}
+
+func (reader *ToolResourceReader) expandRelatedJob(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	job *batchv1.Job,
+	operation string,
+) error {
+	if !relatedIncludes(builder.request, toolcontract.RelatedIncludePods) {
+		return nil
+	}
+	root := builder.graph.Root
+	if job == nil || job.UID == "" {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	selector, _, ok := safeObjectSelector(job.Spec.Selector)
+	if !ok {
+		selector = labels.Set{"batch.kubernetes.io/controller-uid": string(job.UID)}.AsSelector()
+	}
+	return reader.listOwnedPods(ctx, bundle, builder, root, selector, string(job.UID), "batch/v1", "Job", 1, operation)
+}
+
+func (reader *ToolResourceReader) listOwnedPods(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	from toolcontract.RelatedReference,
+	selector labels.Selector,
+	ownerUID, ownerAPIVersion, ownerKind string,
+	hop int,
+	operation string,
+) error {
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	limit := relatedListLimit(builder.request)
+	list, rawErr := bundle.typed.CoreV1().Pods(builder.request.Scope.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(), Limit: limit,
+	})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return relatedBranchError(ctx, builder, from, toolcontract.RelatedRelationOwnerReference, hop, err)
+	}
+	if list == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if list.Continue != "" || len(list.Items) > int(limit) {
+		builder.graph.Truncated = true
+	}
+	sort.Slice(list.Items, func(left, right int) bool { return list.Items[left].Name < list.Items[right].Name })
+	previousName := ""
+	for index := range list.Items {
+		pod := &list.Items[index]
+		if previousName == pod.Name {
+			return invalidKubernetesProjectionError(operation)
+		}
+		previousName = pod.Name
+		if !controllerOwnerMatches(pod.OwnerReferences, ownerAPIVersion, ownerKind, "", ownerUID) {
+			continue
+		}
+		observation, err := projectToolPod(pod, builder.request.Scope.Namespace, "", toolcontract.ResourceDetailSummary)
+		if err != nil {
+			return invalidKubernetesProjectionError(operation)
+		}
+		if !builder.addFetched(from, observation, toolcontract.RelatedRelationOwnerReference, hop, nil, 0) {
+			break
+		}
+	}
+	return nil
+}
+
+func (reader *ToolResourceReader) expandRelatedService(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	service *corev1.Service,
+	operation string,
+) error {
+	if service == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	root := builder.graph.Root
+	if relatedIncludes(builder.request, toolcontract.RelatedIncludePods) {
+		if len(service.Spec.Selector) == 0 || len(service.Spec.Selector) > maxRelatedSelectorKeys {
+			builder.addGap(root, toolcontract.RelatedRelationSelectorMatch, domain.SafeErrorClassUnsupported, 1)
+		} else {
+			selector := labels.Set(service.Spec.Selector).AsSelector()
+			if err := reader.listSelectorMatchedPods(ctx, bundle, builder, root, selector, len(service.Spec.Selector), 1, operation); err != nil {
+				return err
+			}
+		}
+	}
+	if relatedIncludes(builder.request, toolcontract.RelatedIncludeServiceEndpoints) && builder.hasCapacityForEdge() {
+		counts, err := reader.gateway.countServiceEndpoints(ctx, reader.client, builder.request.Scope, service.Name)
+		if err != nil {
+			return relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationServiceEndpoints, 1, err)
+		}
+		builder.addEndpointCounts(root, 1, counts)
+	}
+	return nil
+}
+
+func (reader *ToolResourceReader) listSelectorMatchedPods(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	from toolcontract.RelatedReference,
+	selector labels.Selector,
+	selectorKeys, hop int,
+	operation string,
+) error {
+	if selector == nil || selector.Empty() || selectorKeys < 1 {
+		builder.addGap(from, toolcontract.RelatedRelationSelectorMatch, domain.SafeErrorClassUnsupported, hop)
+		return nil
+	}
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	limit := relatedListLimit(builder.request)
+	list, rawErr := bundle.typed.CoreV1().Pods(builder.request.Scope.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(), Limit: limit,
+	})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return relatedBranchError(ctx, builder, from, toolcontract.RelatedRelationSelectorMatch, hop, err)
+	}
+	if list == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if list.Continue != "" || len(list.Items) > int(limit) {
+		builder.graph.Truncated = true
+	}
+	sort.Slice(list.Items, func(left, right int) bool { return list.Items[left].Name < list.Items[right].Name })
+	previousName := ""
+	for index := range list.Items {
+		pod := &list.Items[index]
+		if previousName == pod.Name {
+			return invalidKubernetesProjectionError(operation)
+		}
+		previousName = pod.Name
+		if !selector.Matches(labels.Set(pod.Labels)) {
+			continue
+		}
+		observation, err := projectToolPod(pod, builder.request.Scope.Namespace, "", toolcontract.ResourceDetailSummary)
+		if err != nil {
+			return invalidKubernetesProjectionError(operation)
+		}
+		if !builder.addFetched(from, observation, toolcontract.RelatedRelationSelectorMatch, hop, selector, selectorKeys) {
+			break
+		}
+	}
+	return nil
+}
+
+func (reader *ToolResourceReader) expandRelatedPod(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	pod *corev1.Pod,
+	operation string,
+) error {
+	if pod == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if relatedIncludes(builder.request, toolcontract.RelatedIncludeOwners) {
+		if err := reader.followPodOwner(ctx, bundle, builder, pod, operation); err != nil {
+			return err
+		}
+	}
+	if !relatedIncludes(builder.request, toolcontract.RelatedIncludeServices) &&
+		!relatedIncludes(builder.request, toolcontract.RelatedIncludeServiceEndpoints) {
+		return nil
+	}
+	root := builder.graph.Root
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	limit := int64(domain.MaxResourceSummaries)
+	services, rawErr := bundle.typed.CoreV1().Services(builder.request.Scope.Namespace).List(ctx, metav1.ListOptions{Limit: limit})
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationSelectorMatch, 1, err)
+	}
+	if services == nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	if services.Continue != "" || len(services.Items) > int(limit) {
+		builder.graph.Truncated = true
+	}
+	sort.Slice(services.Items, func(left, right int) bool { return services.Items[left].Name < services.Items[right].Name })
+	type matchedService struct {
+		object    *corev1.Service
+		reference toolcontract.RelatedReference
+	}
+	matched := make([]matchedService, 0)
+	previousName := ""
+	for index := range services.Items {
+		service := &services.Items[index]
+		if previousName == service.Name {
+			return invalidKubernetesProjectionError(operation)
+		}
+		previousName = service.Name
+		if len(service.Spec.Selector) == 0 {
+			continue
+		}
+		if len(service.Spec.Selector) > maxRelatedSelectorKeys {
+			builder.addGap(root, toolcontract.RelatedRelationSelectorMatch, domain.SafeErrorClassUnsupported, 1)
+			continue
+		}
+		selector := labels.Set(service.Spec.Selector).AsSelector()
+		if !selector.Matches(labels.Set(pod.Labels)) {
+			continue
+		}
+		observation, err := projectToolService(service, builder.request.Scope.Namespace, "", toolcontract.ResourceDetailSummary)
+		if err != nil {
+			return invalidKubernetesProjectionError(operation)
+		}
+		if !builder.addFetched(root, observation, toolcontract.RelatedRelationSelectorMatch, 1, selector, len(service.Spec.Selector)) {
+			break
+		}
+		matched = append(matched, matchedService{
+			object: service, reference: relatedReferenceFromResource(observation.Summary.Reference, false),
+		})
+	}
+	if builder.request.Depth < 2 || !relatedIncludes(builder.request, toolcontract.RelatedIncludeServiceEndpoints) {
+		return nil
+	}
+	for _, service := range matched {
+		if !builder.hasCapacityForEdge() {
+			break
+		}
+		counts, err := reader.gateway.countServiceEndpoints(ctx, reader.client, builder.request.Scope, service.object.Name)
+		if err != nil {
+			if branchErr := relatedBranchError(ctx, builder, service.reference, toolcontract.RelatedRelationServiceEndpoints, 2, err); branchErr != nil {
+				return branchErr
+			}
+			continue
+		}
+		builder.addEndpointCounts(service.reference, 2, counts)
+	}
+	return nil
+}
+
+func (reader *ToolResourceReader) followPodOwner(
+	ctx context.Context,
+	bundle *ClientBundle,
+	builder *relatedGraphBuilder,
+	pod *corev1.Pod,
+	operation string,
+) error {
+	root := builder.graph.Root
+	owner, found := fixedControllerOwner(pod.OwnerReferences)
+	if !found {
+		if controllerOwnerCount(pod.OwnerReferences) > 1 {
+			builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassPolicyDenied, 1)
+		}
+		return nil
+	}
+	reference, ok := relatedOwnerReference(builder.request.Scope.Namespace, owner)
+	if !ok {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		return nil
+	}
+	if relatedReferenceKey(reference) == relatedReferenceKey(root) {
+		builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassPolicyDenied, 1)
+		return nil
+	}
+	followable := owner.UID != "" &&
+		(owner.APIVersion == "apps/v1" && owner.Kind == "ReplicaSet" || owner.APIVersion == "batch/v1" && owner.Kind == "Job")
+	if !followable {
+		builder.addReferenceOnly(root, reference, toolcontract.RelatedRelationOwnerReference, 1)
+		if owner.APIVersion != "apps/v1" || owner.Kind != "StatefulSet" {
+			builder.addGap(root, toolcontract.RelatedRelationOwnerReference, domain.SafeErrorClassUnsupported, 1)
+		}
+		return nil
+	}
+	if !builder.hasCapacityForEdge() || len(builder.graph.Nodes) >= builder.request.MaxNodes {
+		builder.graph.Truncated = true
+		return nil
+	}
+	var observation toolcontract.ResourceObservation
+	var rawErr error
+	switch owner.Kind {
+	case "ReplicaSet":
+		object, err := bundle.typed.AppsV1().ReplicaSets(builder.request.Scope.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+		rawErr = err
+		if err == nil && object != nil && object.UID == owner.UID {
+			observation, err = projectToolReplicaSet(object, builder.request.Scope.Namespace, owner.Name, toolcontract.ResourceDetailSummary)
+			rawErr = err
+		} else if err == nil {
+			rawErr = newKubeSafeError(ClassNotFound, "kubernetes_related_owner_changed", operation, "The related Kubernetes owner was not found.")
+		}
+	case "Job":
+		object, err := bundle.typed.BatchV1().Jobs(builder.request.Scope.Namespace).Get(ctx, owner.Name, metav1.GetOptions{})
+		rawErr = err
+		if err == nil && object != nil && object.UID == owner.UID {
+			observation, err = projectToolJob(object, builder.request.Scope.Namespace, owner.Name, toolcontract.ResourceDetailSummary)
+			rawErr = err
+		} else if err == nil {
+			rawErr = newKubeSafeError(ClassNotFound, "kubernetes_related_owner_changed", operation, "The related Kubernetes owner was not found.")
+		}
+	}
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		if branchErr := relatedBranchError(ctx, builder, root, toolcontract.RelatedRelationOwnerReference, 1, err); branchErr != nil {
+			return branchErr
+		}
+		builder.addReferenceOnly(root, reference, toolcontract.RelatedRelationOwnerReference, 1)
+		return nil
+	}
+	if observation.Validate() != nil {
+		return invalidKubernetesProjectionError(operation)
+	}
+	builder.addFetched(root, observation, toolcontract.RelatedRelationOwnerReference, 1, nil, 0)
+	return nil
+}
+
+func relatedIncludes(request toolcontract.RelatedReadRequest, wanted toolcontract.RelatedInclude) bool {
+	for _, include := range request.Includes {
+		if include == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func relatedListLimit(request toolcontract.RelatedReadRequest) int64 {
+	return int64(min(request.MaxNodes, domain.MaxResourceSummaries))
+}
+
+func safeObjectSelector(value *metav1.LabelSelector) (labels.Selector, int, bool) {
+	if value == nil {
+		return nil, 0, false
+	}
+	keyCount := len(value.MatchLabels) + len(value.MatchExpressions)
+	if keyCount < 1 || keyCount > 64 {
+		return nil, 0, false
+	}
+	selector, err := metav1.LabelSelectorAsSelector(value)
+	if err != nil || selector == nil || selector.Empty() {
+		return nil, 0, false
+	}
+	return selector, keyCount, true
+}
+
+func controllerOwnerMatches(
+	references []metav1.OwnerReference,
+	apiVersion, kind, name, uid string,
+) bool {
+	matched := false
+	for _, reference := range references {
+		if reference.Controller == nil || !*reference.Controller || reference.APIVersion != apiVersion || reference.Kind != kind ||
+			name != "" && reference.Name != name || string(reference.UID) != uid {
+			continue
+		}
+		if matched {
+			return false
+		}
+		matched = true
+	}
+	return matched
+}
+
+func controllerOwnerUID(references []metav1.OwnerReference, apiVersion, kind string) string {
+	result := ""
+	for _, reference := range references {
+		if reference.Controller == nil || !*reference.Controller || reference.APIVersion != apiVersion || reference.Kind != kind || reference.UID == "" {
+			continue
+		}
+		if result != "" {
+			return ""
+		}
+		result = string(reference.UID)
+	}
+	return result
+}
+
+func fixedControllerOwner(references []metav1.OwnerReference) (metav1.OwnerReference, bool) {
+	var result metav1.OwnerReference
+	found := false
+	for _, reference := range references {
+		if reference.Controller == nil || !*reference.Controller {
+			continue
+		}
+		if found {
+			return metav1.OwnerReference{}, false
+		}
+		result = reference
+		found = true
+	}
+	return result, found
+}
+
+func controllerOwnerCount(references []metav1.OwnerReference) int {
+	count := 0
+	for _, reference := range references {
+		if reference.Controller != nil && *reference.Controller {
+			count++
+		}
+	}
+	return count
+}
+
+func relatedOwnerReference(namespace string, owner metav1.OwnerReference) (toolcontract.RelatedReference, bool) {
+	if !domain.ValidNamespaceName(namespace) || !domain.ValidResourceName(owner.Name) ||
+		!validRelatedOwnerAPIVersion(owner.APIVersion) || !validRelatedOwnerKind(owner.Kind) ||
+		!safeIdentityText(string(owner.UID)) ||
+		owner.APIVersion == "v1" && (owner.Kind == "Secret" || owner.Kind == "ConfigMap") {
+		return toolcontract.RelatedReference{}, false
+	}
+	return toolcontract.RelatedReference{
+		APIVersion: owner.APIVersion, Kind: owner.Kind, Namespace: namespace,
+		Name: owner.Name, UID: string(owner.UID), ReferenceOnly: true,
+	}, true
+}
+
+func validRelatedOwnerAPIVersion(value string) bool {
+	if len(value) < 1 || len(value) > 256 {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for index, part := range parts {
+		if !validRelatedOwnerAPISegment(part, index == 0 && len(parts) == 2) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRelatedOwnerAPISegment(value string, allowDot bool) bool {
+	if value == "" || !relatedOwnerLowerOrDigit(value[0]) || !relatedOwnerLowerOrDigit(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index < len(value)-1; index++ {
+		current := value[index]
+		if relatedOwnerLowerOrDigit(current) || current == '-' || allowDot && current == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validRelatedOwnerKind(value string) bool {
+	if len(value) < 1 || len(value) > 63 || value[0] < 'A' || value[0] > 'Z' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		current := value[index]
+		if current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' || current >= '0' && current <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func relatedOwnerLowerOrDigit(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
+}
+
+func relatedReferenceFromResource(reference domain.ResourceRef, referenceOnly bool) toolcontract.RelatedReference {
+	return toolcontract.RelatedReference{
+		APIVersion: reference.APIVersion, Kind: reference.Kind, Namespace: reference.Namespace,
+		Name: reference.Name, UID: reference.UID, ResourceVersion: reference.ResourceVersion, ReferenceOnly: referenceOnly,
+	}
+}
+
+func relatedReferenceKey(reference toolcontract.RelatedReference) string {
+	return strings.Join([]string{
+		reference.APIVersion, reference.Kind, reference.Namespace, reference.Name,
+	}, "\x00")
+}
+
+func relatedEdgeAdapterKey(
+	relation toolcontract.RelatedRelation,
+	from, to toolcontract.RelatedReference,
+) string {
+	return strings.Join([]string{string(relation), relatedReferenceKey(from), relatedReferenceKey(to)}, "\x00")
+}
+
+func relatedNodeAdapterSortKey(node toolcontract.RelatedNodeObservation) string {
+	return fmt.Sprintf("%02d\x00%s", node.Hop, relatedReferenceKey(node.Reference))
+}
+
+func relatedEdgeAdapterSortKey(edge toolcontract.RelatedEdgeObservation) string {
+	return fmt.Sprintf("%02d\x00%s", edge.Hop, relatedEdgeAdapterKey(edge.Relation, edge.From, edge.To))
+}
+
+func relatedGapAdapterSortKey(gap toolcontract.RelatedGapObservation) string {
+	return fmt.Sprintf("%02d\x00%s\x00%s", gap.Hop, relatedEdgeAdapterKey(gap.Relation, gap.From, toolcontract.RelatedReference{}), gap.Class)
+}
+
+func relatedBranchError(
+	ctx context.Context,
+	builder *relatedGraphBuilder,
+	from toolcontract.RelatedReference,
+	relation toolcontract.RelatedRelation,
+	hop int,
+	err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	type classified interface {
+		Class() domain.SafeErrorClass
+	}
+	var failure classified
+	if !errors.As(err, &failure) {
+		return err
+	}
+	switch failure.Class() {
+	case domain.SafeErrorClassPermissionDenied,
+		domain.SafeErrorClassNotFound,
+		domain.SafeErrorClassConflict,
+		domain.SafeErrorClassUnsupported,
+		domain.SafeErrorClassPolicyDenied,
+		domain.SafeErrorClassRateLimited,
+		domain.SafeErrorClassUnavailable:
+		builder.addGap(from, relation, failure.Class(), hop)
+		return nil
+	default:
+		return err
+	}
+}
+
 func (reader *ToolResourceReader) validateContext(ctx context.Context, scope domain.ClusterScope, operation string) error {
 	if ctx == nil {
 		return newKubeSafeError(ClassInvalidInput, "kubernetes_context_required", operation, "An operation Context is required.")
@@ -868,11 +1885,12 @@ func (reader *ToolResourceReader) validateContext(ctx context.Context, scope dom
 
 // Compile-time checks keep the adapter bound to the current consumer ports.
 var (
-	_ application.ScopeClientFactory = (*Gateway)(nil)
-	_ application.NamespaceReader    = (*Gateway)(nil)
-	_ application.ResourceService    = (*Gateway)(nil)
-	_ application.ScopeClient        = (*scopeClient)(nil)
-	_ toolcontract.ResourceReader    = (*ToolResourceReader)(nil)
-	_ toolcontract.EventReader       = (*ToolResourceReader)(nil)
-	_ toolcontract.PodLogReader      = (*ToolResourceReader)(nil)
+	_ application.ScopeClientFactory     = (*Gateway)(nil)
+	_ application.NamespaceReader        = (*Gateway)(nil)
+	_ application.ResourceService        = (*Gateway)(nil)
+	_ application.ScopeClient            = (*scopeClient)(nil)
+	_ toolcontract.ResourceReader        = (*ToolResourceReader)(nil)
+	_ toolcontract.EventReader           = (*ToolResourceReader)(nil)
+	_ toolcontract.PodLogReader          = (*ToolResourceReader)(nil)
+	_ toolcontract.RelatedResourceReader = (*ToolResourceReader)(nil)
 )

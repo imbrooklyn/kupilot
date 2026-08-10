@@ -2,6 +2,7 @@ package einoadapter
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -82,15 +83,55 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	specifications := agent.ToolSpecifications()
 	infos := make([]*schema.ToolInfo, len(specifications))
+	snapshot := make([]toolInfoWire, len(specifications))
+	wantNames := []domain.ToolName{
+		domain.ToolNameGetResource,
+		domain.ToolNameListResources,
+		domain.ToolNameGetEvents,
+		domain.ToolNameGetPodLogs,
+		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetRelatedResources,
+	}
+	if len(specifications) != len(wantNames) {
+		t.Fatalf("Tool specification count = %d, want %d", len(specifications), len(wantNames))
+	}
 	for index, specification := range specifications {
+		if specification.Name != wantNames[index] {
+			t.Fatalf("Tool specification[%d] = %q, want %q", index, specification.Name, wantNames[index])
+		}
 		info, err := toolInfo(specification)
 		if err != nil {
 			t.Fatalf("toolInfo(%q) error = %v", specification.Name, err)
 		}
 		infos[index] = info
+		jsonSchema, err := info.ParamsOneOf.ToJSONSchema()
+		if err != nil {
+			t.Fatalf("ToJSONSchema(%q) error = %v", specification.Name, err)
+		}
+		encodedSchema, err := json.Marshal(jsonSchema)
+		if err != nil {
+			t.Fatalf("json.Marshal(schema %q) error = %v", specification.Name, err)
+		}
+		snapshot[index] = toolInfoWire{
+			Name: info.Name, Desc: info.Desc, HasParamsOneOf: info.ParamsOneOf != nil, JSONSchema: encodedSchema,
+		}
 	}
 	if err := validateBoundToolInfos(infos); err != nil {
 		t.Fatalf("validateBoundToolInfos() error = %v", err)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
+	}
+	const expectedSnapshotSHA256 = "107f3b5170474952dfe27a518c450a7ecd47f835c3f8fc5a60170eb390a5e947"
+	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
+		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
+	}
+	lowerSnapshot := strings.ToLower(string(encodedSnapshot))
+	for _, prohibited := range []string{"run_shell", "kubectl", "secret", "write", "patch", "delete", "exec", `\"namespace\"`, `\"gvr\"`, `\"raw_selector\"`} {
+		if strings.Contains(lowerSnapshot, prohibited) {
+			t.Fatalf("Eino Tool catalog snapshot contains prohibited authority %q", prohibited)
+		}
 	}
 	infos[0].Name = "changed_tool"
 	if err := validateBoundToolInfos(infos); err == nil {

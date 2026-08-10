@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -50,6 +51,9 @@ var (
 	// ErrToolOutputLimit reports a complete result that cannot fit the injected
 	// result ceiling without deterministic truncation.
 	ErrToolOutputLimit = errors.New("resource Tool output exceeds its fixed limit")
+	// ErrInvalidRelatedRead reports an invalid fixed relationship request or
+	// source projection without exposing Kubernetes object content.
+	ErrInvalidRelatedRead = errors.New("related-resource Tool read data is invalid")
 )
 
 // BoundToolCall is the S13/S14 runtime-owned immutable call. This alias keeps
@@ -253,6 +257,425 @@ type ResourceObservation struct {
 type ResourceObservationList struct {
 	Items     []ResourceObservation
 	Truncated bool
+}
+
+// RelatedInclude is one code-defined relationship family. The model cannot
+// supply an arbitrary edge or selector.
+type RelatedInclude string
+
+const (
+	RelatedIncludeOwners           RelatedInclude = "owners"
+	RelatedIncludePods             RelatedInclude = "pods"
+	RelatedIncludeReplicaSets      RelatedInclude = "replica_sets"
+	RelatedIncludeServiceEndpoints RelatedInclude = "service_endpoints"
+	RelatedIncludeServices         RelatedInclude = "services"
+)
+
+func (include RelatedInclude) validFor(kind domain.ResourceKind) bool {
+	switch kind {
+	case domain.ResourceKindDeployment:
+		return include == RelatedIncludePods || include == RelatedIncludeReplicaSets
+	case domain.ResourceKindReplicaSet:
+		return include == RelatedIncludeOwners || include == RelatedIncludePods
+	case domain.ResourceKindPod:
+		return include == RelatedIncludeOwners || include == RelatedIncludeServiceEndpoints || include == RelatedIncludeServices
+	case domain.ResourceKindJob:
+		return include == RelatedIncludePods
+	case domain.ResourceKindService:
+		return include == RelatedIncludePods || include == RelatedIncludeServiceEndpoints
+	default:
+		return false
+	}
+}
+
+// RelatedRelation is one fixed graph edge kind.
+type RelatedRelation string
+
+const (
+	RelatedRelationOwnerReference   RelatedRelation = "owner_reference"
+	RelatedRelationSelectorMatch    RelatedRelation = "selector_match"
+	RelatedRelationServiceEndpoints RelatedRelation = "service_endpoints"
+)
+
+func (relation RelatedRelation) valid() bool {
+	return relation == RelatedRelationOwnerReference || relation == RelatedRelationSelectorMatch ||
+		relation == RelatedRelationServiceEndpoints
+}
+
+// RelatedReadRequest is one bounded traversal rooted at an allowlisted direct
+// target. Scope, traversal ceilings, and selector construction are runtime
+// owned and never model-controlled.
+type RelatedReadRequest struct {
+	Scope     domain.ClusterScope
+	Reference domain.ResourceRef
+	Depth     int
+	Includes  []RelatedInclude
+	MaxNodes  int
+	MaxEdges  int
+}
+
+// Validate rejects generic, cross-Namespace, expanding, or non-canonical
+// relationship reads before an adapter action.
+func (request RelatedReadRequest) Validate() error {
+	kind, allowed := domain.ResourceKindForReference(request.Reference)
+	if request.Scope.Validate() != nil || !allowed || domain.ValidateLiveResourceRef(request.Reference) != nil ||
+		request.Reference.Namespace != request.Scope.Namespace || request.Depth < 1 || request.Depth > 2 ||
+		request.MaxNodes < 1 || request.MaxNodes > 25 || request.MaxEdges < 1 || request.MaxEdges > 40 ||
+		len(request.Includes) == 0 || len(request.Includes) > 3 {
+		return ErrInvalidRelatedRead
+	}
+	previous := ""
+	for _, include := range request.Includes {
+		current := string(include)
+		if !include.validFor(kind) || previous != "" && current <= previous {
+			return ErrInvalidRelatedRead
+		}
+		previous = current
+	}
+	return nil
+}
+
+// RelatedReference is a bounded graph identity. ReferenceOnly values originate
+// only from an already-read owner reference and must never be fetched.
+type RelatedReference struct {
+	APIVersion      string
+	Kind            string
+	Namespace       string
+	Name            string
+	UID             string
+	ResourceVersion string
+	ReferenceOnly   bool
+}
+
+func (reference RelatedReference) valid(scope domain.ClusterScope) bool {
+	if reference.Namespace != scope.Namespace || !domain.ValidNamespaceName(reference.Namespace) ||
+		!domain.ValidResourceName(reference.Name) || !validRelatedAPIVersion(reference.APIVersion) ||
+		!validRelatedKind(reference.Kind) || !validRelatedOptionalIdentity(reference.UID, 256) ||
+		!validRelatedOptionalIdentity(reference.ResourceVersion, 256) {
+		return false
+	}
+	if reference.ReferenceOnly {
+		return reference.ResourceVersion == "" && !forbiddenRelatedReference(reference.APIVersion, reference.Kind)
+	}
+	_, allowed := domain.ResourceKindForReference(reference.resourceRef())
+	return allowed
+}
+
+func (reference RelatedReference) resourceRef() domain.ResourceRef {
+	return domain.ResourceRef{
+		APIVersion: reference.APIVersion, Kind: reference.Kind, Namespace: reference.Namespace,
+		Name: reference.Name, UID: reference.UID, ResourceVersion: reference.ResourceVersion,
+	}
+}
+
+func (reference RelatedReference) key() string {
+	return strings.Join([]string{reference.APIVersion, reference.Kind, reference.Namespace, reference.Name}, "\x00")
+}
+
+// RelatedNodeObservation is one fetched safe resource projection or one
+// unfetched owner identity already carried by a fetched object.
+type RelatedNodeObservation struct {
+	Reference RelatedReference
+	Resource  ResourceObservation
+	Fetched   bool
+	Hop       int
+}
+
+func (node RelatedNodeObservation) valid(request RelatedReadRequest) bool {
+	if node.Hop < 0 || node.Hop > request.Depth || !node.Reference.valid(request.Scope) {
+		return false
+	}
+	if !node.Fetched {
+		return node.Reference.ReferenceOnly && zeroResourceObservation(node.Resource)
+	}
+	return !node.Reference.ReferenceOnly && node.Resource.validate() == nil &&
+		node.Reference.resourceRef() == node.Resource.Summary.Reference
+}
+
+// RelatedEdgeObservation contains no raw selector. Selector matches expose
+// only a key count and a deterministic one-way fingerprint; EndpointSlice
+// relationships expose counts and never addresses.
+type RelatedEdgeObservation struct {
+	From                RelatedReference
+	To                  RelatedReference
+	ToPresent           bool
+	Relation            RelatedRelation
+	Hop                 int
+	SelectorKeyCount    int
+	SelectorFingerprint string
+	ReadyEndpoints      int
+	NotReadyEndpoints   int
+	Truncated           bool
+}
+
+func (edge RelatedEdgeObservation) valid(request RelatedReadRequest) bool {
+	if !edge.Relation.valid() || edge.Hop < 1 || edge.Hop > request.Depth || !edge.From.valid(request.Scope) ||
+		edge.ReadyEndpoints < 0 || edge.NotReadyEndpoints < 0 {
+		return false
+	}
+	switch edge.Relation {
+	case RelatedRelationOwnerReference:
+		return edge.ToPresent && edge.To.valid(request.Scope) && edge.SelectorKeyCount == 0 &&
+			edge.SelectorFingerprint == "" && edge.ReadyEndpoints == 0 && edge.NotReadyEndpoints == 0
+	case RelatedRelationSelectorMatch:
+		return edge.ToPresent && edge.To.valid(request.Scope) && edge.SelectorKeyCount > 0 && edge.SelectorKeyCount <= 64 &&
+			validSHA256Fingerprint(edge.SelectorFingerprint) && edge.ReadyEndpoints == 0 && edge.NotReadyEndpoints == 0
+	case RelatedRelationServiceEndpoints:
+		return !edge.ToPresent && edge.To == (RelatedReference{}) && edge.From.Kind == string(domain.ResourceKindService) &&
+			edge.SelectorKeyCount == 0 && edge.SelectorFingerprint == ""
+	default:
+		return false
+	}
+}
+
+func (edge RelatedEdgeObservation) key() string {
+	return strings.Join([]string{string(edge.Relation), edge.From.key(), edge.To.key()}, "\x00")
+}
+
+// RelatedGapObservation is one safe missing branch. It contains only a stable
+// class and code-defined relation, never a vendor or server error string.
+type RelatedGapObservation struct {
+	From     RelatedReference
+	Relation RelatedRelation
+	Class    domain.SafeErrorClass
+	Hop      int
+}
+
+func (gap RelatedGapObservation) valid(request RelatedReadRequest) bool {
+	if !gap.From.valid(request.Scope) || !gap.Relation.valid() || gap.Hop < 1 || gap.Hop > request.Depth {
+		return false
+	}
+	switch gap.Class {
+	case domain.SafeErrorClassPermissionDenied,
+		domain.SafeErrorClassNotFound,
+		domain.SafeErrorClassConflict,
+		domain.SafeErrorClassUnsupported,
+		domain.SafeErrorClassPolicyDenied,
+		domain.SafeErrorClassRateLimited,
+		domain.SafeErrorClassUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// RelatedObservationGraph is the complete source-allowlisted adapter result
+// before Tool-local redaction, output fitting, and Evidence creation.
+type RelatedObservationGraph struct {
+	Root      RelatedReference
+	Nodes     []RelatedNodeObservation
+	Edges     []RelatedEdgeObservation
+	Gaps      []RelatedGapObservation
+	Truncated bool
+}
+
+// Validate checks identity, bounds, uniqueness, edge closure, and acyclicity
+// against the exact runtime-derived request.
+func (graph RelatedObservationGraph) Validate(request RelatedReadRequest) error {
+	if request.Validate() != nil || !graph.Root.valid(request.Scope) || graph.Root.ReferenceOnly ||
+		!sameRelatedTarget(request.Reference, graph.Root.resourceRef()) || len(graph.Nodes) < 1 ||
+		len(graph.Nodes) > request.MaxNodes || len(graph.Edges) > request.MaxEdges || len(graph.Gaps) > request.MaxEdges {
+		return ErrInvalidRelatedRead
+	}
+	nodes := make(map[string]RelatedNodeObservation, len(graph.Nodes))
+	rootFound := false
+	for _, node := range graph.Nodes {
+		if !node.valid(request) {
+			return ErrInvalidRelatedRead
+		}
+		key := node.Reference.key()
+		if _, duplicate := nodes[key]; duplicate {
+			return ErrInvalidRelatedRead
+		}
+		nodes[key] = node
+		if key == graph.Root.key() {
+			rootFound = node.Reference == graph.Root && node.Hop == 0 && node.Fetched
+		}
+	}
+	if !rootFound {
+		return ErrInvalidRelatedRead
+	}
+	edges := make(map[string]struct{}, len(graph.Edges))
+	adjacency := make(map[string][]string, len(graph.Nodes))
+	incoming := make(map[string]int, len(graph.Nodes))
+	for _, edge := range graph.Edges {
+		if !edge.valid(request) {
+			return ErrInvalidRelatedRead
+		}
+		fromKey := edge.From.key()
+		fromNode, exists := nodes[fromKey]
+		if !exists || fromNode.Reference != edge.From || !fromNode.Fetched {
+			return ErrInvalidRelatedRead
+		}
+		if edge.ToPresent {
+			toKey := edge.To.key()
+			toNode, exists := nodes[toKey]
+			if !exists || toNode.Reference != edge.To || fromNode.Hop+1 != edge.Hop || toNode.Hop != edge.Hop ||
+				edge.Relation == RelatedRelationSelectorMatch && !toNode.Fetched {
+				return ErrInvalidRelatedRead
+			}
+			adjacency[fromKey] = append(adjacency[fromKey], toKey)
+			incoming[toKey]++
+		} else if fromNode.Hop+1 != edge.Hop {
+			return ErrInvalidRelatedRead
+		}
+		key := edge.key()
+		if _, duplicate := edges[key]; duplicate {
+			return ErrInvalidRelatedRead
+		}
+		edges[key] = struct{}{}
+	}
+	for key := range nodes {
+		if key != graph.Root.key() && incoming[key] == 0 {
+			return ErrInvalidRelatedRead
+		}
+	}
+	gaps := make(map[string]struct{}, len(graph.Gaps))
+	for _, gap := range graph.Gaps {
+		if !gap.valid(request) {
+			return ErrInvalidRelatedRead
+		}
+		fromNode, exists := nodes[gap.From.key()]
+		if !exists || fromNode.Reference != gap.From || !fromNode.Fetched {
+			return ErrInvalidRelatedRead
+		}
+		key := strings.Join([]string{gap.From.key(), string(gap.Relation), string(gap.Class)}, "\x00")
+		if _, duplicate := gaps[key]; duplicate {
+			return ErrInvalidRelatedRead
+		}
+		gaps[key] = struct{}{}
+	}
+	if relatedGraphHasCycle(adjacency) {
+		return ErrInvalidRelatedRead
+	}
+	return nil
+}
+
+// RelatedResourceReader is the Tool-owned one-operation relationship port. It
+// exposes no client, GVR, raw selector, discovery, Watch, or write method.
+type RelatedResourceReader interface {
+	ReadRelatedResources(context.Context, RelatedReadRequest) (RelatedObservationGraph, error)
+}
+
+func sameRelatedTarget(request, result domain.ResourceRef) bool {
+	return request.APIVersion == result.APIVersion && request.Kind == result.Kind &&
+		request.Namespace == result.Namespace && request.Name == result.Name &&
+		(request.UID == "" || request.UID == result.UID)
+}
+
+func zeroResourceObservation(observation ResourceObservation) bool {
+	return observation.Summary.Reference == (domain.ResourceRef{}) && observation.Summary.CreatedAt.IsZero() &&
+		observation.Summary.Status == (domain.ResourceStatus{}) && len(observation.Summary.Owners) == 0 &&
+		observation.Generation == (OptionalInt64{}) &&
+		observation.LabelCount == 0 && len(observation.Labels) == 0 && observation.Status == (ResourceDiagnosticStatus{}) &&
+		len(observation.Conditions) == 0 && len(observation.Containers) == 0 && len(observation.ServicePorts) == 0 && !observation.Truncated
+}
+
+func validRelatedIdentity(value string, maximumBytes int) bool {
+	return value != "" && len(value) <= maximumBytes && utf8.ValidString(value) && strings.TrimSpace(value) == value &&
+		!strings.ContainsFunc(value, func(current rune) bool { return unicode.IsControl(current) || unicode.In(current, unicode.Cf) })
+}
+
+func validRelatedAPIVersion(value string) bool {
+	if len(value) < 1 || len(value) > 256 {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for index, part := range parts {
+		if !validRelatedAPISegment(part, index == 0 && len(parts) == 2) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRelatedAPISegment(value string, allowDot bool) bool {
+	if value == "" || !asciiLowerOrDigit(value[0]) || !asciiLowerOrDigit(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index < len(value)-1; index++ {
+		current := value[index]
+		if asciiLowerOrDigit(current) || current == '-' || allowDot && current == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validRelatedKind(value string) bool {
+	if len(value) < 1 || len(value) > 63 || value[0] < 'A' || value[0] > 'Z' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		current := value[index]
+		if current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z' || current >= '0' && current <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func forbiddenRelatedReference(apiVersion, kind string) bool {
+	return apiVersion == "v1" && (kind == "Secret" || kind == "ConfigMap")
+}
+
+func asciiLowerOrDigit(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
+}
+
+func validRelatedOptionalIdentity(value string, maximumBytes int) bool {
+	return value == "" || validRelatedIdentity(value, maximumBytes)
+}
+
+func validSHA256Fingerprint(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, current := range value {
+		if current < '0' || current > '9' {
+			if current < 'a' || current > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func relatedGraphHasCycle(adjacency map[string][]string) bool {
+	const (
+		unvisited = iota
+		visiting
+		visited
+	)
+	states := make(map[string]int, len(adjacency))
+	var visit func(string) bool
+	visit = func(node string) bool {
+		switch states[node] {
+		case visiting:
+			return true
+		case visited:
+			return false
+		}
+		states[node] = visiting
+		for _, next := range adjacency[node] {
+			if visit(next) {
+				return true
+			}
+		}
+		states[node] = visited
+		return false
+	}
+	for node := range adjacency {
+		if visit(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func (observation ResourceObservation) validate() error {

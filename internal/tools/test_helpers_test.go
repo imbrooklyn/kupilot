@@ -66,6 +66,40 @@ type fakePodLogReader struct {
 	readFn   func(context.Context, PodLogReadRequest) (PodLogObservation, error)
 }
 
+type fakeRelatedResourceReader struct {
+	mu       sync.Mutex
+	calls    int
+	requests []RelatedReadRequest
+	readFn   func(context.Context, RelatedReadRequest) (RelatedObservationGraph, error)
+}
+
+func (reader *fakeRelatedResourceReader) ReadRelatedResources(
+	ctx context.Context,
+	request RelatedReadRequest,
+) (RelatedObservationGraph, error) {
+	reader.mu.Lock()
+	reader.calls++
+	reader.requests = append(reader.requests, request)
+	function := reader.readFn
+	reader.mu.Unlock()
+	if function == nil {
+		return RelatedObservationGraph{}, nil
+	}
+	return function(ctx, request)
+}
+
+func (reader *fakeRelatedResourceReader) count() int {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.calls
+}
+
+func (reader *fakeRelatedResourceReader) lastRequest() RelatedReadRequest {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.requests[len(reader.requests)-1]
+}
+
 func (reader *fakePodLogReader) ReadPodLog(ctx context.Context, request PodLogReadRequest) (PodLogObservation, error) {
 	reader.mu.Lock()
 	reader.calls++
@@ -280,6 +314,19 @@ func boundLogCall(t *testing.T, input agent.RunInput, name domain.ToolName, argu
 	})
 	if err != nil {
 		t.Fatalf("agent.BindToolCall(%s) error = %v", name, err)
+	}
+	return call
+}
+
+func boundRelatedCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-related-1",
+		Name:          domain.ToolNameGetRelatedResources,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(get_related_resources) error = %v", err)
 	}
 	return call
 }

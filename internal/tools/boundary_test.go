@@ -62,3 +62,64 @@ func TestToolsKeepConsumerOwnedBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape(t *testing.T) {
+	t.Parallel()
+
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() did not return the package path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	paths := []string{
+		filepath.Join(repositoryRoot, "internal", "kube", "resources.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "contracts.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "catalog.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "get_resource.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "list_resources.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "get_events.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "get_pod_logs.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "get_previous_pod_logs.go"),
+		filepath.Join(repositoryRoot, "internal", "tools", "get_related_resources.go"),
+		filepath.Join(repositoryRoot, "internal", "agent", "einoadapter", "tool_bridge.go"),
+	}
+	deniedImports := []string{
+		"os/exec",
+		"k8s.io/client-go/dynamic",
+		"k8s.io/client-go/discovery",
+		"k8s.io/client-go/rest",
+	}
+	deniedCalls := map[string]bool{
+		"Create": true, "Update": true, "UpdateStatus": true, "Patch": true,
+		"Delete": true, "DeleteCollection": true, "Watch": true,
+		"RESTClient": true, "AbsPath": true, "Do": true, "DoRaw": true,
+	}
+	for _, path := range paths {
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile(%s) error = %v", path, err)
+		}
+		for _, importSpec := range file.Imports {
+			importPath, err := strconv.Unquote(importSpec.Path.Value)
+			if err != nil {
+				t.Fatalf("strconv.Unquote(%s) error = %v", importSpec.Path.Value, err)
+			}
+			for _, denied := range deniedImports {
+				if strings.HasPrefix(importPath, denied) {
+					t.Fatalf("%s imports prohibited capability %q", filepath.Base(path), importPath)
+				}
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && deniedCalls[selector.Sel.Name] {
+				t.Fatalf("%s calls prohibited method %s", filepath.Base(path), selector.Sel.Name)
+			}
+			return true
+		})
+	}
+}

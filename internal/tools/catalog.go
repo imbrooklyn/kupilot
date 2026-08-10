@@ -2,11 +2,65 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+var (
+	// ErrInvalidReadOnlyToolCatalog reports incomplete dependencies for the
+	// exact six-handler v0.1 catalog.
+	ErrInvalidReadOnlyToolCatalog = errors.New("the fixed read-only Tool catalog dependencies are invalid")
+)
+
+// ReadOnlyToolCatalogDependencies contain the active dependencies for exactly
+// the six admitted v0.1 handlers. They are concrete and cannot register a
+// dynamically named or seventh Tool.
+type ReadOnlyToolCatalogDependencies struct {
+	Resources ResourceToolDependencies
+	Events    EventToolDependencies
+	Logs      LogToolDependencies
+	Related   RelatedToolDependencies
+}
+
+// NewReadOnlyToolCatalog constructs the compile-time fixed handler table used
+// by the Agent adapter. Schema authority remains in the neutral Agent catalog.
+func NewReadOnlyToolCatalog(dependencies ReadOnlyToolCatalogDependencies) (agent.ToolHandlers, error) {
+	getResource, err := NewGetResourceTool(dependencies.Resources)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	listResources, err := NewListResourcesTool(dependencies.Resources)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	getEvents, err := NewGetEventsTool(dependencies.Events)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	getPodLogs, err := NewGetPodLogsTool(dependencies.Logs)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	getPreviousPodLogs, err := NewGetPreviousPodLogsTool(dependencies.Logs)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	getRelatedResources, err := NewGetRelatedResourcesTool(dependencies.Related)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	handlers := agent.ToolHandlers{
+		GetResource: getResource, ListResources: listResources, GetEvents: getEvents,
+		GetPodLogs: getPodLogs, GetPreviousPodLogs: getPreviousPodLogs, GetRelatedResources: getRelatedResources,
+	}
+	if handlers.Validate() != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	return handlers, nil
+}
 
 type resourceArgument struct {
 	APIVersion string `json:"api_version"`
@@ -26,6 +80,20 @@ type listResourcesArguments struct {
 	Limit        int    `json:"limit"`
 	NameQuery    string `json:"name_query,omitempty"`
 	Purpose      string `json:"purpose"`
+}
+
+type relatedResourceArgument struct {
+	APIVersion string `json:"api_version"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
+}
+
+type getRelatedResourcesArguments struct {
+	Include       []RelatedInclude        `json:"include"`
+	Purpose       string                  `json:"purpose"`
+	RelationDepth int                     `json:"relation_depth"`
+	Resource      relatedResourceArgument `json:"resource"`
 }
 
 func decodeGetResourceCall(call BoundToolCall) (getResourceArguments, ResourceReadRequest, error) {
@@ -68,4 +136,33 @@ func decodeListResourcesCall(call BoundToolCall) (listResourcesArguments, Resour
 		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
 	}
 	return arguments, request, nil
+}
+
+func decodeRelatedResourcesCall(call BoundToolCall) (getRelatedResourcesArguments, RelatedReadRequest, bool, error) {
+	if call.Validate() != nil || call.Name() != domain.ToolNameGetRelatedResources || call.Version() != agent.ToolCatalogVersion {
+		return getRelatedResourcesArguments{}, RelatedReadRequest{}, false, ErrInvalidCanonicalArguments
+	}
+	var arguments getRelatedResourcesArguments
+	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() ||
+		arguments.RelationDepth < 1 || arguments.RelationDepth > 2 {
+		return getRelatedResourcesArguments{}, RelatedReadRequest{}, false, ErrInvalidCanonicalArguments
+	}
+	effectiveDepth := min(arguments.RelationDepth, call.Ceilings().MaxRelationshipHops, 2)
+	request := RelatedReadRequest{
+		Scope: call.Scope(),
+		Reference: domain.ResourceRef{
+			APIVersion: arguments.Resource.APIVersion,
+			Kind:       arguments.Resource.Kind,
+			Namespace:  call.Scope().Namespace,
+			Name:       arguments.Resource.Name,
+			UID:        arguments.Resource.UID,
+		},
+		Depth: effectiveDepth, Includes: append([]RelatedInclude(nil), arguments.Include...),
+		MaxNodes: min(call.Ceilings().MaxRelationshipNodes, 25),
+		MaxEdges: min(call.Ceilings().MaxRelationshipEdges, 40),
+	}
+	if request.Validate() != nil {
+		return getRelatedResourcesArguments{}, RelatedReadRequest{}, false, ErrInvalidCanonicalArguments
+	}
+	return arguments, request, effectiveDepth < arguments.RelationDepth, nil
 }

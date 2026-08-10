@@ -1,0 +1,99 @@
+{
+  "service": {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "annotations": {
+        "unsafe.example.invalid/note": "RELATED_ANNOTATION_MARKER"
+      },
+      "name": "sample-service",
+      "namespace": "team-a",
+      "resourceVersion": "31",
+      "uid": "service-uid"
+    },
+    "spec": {
+      "selector": {
+        "app": "sample"
+      },
+      "type": "ClusterIP"
+    }
+  },
+  "pods": {
+    "apiVersion": "v1",
+    "items": [
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "annotations": {
+            "unsafe.example.invalid/note": "RELATED_POD_ANNOTATION_MARKER"
+          },
+          "labels": {
+            "app": "sample"
+          },
+          "name": "sample-pod",
+          "namespace": "team-a",
+          "resourceVersion": "32",
+          "uid": "pod-uid"
+        },
+        "spec": {
+          "containers": [
+            {
+              "name": "app"
+            }
+          ]
+        },
+        "status": {
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": false,
+              "restartCount": 0
+            }
+          ],
+          "phase": "Pending"
+        }
+      }
+    ],
+    "kind": "PodList",
+    "metadata": {
+      "resourceVersion": "32"
+    }
+  },
+  "endpoint_slices": {
+    "apiVersion": "discovery.k8s.io/v1",
+    "items": [
+      {
+        "addressType": "IPv4",
+        "apiVersion": "discovery.k8s.io/v1",
+        "endpoints": [
+          {
+            "addresses": [
+              "ADDRESS_MARKER"
+            ],
+            "conditions": {
+              "ready": false
+            }
+          }
+        ],
+        "kind": "EndpointSlice",
+        "metadata": {
+          "annotations": {
+            "unsafe.example.invalid/note": "RELATED_ENDPOINT_ANNOTATION_MARKER"
+          },
+          "labels": {
+            "kubernetes.io/service-name": "sample-service"
+          },
+          "name": "sample-slice",
+          "namespace": "team-a",
+          "resourceVersion": "33",
+          "uid": "slice-uid"
+        }
+      }
+    ],
+    "kind": "EndpointSliceList",
+    "metadata": {
+      "resourceVersion": "33"
+    }
+  }
+}
