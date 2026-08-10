@@ -143,6 +143,7 @@ type modelCollector struct {
 	sawTool   bool
 	metadata  bool
 	usage     bool
+	progress  bool
 	completed *domain.ModelCompletion
 	failure   error
 }
@@ -182,8 +183,11 @@ func (collector *modelCollector) accept(event domain.ModelStreamEvent) error {
 			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
 		collector.text.WriteString(event.TextDelta)
-		if err := collector.state.publish(collector.ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: event.TextDelta}); err != nil {
-			return err
+		if !collector.progress {
+			if err := collector.state.publish(collector.ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: safeModelProgress}); err != nil {
+				return err
+			}
+			collector.progress = true
 		}
 	case domain.ModelStreamEventToolCallFragment:
 		if collector.text.Len() != 0 {

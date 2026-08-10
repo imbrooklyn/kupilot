@@ -161,6 +161,7 @@ const (
 	warningConfirmedFactRemoved = "A confirmed fact was removed because it did not cite accepted Evidence from this AgentRun."
 	warningHypothesisReference  = "Unsupported Evidence references were removed from a hypothesis."
 	warningExecutionRejected    = "An execution claim was rejected; recommendations are not executed in v0.1."
+	maxDiagnosisDraftTextBytes  = 16 * 1024
 )
 
 // ValidateDiagnosis rejects unsupported fact entries, removes unsupported
@@ -170,6 +171,11 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	if !metadata.ID.Valid() || metadata.CreatedAt.IsZero() || metadata.CreatedAt.Location() != time.UTC ||
 		metadata.CreatedAt.Nanosecond()%int(time.Millisecond) != 0 {
 		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+	}
+	var err error
+	draft, err = sanitizeDiagnosisDraft(draft)
+	if err != nil {
+		return domain.Diagnosis{}, err
 	}
 	snapshot, err := registry.snapshot()
 	if err != nil {
@@ -269,6 +275,88 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		return domain.Diagnosis{}, err
 	}
 	return diagnosis, nil
+}
+
+func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
+	result := DiagnosisDraft{
+		ConfirmedFacts:     make([]domain.ConfirmedFact, len(draft.ConfirmedFacts)),
+		Hypotheses:         make([]domain.Hypothesis, len(draft.Hypotheses)),
+		MissingInformation: make([]domain.MissingInformation, len(draft.MissingInformation)),
+		RecommendedActions: make([]domain.RecommendedAction, len(draft.RecommendedActions)),
+	}
+	for index, fact := range draft.ConfirmedFacts {
+		statement, err := sanitizeDiagnosisText(fact.Statement)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		result.ConfirmedFacts[index] = domain.ConfirmedFact{
+			Statement: statement, EvidenceIDs: append([]domain.EvidenceID(nil), fact.EvidenceIDs...),
+		}
+	}
+	for index, hypothesis := range draft.Hypotheses {
+		statement, err := sanitizeDiagnosisText(hypothesis.Statement)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		falsifier, err := sanitizeDiagnosisText(hypothesis.Falsifier)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		result.Hypotheses[index] = domain.Hypothesis{
+			Statement:             statement,
+			SupportingEvidenceIDs: append([]domain.EvidenceID(nil), hypothesis.SupportingEvidenceIDs...),
+			Confidence:            hypothesis.Confidence,
+			Falsifier:             falsifier,
+		}
+	}
+	for index, missing := range draft.MissingInformation {
+		detail, err := sanitizeDiagnosisText(missing.Detail)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		impact, err := sanitizeDiagnosisText(missing.Impact)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		result.MissingInformation[index] = domain.MissingInformation{
+			Kind: missing.Kind, Detail: detail, Impact: impact,
+		}
+	}
+	for index, action := range draft.RecommendedActions {
+		actionText, err := sanitizeDiagnosisText(action.Action)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		risk, err := sanitizeDiagnosisText(action.Risk)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		prerequisites := make([]string, len(action.Prerequisites))
+		for prerequisiteIndex, prerequisite := range action.Prerequisites {
+			prerequisites[prerequisiteIndex], err = sanitizeDiagnosisText(prerequisite)
+			if err != nil {
+				return DiagnosisDraft{}, err
+			}
+		}
+		result.RecommendedActions[index] = domain.RecommendedAction{
+			Action: actionText, Risk: risk, Prerequisites: prerequisites, Executed: action.Executed,
+		}
+	}
+	return result, nil
+}
+
+func sanitizeDiagnosisText(value string) (string, error) {
+	processed, err := processModelText(value, maxDiagnosisDraftTextBytes)
+	if err != nil {
+		if errors.Is(err, ErrSensitiveModelTextBlocked) {
+			return "", err
+		}
+		return "", ErrInvalidDiagnosisDraft
+	}
+	if processed == "" {
+		return "", ErrInvalidDiagnosisDraft
+	}
+	return processed, nil
 }
 
 func allEvidenceRegistered(ids []domain.EvidenceID, evidence map[domain.EvidenceID]domain.Evidence) bool {

@@ -176,8 +176,15 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 		seenInvocationIDs[invocationID] = struct{}{}
 		call, err := agent.BindToolCall(state.input, invocationID, selection)
 		if err != nil {
+			if errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
+				return failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
+			}
 			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a Tool call outside the fixed policy.", err)
 		}
+		safeSelection := domain.ModelToolCall{
+			ID: selection.ID, Name: call.Name(), ArgumentsJSON: call.ArgumentsJSON(),
+		}
+		selections[index] = safeSelection
 		requestedAt := state.now()
 		if !validRuntimeTime(requestedAt) {
 			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
@@ -204,7 +211,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 			call:      call,
 			requested: invocation,
 			toolName:  call.Name(),
-			modelCall: selection,
+			modelCall: safeSelection,
 		}
 	}
 

@@ -14,11 +14,13 @@ var (
 )
 
 const (
-	safeInternalFailure      = "The Agent runtime failed safely."
-	safeInvalidModelResponse = "The model returned an invalid Agent response."
-	safeInvalidToolResult    = "A Tool returned data outside the safe result contract."
-	safeEventRejected        = "The Agent event stream could not be accepted safely."
-	safeScopeStale           = "The Agent run stopped because its ClusterScope is stale."
+	safeInternalFailure           = "The Agent runtime failed safely."
+	safeInvalidModelResponse      = "The model returned an invalid Agent response."
+	safeInvalidToolResult         = "A Tool returned data outside the safe result contract."
+	safeEventRejected             = "The Agent event stream could not be accepted safely."
+	safeScopeStale                = "The Agent run stopped because its ClusterScope is stale."
+	safeSensitiveModelTextBlocked = "Sensitive model output was blocked before downstream use."
+	safeModelProgress             = "Validating the model response."
 )
 
 type runtimeFailure struct {

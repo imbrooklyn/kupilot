@@ -2,7 +2,7 @@
 
 - Status: Accepted security baseline for `v0.1` and the admitted `v0.2` write
   boundary
-- Date: 2026-08-08
+- Date: 2026-08-10
 
 This document defines KuPilot's security objectives, trust boundaries, runtime
 controls, and deterministic security tests. It is normative for implementation
@@ -206,6 +206,13 @@ dispatches through a fixed name-to-handler table. There is no shell, kubectl,
 generic HTTP, generic Kubernetes, dynamic plugin, text-to-command, or
 prompt-parsed fallback path.
 
+Model-provided free text in a structured Tool selection is normalized,
+screened for sensitive values, and bounded before the call becomes a canonical
+runtime value. Lower-risk matches use the code-defined redaction marker. A
+high-confidence match or invalid control sequence is rejected before handler or
+Kubernetes I/O, and only the processed canonical selection can enter a later
+model request, Application event, or durable ToolInvocation.
+
 ### C05: Scope and stale-work isolation
 
 The complete immutable ClusterScope and process-local generation are checked at
@@ -234,6 +241,11 @@ errors, and resumed content remain untrusted data. They cannot add Tools, widen
 scope, change budgets, choose an endpoint, create Evidence, approve a write, or
 produce an execution record. Structured model output is decoded with strict
 limits; invalid or extra content produces a classified failure or a safe gap.
+Every model-provided Diagnosis text field passes the same local normalization,
+sensitive-value, and bound policy before final validation. High-confidence
+sensitive output is blocked before a Diagnosis event or durable write. Raw
+structured response deltas are not published as display text; the UI receives
+only code-defined progress text until the validated Diagnosis is ready.
 
 Only local code assigns terminal style. Before rendering, all external text is
 valid UTF-8, bounded, and stripped of escape, C0/C1, operating-system command,
@@ -256,6 +268,13 @@ Schema mappings contain only fields allowed by the retention contract. Opening,
 migration, recovery, and retention enforcement are explicit startup gates.
 Corruption or an unknown schema is not silently replaced. SQLite encryption or
 tamper resistance is not claimed.
+
+A durable Diagnosis verifies each cited Evidence ID independently against the
+same AgentRun. Its exact observation window is derived from all accepted
+Evidence stored for that run, including Evidence not cited by a confirmed fact
+or hypothesis. Its initial detail state also includes accepted Tool-result
+truncation when a fixed limit produced no Evidence. Historic reads preserve the
+window and derive `partial` or `expired` when retention removes detail.
 
 ### C09: Bounded execution
 
@@ -323,14 +342,14 @@ security test oracle.
 | --- | --- | --- | --- |
 | T01 | Kubeconfig, token, certificate, key, or exec credential output reaches the model, terminal, logs, errors, or SQLite, or unsafe kubeconfig permissions go unnoticed | C01, C02, C08, C10; credentials are adapter-local and excluded by sink schemas; unsafe Unix source permissions produce a content-free warning without automatic changes | Inject a distinct synthetic canary at every credential source; exercise success and every adapter error; assert exact absence from captured model requests, events, rendered frames, logs, repository queries, and safe errors; table-test owner/group/world modes and assert warning text has no content or path and mode bits never change |
 | T02 | The model API key is persisted, rendered, inherited by a child, disclosed by an error, or sent to a different endpoint | C01, C02, C03, C10; ephemeral source, immediate environment removal, same-origin transport | Use environment and safe-input fakes plus a redirect and exec child; assert the authentication value appears only in the outbound header to the configured origin, never in child or redirect traffic or any captured sink; scan formatted error paths with a synthetic canary |
-| T03 | Secret data or another high-risk value is read from Kubernetes or smuggled through an Event, resource field, question, or container output | C06 source denial followed by the ordered egress pipeline and C07 blocking | Assert a Secret or ConfigMap-data request has external call count zero; place separate synthetic canaries in every eligible free-text source and prove block or typed redaction before model, TUI, Evidence, and persistence sinks |
+| T03 | Secret data or another high-risk value is read from Kubernetes or smuggled through an Event, resource field, question, container output, Tool selection, or Diagnosis draft | C04 and C07 model-text processing plus C06 source denial and the ordered egress pipeline | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, and the full sink integration test prove typed redaction or blocking before model, Tool/Kubernetes, TUI, Evidence, audit/log, and persistence sinks; denial paths assert zero forbidden calls |
 | T04 | Prompt or Tool-result injection asks the Agent to ignore policy, reveal data, change endpoint, cross scope, write, or approve itself | C04, C05, C07, C11, C12; authority exists only in runtime state and fixed dispatch | Feed injection fixtures through user, Event, container-output, resource-name, historic-message, and model channels; assert unchanged catalog, endpoint, scope, budgets, approval state, and zero forbidden adapter calls |
 | T05 | A structured Tool selection supplies unknown fields, scope, arbitrary Kind, raw selector, deadline, or larger limit | C04 strict decoding, internal scope binding, and C09 ceilings | Table-test missing, duplicate, unknown, wrong-type, overlong, and boundary fields; fuzz decoding; assert denial occurs before reservation or external I/O and canonical arguments contain only schema fields |
 | T06 | A malicious endpoint, URL confusion, redirect, or error body exfiltrates the API key or cluster data | C03 canonical origin validation, normal TLS, loopback-only HTTP, cross-origin redirect denial, consent binding, and safe errors | Table-test public/private HTTPS, loopback HTTP, non-loopback HTTP, user information, query, and redirect forms; prove no credential forwarding; change origin after consent and assert zero model-content requests until renewed consent |
 | T07 | A Context or Namespace switch allows a stale result into the model, database, TUI, Evidence, or approval state | C05 three-gate generation protocol and approval invalidation | Move generation with barriers before invocation and during I/O; assert respectively zero external calls and zero accepted sinks; deliver late and duplicate events and assert terminal state is unchanged |
 | T08 | Broad RBAC permits reads outside KuPilot's Kind, relationship, Namespace, or field policy | C06 task-specific ports, code allowlists, projection, and local limits | Run every Tool against a request-recording fake API; compare exact verbs, resources, Namespace, limits, and projected fields to golden allowlists; assert adversarial owner graphs stop at fixed edges and hops |
 | T09 | Model output bypasses structured Tool calling through prose, malformed stream fragments, duplicate calls, or an invented Tool name | C04 strict structured events and no text fallback; C09 repetition and loop limits | Replay chunk-boundary permutations, malformed events, duplicate identifiers, invented names, and prose that resembles a call; assert no unintended handler call and one classified terminal outcome |
-| T10 | SQLite leaks excluded data, accepts SQL injection, opens an unsafe path, or silently loses integrity | C08 fixed path, permissions, schema allowlist, bound SQL, migrations, and integrity gates | Verify mode bits and sidecars on supported platforms; reject symlink fixtures; round-trip adversarial text as data; inspect all eligible columns for synthetic prohibited canaries; corrupt schema and assert no automatic replacement |
+| T10 | SQLite leaks excluded data, accepts SQL injection, opens an unsafe path, or silently loses integrity | C08 fixed path, permissions, schema allowlist, bound SQL, migrations, integrity gates, and the all-accepted-Evidence Diagnosis window invariant | Database and sidecar canary scans, path and mode tests, `TestRepositorySourcesKeepExplicitSQLBoundary`, corruption tests, `TestDiagnosisRepositoryUsesAllAcceptedEvidenceForObservationWindow`, truncation with and without Evidence, cross-run rejection, retention-state tests, and the full sink integration test verify excluded-data absence and exact durable Evidence semantics |
 | T11 | Retained data outlives its contract, minimal-persistence becomes resumable, deletion is partial, or cleanup failure is hidden | C08 plus the Data Retention Contract | Use a fake clock at cutoff boundaries; assert complete transactional cascades, no content rows in minimal mode, no resume candidate, honest deletion failure, and a startup/run gate when mandatory pruning fails |
 | T12 | Kubernetes, model, or user-controlled text executes terminal control sequences, spoofs approval, or hides scope | C07 local-only styling and typed approval state | Golden-test escape, control, invalid UTF-8, bidirectional, wide, combining, and oversized input from every external source; assert rendered bytes contain no forbidden sequence and approval fields cannot originate in text |
 | T13 | Unbounded model streams, Kubernetes results, logs, recursion, retries, or event queues exhaust memory, time, or model budget | C09 atomic hard ceilings and owned cancellation | Test each exact boundary and one-over value with fake clocks and counters; fuzz stream chunks; assert bounded allocations/queues, no call after exhaustion, one terminal result, and an explicit gap |

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,6 +64,68 @@ func TestDiagnosisValidatorRejectsUnregisteredEvidenceAndExecutionClaims(t *test
 	}
 	if !strings.Contains(diagnosis.AnswerMarkdown, string(testEvidenceID)) || !strings.Contains(diagnosis.AnswerMarkdown, "Not executed") {
 		t.Fatalf("rendered Diagnosis = %s", diagnosis.AnswerMarkdown)
+	}
+}
+
+func TestDiagnosisValidatorSanitizesEveryModelFreeTextField(t *testing.T) {
+	input := testRunInput(t, "Inspect the selected Pod.")
+	call := testBoundCall(t, input, testInvocationID, "sample-pod")
+	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(1_000).UTC())
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if _, err := registry.AcceptToolResult(call, result); err != nil {
+		t.Fatalf("AcceptToolResult() error = %v", err)
+	}
+	canary := strings.Join([]string{"synthetic", "diagnosis", "field", "canary", "4501"}, "-")
+	unsafeText := "\x1b[31mObserved token=" + canary + "\x1b[0m\u202e"
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		ConfirmedFacts: []domain.ConfirmedFact{{
+			Statement: unsafeText, EvidenceIDs: []domain.EvidenceID{testEvidenceID},
+		}},
+		Hypotheses: []domain.Hypothesis{{
+			Statement: unsafeText, SupportingEvidenceIDs: []domain.EvidenceID{testEvidenceID},
+			Confidence: domain.DiagnosisConfidenceLow, Falsifier: unsafeText,
+		}},
+		MissingInformation: []domain.MissingInformation{{
+			Kind: domain.MissingInformationAbsent, Detail: unsafeText, Impact: unsafeText,
+		}},
+		RecommendedActions: []domain.RecommendedAction{{
+			Action: unsafeText, Risk: unsafeText, Prerequisites: []string{unsafeText}, Executed: false,
+		}},
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC()}, registry)
+	if err != nil {
+		t.Fatalf("ValidateDiagnosis(sanitized fields) error = %v", err)
+	}
+	encoded := fmt.Sprintf("%#v", diagnosis)
+	if strings.Contains(encoded, canary) || strings.ContainsRune(encoded, '\x1b') || strings.ContainsRune(encoded, '\u202e') ||
+		!strings.Contains(encoded, "[REDACTED]") {
+		t.Fatalf("sanitized Diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence(t *testing.T) {
+	input := testRunInput(t, "Inspect the selected Pod.")
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	canary := strings.Join([]string{"synthetic", "blocked", "diagnosis", "canary", "4502"}, "-")
+	blocked := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
+		canary + "\n" + strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ")
+	_, err = ValidateDiagnosis(DiagnosisDraft{
+		RecommendedActions: []domain.RecommendedAction{{
+			Action: blocked, Risk: "Review is required.", Executed: false,
+		}},
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC()}, registry)
+	if !errors.Is(err, ErrSensitiveModelTextBlocked) || strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), blocked) {
+		t.Fatalf("ValidateDiagnosis(blocked text) error = %v", err)
+	}
+	if _, err := ValidateDiagnosis(DiagnosisDraft{}, DiagnosisMetadata{
+		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(),
+	}, registry); err != nil {
+		t.Fatalf("blocked draft sealed or changed the Evidence registry: %v", err)
 	}
 }
 

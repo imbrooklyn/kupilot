@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +113,70 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	}
 	if !strings.Contains(boundedList.ArgumentsJSON(), `"limit":5`) {
 		t.Fatalf("canonical list arguments = %s", boundedList.ArgumentsJSON())
+	}
+}
+
+func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T) {
+	input := testRunInput(t, "Inspect the selected Pod.")
+	canary := strings.Join([]string{"synthetic", "model", "binding", "canary", "4401"}, "-")
+	purposeJSON, err := json.Marshal("Inspect the selected Pod; token=" + canary)
+	if err != nil {
+		t.Fatalf("json.Marshal(purpose) error = %v", err)
+	}
+	bound, err := BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-1",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: `{"purpose":` + string(purposeJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+	})
+	if err != nil {
+		t.Fatalf("BindToolCall(sensitive replacement) error = %v", err)
+	}
+	if strings.Contains(bound.Purpose(), canary) || strings.Contains(bound.ArgumentsJSON(), canary) ||
+		!strings.Contains(bound.Purpose(), "[REDACTED]") || !strings.Contains(bound.ArgumentsJSON(), "[REDACTED]") {
+		t.Fatalf("sanitized BoundToolCall = %#v", bound)
+	}
+
+	controlJSON, err := json.Marshal("\x1b[31mInspect the selected Pod.\x1b[0m\u202e")
+	if err != nil {
+		t.Fatalf("json.Marshal(control purpose) error = %v", err)
+	}
+	_, err = BindToolCall(input, invocationID(4), domain.ModelToolCall{
+		ID:            "call-4",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: `{"purpose":` + string(controlJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+	})
+	if !errors.Is(err, ErrToolPolicyDenied) {
+		t.Fatalf("BindToolCall(control purpose) error = %v, want %v", err, ErrToolPolicyDenied)
+	}
+
+	queryJSON, err := json.Marshal("token=" + canary)
+	if err != nil {
+		t.Fatalf("json.Marshal(name query) error = %v", err)
+	}
+	listed, err := BindToolCall(input, invocationID(2), domain.ModelToolCall{
+		ID:            "call-2",
+		Name:          domain.ToolNameListResources,
+		ArgumentsJSON: `{"kind":"Pod","name_query":` + string(queryJSON) + `,"purpose":"Find matching Pods."}`,
+	})
+	if err != nil || strings.Contains(listed.ArgumentsJSON(), canary) || !strings.Contains(listed.ArgumentsJSON(), "[REDACTED]") {
+		t.Fatalf("sanitized list_resources call/error = %#v/%v", listed, err)
+	}
+
+	blockedCanary := strings.Join([]string{"synthetic", "blocked", "binding", "canary", "4402"}, "-")
+	blockedPurpose := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
+		blockedCanary + "\n" + strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ")
+	blockedJSON, err := json.Marshal(blockedPurpose)
+	if err != nil {
+		t.Fatalf("json.Marshal(blocked purpose) error = %v", err)
+	}
+	_, err = BindToolCall(input, invocationID(3), domain.ModelToolCall{
+		ID:            "call-3",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: `{"purpose":` + string(blockedJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+	})
+	if !errors.Is(err, ErrSensitiveModelTextBlocked) ||
+		strings.Contains(err.Error(), blockedCanary) || strings.Contains(err.Error(), blockedPurpose) {
+		t.Fatalf("blocked BindToolCall error = %v", err)
 	}
 }
 

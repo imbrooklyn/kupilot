@@ -68,6 +68,136 @@ func TestDiagnosisRepositoryRoundTripsTypedCollectionsAndEvidenceState(t *testin
 	}
 }
 
+func TestDiagnosisRepositoryUsesAllAcceptedEvidenceForObservationWindow(t *testing.T) {
+	testCases := []struct {
+		name               string
+		evidenceCount      int
+		referenced         []int
+		truncated          []int
+		wantState          domain.EvidenceDetailState
+		wantReferenceCount int
+	}{
+		{name: "zero references", evidenceCount: 2, wantState: domain.EvidenceDetailAvailable},
+		{name: "one accepted Evidence reference", evidenceCount: 1, referenced: []int{0}, wantState: domain.EvidenceDetailAvailable, wantReferenceCount: 1},
+		{name: "subset of accepted Evidence references", evidenceCount: 3, referenced: []int{0, 1}, wantState: domain.EvidenceDetailAvailable, wantReferenceCount: 2},
+		{name: "truncated accepted Evidence", evidenceCount: 2, referenced: []int{0}, truncated: []int{1}, wantState: domain.EvidenceDetailPartial, wantReferenceCount: 1},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-all-evidence-window")
+			run := seedStandardRun(t, db,
+				"00000000-0000-7000-8000-000000004301",
+				"00000000-0000-7000-8000-000000004302",
+				"00000000-0000-7000-8000-000000004303",
+				time.UnixMilli(330).UTC(),
+			)
+			invocation := testToolInvocation("00000000-0000-7000-8000-000000004304", run, 1, time.UnixMilli(331).UTC())
+			evidenceIDs := []domain.EvidenceID{
+				"00000000-0000-7000-8000-000000004305",
+				"00000000-0000-7000-8000-000000004306",
+				"00000000-0000-7000-8000-000000004307",
+			}
+			evidence := make([]domain.Evidence, testCase.evidenceCount)
+			for index := range evidence {
+				evidence[index] = testEvidence(
+					evidenceIDs[index],
+					invocation,
+					time.UnixMilli(int64(332+index)).UTC(),
+				)
+			}
+			for _, index := range testCase.truncated {
+				evidence[index].Truncated = true
+				evidence[index].Fingerprint = domain.SHA256Hex("truncated-all-evidence-window")
+			}
+			invocation.EvidenceCount = len(evidence)
+			if err := NewToolInvocationRepository(db).Save(context.Background(), invocation, evidence); err != nil {
+				t.Fatalf("Save(ToolInvocation) error = %v", err)
+			}
+
+			diagnosis := testDiagnosis("00000000-0000-7000-8000-000000004309", run, evidence)
+			diagnosis.ConfirmedFacts = nil
+			diagnosis.Hypotheses = nil
+			if len(testCase.referenced) > 0 {
+				ids := make([]domain.EvidenceID, len(testCase.referenced))
+				for index, evidenceIndex := range testCase.referenced {
+					ids[index] = evidence[evidenceIndex].ID
+				}
+				diagnosis.ConfirmedFacts = []domain.ConfirmedFact{{
+					Statement: "The accepted Evidence supports this bounded observation.", EvidenceIDs: ids,
+				}}
+			}
+			diagnosis.EvidenceDetailsState = testCase.wantState
+			repository := NewDiagnosisRepository(db)
+			if err := repository.Save(context.Background(), diagnosis); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			got, err := repository.GetByRunID(context.Background(), run.ID)
+			if err != nil {
+				t.Fatalf("GetByRunID() error = %v", err)
+			}
+			if len(got.ReferencedEvidenceIDs()) != testCase.wantReferenceCount || got.EvidenceDetailsState != testCase.wantState ||
+				got.ObservedFrom == nil || got.ObservedTo == nil ||
+				!got.ObservedFrom.Equal(evidence[0].ObservedAt) || !got.ObservedTo.Equal(evidence[len(evidence)-1].ObservedAt) {
+				t.Fatalf("GetByRunID() = %#v", got)
+			}
+			if testCase.wantReferenceCount == 0 {
+				if _, err := db.handle.ExecContext(context.Background(), `DELETE FROM evidence_items WHERE id = ?`, evidence[0].ID); err != nil {
+					t.Fatalf("delete first unreferenced Evidence error = %v", err)
+				}
+				partial, err := repository.GetByRunID(context.Background(), run.ID)
+				if err != nil || partial.EvidenceDetailsState != domain.EvidenceDetailPartial {
+					t.Fatalf("GetByRunID(partial unreferenced Evidence) = %#v/%v", partial, err)
+				}
+				if _, err := db.handle.ExecContext(context.Background(), `DELETE FROM evidence_items WHERE id = ?`, evidence[1].ID); err != nil {
+					t.Fatalf("delete final unreferenced Evidence error = %v", err)
+				}
+				expired, err := repository.GetByRunID(context.Background(), run.ID)
+				if err != nil || expired.EvidenceDetailsState != domain.EvidenceDetailExpired {
+					t.Fatalf("GetByRunID(expired unreferenced Evidence) = %#v/%v", expired, err)
+				}
+			}
+		})
+	}
+
+	t.Run("Tool result truncation without Evidence", func(t *testing.T) {
+		db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-empty-truncated-window")
+		run := seedStandardRun(t, db,
+			"00000000-0000-7000-8000-000000004321",
+			"00000000-0000-7000-8000-000000004322",
+			"00000000-0000-7000-8000-000000004323",
+			time.UnixMilli(340).UTC(),
+		)
+		invocation := testToolInvocation("00000000-0000-7000-8000-000000004324", run, 1, time.UnixMilli(341).UTC())
+		invocation.Truncated = true
+		if err := NewToolInvocationRepository(db).Save(context.Background(), invocation, nil); err != nil {
+			t.Fatalf("Save(truncated ToolInvocation) error = %v", err)
+		}
+		diagnosis := domain.Diagnosis{
+			ID:    "00000000-0000-7000-8000-000000004325",
+			RunID: run.ID,
+			Scope: run.Scope,
+			MissingInformation: []domain.MissingInformation{{
+				Kind:   domain.MissingInformationTruncated,
+				Detail: "The Tool result reached a fixed limit before producing Evidence.",
+				Impact: "The Diagnosis cannot account for content outside the admitted result.",
+			}},
+			AnswerMarkdown:       "No accepted Evidence was available from the truncated result.",
+			CreatedAt:            time.UnixMilli(347).UTC(),
+			EvidenceDetailsState: domain.EvidenceDetailPartial,
+		}
+		repository := NewDiagnosisRepository(db)
+		if err := repository.Save(context.Background(), diagnosis); err != nil {
+			t.Fatalf("Save(truncated Diagnosis without Evidence) error = %v", err)
+		}
+		got, err := repository.GetByRunID(context.Background(), run.ID)
+		if err != nil || got.ObservedFrom != nil || got.ObservedTo != nil ||
+			got.EvidenceDetailsState != domain.EvidenceDetailPartial {
+			t.Fatalf("GetByRunID(truncated Diagnosis without Evidence) = %#v/%v", got, err)
+		}
+	})
+}
+
 func TestDiagnosisRepositoryRejectsCrossRunMinimalDuplicateAndOversizedData(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-denials")
 	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000004101", "00000000-0000-7000-8000-000000004102", "00000000-0000-7000-8000-000000004103", time.UnixMilli(310).UTC())
@@ -78,7 +208,25 @@ func TestDiagnosisRepositoryRejectsCrossRunMinimalDuplicateAndOversizedData(t *t
 	if err := tools.Save(context.Background(), invocation, []domain.Evidence{evidence}); err != nil {
 		t.Fatalf("Save(ToolInvocation) error = %v", err)
 	}
+	if err := NewAgentRunRepository(db).Finish(context.Background(), testTerminalRun(run, domain.AgentRunStatusCompleted, time.UnixMilli(313).UTC())); err != nil {
+		t.Fatalf("Finish(AgentRun) error = %v", err)
+	}
 	repository := NewDiagnosisRepository(db)
+	otherRun := seedStandardRun(t, db, "00000000-0000-7000-8000-000000004111", "00000000-0000-7000-8000-000000004112", "00000000-0000-7000-8000-000000004113", time.UnixMilli(314).UTC())
+	otherInvocation := testToolInvocation("00000000-0000-7000-8000-000000004114", otherRun, 1, time.UnixMilli(315).UTC())
+	otherEvidence := testEvidence("00000000-0000-7000-8000-000000004115", otherInvocation, time.UnixMilli(316).UTC())
+	otherInvocation.EvidenceCount = 1
+	if err := tools.Save(context.Background(), otherInvocation, []domain.Evidence{otherEvidence}); err != nil {
+		t.Fatalf("Save(other ToolInvocation) error = %v", err)
+	}
+	crossRunReference := testDiagnosis("00000000-0000-7000-8000-000000004116", run, []domain.Evidence{evidence})
+	crossRunReference.ConfirmedFacts[0].EvidenceIDs[0] = otherEvidence.ID
+	if err := repository.Save(context.Background(), crossRunReference); !errors.Is(err, ErrDiagnosisEvidenceInvalid) {
+		t.Fatalf("Save(cross-run Evidence) error = %v, want ErrDiagnosisEvidenceInvalid", err)
+	}
+	if _, err := repository.GetByRunID(context.Background(), run.ID); !errors.Is(err, ErrDiagnosisNotFound) {
+		t.Fatalf("cross-run reference left Diagnosis: %v", err)
+	}
 
 	missingReference := testDiagnosis("00000000-0000-7000-8000-000000004106", run, []domain.Evidence{evidence})
 	missingReference.ConfirmedFacts[0].EvidenceIDs[0] = "00000000-0000-7000-8000-000000004199"

@@ -3,6 +3,7 @@ package einoadapter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -78,6 +79,95 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 			t.Fatalf("event[%d].Kind = %q, want %q", index, events[index].Kind, kind)
 		}
 	}
+	if events[7].TextDelta != safeModelProgress || strings.Contains(events[7].TextDelta, "confirmed_facts") {
+		t.Fatalf("model progress event = %#v", events[7])
+	}
+}
+
+func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
+	blockedCanary := strings.Join([]string{"synthetic", "blocked", "adapter", "canary", "4601"}, "-")
+	blockedText := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
+		blockedCanary + "\n" + strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ")
+
+	t.Run("Tool purpose", func(t *testing.T) {
+		clock := newTestClock()
+		guard := newTestScopeGuard()
+		arguments, err := json.Marshal(struct {
+			Purpose  string `json:"purpose"`
+			Resource struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"resource"`
+		}{
+			Purpose: blockedText,
+			Resource: struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			}{Kind: "Pod", Name: "sample-pod"},
+		})
+		if err != nil {
+			t.Fatalf("json.Marshal(Tool arguments) error = %v", err)
+		}
+		model := &recordingModel{scripts: []modelScript{scriptedEvents(toolCallEvents(domain.ModelToolCall{
+			ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: string(arguments),
+		})...)}}
+		tool := new(recordingTool)
+		recorder := newEventRecorder()
+		input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+		outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
+
+		if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
+			*outcome.ErrorClass != domain.SafeErrorClassSensitiveOutputBlocked || outcome.SafeMessage != safeSensitiveModelTextBlocked {
+			t.Fatalf("blocked Tool-purpose outcome = %#v", outcome)
+		}
+		if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
+			t.Fatalf("blocked Tool-purpose calls: Tool = %d, Model = %d", len(tool.Calls()), len(model.Requests()))
+		}
+		if encoded := fmt.Sprintf("%#v", recorder.Events()); strings.Contains(encoded, blockedCanary) || strings.Contains(encoded, blockedText) {
+			t.Fatalf("blocked Tool-purpose events = %s", encoded)
+		}
+		assertTerminalSequence(t, recorder.Events())
+	})
+
+	t.Run("Diagnosis", func(t *testing.T) {
+		clock := newTestClock()
+		guard := newTestScopeGuard()
+		encodedDiagnosis, err := json.Marshal(struct {
+			ConfirmedFacts     []domain.ConfirmedFact      `json:"confirmed_facts"`
+			Hypotheses         []domain.Hypothesis         `json:"hypotheses"`
+			MissingInformation []domain.MissingInformation `json:"missing_information"`
+			RecommendedActions []domain.RecommendedAction  `json:"recommended_actions"`
+		}{
+			ConfirmedFacts:     []domain.ConfirmedFact{},
+			Hypotheses:         []domain.Hypothesis{},
+			MissingInformation: []domain.MissingInformation{},
+			RecommendedActions: []domain.RecommendedAction{{
+				Action: blockedText, Risk: "Review is required.", Prerequisites: []string{}, Executed: false,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("json.Marshal(Diagnosis) error = %v", err)
+		}
+		model := &recordingModel{scripts: []modelScript{scriptedEvents(diagnosisEvents(string(encodedDiagnosis))...)}}
+		tool := new(recordingTool)
+		recorder := newEventRecorder()
+		input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+		outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
+
+		if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
+			*outcome.ErrorClass != domain.SafeErrorClassSensitiveOutputBlocked || outcome.SafeMessage != safeSensitiveModelTextBlocked {
+			t.Fatalf("blocked Diagnosis outcome = %#v", outcome)
+		}
+		if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
+			t.Fatalf("blocked Diagnosis calls: Tool = %d, Model = %d", len(tool.Calls()), len(model.Requests()))
+		}
+		encodedEvents := fmt.Sprintf("%#v", recorder.Events())
+		if strings.Contains(encodedEvents, blockedCanary) || strings.Contains(encodedEvents, blockedText) ||
+			!strings.Contains(encodedEvents, safeModelProgress) {
+			t.Fatalf("blocked Diagnosis events = %s", encodedEvents)
+		}
+		assertTerminalSequence(t, recorder.Events())
+	})
 }
 
 func TestAdapterCloseWaitsForAdmittedRunAndRejectsNewRuns(t *testing.T) {

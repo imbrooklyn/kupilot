@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
 const (
@@ -32,6 +33,10 @@ var (
 	// ErrInvalidToolResultMessage reports an invalid or oversized model-bound
 	// ToolResult derivative.
 	ErrInvalidToolResultMessage = errors.New("the safe ToolResult message is invalid")
+	// ErrSensitiveModelTextBlocked reports model-provided free text that the
+	// fixed local sensitive-value policy cannot safely replace.
+	ErrSensitiveModelTextBlocked = errors.New("sensitive model-provided text was blocked")
+	errInvalidModelText          = errors.New("model-provided text is invalid")
 )
 
 const (
@@ -291,8 +296,12 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Purpose  string           `json:"purpose"`
 			Resource resourceArgument `json:"resource"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !validPurpose(wire.Purpose) {
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
 			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
 		}
 		resource, err := normalizeResource(scope, wire.Resource)
 		if err != nil {
@@ -305,7 +314,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if detail != "summary" && detail != "diagnostic" {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getResourceArguments{Detail: detail, Purpose: wire.Purpose, Resource: resource}, wire.Purpose)
+		return marshalCanonical(getResourceArguments{Detail: detail, Purpose: purpose, Resource: resource}, purpose)
 	case domain.ToolNameListResources:
 		var wire struct {
 			HealthFilter string `json:"health_filter"`
@@ -314,9 +323,16 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			NameQuery    string `json:"name_query"`
 			Purpose      string `json:"purpose"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !validPurpose(wire.Purpose) ||
-			!domain.ResourceKind(wire.Kind).Valid() || !validAgentText(wire.NameQuery, maxNameQueryBytes, true) {
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !domain.ResourceKind(wire.Kind).Valid() {
 			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
+		}
+		nameQuery, err := safeOptionalToolText(wire.NameQuery, maxNameQueryBytes)
+		if err != nil {
+			return "", "", err
 		}
 		health := wire.HealthFilter
 		if health == "" {
@@ -332,7 +348,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if limit < 1 || limit > 50 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(listResourcesArguments{HealthFilter: health, Kind: wire.Kind, Limit: limit, NameQuery: wire.NameQuery, Purpose: wire.Purpose}, wire.Purpose)
+		return marshalCanonical(listResourcesArguments{HealthFilter: health, Kind: wire.Kind, Limit: limit, NameQuery: nameQuery, Purpose: purpose}, purpose)
 	case domain.ToolNameGetEvents:
 		var wire struct {
 			Limit        *int             `json:"limit"`
@@ -340,8 +356,12 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Resource     resourceArgument `json:"resource"`
 			SinceSeconds *int             `json:"since_seconds"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !validPurpose(wire.Purpose) {
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
 			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
 		}
 		resource, err := normalizeResource(scope, wire.Resource)
 		if err != nil {
@@ -357,7 +377,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if limit < 1 || limit > maxRequestedEvents || since < 60 || since > 86400 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getEventsArguments{Limit: limit, Purpose: wire.Purpose, Resource: resource, SinceSeconds: since}, wire.Purpose)
+		return marshalCanonical(getEventsArguments{Limit: limit, Purpose: purpose, Resource: resource, SinceSeconds: since}, purpose)
 	case domain.ToolNameGetPodLogs, domain.ToolNameGetPreviousPodLogs:
 		var wire struct {
 			Container    string `json:"container"`
@@ -366,9 +386,13 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			SinceSeconds *int   `json:"since_seconds"`
 			TailLines    *int   `json:"tail_lines"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !validPurpose(wire.Purpose) ||
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil ||
 			!validAgentText(wire.Container, 253, true) || wire.Container != "" && !domain.ValidResourceName(wire.Container) {
 			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
 		}
 		pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: scope.Namespace, Name: wire.PodName}
 		if domain.ValidateLiveResourceRef(pod) != nil {
@@ -384,7 +408,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if tail < 1 || tail > maxRequestedLogs || since < 60 || since > 3600 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getPodLogsArguments{Container: wire.Container, PodName: wire.PodName, Purpose: wire.Purpose, SinceSeconds: since, TailLines: tail}, wire.Purpose)
+		return marshalCanonical(getPodLogsArguments{Container: wire.Container, PodName: wire.PodName, Purpose: purpose, SinceSeconds: since, TailLines: tail}, purpose)
 	case domain.ToolNameGetRelatedResources:
 		var wire struct {
 			Include       []string         `json:"include"`
@@ -392,8 +416,12 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			RelationDepth *int             `json:"relation_depth"`
 			Resource      resourceArgument `json:"resource"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !validPurpose(wire.Purpose) {
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
 			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
 		}
 		resource, err := normalizeResource(scope, wire.Resource)
 		if err != nil {
@@ -410,7 +438,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if err != nil {
 			return "", "", err
 		}
-		return marshalCanonical(getRelatedResourcesArguments{Include: include, Purpose: wire.Purpose, RelationDepth: depth, Resource: resource}, wire.Purpose)
+		return marshalCanonical(getRelatedResourcesArguments{Include: include, Purpose: purpose, RelationDepth: depth, Resource: resource}, purpose)
 	default:
 		return "", "", ErrToolPolicyDenied
 	}
@@ -475,6 +503,48 @@ func marshalCanonical(value any, purpose string) (string, string, error) {
 
 func validPurpose(value string) bool {
 	return validAgentText(value, maxToolPurposeBytes, false)
+}
+
+func safeToolPurpose(value string) (string, error) {
+	processed, err := processModelText(value, maxToolPurposeBytes)
+	if err != nil {
+		if errors.Is(err, ErrSensitiveModelTextBlocked) {
+			return "", err
+		}
+		return "", ErrToolPolicyDenied
+	}
+	if !validPurpose(processed) {
+		return "", ErrToolPolicyDenied
+	}
+	return processed, nil
+}
+
+func safeOptionalToolText(value string, maximumBytes int) (string, error) {
+	processed, err := processModelText(value, maximumBytes)
+	if err != nil {
+		if errors.Is(err, ErrSensitiveModelTextBlocked) {
+			return "", err
+		}
+		return "", ErrToolPolicyDenied
+	}
+	if !validAgentText(processed, maximumBytes, true) {
+		return "", ErrToolPolicyDenied
+	}
+	return processed, nil
+}
+
+func processModelText(value string, maximumBytes int) (string, error) {
+	if maximumBytes < 1 || len(value) > maximumBytes {
+		return "", errInvalidModelText
+	}
+	processed, err := security.NewRedactor().Process(value, maximumBytes)
+	if errors.Is(err, security.ErrSensitiveOutputBlocked) {
+		return "", ErrSensitiveModelTextBlocked
+	}
+	if err != nil || processed.Truncated {
+		return "", errInvalidModelText
+	}
+	return processed.Value, nil
 }
 
 func validAgentText(value string, maximumBytes int, allowEmpty bool) bool {

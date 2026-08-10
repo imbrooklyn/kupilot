@@ -41,12 +41,28 @@ const (
 		FROM evidence_items
 		WHERE id = ?
 	`
+	getDiagnosisEvidenceWindowSQL = `
+		SELECT
+			COUNT(e.id) AS evidence_count,
+			MIN(e.observed_at_ms) AS observed_from_ms,
+			MAX(e.observed_at_ms) AS observed_to_ms,
+			CASE
+				WHEN COALESCE(MAX(e.truncated), 0) = 1 OR COALESCE((
+					SELECT MAX(t.truncated)
+					FROM tool_invocations AS t
+					WHERE t.run_id = ?
+				), 0) = 1 THEN 1
+				ELSE 0
+			END AS truncated
+		FROM evidence_items AS e
+		WHERE e.run_id = ?
+	`
 )
 
 var (
 	// ErrDiagnosisNotFound does not distinguish expiry from an unknown identifier.
 	ErrDiagnosisNotFound = errors.New("the requested Diagnosis was not found")
-	// ErrDiagnosisEvidenceInvalid reports missing or cross-run support at write time.
+	// ErrDiagnosisEvidenceInvalid reports inconsistent same-run Evidence references or observation state.
 	ErrDiagnosisEvidenceInvalid = errors.New("Diagnosis Evidence references are invalid")
 )
 
@@ -73,12 +89,20 @@ type diagnosisEvidenceStateRow struct {
 	ObservedAtMS int64  `db:"observed_at_ms"`
 }
 
+type diagnosisEvidenceWindowRow struct {
+	EvidenceCount  int64         `db:"evidence_count"`
+	ObservedFromMS sql.NullInt64 `db:"observed_from_ms"`
+	ObservedToMS   sql.NullInt64 `db:"observed_to_ms"`
+	Truncated      int64         `db:"truncated"`
+}
+
 type diagnosisEvidenceSummary struct {
-	State        domain.EvidenceDetailState
-	Referenced   int
-	Found        int
-	ObservedFrom *time.Time
-	ObservedTo   *time.Time
+	State         domain.EvidenceDetailState
+	Referenced    int
+	Found         int
+	EvidenceCount int64
+	ObservedFrom  *time.Time
+	ObservedTo    *time.Time
 }
 
 // DiagnosisRepository persists only locally validated structured Diagnoses.
@@ -253,9 +277,29 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 
 func summarizeDiagnosisEvidence(ctx context.Context, getter strictGetter, diagnosis domain.Diagnosis) (diagnosisEvidenceSummary, error) {
 	ids := diagnosis.ReferencedEvidenceIDs()
+	var window diagnosisEvidenceWindowRow
+	if err := getter.GetContext(ctx, &window, getDiagnosisEvidenceWindowSQL, diagnosis.RunID, diagnosis.RunID); err != nil {
+		return diagnosisEvidenceSummary{}, err
+	}
+	if window.EvidenceCount < 0 || window.Truncated != 0 && window.Truncated != 1 ||
+		window.EvidenceCount == 0 && (window.ObservedFromMS.Valid || window.ObservedToMS.Valid) ||
+		window.EvidenceCount > 0 && (!window.ObservedFromMS.Valid || !window.ObservedToMS.Valid ||
+			window.ObservedFromMS.Int64 < 0 || window.ObservedToMS.Int64 < window.ObservedFromMS.Int64) {
+		return diagnosisEvidenceSummary{}, ErrDiagnosisEvidenceInvalid
+	}
 	summary := diagnosisEvidenceSummary{
-		State:      domain.EvidenceDetailAvailable,
-		Referenced: len(ids),
+		State:         domain.EvidenceDetailAvailable,
+		Referenced:    len(ids),
+		EvidenceCount: window.EvidenceCount,
+	}
+	if window.EvidenceCount > 0 {
+		observedFrom := time.UnixMilli(window.ObservedFromMS.Int64).UTC()
+		observedTo := time.UnixMilli(window.ObservedToMS.Int64).UTC()
+		summary.ObservedFrom = &observedFrom
+		summary.ObservedTo = &observedTo
+	}
+	if window.Truncated == 1 {
+		summary.State = domain.EvidenceDetailPartial
 	}
 	for _, id := range ids {
 		var row diagnosisEvidenceStateRow
@@ -268,29 +312,18 @@ func summarizeDiagnosisEvidence(ctx context.Context, getter strictGetter, diagno
 			return diagnosisEvidenceSummary{}, ErrDiagnosisEvidenceInvalid
 		}
 		summary.Found++
-		observedAt := time.UnixMilli(row.ObservedAtMS).UTC()
-		if summary.ObservedFrom == nil || observedAt.Before(*summary.ObservedFrom) {
-			value := observedAt
-			summary.ObservedFrom = &value
-		}
-		if summary.ObservedTo == nil || observedAt.After(*summary.ObservedTo) {
-			value := observedAt
-			summary.ObservedTo = &value
-		}
-		if row.Truncated == 1 {
-			summary.State = domain.EvidenceDetailPartial
-		}
 	}
-	if summary.Referenced > 0 && summary.Found == 0 {
+	if (summary.EvidenceCount == 0 && diagnosis.ObservedFrom != nil) ||
+		(summary.Referenced > 0 && summary.Found == 0) {
 		summary.State = domain.EvidenceDetailExpired
-	} else if summary.Found < summary.Referenced {
+	} else if summary.Found < summary.Referenced || !diagnosisWindowMatches(diagnosis, summary) {
 		summary.State = domain.EvidenceDetailPartial
 	}
 	return summary, nil
 }
 
 func diagnosisWindowMatches(diagnosis domain.Diagnosis, summary diagnosisEvidenceSummary) bool {
-	if summary.Referenced == 0 {
+	if summary.EvidenceCount == 0 {
 		return diagnosis.ObservedFrom == nil && diagnosis.ObservedTo == nil
 	}
 	return diagnosis.ObservedFrom != nil && diagnosis.ObservedTo != nil &&
