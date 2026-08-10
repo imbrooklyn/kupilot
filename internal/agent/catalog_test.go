@@ -113,3 +113,51 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 		t.Fatalf("canonical list arguments = %s", boundedList.ArgumentsJSON())
 	}
 }
+
+func FuzzBindToolCallStrictSchema(f *testing.F) {
+	for _, seed := range []struct {
+		name      string
+		arguments string
+	}{
+		{name: string(domain.ToolNameGetResource), arguments: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`},
+		{name: string(domain.ToolNameGetResource), arguments: `{"namespace":"other","purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`},
+		{name: string(domain.ToolNameGetResource), arguments: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","kind":"Secret","name":"sample-pod"}}`},
+		{name: string(domain.ToolNameListResources), arguments: `{"kind":"Pod","limit":51,"purpose":"Find Pods."}`},
+		{name: "run_shell", arguments: `{}`},
+		{name: string(domain.ToolNameGetPodLogs), arguments: `{"pod_name":"sample-pod","purpose":"Inspect logs.","tail_lines":200}`},
+	} {
+		f.Add(seed.name, seed.arguments)
+	}
+
+	f.Fuzz(func(t *testing.T, name, arguments string) {
+		if len(name) > domain.MaxModelToolNameBytes+1 || len(arguments) > domain.MaxModelToolArgumentsBytes+1 {
+			return
+		}
+		input := testRunInput(t, "Inspect the selected Pod.")
+		selection := domain.ModelToolCall{
+			ID: "fuzz-call", Name: domain.ToolName(name), ArgumentsJSON: arguments,
+		}
+		bound, err := BindToolCall(input, testInvocationID, selection)
+		if err != nil {
+			return
+		}
+		if bound.Validate() != nil || bound.Scope() != input.Scope() || bound.Name() != selection.Name {
+			t.Fatalf("successful binding violated runtime invariants: %#v", bound)
+		}
+		canonical := bound.ArgumentsJSON()
+		for _, prohibited := range []string{
+			`"context":`, `"namespace":`, `"scope":`, `"gvr":`, `"selector":`,
+			`"endpoint":`, `"credential":`, `"kubeconfig":`, `"deadline":`,
+			`"max_bytes":`, `"max_items":`,
+		} {
+			if strings.Contains(canonical, prohibited) {
+				t.Fatalf("canonical Tool arguments contain prohibited authority %s: %s", prohibited, canonical)
+			}
+		}
+		if validation := (domain.ModelToolCall{
+			ID: selection.ID, Name: bound.Name(), ArgumentsJSON: canonical,
+		}).Validate(); validation != nil {
+			t.Fatalf("bound canonical Tool arguments are invalid: %v", validation)
+		}
+	})
+}

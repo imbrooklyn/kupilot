@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -99,4 +100,46 @@ func TestFilterSlashCommandsIsStableAndBounded(t *testing.T) {
 	if got := FilterSlashCommands("does-not-exist"); len(got) != 0 {
 		t.Fatalf("unknown filter = %#v", got)
 	}
+}
+
+func FuzzParseSlashDraftHasNoDynamicAuthority(f *testing.F) {
+	for _, seed := range []string{
+		"plain chat", "/", "/help", "/ns team-a", "//help", "/unknown",
+		"/help\nsecond line", "/Help", "/help?", "!kubectl delete pod sample",
+		"/help \rignored", "\x1b[31m/help",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, draft string) {
+		if len(draft) > 65536 {
+			return
+		}
+		parsed := ParseSlashDraft(draft)
+		switch parsed.Mode {
+		case DraftChat, DraftEscapedChat, DraftSlash, DraftUnknownSlash:
+		default:
+			t.Fatalf("ParseSlashDraft() returned invalid mode %d", parsed.Mode)
+		}
+		if strings.ContainsRune(draft, '\n') || !strings.HasPrefix(draft, "/") {
+			if parsed.Mode != DraftChat || parsed.Command != nil {
+				t.Fatalf("non-command draft gained authority: %q => %#v", draft, parsed)
+			}
+			return
+		}
+		if parsed.Command == nil {
+			if parsed.Mode != DraftSlash && parsed.Mode != DraftEscapedChat && parsed.Mode != DraftUnknownSlash {
+				t.Fatalf("command-free Slash parse has inconsistent mode: %#v", parsed)
+			}
+			return
+		}
+		if parsed.Mode != DraftSlash || !validSlashName(parsed.Name) {
+			t.Fatalf("parsed command has invalid authority metadata: %#v", parsed)
+		}
+		fixed, found := findSlashCommand(parsed.Name)
+		if !found || fixed.Name != parsed.Command.Name || fixed.action != parsed.Command.action ||
+			fixed.commandKind != parsed.Command.commandKind {
+			t.Fatalf("parsed command escaped the fixed registry: %#v", parsed)
+		}
+	})
 }

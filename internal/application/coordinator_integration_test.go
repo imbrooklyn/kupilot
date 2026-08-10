@@ -20,11 +20,13 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/security"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 	"github.com/imbrooklyn/kupilot/internal/tools"
+	"github.com/imbrooklyn/kupilot/internal/tui"
 )
 
 const (
 	integrationEvidenceID1 domain.EvidenceID = "00000000-0000-7000-8000-000000000701"
 	integrationEvidenceID2 domain.EvidenceID = "00000000-0000-7000-8000-000000000702"
+	integrationEvidenceID3 domain.EvidenceID = "00000000-0000-7000-8000-000000000703"
 )
 
 func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
@@ -238,9 +240,129 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	if terminalCount != 1 {
 		t.Fatalf("UI terminal count = %d, want 1", terminalCount)
 	}
+	if frame := renderIntegrationUI(ui); strings.Contains(frame, canary) {
+		t.Fatal("rendered TUI frame contains the sensitive canary")
+	}
 	if strings.Contains(fmt.Sprintf("%#v", observer.Values()), canary) {
 		t.Fatal("lifecycle log observations contain the sensitive canary")
 	}
+
+	toolPurposeCanary := strings.Join([]string{"synthetic", "model", "tool", "purpose", "canary", "8201"}, "-")
+	diagnosisCanary := strings.Join([]string{"synthetic", "model", "diagnosis", "canary", "8202"}, "-")
+	safeEventCount := len(ui)
+	t.Run("security review finding SR-001 reproduces model text reaching actions and sinks", func(t *testing.T) {
+		model.SetReviewPayloads(
+			"Inspect the selected Pod; token="+toolPurposeCanary,
+			integrationSensitiveDiagnosisJSON(integrationEvidenceID3, diagnosisCanary),
+		)
+		findingRunID, err := coordinator.StartRun(context.Background(), application.StartRunCommand{
+			SessionID: session.ID,
+			Question:  "Re-check the selected Pod.",
+			Resource: &domain.ResourceRef{
+				APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartRun(review finding) error = %v", err)
+		}
+		findingWaitContext, cancelFindingWait := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelFindingWait()
+		findingResult, err := coordinator.WaitRun(findingWaitContext, findingRunID)
+		if err != nil {
+			t.Fatalf("WaitRun(review finding) error = %v", err)
+		}
+		if findingResult.Status != domain.AgentRunStatusCompleted || kubernetes.resourceCalls() != 2 {
+			t.Fatalf("review finding result/Kubernetes calls = %#v/%d", findingResult, kubernetes.resourceCalls())
+		}
+
+		findingRequests := model.Requests()
+		if len(findingRequests) != 4 || !strings.Contains(fmt.Sprintf("%#v", findingRequests[3]), toolPurposeCanary) {
+			t.Fatalf("the model-generated Tool purpose did not reach the subsequent model request: %#v", findingRequests)
+		}
+		findingInvocations, err := toolRepository.ListByRun(context.Background(), findingRunID)
+		if err != nil || len(findingInvocations) != 1 ||
+			!strings.Contains(fmt.Sprintf("%#v", findingInvocations[0]), toolPurposeCanary) {
+			t.Fatalf("persisted finding ToolInvocation = %#v/%v", findingInvocations, err)
+		}
+		findingDiagnosis, err := diagnosisRepository.GetByRunID(context.Background(), findingRunID)
+		if err != nil || !strings.Contains(fmt.Sprintf("%#v", findingDiagnosis), diagnosisCanary) {
+			t.Fatalf("persisted finding Diagnosis = %#v/%v", findingDiagnosis, err)
+		}
+		findingEvents := uiEvents.Events()
+		if safeEventCount > len(findingEvents) {
+			t.Fatalf("finding UI event count = %d, before finding = %d", len(findingEvents), safeEventCount)
+		}
+		var findingEventText strings.Builder
+		for _, event := range findingEvents[safeEventCount:] {
+			findingEventText.WriteString(event.Text)
+			if event.ToolStep != nil {
+				findingEventText.WriteString(event.ToolStep.Purpose)
+				findingEventText.WriteString(event.ToolStep.Summary)
+			}
+		}
+		if !strings.Contains(findingEventText.String(), toolPurposeCanary) || !strings.Contains(findingEventText.String(), diagnosisCanary) {
+			t.Fatalf("finding UI events do not reproduce both model canaries: %s", findingEventText.String())
+		}
+		findingFrame := renderIntegrationUI(findingEvents[safeEventCount:])
+		if !strings.Contains(findingFrame, toolPurposeCanary) || !strings.Contains(findingFrame, diagnosisCanary) {
+			t.Fatalf("rendered finding TUI frame does not reproduce both model canaries: %s", findingFrame)
+		}
+		if strings.Contains(fmt.Sprintf("%#v", observer.Values()), toolPurposeCanary) ||
+			strings.Contains(fmt.Sprintf("%#v", observer.Values()), diagnosisCanary) {
+			t.Fatal("text-free lifecycle observations unexpectedly contain a finding canary")
+		}
+	})
+
+	unreferencedCanary := strings.Join([]string{"synthetic", "unreferenced", "diagnosis", "canary", "8203"}, "-")
+	t.Run("security review finding SR-002 reproduces valid unreferenced Diagnosis degradation", func(t *testing.T) {
+		model.SetReviewPayloads(
+			"Inspect the selected Pod.",
+			integrationUnreferencedDiagnosisJSON(unreferencedCanary),
+		)
+		degradedRunID, err := coordinator.StartRun(context.Background(), application.StartRunCommand{
+			SessionID: session.ID,
+			Question:  "Check the selected Pod without asserting a confirmed fact.",
+			Resource: &domain.ResourceRef{
+				APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartRun(degraded finding) error = %v", err)
+		}
+		degradedWaitContext, cancelDegradedWait := context.WithTimeout(context.Background(), 5*time.Second)
+		degradedResult, err := coordinator.WaitRun(degradedWaitContext, degradedRunID)
+		cancelDegradedWait()
+		if err != nil {
+			t.Fatalf("WaitRun(degraded finding) error = %v", err)
+		}
+		if degradedResult.Status != domain.AgentRunStatusCompleted || !degradedResult.PersistenceDegraded {
+			t.Fatalf("degraded finding result = %#v", degradedResult)
+		}
+		if _, err := diagnosisRepository.GetByRunID(context.Background(), degradedRunID); err == nil {
+			t.Fatal("unreferenced Diagnosis unexpectedly became durable")
+		}
+		degradedEvents := fmt.Sprintf("%#v", uiEvents.Events()[safeEventCount:])
+		if !strings.Contains(degradedEvents, unreferencedCanary) ||
+			!strings.Contains(degradedEvents, string(application.UIEventPersistenceDegraded)) {
+			t.Fatalf("degraded finding UI events = %s", degradedEvents)
+		}
+		requestsBeforeRejectedStart := len(model.Requests())
+		kubernetesBeforeRejectedStart := kubernetes.resourceCalls()
+		_, err = coordinator.StartRun(context.Background(), application.StartRunCommand{
+			SessionID: session.ID,
+			Question:  "This run must remain blocked after degraded persistence.",
+			Resource: &domain.ResourceRef{
+				APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+			},
+		})
+		if !errors.Is(err, application.ErrPersistenceUnavailable) {
+			t.Fatalf("StartRun(after degraded finding) error = %v", err)
+		}
+		if len(model.Requests()) != requestsBeforeRejectedStart || kubernetes.resourceCalls() != kubernetesBeforeRejectedStart {
+			t.Fatalf("post-degradation model/Kubernetes calls changed from %d/%d to %d/%d",
+				requestsBeforeRejectedStart, kubernetesBeforeRejectedStart, len(model.Requests()), kubernetes.resourceCalls())
+		}
+	})
 
 	if err := database.Close(); err != nil {
 		t.Fatalf("database.Close() error = %v", err)
@@ -250,6 +372,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.ReadDir(state directory) error = %v", err)
 	}
+	findingStorage := map[string]bool{toolPurposeCanary: false, diagnosisCanary: false}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -261,7 +384,32 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		if strings.Contains(string(content), canary) {
 			t.Fatalf("SQLite file %s contains the sensitive canary", entry.Name())
 		}
+		if strings.Contains(string(content), unreferencedCanary) {
+			t.Fatalf("SQLite file %s contains the non-durable unreferenced Diagnosis canary", entry.Name())
+		}
+		for value := range findingStorage {
+			if strings.Contains(string(content), value) {
+				findingStorage[value] = true
+			}
+		}
 	}
+	for value, observed := range findingStorage {
+		if !observed {
+			t.Fatalf("SQLite files did not reproduce model-originated finding canary %q", value)
+		}
+	}
+}
+
+func renderIntegrationUI(events []application.UIEvent) string {
+	model := tui.NewModel(tui.Config{
+		Width: 120, Height: 80, NoColor: true,
+		Scope: tui.ScopeView{Context: "test-context", Namespace: "team-a", Generation: 7, ReadOnly: true},
+	})
+	for _, event := range events {
+		updated, _ := model.Update(tui.ApplicationEventMsg{Event: event})
+		model = updated.(tui.Model)
+	}
+	return model.View().Content
 }
 
 type integrationClock struct {
@@ -373,9 +521,10 @@ func (scope *integrationScope) UnbindRun(runID domain.AgentRunID) {
 }
 
 type integrationModel struct {
-	mu        sync.Mutex
-	requests  []domain.ModelRequest
-	diagnosis string
+	mu          sync.Mutex
+	requests    []domain.ModelRequest
+	toolPurpose string
+	diagnosis   string
 }
 
 func (model *integrationModel) Stream(
@@ -389,32 +538,34 @@ func (model *integrationModel) Stream(
 	model.mu.Lock()
 	model.requests = append(model.requests, request)
 	call := len(model.requests)
+	toolPurpose := model.toolPurpose
 	diagnosis := model.diagnosis
 	model.mu.Unlock()
+	if toolPurpose == "" {
+		toolPurpose = "Inspect the selected Pod."
+	}
 	if err := ctx.Err(); err != nil {
 		return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
 	}
-	switch call {
-	case 1:
+	switch (call - 1) % 2 {
+	case 0:
 		consume(domain.ModelStreamEvent{
 			Sequence: 1, Kind: domain.ModelStreamEventToolCallFragment,
 			ToolCallFragment: &domain.ModelToolCallFragment{
 				Index: 0, IDFragment: "call-1", NameFragment: string(domain.ToolNameGetResource),
-				ArgumentsFragment: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
+				ArgumentsFragment: fmt.Sprintf(`{"purpose":%q,"resource":{"kind":"Pod","name":"sample-pod"}}`, toolPurpose),
 			},
 		})
 		consume(domain.ModelStreamEvent{
 			Sequence: 2, Kind: domain.ModelStreamEventCompleted,
 			Completion: &domain.ModelCompletion{FinishReason: domain.ModelFinishReasonToolCalls},
 		})
-	case 2:
+	case 1:
 		consume(domain.ModelStreamEvent{Sequence: 1, Kind: domain.ModelStreamEventTextDelta, TextDelta: diagnosis})
 		consume(domain.ModelStreamEvent{
 			Sequence: 2, Kind: domain.ModelStreamEventCompleted,
 			Completion: &domain.ModelCompletion{FinishReason: domain.ModelFinishReasonStop},
 		})
-	default:
-		return domain.NewModelError(domain.ModelErrorCodeInternal, domain.ModelOperationStream, string(request.ID))
 	}
 	return nil
 }
@@ -425,10 +576,32 @@ func (model *integrationModel) Requests() []domain.ModelRequest {
 	return append([]domain.ModelRequest(nil), model.requests...)
 }
 
+func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	model.toolPurpose = toolPurpose
+	model.diagnosis = diagnosis
+}
+
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	return fmt.Sprintf(
 		`{"confirmed_facts":[{"statement":"The Pod is not Ready.","evidence_ids":[%q]}],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":"Review the readiness probe configuration.","risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
 		evidenceID,
+	)
+}
+
+func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
+	return fmt.Sprintf(
+		`{"confirmed_facts":[{"statement":%q,"evidence_ids":[%q]}],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":"Review the generated output.","risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
+		"The projected condition includes token="+canary,
+		evidenceID,
+	)
+}
+
+func integrationUnreferencedDiagnosisJSON(canary string) string {
+	return fmt.Sprintf(
+		`{"confirmed_facts":[],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":%q,"risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
+		"Review the observation without claiming it; marker="+canary,
 	)
 }
 

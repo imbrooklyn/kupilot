@@ -109,3 +109,64 @@ func TestRedactorProcessesLogTextWithoutLosingLineBoundaries(t *testing.T) {
 		t.Fatalf("ProcessLines() result = %#v", result)
 	}
 }
+
+func FuzzRedactorSafety(f *testing.F) {
+	privateKey := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\nsynthetic\n" +
+		strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ")
+	for _, seed := range []struct {
+		value string
+		lines bool
+	}{
+		{value: "plain external text"},
+		{value: "token=" + strings.Repeat("s", 32)},
+		{value: "before\x1b]52;c;synthetic\x07after\u202e"},
+		{value: "first\r\nsecond\x1b[31mthird", lines: true},
+		{value: privateKey},
+		{value: string([]byte{0xff, 'a', '\n', 0x00}), lines: true},
+	} {
+		f.Add([]byte(seed.value), uint16(1024), seed.lines)
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte, encodedMaximum uint16, lines bool) {
+		if len(raw) > 8192 {
+			raw = raw[:8192]
+		}
+		maximum := int(encodedMaximum%4096) + 1
+		processor := NewRedactor()
+		var (
+			result TextResult
+			err    error
+		)
+		if lines {
+			result, err = processor.ProcessLines(string(raw), maximum)
+		} else {
+			result, err = processor.Process(string(raw), maximum)
+		}
+		if errors.Is(err, ErrSensitiveOutputBlocked) {
+			if result != (TextResult{}) {
+				t.Fatalf("blocked result = %#v, want zero value", result)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("redactor error = %v", err)
+		}
+		if !utf8.ValidString(result.Value) || len(result.Value) > maximum {
+			t.Fatalf("redactor returned invalid or oversized text: %q", result.Value)
+		}
+		for _, current := range result.Value {
+			if current == '\n' && lines {
+				continue
+			}
+			if unsafeExternalRune(current) {
+				t.Fatalf("redactor retained unsafe rune %U in %q", current, result.Value)
+			}
+		}
+		if containsBlockedSensitiveValue(result.Value) {
+			t.Fatalf("redactor returned blocked sensitive material: %q", result.Value)
+		}
+		if _, count := redactSensitiveValues(result.Value); count != 0 {
+			t.Fatalf("redactor output is not a sensitive-pattern fixed point: %q", result.Value)
+		}
+	})
+}
