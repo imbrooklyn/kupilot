@@ -6,6 +6,7 @@ import (
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -345,10 +346,173 @@ func resourceKindDeniedError(operation string) *SafeError {
 	)
 }
 
+// ToolResourceReader binds the Tool-owned read port to one exact live scope
+// client. It exposes no client-go value, selector, GVR, pagination, or write
+// capability.
+type ToolResourceReader struct {
+	gateway *Gateway
+	client  application.ScopeClient
+	scope   domain.ClusterScope
+}
+
+// NewToolResourceReader validates one immutable scope/client binding without
+// performing a Kubernetes API action.
+func NewToolResourceReader(
+	gateway *Gateway,
+	client application.ScopeClient,
+	scope domain.ClusterScope,
+) (*ToolResourceReader, error) {
+	if gateway == nil || scope.Validate() != nil {
+		return nil, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_reader_binding_invalid",
+			"bind_tool_resource_reader",
+			"The Kubernetes Tool reader binding is invalid.",
+		)
+	}
+	if _, err := gateway.resourceBundle(client, scope, "bind_tool_resource_reader"); err != nil {
+		return nil, err
+	}
+	return &ToolResourceReader{gateway: gateway, client: client, scope: scope}, nil
+}
+
+// ReadResource performs one exact typed GET and returns the Tool-owned reader
+// DTO rather than a Kubernetes object.
+func (reader *ToolResourceReader) ReadResource(
+	ctx context.Context,
+	request toolcontract.ResourceReadRequest,
+) (toolcontract.ResourceObservation, error) {
+	if err := reader.validateContext(ctx, request.Scope, "tool_get_resource"); err != nil {
+		return toolcontract.ResourceObservation{}, err
+	}
+	kind, allowed := domain.ResourceKindForReference(request.Reference)
+	if !allowed {
+		return toolcontract.ResourceObservation{}, resourceKindDeniedError("tool_get_resource")
+	}
+	if request.Reference.Namespace != request.Scope.Namespace {
+		return toolcontract.ResourceObservation{}, newKubeSafeError(
+			ClassPolicyDenied,
+			"kubernetes_cross_namespace_denied",
+			"tool_get_resource",
+			"Cross-Namespace Kubernetes reads are not allowed.",
+		)
+	}
+	if request.Validate() != nil {
+		return toolcontract.ResourceObservation{}, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_resource_request_invalid",
+			"tool_get_resource",
+			"The Kubernetes Tool resource request is invalid.",
+		)
+	}
+	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, "tool_get_resource")
+	if err != nil {
+		return toolcontract.ResourceObservation{}, err
+	}
+	var observation toolcontract.ResourceObservation
+	switch kind {
+	case domain.ResourceKindPod:
+		object, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
+			return toolcontract.ResourceObservation{}, err
+		}
+		observation, err = projectToolPod(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+	case domain.ResourceKindDeployment:
+		object, rawErr := bundle.typed.AppsV1().Deployments(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
+			return toolcontract.ResourceObservation{}, err
+		}
+		observation, err = projectToolDeployment(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+	case domain.ResourceKindReplicaSet:
+		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
+			return toolcontract.ResourceObservation{}, err
+		}
+		observation, err = projectToolReplicaSet(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+	case domain.ResourceKindJob:
+		object, rawErr := bundle.typed.BatchV1().Jobs(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
+			return toolcontract.ResourceObservation{}, err
+		}
+		observation, err = projectToolJob(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+	case domain.ResourceKindService:
+		object, rawErr := bundle.typed.CoreV1().Services(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
+			return toolcontract.ResourceObservation{}, err
+		}
+		observation, err = projectToolService(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+	default:
+		return toolcontract.ResourceObservation{}, resourceKindDeniedError("tool_get_resource")
+	}
+	if err != nil || observation.Validate() != nil {
+		return toolcontract.ResourceObservation{}, invalidKubernetesProjectionError("tool_get_resource")
+	}
+	return observation, nil
+}
+
+// ListResources performs one fixed typed LIST by reusing the S10 bounded
+// summary reader and translating it to the Tool-owned reader DTO.
+func (reader *ToolResourceReader) ListResources(
+	ctx context.Context,
+	request toolcontract.ResourceListRequest,
+) (toolcontract.ResourceObservationList, error) {
+	if err := reader.validateContext(ctx, request.Scope, "tool_list_resources"); err != nil {
+		return toolcontract.ResourceObservationList{}, err
+	}
+	if !request.Kind.Valid() {
+		return toolcontract.ResourceObservationList{}, resourceKindDeniedError("tool_list_resources")
+	}
+	if request.Validate() != nil {
+		return toolcontract.ResourceObservationList{}, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_resource_list_invalid",
+			"tool_list_resources",
+			"The Kubernetes Tool resource list request is invalid.",
+		)
+	}
+	list, err := reader.gateway.ListResources(ctx, reader.client, request.Scope, request.Kind, request.Limit)
+	if err != nil {
+		return toolcontract.ResourceObservationList{}, err
+	}
+	result := toolcontract.ResourceObservationList{
+		Items:     make([]toolcontract.ResourceObservation, len(list.Items)),
+		Truncated: list.Truncated,
+	}
+	for index, item := range list.Items {
+		result.Items[index] = toolcontract.ResourceObservation{Summary: item}
+	}
+	if result.Validate(request) != nil {
+		return toolcontract.ResourceObservationList{}, invalidKubernetesProjectionError("tool_list_resources")
+	}
+	return result, nil
+}
+
+func (reader *ToolResourceReader) validateContext(ctx context.Context, scope domain.ClusterScope, operation string) error {
+	if ctx == nil {
+		return newKubeSafeError(ClassInvalidInput, "kubernetes_context_required", operation, "An operation Context is required.")
+	}
+	if ctx.Err() != nil {
+		return classifyContextError(ctx.Err(), operation)
+	}
+	if reader == nil || reader.gateway == nil || reader.client == nil || reader.scope.Validate() != nil {
+		return gatewayUnavailableError(operation)
+	}
+	if scope != reader.scope {
+		return newKubeSafeError(
+			ClassStaleScope,
+			"kubernetes_tool_reader_scope_stale",
+			operation,
+			"The bound Kubernetes Tool reader scope is stale.",
+		)
+	}
+	return nil
+}
+
 // Compile-time checks keep the adapter bound to the current consumer ports.
 var (
 	_ application.ScopeClientFactory = (*Gateway)(nil)
 	_ application.NamespaceReader    = (*Gateway)(nil)
 	_ application.ResourceService    = (*Gateway)(nil)
 	_ application.ScopeClient        = (*scopeClient)(nil)
+	_ toolcontract.ResourceReader    = (*ToolResourceReader)(nil)
 )

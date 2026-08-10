@@ -1,0 +1,220 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/agent"
+	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
+)
+
+const (
+	testRunID        domain.AgentRunID       = "00000000-0000-7000-8000-000000010001"
+	testSessionID    domain.SessionID        = "00000000-0000-7000-8000-000000010002"
+	testMessageID    domain.MessageID        = "00000000-0000-7000-8000-000000010003"
+	testInvocationID domain.ToolInvocationID = "00000000-0000-7000-8000-000000010004"
+)
+
+var (
+	testActivatedAt = time.UnixMilli(1_000).UTC()
+	testObservedAt  = time.UnixMilli(2_000).UTC()
+)
+
+type fakeResourceReader struct {
+	mu           sync.Mutex
+	getCalls     int
+	listCalls    int
+	getRequests  []ResourceReadRequest
+	listRequests []ResourceListRequest
+	getFn        func(context.Context, ResourceReadRequest) (ResourceObservation, error)
+	listFn       func(context.Context, ResourceListRequest) (ResourceObservationList, error)
+}
+
+func (reader *fakeResourceReader) ReadResource(ctx context.Context, request ResourceReadRequest) (ResourceObservation, error) {
+	reader.mu.Lock()
+	reader.getCalls++
+	reader.getRequests = append(reader.getRequests, request)
+	function := reader.getFn
+	reader.mu.Unlock()
+	if function == nil {
+		return ResourceObservation{}, nil
+	}
+	return function(ctx, request)
+}
+
+func (reader *fakeResourceReader) ListResources(ctx context.Context, request ResourceListRequest) (ResourceObservationList, error) {
+	reader.mu.Lock()
+	reader.listCalls++
+	reader.listRequests = append(reader.listRequests, request)
+	function := reader.listFn
+	reader.mu.Unlock()
+	if function == nil {
+		return ResourceObservationList{}, nil
+	}
+	return function(ctx, request)
+}
+
+func (reader *fakeResourceReader) counts() (int, int) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.getCalls, reader.listCalls
+}
+
+func (reader *fakeResourceReader) lastListRequest() ResourceListRequest {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.listRequests[len(reader.listRequests)-1]
+}
+
+type sequenceScopeGuard struct {
+	mu      sync.Mutex
+	results []bool
+	calls   int
+}
+
+func (guard *sequenceScopeGuard) Current(_ context.Context, _ domain.ClusterScope) bool {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	guard.calls++
+	if len(guard.results) == 0 {
+		return true
+	}
+	result := guard.results[0]
+	if len(guard.results) > 1 {
+		guard.results = guard.results[1:]
+	}
+	return result
+}
+
+type sequenceEvidenceIDs struct {
+	mu   sync.Mutex
+	next int
+}
+
+func (source *sequenceEvidenceIDs) NewEvidenceID() (domain.EvidenceID, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.next++
+	return domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 10_100+source.next)), nil
+}
+
+func (source *sequenceEvidenceIDs) count() int {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return source.next
+}
+
+type fakeClassifiedError struct {
+	class     domain.SafeErrorClass
+	message   string
+	retryable bool
+}
+
+func (failure *fakeClassifiedError) Error() string                { return failure.message }
+func (failure *fakeClassifiedError) Class() domain.SafeErrorClass { return failure.class }
+func (failure *fakeClassifiedError) SafeMessage() string          { return failure.message }
+func (failure *fakeClassifiedError) Retryable() bool              { return failure.retryable }
+func (failure *fakeClassifiedError) ErrorCode() string            { return "synthetic_failure" }
+func (failure *fakeClassifiedError) Operation() string            { return "synthetic_read" }
+
+func testDependencies(reader ResourceReader, guard ScopeGuard) ResourceToolDependencies {
+	return ResourceToolDependencies{
+		EvidenceIDs: &sequenceEvidenceIDs{},
+		Now:         func() time.Time { return testObservedAt },
+		Reader:      reader,
+		ScopeGuard:  guard,
+		Text:        security.NewRedactor(),
+	}
+}
+
+func testRunInput(t *testing.T, resultBytes int) agent.RunInput {
+	t.Helper()
+	limits := agent.DefaultRunBudgetLimits()
+	if resultBytes > 0 {
+		limits.ToolResultBytes = resultBytes
+	}
+	input, err := agent.NewRunInput(
+		testRunID,
+		testSessionID,
+		testMessageID,
+		"Inspect the selected Kubernetes resource.",
+		domain.ClusterScope{
+			Context:     "test-context",
+			Namespace:   "team-a",
+			Generation:  7,
+			ActivatedAt: testActivatedAt,
+		},
+		nil,
+		limits,
+	)
+	if err != nil {
+		t.Fatalf("agent.NewRunInput() error = %v", err)
+	}
+	return input
+}
+
+func boundGetCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-get-1",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(get_resource) error = %v", err)
+	}
+	return call
+}
+
+func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-list-1",
+		Name:          domain.ToolNameListResources,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(list_resources) error = %v", err)
+	}
+	return call
+}
+
+func resourceObservation(kind domain.ResourceKind, name string) ResourceObservation {
+	status := domain.ResourceStatus{}
+	switch kind {
+	case domain.ResourceKindPod:
+		status.Phase = "Running"
+		status.Desired = domain.Count(1)
+		status.Ready = domain.Count(1)
+	case domain.ResourceKindDeployment, domain.ResourceKindReplicaSet:
+		status.Desired = domain.Count(1)
+		status.Ready = domain.Count(1)
+		status.Available = domain.Count(1)
+	case domain.ResourceKindJob:
+		status.Phase = "Complete"
+		status.Desired = domain.Count(1)
+		status.Succeeded = domain.Count(1)
+		status.Active = domain.Count(0)
+		status.Failed = domain.Count(0)
+	case domain.ResourceKindService:
+		status.ServiceType = "ClusterIP"
+	}
+	return ResourceObservation{
+		Summary: domain.ResourceSummary{
+			Reference: domain.ResourceRef{
+				APIVersion:      kind.APIVersion(),
+				Kind:            string(kind),
+				Namespace:       "team-a",
+				Name:            name,
+				UID:             "generated-uid-" + name,
+				ResourceVersion: "17",
+			},
+			CreatedAt: time.UnixMilli(500).UTC(),
+			Status:    status,
+		},
+	}
+}
