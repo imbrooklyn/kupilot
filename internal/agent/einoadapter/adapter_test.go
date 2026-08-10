@@ -80,6 +80,47 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 	}
 }
 
+func TestAdapterCloseWaitsForAdmittedRunAndRejectsNewRuns(t *testing.T) {
+	clock := newTestClock()
+	guard := newTestScopeGuard()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	model := &recordingModel{scripts: []modelScript{
+		func(_ context.Context, request domain.ModelRequest, _ agent.ModelStreamConsumer) *domain.ModelError {
+			close(entered)
+			<-release
+			return domain.NewModelError(domain.ModelErrorCodeServiceUnavailable, domain.ModelOperationStream, string(request.ID))
+		},
+	}}
+	adapter := testAdapter(t, clock, model, &recordingTool{}, guard)
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	runDone := make(chan agent.RunOutcome, 1)
+	go func() {
+		runDone <- adapter.Run(context.Background(), input, newEventRecorder())
+	}()
+	<-entered
+	closeDone := make(chan struct{})
+	go func() {
+		adapter.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close() returned while a Run call was active")
+	default:
+	}
+	close(release)
+	<-runDone
+	<-closeDone
+
+	requestCount := len(model.Requests())
+	outcome := adapter.Run(context.Background(), input, newEventRecorder())
+	if outcome.Validate(input) != nil || len(model.Requests()) != requestCount {
+		t.Fatalf("Run(after Close) outcome/requests = %#v/%d", outcome, len(model.Requests()))
+	}
+	adapter.Close()
+}
+
 func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	specifications := agent.ToolSpecifications()
 	infos := make([]*schema.ToolInfo, len(specifications))

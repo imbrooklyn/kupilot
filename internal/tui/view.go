@@ -59,6 +59,9 @@ func (model Model) footerView() string {
 	} else if model.run.Status != "" {
 		run = "run/" + model.run.Status
 	}
+	if model.run.PersistenceDegraded {
+		run += "-degraded"
+	}
 	modelStatus := "model/unconfigured"
 	if model.modelName != "" {
 		modelStatus = "model/" + model.modelName

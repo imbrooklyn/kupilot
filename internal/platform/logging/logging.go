@@ -17,6 +17,7 @@ const (
 	maxRecordAttrs      = 12
 	maxInspectedAttrs   = 32
 	EventStartup        = "startup"
+	EventAgentRun       = "agent_run"
 )
 
 // Options configures one independent local file sink. Non-zero rotation values
@@ -156,19 +157,19 @@ func (handler *allowlistHandler) WithGroup(string) slog.Handler {
 }
 
 func allowedEvent(value string) bool {
-	return value == EventStartup
+	return value == EventStartup || value == EventAgentRun
 }
 
 func sanitizeAttr(attr slog.Attr) (slog.Attr, bool) {
 	switch attr.Key {
 	case "component":
 		attr.Value = attr.Value.Resolve()
-		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "composition", "config", "logging") {
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "composition", "config", "logging", "application") {
 			return slog.Attr{}, false
 		}
 	case "operation":
 		attr.Value = attr.Value.Resolve()
-		if attr.Value.Kind() != slog.KindString || attr.Value.String() != "configuration_load" {
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "configuration_load", "run_lifecycle") {
 			return slog.Attr{}, false
 		}
 	case "outcome":
@@ -186,7 +187,12 @@ func sanitizeAttr(attr slog.Attr) (slog.Attr, bool) {
 		if attr.Value.Kind() != slog.KindString || attr.Value.String() != "openai_compatible" {
 			return slog.Attr{}, false
 		}
-	case "count", "duration_ms", "sequence":
+	case "phase":
+		attr.Value = attr.Value.Resolve()
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "started", "terminal", "persistence_degraded") {
+			return slog.Attr{}, false
+		}
+	case "count", "duration_ms", "sequence", "scope_generation":
 		attr.Value = attr.Value.Resolve()
 		if attr.Value.Kind() != slog.KindInt64 || attr.Value.Int64() < 0 || attr.Value.Int64() > 1_000_000_000 {
 			return slog.Attr{}, false

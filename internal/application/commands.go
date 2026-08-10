@@ -13,6 +13,53 @@ const MaxQuestionBytes = 64 * 1024
 // ErrInvalidUICommand reports an invalid delivery intent without echoing its data.
 var ErrInvalidUICommand = errors.New("UI command data is invalid")
 
+// CreateSessionCommand contains the only policy choice needed to create a new
+// Session shell. Privacy onboarding remains a separate delivery flow.
+type CreateSessionCommand struct {
+	PrivacyMode domain.PrivacyMode
+}
+
+// Validate checks the fixed durable privacy modes.
+func (command CreateSessionCommand) Validate() error {
+	if command.PrivacyMode != domain.PrivacyModeStandard && command.PrivacyMode != domain.PrivacyModeMinimal {
+		return ErrInvalidUICommand
+	}
+	return nil
+}
+
+// StartRunCommand contains user intent but no caller-supplied live scope,
+// provider, Tool authority, deadline, or hard limit.
+type StartRunCommand struct {
+	SessionID domain.SessionID
+	Question  string
+	Resource  *domain.ResourceRef
+}
+
+// Validate checks bounded intent before Application applies its egress policy.
+func (command StartRunCommand) Validate() error {
+	if !command.SessionID.Valid() || !validUICommandText(command.Question, MaxQuestionBytes) {
+		return ErrInvalidUICommand
+	}
+	if command.Resource != nil && domain.ValidateLiveResourceRef(*command.Resource) != nil {
+		return ErrInvalidUICommand
+	}
+	return nil
+}
+
+// CancelRunCommand binds cancellation to the exact active run generation.
+type CancelRunCommand struct {
+	RunID           domain.AgentRunID
+	ScopeGeneration int64
+}
+
+// Validate rejects stale or unbound cancellation intent.
+func (command CancelRunCommand) Validate() error {
+	if !command.RunID.Valid() || command.ScopeGeneration < 1 {
+		return ErrInvalidUICommand
+	}
+	return nil
+}
+
 // UICommandKind identifies one fixed TUI-to-Application intent.
 type UICommandKind string
 

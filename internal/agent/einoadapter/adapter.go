@@ -5,6 +5,7 @@ package einoadapter
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	einocallbacks "github.com/cloudwego/eino/callbacks"
@@ -34,6 +35,10 @@ type Adapter struct {
 	scopeGuard  agent.RunScopeGuard
 	identifiers agent.RunIdentifierSource
 	now         func() time.Time
+
+	lifecycleMu sync.Mutex
+	activeRuns  sync.WaitGroup
+	closed      bool
 }
 
 var _ agent.AgentRunner = (*Adapter)(nil)
@@ -60,6 +65,14 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if adapter == nil || ctx == nil || sink == nil || input.Validate() != nil {
 		return invalidInputOutcome()
 	}
+	adapter.lifecycleMu.Lock()
+	if adapter.closed {
+		adapter.lifecycleMu.Unlock()
+		return internalOutcome()
+	}
+	adapter.activeRuns.Add(1)
+	adapter.lifecycleMu.Unlock()
+	defer adapter.activeRuns.Done()
 	startedAt := adapter.now()
 	if !validRuntimeTime(startedAt) {
 		return internalOutcome()
@@ -161,6 +174,22 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 		return state.finishFailure(runCtx, err)
 	}
 	return state.finishDiagnosis(runCtx, diagnosis)
+}
+
+// Close prevents new runs and waits for every previously admitted Run call.
+// Application must cancel and wait its sole active run before invoking Close.
+func (adapter *Adapter) Close() {
+	if adapter == nil {
+		return
+	}
+	adapter.lifecycleMu.Lock()
+	if adapter.closed {
+		adapter.lifecycleMu.Unlock()
+		return
+	}
+	adapter.closed = true
+	adapter.lifecycleMu.Unlock()
+	adapter.activeRuns.Wait()
 }
 
 func validRuntimeTime(value time.Time) bool {

@@ -1,0 +1,183 @@
+package kube
+
+import (
+	"context"
+	"sync"
+
+	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
+	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
+)
+
+// ToolScopeBinding connects one verified opaque scope client to the fixed Tool
+// read ports without exposing client-go values. ScopeManager remains the sole
+// owner of client closure and generation invalidation.
+type ToolScopeBinding struct {
+	gateway *Gateway
+
+	mu         sync.Mutex
+	client     application.ScopeClient
+	reader     *ToolResourceReader
+	generation int64
+}
+
+var (
+	_ application.ScopeClientFactory     = (*ToolScopeBinding)(nil)
+	_ application.ScopeInvalidationHook  = (*ToolScopeBinding)(nil)
+	_ toolcontract.ResourceReader        = (*ToolScopeBinding)(nil)
+	_ toolcontract.EventReader           = (*ToolScopeBinding)(nil)
+	_ toolcontract.PodLogReader          = (*ToolScopeBinding)(nil)
+	_ toolcontract.RelatedResourceReader = (*ToolScopeBinding)(nil)
+)
+
+// NewToolScopeBinding wraps the existing narrow Gateway without creating a
+// client or performing kubeconfig or Kubernetes I/O.
+func NewToolScopeBinding(gateway *Gateway) (*ToolScopeBinding, error) {
+	if gateway == nil || gateway.factory == nil {
+		return nil, gatewayUnavailableError("create_tool_scope_binding")
+	}
+	return &ToolScopeBinding{gateway: gateway}, nil
+}
+
+// Contexts delegates safe local kubeconfig projection without performing a
+// Kubernetes API request.
+func (gateway *ToolScopeBinding) Contexts(ctx context.Context) ([]application.ContextCandidate, error) {
+	if gateway == nil || gateway.gateway == nil {
+		return nil, gatewayUnavailableError("list_contexts")
+	}
+	return gateway.gateway.Contexts(ctx)
+}
+
+// Create delegates client construction and remembers only the opaque handle
+// needed to bind Tool reads after Application publishes an active scope.
+func (gateway *ToolScopeBinding) Create(ctx context.Context, contextName string) (application.ScopeClient, error) {
+	if gateway == nil || gateway.gateway == nil {
+		return nil, gatewayUnavailableError("create_scope_client")
+	}
+	client, err := gateway.gateway.Create(ctx, contextName)
+	if err != nil {
+		return nil, err
+	}
+	gateway.mu.Lock()
+	gateway.client = client
+	gateway.reader = nil
+	gateway.mu.Unlock()
+	return client, nil
+}
+
+// InvalidateScope synchronously removes the old bound reader before the
+// ScopeManager closes or reuses its opaque client.
+func (gateway *ToolScopeBinding) InvalidateScope(generation int64) error {
+	if gateway == nil || generation < 1 {
+		return newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_scope_generation_invalid",
+			"invalidate_tool_scope",
+			"The Kubernetes scope generation is invalid.",
+		)
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if generation <= gateway.generation {
+		return newKubeSafeError(
+			ClassStaleScope,
+			"kubernetes_scope_generation_stale",
+			"invalidate_tool_scope",
+			"The Kubernetes scope generation is stale.",
+		)
+	}
+	gateway.generation = generation
+	gateway.reader = nil
+	return nil
+}
+
+// ReadResource delegates one fixed direct read through the current immutable
+// client/scope binding.
+func (gateway *ToolScopeBinding) ReadResource(
+	ctx context.Context,
+	request toolcontract.ResourceReadRequest,
+) (toolcontract.ResourceObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.ResourceObservation{}, err
+	}
+	return reader.ReadResource(ctx, request)
+}
+
+// ListResources delegates one fixed selector-free bounded list.
+func (gateway *ToolScopeBinding) ListResources(
+	ctx context.Context,
+	request toolcontract.ResourceListRequest,
+) (toolcontract.ResourceObservationList, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.ResourceObservationList{}, err
+	}
+	return reader.ListResources(ctx, request)
+}
+
+// ReadEvents delegates the one fixed Events relationship read.
+func (gateway *ToolScopeBinding) ReadEvents(
+	ctx context.Context,
+	request toolcontract.EventReadRequest,
+) (toolcontract.EventObservationList, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.EventObservationList{}, err
+	}
+	return reader.ReadEvents(ctx, request)
+}
+
+// ReadPodLog delegates one bounded non-following Pod log read.
+func (gateway *ToolScopeBinding) ReadPodLog(
+	ctx context.Context,
+	request toolcontract.PodLogReadRequest,
+) (toolcontract.PodLogObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	return reader.ReadPodLog(ctx, request)
+}
+
+// ReadRelatedResources delegates one code-defined bounded relationship graph.
+func (gateway *ToolScopeBinding) ReadRelatedResources(
+	ctx context.Context,
+	request toolcontract.RelatedReadRequest,
+) (toolcontract.RelatedObservationGraph, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.RelatedObservationGraph{}, err
+	}
+	return reader.ReadRelatedResources(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolResourceReader, error) {
+	if gateway == nil || gateway.gateway == nil || scope.Validate() != nil {
+		return nil, newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_tool_reader_binding_invalid",
+			"bind_tool_scope_reader",
+			"The Kubernetes Tool reader binding is invalid.",
+		)
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if gateway.client == nil || gateway.generation != scope.Generation {
+		return nil, newKubeSafeError(
+			ClassStaleScope,
+			"kubernetes_scope_generation_stale",
+			"bind_tool_scope_reader",
+			"The Kubernetes scope changed before the Tool read completed.",
+		)
+	}
+	if gateway.reader != nil {
+		return gateway.reader, nil
+	}
+	reader, err := NewToolResourceReader(gateway.gateway, gateway.client, scope)
+	if err != nil {
+		return nil, err
+	}
+	gateway.reader = reader
+	return reader, nil
+}

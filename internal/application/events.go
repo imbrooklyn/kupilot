@@ -1,8 +1,10 @@
 package application
 
 import (
+	"context"
 	"errors"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
@@ -77,6 +79,9 @@ const (
 	UIEventRunCompleted UIEventKind = "run_completed"
 	UIEventRunFailed    UIEventKind = "run_failed"
 	UIEventRunCancelled UIEventKind = "run_cancelled"
+	// UIEventPersistenceDegraded is a visible nonterminal warning. It never
+	// claims that incomplete data is resumable.
+	UIEventPersistenceDegraded UIEventKind = "persistence_degraded"
 )
 
 // ToolStepStatus is the delivery-safe state of one inline Tool step.
@@ -128,7 +133,7 @@ func (event UIEvent) Validate() error {
 		if event.Text != "" || event.ToolStep != nil {
 			return ErrInvalidUIEvent
 		}
-	case UIEventTextDelta, UIEventRunCompleted, UIEventRunFailed, UIEventRunCancelled:
+	case UIEventTextDelta, UIEventRunCompleted, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
 		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil {
 			return ErrInvalidUIEvent
 		}
@@ -140,6 +145,245 @@ func (event UIEvent) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	return nil
+}
+
+// RunObservationKind identifies fixed text-free lifecycle metadata admitted to
+// the local logging observer.
+type RunObservationKind string
+
+const (
+	RunObservationStarted             RunObservationKind = "started"
+	RunObservationTerminal            RunObservationKind = "terminal"
+	RunObservationPersistenceDegraded RunObservationKind = "persistence_degraded"
+)
+
+// RunObservation contains no user, model, Tool, Evidence, or Diagnosis text.
+type RunObservation struct {
+	Kind                RunObservationKind
+	RunID               domain.AgentRunID
+	ScopeGeneration     int64
+	Status              domain.AgentRunStatus
+	PersistenceDegraded bool
+}
+
+func (observation RunObservation) valid() bool {
+	if !observation.RunID.Valid() || observation.ScopeGeneration < 1 {
+		return false
+	}
+	switch observation.Kind {
+	case RunObservationStarted:
+		return observation.Status == domain.AgentRunStatusRunning && !observation.PersistenceDegraded
+	case RunObservationTerminal:
+		return observation.Status.Terminal()
+	case RunObservationPersistenceDegraded:
+		return observation.Status == domain.AgentRunStatusRunning && observation.PersistenceDegraded
+	default:
+		return false
+	}
+}
+
+const uiDeltaFlushBytes = 4 * 1024
+
+// eventBridge is the synchronous Application-to-delivery coalescing boundary.
+// It owns no goroutine or channel, never drops structural events, and assigns a
+// UI-local sequence so coalesced Agent deltas cannot create ambiguous ordering.
+type eventBridge struct {
+	runID           domain.AgentRunID
+	scopeGeneration int64
+	sink            UIEventSink
+	sequence        int64
+	started         bool
+	terminal        bool
+	pendingDelta    string
+	diagnosis       string
+}
+
+func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, sink UIEventSink) (*eventBridge, error) {
+	if !runID.Valid() || scopeGeneration < 1 || sink == nil {
+		return nil, ErrInvalidUIEvent
+	}
+	return &eventBridge{runID: runID, scopeGeneration: scopeGeneration, sink: sink}, nil
+}
+
+func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) error {
+	if bridge == nil || ctx == nil || ctx.Err() != nil || event.Validate() != nil ||
+		event.RunID != bridge.runID || event.ScopeGeneration != bridge.scopeGeneration || bridge.terminal {
+		return ErrInvalidUIEvent
+	}
+	if event.Kind == agent.RunEventTextDelta {
+		if !bridge.started {
+			return ErrInvalidUIEvent
+		}
+		if len(bridge.pendingDelta)+len(event.TextDelta) > MaxQuestionBytes {
+			if err := bridge.flushDelta(ctx); err != nil {
+				return err
+			}
+		}
+		bridge.pendingDelta += event.TextDelta
+		if len(bridge.pendingDelta) >= uiDeltaFlushBytes {
+			return bridge.flushDelta(ctx)
+		}
+		return nil
+	}
+	if err := bridge.flushDelta(ctx); err != nil {
+		return err
+	}
+	switch event.Kind {
+	case agent.RunEventRunStarted:
+		if bridge.started {
+			return ErrInvalidUIEvent
+		}
+		bridge.started = true
+		return bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted})
+	case agent.RunEventModelStreamStarted, agent.RunEventEvidenceCollected:
+		return nil
+	case agent.RunEventDiagnosisReady:
+		bridge.diagnosis = event.Diagnosis.AnswerMarkdown
+		return nil
+	case agent.RunEventToolCallRequested, agent.RunEventToolCallStarted,
+		agent.RunEventToolCallCompleted, agent.RunEventToolCallFailed, agent.RunEventToolCallDenied:
+		step, err := projectToolStep(event)
+		if err != nil {
+			return err
+		}
+		return bridge.emit(ctx, UIEvent{Kind: UIEventToolStep, ToolStep: &step})
+	case agent.RunEventRunCompleted:
+		if bridge.diagnosis == "" {
+			return ErrInvalidUIEvent
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCompleted, Text: bridge.diagnosis})
+	case agent.RunEventRunFailed:
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage})
+	case agent.RunEventRunCancelled:
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The AgentRun was cancelled."})
+	case agent.RunEventRunTimedOut:
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun reached its deadline."})
+	case agent.RunEventRunStaleScope:
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun stopped because its Kubernetes scope changed."})
+	case agent.RunEventRunInterrupted:
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun was interrupted."})
+	default:
+		return ErrInvalidUIEvent
+	}
+}
+
+func (bridge *eventBridge) persistenceDegraded(ctx context.Context) error {
+	if bridge == nil || ctx == nil || ctx.Err() != nil || !bridge.started || bridge.terminal {
+		return ErrInvalidUIEvent
+	}
+	if err := bridge.flushDelta(ctx); err != nil {
+		return err
+	}
+	return bridge.emit(ctx, UIEvent{
+		Kind: UIEventPersistenceDegraded,
+		Text: "Local persistence is degraded; this run may not be resumable.",
+	})
+}
+
+func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) error {
+	if bridge == nil || ctx == nil || ctx.Err() != nil || bridge.terminal || safeMessage == "" {
+		return ErrInvalidUIEvent
+	}
+	if !bridge.started {
+		bridge.started = true
+		if err := bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted}); err != nil {
+			return err
+		}
+	}
+	if err := bridge.flushDelta(ctx); err != nil {
+		return err
+	}
+	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: safeMessage})
+}
+
+func (bridge *eventBridge) flushDelta(ctx context.Context) error {
+	if bridge.pendingDelta == "" {
+		return nil
+	}
+	value := bridge.pendingDelta
+	if err := bridge.emit(ctx, UIEvent{Kind: UIEventTextDelta, Text: value}); err != nil {
+		return err
+	}
+	bridge.pendingDelta = ""
+	return nil
+}
+
+func (bridge *eventBridge) emitTerminal(ctx context.Context, event UIEvent) error {
+	if err := bridge.emit(ctx, event); err != nil {
+		return err
+	}
+	bridge.terminal = true
+	return nil
+}
+
+func (bridge *eventBridge) emit(ctx context.Context, event UIEvent) error {
+	nextSequence := bridge.sequence + 1
+	event.RunID = bridge.runID
+	event.ScopeGeneration = bridge.scopeGeneration
+	event.Sequence = nextSequence
+	if event.Validate() != nil {
+		return ErrInvalidUIEvent
+	}
+	if err := bridge.sink.PublishUIEvent(ctx, event); err != nil {
+		return err
+	}
+	bridge.sequence = nextSequence
+	return nil
+}
+
+func projectToolStep(event agent.RunEvent) (ToolStep, error) {
+	invocation := event.ToolInvocation
+	if invocation == nil {
+		return ToolStep{}, ErrInvalidUIEvent
+	}
+	step := ToolStep{
+		InvocationID: invocation.ID,
+		Name:         invocation.Name,
+		Status:       ToolStepRequested,
+		Truncated:    invocation.Truncated,
+	}
+	if invocation.Purpose != nil {
+		step.Purpose = *invocation.Purpose
+	}
+	if invocation.ResultSummary != nil {
+		step.Summary = *invocation.ResultSummary
+	} else if invocation.SafeError != nil {
+		step.Summary = *invocation.SafeError
+	}
+	switch event.Kind {
+	case agent.RunEventToolCallRequested:
+		step.Status = ToolStepRequested
+	case agent.RunEventToolCallStarted:
+		step.Status = ToolStepRunning
+	case agent.RunEventToolCallCompleted:
+		step.Status = ToolStepSucceeded
+		if invocation.Truncated {
+			step.Status = ToolStepPartial
+		}
+		if step.Summary == "" {
+			step.Summary = "Tool collection completed."
+		}
+	case agent.RunEventToolCallDenied:
+		step.Status = ToolStepDenied
+		if step.Summary == "" {
+			step.Summary = "The Tool call was denied safely."
+		}
+	case agent.RunEventToolCallFailed:
+		step.Status = ToolStepFailed
+		if invocation.Status == domain.ToolInvocationStatusCancelled {
+			step.Status = ToolStepCancelled
+		}
+		if step.Summary == "" {
+			step.Summary = "The Tool call failed safely."
+		}
+	default:
+		return ToolStep{}, ErrInvalidUIEvent
+	}
+	step.EvidenceCount = invocation.EvidenceCount
+	if !step.valid() {
+		return ToolStep{}, ErrInvalidUIEvent
+	}
+	return step, nil
 }
 
 func (step ToolStep) valid() bool {

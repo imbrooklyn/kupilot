@@ -54,6 +54,40 @@ func TestFileLoggerWritesAllowlistedJSONWithoutTerminalOutput(t *testing.T) {
 	}
 }
 
+func TestFileLoggerWritesTextFreeRunLifecycleMetadata(t *testing.T) {
+	t.Parallel()
+	canary := "generated-run-question-canary-1234567890"
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{Directory: root, Now: fixedClock(time.Now().UTC())})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	sink.Logger.InfoContext(context.Background(), EventAgentRun,
+		"component", "application",
+		"operation", "run_lifecycle",
+		"phase", "persistence_degraded",
+		"outcome", "failure",
+		"scope_generation", int64(7),
+		"degraded", true,
+		"question", canary,
+	)
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	content := readCurrentLog(t, root)
+	for _, want := range []string{
+		`"msg":"agent_run"`, `"component":"application"`, `"operation":"run_lifecycle"`,
+		`"phase":"persistence_degraded"`, `"scope_generation":7`, `"degraded":true`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("run lifecycle log does not contain %q: %s", want, content)
+		}
+	}
+	if strings.Contains(content, canary) || strings.Contains(content, `"question"`) {
+		t.Fatal("run lifecycle log contains question data")
+	}
+}
+
 func TestFileLoggerDropsUnsafeMessagesFieldsAndValues(t *testing.T) {
 	t.Parallel()
 

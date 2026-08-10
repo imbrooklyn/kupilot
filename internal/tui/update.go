@@ -558,7 +558,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) {
 		return
 	}
 	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
-		event.ScopeGeneration != model.run.ScopeGeneration || event.Sequence <= model.run.LastSequence {
+		event.ScopeGeneration != model.run.ScopeGeneration || event.Sequence != model.run.LastSequence+1 {
 		return
 	}
 
@@ -574,6 +574,13 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) {
 		}
 		model.run.StreamedText += text
 		model.transcript.AppendAgent(text)
+	case application.UIEventPersistenceDegraded:
+		text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
+		if text == "" {
+			text = "Local persistence is degraded; this run may not be resumable."
+		}
+		model.run.PersistenceDegraded = true
+		model.transcript.AppendNotice(text)
 	case application.UIEventToolStep:
 		step := event.ToolStep
 		model.transcript.UpsertToolStep(components.ToolStep{

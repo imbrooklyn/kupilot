@@ -124,45 +124,8 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 	if event.Validate() != nil {
 		return auditcontract.ErrInvalidRepositoryRequest
 	}
-	detailsJSON, err := json.Marshal(event.Details)
-	if err != nil {
-		return auditcontract.ErrInvalidRepositoryRequest
-	}
-	subjectJSON, err := encodeSelectedResource(event.Subject)
-	if err != nil {
-		return auditcontract.ErrInvalidRepositoryRequest
-	}
-	err = withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		if err := validateAuditRelationships(ctx, tx, event, true); err != nil {
-			return err
-		}
-		var scopeContext any
-		var scopeNamespace any
-		var scopeGeneration any
-		if event.Scope != nil {
-			scopeContext = event.Scope.Context
-			scopeNamespace = event.Scope.Namespace
-			scopeGeneration = event.Scope.Generation
-		}
-		_, err := tx.ExecContext(
-			ctx,
-			insertAuditEventSQL,
-			event.ID,
-			nullableSessionID(event.SessionID),
-			nullableRunID(event.RunID),
-			event.Type,
-			event.Actor,
-			event.Outcome,
-			scopeContext,
-			scopeNamespace,
-			scopeGeneration,
-			nullableString(subjectJSON),
-			string(detailsJSON),
-			nullableString(event.CorrelationID),
-			nullableString(event.IntegrityHash),
-			event.OccurredAt.UTC().UnixMilli(),
-		)
-		return err
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		return insertAuditEvent(ctx, tx, event)
 	})
 	if isAuditContractError(err) || isSessionContractError(err) {
 		return err
@@ -171,6 +134,50 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 		return repositoryFailure(repository.db, "audit_event_append_failed", "append_audit_event", "KuPilot could not store the AuditEvent.", err)
 	}
 	return nil
+}
+
+func insertAuditEvent(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent) error {
+	if event.Validate() != nil {
+		return auditcontract.ErrInvalidRepositoryRequest
+	}
+	detailsJSON, err := json.Marshal(event.Details)
+	if err != nil {
+		return auditcontract.ErrInvalidRepositoryRequest
+	}
+	subjectJSON, err := encodeSelectedResource(event.Subject)
+	if err != nil {
+		return auditcontract.ErrInvalidRepositoryRequest
+	}
+	if err := validateAuditRelationships(ctx, tx, event, true); err != nil {
+		return err
+	}
+	var scopeContextValue any
+	var scopeNamespaceValue any
+	var scopeGenerationValue any
+	if event.Scope != nil {
+		scopeContextValue = event.Scope.Context
+		scopeNamespaceValue = event.Scope.Namespace
+		scopeGenerationValue = event.Scope.Generation
+	}
+	_, err = tx.ExecContext(
+		ctx,
+		insertAuditEventSQL,
+		event.ID,
+		nullableSessionID(event.SessionID),
+		nullableRunID(event.RunID),
+		event.Type,
+		event.Actor,
+		event.Outcome,
+		scopeContextValue,
+		scopeNamespaceValue,
+		scopeGenerationValue,
+		nullableString(subjectJSON),
+		string(detailsJSON),
+		nullableString(event.CorrelationID),
+		nullableString(event.IntegrityHash),
+		event.OccurredAt.UTC().UnixMilli(),
+	)
+	return err
 }
 
 // GetByID returns one exact strictly mapped AuditEvent.

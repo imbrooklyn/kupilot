@@ -58,13 +58,14 @@ type StartupView struct {
 
 // RunView is the accepted ordered projection for the active or last AgentRun.
 type RunView struct {
-	RunID           domain.AgentRunID
-	ScopeGeneration int64
-	LastSequence    int64
-	Active          bool
-	Terminal        bool
-	StreamedText    string
-	Status          string
+	RunID               domain.AgentRunID
+	ScopeGeneration     int64
+	LastSequence        int64
+	Active              bool
+	Terminal            bool
+	PersistenceDegraded bool
+	StreamedText        string
+	Status              string
 }
 
 // Config supplies pure initial UI state; it contains no infrastructure client.

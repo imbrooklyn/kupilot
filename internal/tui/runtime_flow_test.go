@@ -63,6 +63,40 @@ func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing
 	}
 }
 
+func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T) {
+	t.Parallel()
+	model := newTestModel()
+	stream := []application.UIEvent{
+		runStartedEvent(1),
+		{
+			Kind: application.UIEventPersistenceDegraded, RunID: testRunID,
+			ScopeGeneration: 7, Sequence: 2,
+			Text: "Local persistence is degraded; this run may not be resumable.",
+		},
+		{
+			Kind: application.UIEventRunCompleted, RunID: testRunID,
+			ScopeGeneration: 7, Sequence: 3, Text: "In-memory diagnosis.",
+		},
+	}
+	for _, event := range stream {
+		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
+	}
+	if !model.run.PersistenceDegraded || model.run.Status != "completed" ||
+		!strings.Contains(model.footerView(), "run/completed-degraded") {
+		t.Fatalf("degraded terminal run = %#v; footer=%q", model.run, model.footerView())
+	}
+	entries := model.transcript.Entries()
+	found := false
+	for _, entry := range entries {
+		if strings.Contains(entry.Text, "may not be resumable") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("degraded notice entries = %#v", entries)
+	}
+}
+
 func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
 	t.Parallel()
 
