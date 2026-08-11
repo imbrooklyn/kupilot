@@ -12,11 +12,16 @@ GOIMPORTS_VERSION ?= v0.48.0
 GOLANGCI_LINT_VERSION ?= v2.11.4
 GOVULNCHECK_VERSION ?= v1.6.0
 ACTIONLINT_VERSION ?= v1.7.12
+GORELEASER_VERSION ?= v2.13.3
+SYFT_VERSION ?= v1.44.0
+RELEASE_VERSION ?= 0.1.0
 
 GOIMPORTS_BIN := $(TOOLS_BIN_DIR)/goimports/$(GOIMPORTS_VERSION)/goimports
 GOLANGCI_LINT_BIN := $(TOOLS_BIN_DIR)/golangci-lint/$(GOLANGCI_LINT_VERSION)/golangci-lint
 GOVULNCHECK_BIN := $(TOOLS_BIN_DIR)/govulncheck/$(GOVULNCHECK_VERSION)/govulncheck
 ACTIONLINT_BIN := $(TOOLS_BIN_DIR)/actionlint/$(ACTIONLINT_VERSION)/actionlint
+GORELEASER_BIN := $(TOOLS_BIN_DIR)/goreleaser/$(GORELEASER_VERSION)/goreleaser
+SYFT_BIN := $(TOOLS_BIN_DIR)/syft/$(SYFT_VERSION)/syft
 
 SECURITY_TEST_PATTERN := ^(TestRedactor.*|TestOutputGuard.*|TestScopeManager.*|TestSlashRegistryIsFixedAndReadOnly|TestParseSlashDraftRules|TestValidateModelEndpointPolicy|TestRedirectPolicyAllowsOnlyCanonicalOrigin|TestCrossOriginRedirectIsDeniedBeforeAuthorizationCanMove|TestDatabaseAndWALExcludeProhibitedContentCanaries|TestDiagnosisRepositoryUsesAllAcceptedEvidenceForObservationWindow|TestSanitizeExternalText.*|TestApplicationTextAndScopeAreSanitizedBeforeRenderState|TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler|TestDiagnosisValidatorSanitizesEveryModelFreeTextField|TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence|TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction|TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis|TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink)$$
 MIGRATION_TEST_PATTERN := ^(TestMigrate.*|TestInitialSchemaContainsOnlyAllowlistedStorageColumns)$$
@@ -24,7 +29,7 @@ E2E_TEST_PATTERN := ^(TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis|Tes
 FUZZ_SEED_PATTERN := ^(FuzzRedactorSafety|FuzzBindToolCallStrictSchema|FuzzBoundedSSEBodyIsChunkIndependent|FuzzParseSlashDraftHasNoDynamicAuthority)$$
 IMPORT_GUARD_PATTERN := ^(TestApplicationImportBoundaryIsStatic|TestEinoImportsRemainInTheirSoleTranslationBoundaries|TestExportedKubeBoundaryContainsNoClientGoTypes|TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape|TestTUIImportBoundaryAndSingleTextareaAreStatic|TestRepositorySourcesKeepExplicitSQLBoundary|TestSQLXImportRemainsInsideSQLiteAdapter|TestCompositionConstructsOneModelLifecycleAndNoWritePath|TestSelectedDriverAndSQLXContract|TestV01ProductionHasNoApprovalServiceOrWriteExecutor)$$
 
-.PHONY: bootstrap-tools go-version-check fmt imports fmt-check imports-check lint workflow-lint test test-race test-security security test-migration test-e2e test-fuzz-seeds import-guard dependency-guard vuln vet build cross-build platform-smoke check check-slow check-all
+.PHONY: bootstrap-tools release-tools go-version-check release-version-check release-config-check release-cgo-check release-dry-run release-verify fmt imports fmt-check imports-check lint workflow-lint test test-race test-security security test-migration test-e2e test-fuzz-seeds import-guard dependency-guard vuln vet build cross-build platform-smoke check check-slow check-all
 
 $(GOIMPORTS_BIN):
 	mkdir -p "$(dir $@)"
@@ -42,7 +47,17 @@ $(ACTIONLINT_BIN):
 	mkdir -p "$(dir $@)"
 	GOBIN="$(abspath $(dir $@))" $(GO_CMD) install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
+$(GORELEASER_BIN):
+	mkdir -p "$(dir $@)"
+	GOTOOLCHAIN=$(GATE_GO_VERSION) GOBIN="$(abspath $(dir $@))" $(GO_CMD) install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+
+$(SYFT_BIN):
+	mkdir -p "$(dir $@)"
+	GOTOOLCHAIN=$(GATE_GO_VERSION) GOBIN="$(abspath $(dir $@))" $(GO_CMD) install github.com/anchore/syft/cmd/syft@$(SYFT_VERSION)
+
 bootstrap-tools: $(GOIMPORTS_BIN) $(GOLANGCI_LINT_BIN) $(GOVULNCHECK_BIN) $(ACTIONLINT_BIN)
+
+release-tools: $(GORELEASER_BIN) $(SYFT_BIN)
 
 go-version-check:
 	@actual="$$( $(GO_CMD) env GOVERSION )"; \
@@ -50,6 +65,157 @@ go-version-check:
 		printf '%s\n' "CI gates require $(GATE_GO_VERSION); found $$actual."; \
 		exit 1; \
 	fi
+
+release-version-check:
+	@printf '%s\n' "$(RELEASE_VERSION)" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || { \
+		printf '%s\n' 'RELEASE_VERSION must be a stable SemVer value without a leading v.'; \
+		exit 1; \
+	}
+
+release-config-check: go-version-check release-version-check release-tools
+	PATH="$(abspath $(dir $(SYFT_BIN))):$$PATH" \
+		KUPILOT_RELEASE_VERSION="$(RELEASE_VERSION)" \
+		GOTOOLCHAIN=$(GATE_GO_VERSION) \
+		"$(GORELEASER_BIN)" check --config .goreleaser.yaml
+
+release-cgo-check: go-version-check
+	@set -eu; \
+	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
+		goos="$${target%/*}"; \
+		goarch="$${target#*/}"; \
+		deps="$$(CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" GOTOOLCHAIN=$(GATE_GO_VERSION) $(GO_CMD) list -deps $(COMMAND_PACKAGE))"; \
+		printf '%s\n' "$$deps" | grep -qx 'modernc.org/sqlite'; \
+		if printf '%s\n' "$$deps" | grep -Eq '^(runtime/cgo|github.com/mattn/go-sqlite3)$$'; then \
+			printf '%s\n' "CGO or a CGO SQLite driver entered $$target."; \
+			exit 1; \
+		fi; \
+		cgo_packages="$$(CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" GOTOOLCHAIN=$(GATE_GO_VERSION) $(GO_CMD) list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' $(COMMAND_PACKAGE))"; \
+		if [ -n "$$cgo_packages" ]; then \
+			printf '%s\n' "CGO files entered $$target:" "$$cgo_packages"; \
+			exit 1; \
+		fi; \
+		printf '%s\n' "Verified CGO-free production dependencies for $$target."; \
+	done
+
+release-dry-run: release-config-check release-cgo-check
+	@set -eu; \
+	release_root="$$(mktemp -d "$${TMPDIR:-/tmp}/kupilot-$(RELEASE_VERSION)-dry-run.XXXXXX")"; \
+	goreleaser_dist="$$release_root/work"; \
+	release_dist="$$release_root/release"; \
+	mkdir "$$goreleaser_dist" "$$release_dist"; \
+	printf '%s\n' "Release dry-run workspace: $$release_root"; \
+	if [ -e dist ] || [ -L dist ]; then \
+		printf '%s\n' 'The repository dist path must not exist before a release dry-run.'; \
+		exit 1; \
+	fi; \
+	ln -s "$$goreleaser_dist" dist; \
+	cleanup_release_link() { \
+		if [ -L dist ] && [ "$$(readlink dist)" = "$$goreleaser_dist" ]; then \
+			rm -f dist; \
+		fi; \
+	}; \
+	trap cleanup_release_link EXIT HUP INT TERM; \
+	PATH="$(abspath $(dir $(SYFT_BIN))):$$PATH" \
+		KUPILOT_RELEASE_VERSION="$(RELEASE_VERSION)" \
+		GOTOOLCHAIN=$(GATE_GO_VERSION) \
+		"$(GORELEASER_BIN)" release --snapshot --config .goreleaser.yaml; \
+	cleanup_release_link; \
+	trap - EXIT HUP INT TERM; \
+	for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do \
+		cp "$$goreleaser_dist/kupilot_$(RELEASE_VERSION)_$$target.tar.gz" "$$release_dist/"; \
+		cp "$$goreleaser_dist/kupilot_$(RELEASE_VERSION)_$$target.tar.gz.spdx.json" "$$release_dist/"; \
+	done; \
+	cp "$$goreleaser_dist/kupilot_$(RELEASE_VERSION)_checksums.txt" "$$release_dist/"; \
+	$(MAKE) --no-print-directory release-verify RELEASE_DIST="$$release_dist" RELEASE_VERSION="$(RELEASE_VERSION)"; \
+	printf '%s\n' "Verified candidate assets directory: $$release_dist"
+
+release-verify: release-version-check
+	@set -eu; \
+	if [ -z "$(RELEASE_DIST)" ]; then \
+		printf '%s\n' 'RELEASE_DIST must identify a completed dry-run directory.'; \
+		exit 1; \
+	fi; \
+	dist="$(RELEASE_DIST)"; \
+	checksum="$$dist/kupilot_$(RELEASE_VERSION)_checksums.txt"; \
+	test -f "$$checksum"; \
+	archive_count="$$(find "$$dist" -maxdepth 1 -type f -name 'kupilot_*.tar.gz' | wc -l | tr -d ' ')"; \
+	sbom_count="$$(find "$$dist" -maxdepth 1 -type f -name 'kupilot_*.tar.gz.spdx.json' | wc -l | tr -d ' ')"; \
+	asset_count="$$(find "$$dist" -maxdepth 1 -type f | wc -l | tr -d ' ')"; \
+	entry_count="$$(find "$$dist" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"; \
+	test "$$archive_count" = 4; \
+	test "$$sbom_count" = 4; \
+	test "$$asset_count" = 9; \
+	test "$$entry_count" = 9; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		(cd "$$dist" && sha256sum --check "$$(basename "$$checksum")"); \
+	else \
+		(cd "$$dist" && shasum -a 256 --check "$$(basename "$$checksum")"); \
+	fi; \
+	scan_root="$$(mktemp -d "$${TMPDIR:-/tmp}/kupilot-release-scan.XXXXXX")"; \
+	trap 'rm -rf "$$scan_root"' EXIT HUP INT TERM; \
+	host_os="$$(GOTOOLCHAIN=$(GATE_GO_VERSION) $(GO_CMD) env GOHOSTOS)"; \
+	host_arch="$$(GOTOOLCHAIN=$(GATE_GO_VERSION) $(GO_CMD) env GOHOSTARCH)"; \
+	full_commit="$$(git rev-parse HEAD)"; \
+	short_commit="$$(printf '%s' "$$full_commit" | cut -c1-12)"; \
+	commit_epoch="$$(git show -s --format=%ct HEAD)"; \
+	if release_date="$$(date -u -r "$$commit_epoch" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"; then \
+		:; \
+	else \
+		release_date="$$(date -u -d "@$$commit_epoch" '+%Y-%m-%dT%H:%M:%SZ')"; \
+	fi; \
+	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
+		goos="$${target%/*}"; \
+		goarch="$${target#*/}"; \
+		archive="$$dist/kupilot_$(RELEASE_VERSION)_$${goos}_$${goarch}.tar.gz"; \
+		sbom="$$archive.spdx.json"; \
+		test -f "$$archive"; \
+		test -s "$$sbom"; \
+		members="$$(tar -tzf "$$archive" | LC_ALL=C sort)"; \
+		expected_members="$$(printf 'LICENSE\nkupilot')"; \
+		if [ "$$members" != "$$expected_members" ]; then \
+			printf '%s\n' "Unexpected archive members in $$(basename "$$archive"):" "$$members"; \
+			exit 1; \
+		fi; \
+		target_dir="$$scan_root/$${goos}_$${goarch}"; \
+		mkdir -p "$$target_dir"; \
+		tar -xzf "$$archive" -C "$$target_dir"; \
+		test -x "$$target_dir/kupilot"; \
+		cmp -s LICENSE "$$target_dir/LICENSE"; \
+		metadata="$$target_dir/buildinfo.txt"; \
+		GOTOOLCHAIN=$(GATE_GO_VERSION) $(GO_CMD) version -m "$$target_dir/kupilot" > "$$metadata"; \
+		head -n 1 "$$metadata" | grep -Fq '$(GATE_GO_VERSION)'; \
+		grep -Fq 'CGO_ENABLED=0' "$$metadata"; \
+		grep -Fq "GOOS=$$goos" "$$metadata"; \
+		grep -Fq "GOARCH=$$goarch" "$$metadata"; \
+		grep -Eq 'dep[[:space:]]+modernc\.org/sqlite[[:space:]]+v1\.56\.0' "$$metadata"; \
+		if grep -Fq 'github.com/mattn/go-sqlite3' "$$metadata"; then \
+			printf '%s\n' "A CGO SQLite dependency entered $$(basename "$$archive")."; \
+			exit 1; \
+		fi; \
+		binary_strings="$$target_dir/strings.txt"; \
+		LC_ALL=C strings "$$target_dir/kupilot" > "$$binary_strings"; \
+		grep -Fqx "v$(RELEASE_VERSION)" "$$binary_strings"; \
+		grep -Fqx "$$full_commit" "$$binary_strings"; \
+		grep -Fqx "$$release_date" "$$binary_strings"; \
+		if grep -Eq -- '/Users/|/home/|/private/var/|docs/_local|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}' "$$binary_strings"; then \
+			printf '%s\n' "A prohibited path or secret pattern entered $$(basename "$$archive")."; \
+			exit 1; \
+		fi; \
+		grep -Fq '"spdxVersion":"SPDX-2.3"' "$$sbom"; \
+		if grep -Eq -- '/Users/|/home/|/private/var/|docs/_local|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}' "$$sbom"; then \
+			printf '%s\n' "A prohibited path or secret pattern entered $$(basename "$$sbom")."; \
+			exit 1; \
+		fi; \
+		if [ "$$goos/$$goarch" = "$$host_os/$$host_arch" ]; then \
+			version_line="$$("$$target_dir/kupilot" --version)"; \
+			expected_version_line="kupilot version=v$(RELEASE_VERSION) commit=$$short_commit built=$$release_date go=$(GATE_GO_VERSION) platform=$$goos/$$goarch"; \
+			if [ "$$version_line" != "$$expected_version_line" ]; then \
+				printf '%s\n' "Unexpected native version output: $$version_line"; \
+				exit 1; \
+			fi; \
+		fi; \
+	done; \
+	printf '%s\n' "Verified four archives, checksums, SPDX SBOMs, metadata, and the native --version output."
 
 fmt: imports
 

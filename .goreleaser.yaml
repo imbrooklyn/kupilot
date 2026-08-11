@@ -1,0 +1,83 @@
+version: 2
+
+project_name: kupilot
+dist: dist
+
+builds:
+  - id: kupilot
+    main: ./cmd/kupilot
+    binary: kupilot
+    env:
+      - CGO_ENABLED=0
+      - GOTOOLCHAIN=go1.25.12
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -buildvcs=false
+      - -mod=readonly
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/imbrooklyn/kupilot/internal/platform/buildinfo.releaseVersion=v{{ .Version }}
+        -X github.com/imbrooklyn/kupilot/internal/platform/buildinfo.releaseCommit={{ .FullCommit }}
+        -X github.com/imbrooklyn/kupilot/internal/platform/buildinfo.releaseDate={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: kupilot
+    ids:
+      - kupilot
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        dst: LICENSE
+        info:
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - id: kupilot
+    artifacts: archive
+    ids:
+      - kupilot
+    documents:
+      - "{{ .ArtifactName }}.spdx.json"
+    cmd: syft
+    args:
+      - $artifact
+      - --output
+      - spdx-json=$document
+    env:
+      - SYFT_CHECK_FOR_APP_UPDATE=false
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true
+    disable: false
+
+snapshot:
+  version_template: "{{ .Env.KUPILOT_RELEASE_VERSION }}"
+
+changelog:
+  disable: true
+
+source:
+  enabled: false
+
+release:
+  disable: true

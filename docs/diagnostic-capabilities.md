@@ -37,6 +37,42 @@ a Tool, request Secret data, change scope, or create execution authority.
 
 <!-- markdownlint-enable MD013 -->
 
+## Availability and known limitations
+
+All eight categories share these current boundaries:
+
+- One AgentRun observes one immutable verified Context and Namespace. There is
+  no all-Namespace, cross-cluster, concurrent, background, Watch, or informer
+  mode.
+- Direct targets are limited to Pod, Deployment, ReplicaSet, Job, and Service.
+  EndpointSlice contributes address-free readiness counts only through the
+  Service relationship. A Pod's StatefulSet owner may appear as an unfetched
+  reference; StatefulSet and custom resources are not direct targets.
+- Secret objects and data, ConfigMap data, container environment values, Nodes,
+  full YAML, unrestricted labels or annotations, and arbitrary Kubernetes API
+  types are unavailable by policy.
+- Container output is disabled by default. When enabled through renewed privacy
+  consent, a run may make at most two bounded log calls. Missing prior
+  containers, multi-container ambiguity, RBAC denial, and truncation remain
+  explicit gaps.
+- Kubernetes permission denial never causes a broader retry. The exact
+  namespaced resources and optional Namespace-picker permissions are documented
+  in [Least-Privilege RBAC](rbac/README.md).
+- One run is limited to 90 seconds, eight Agent steps, ten Tool calls, three
+  model calls, 384 KiB of cumulative Tool results, and two no-progress steps.
+  Per-request, item, log, and relationship limits can end collection earlier.
+- Evidence is a snapshot with observation times. A later cluster change can make
+  an otherwise valid Diagnosis stale.
+- Model compatibility is a strict wire contract, not a quality guarantee. An
+  endpoint can satisfy streaming and Tool calling while still producing an
+  incomplete or incorrect hypothesis.
+- Every recommendation remains `executed=false`. KuPilot cannot apply, restart,
+  delete, patch, scale, exec, or verify a user-performed remediation in `v0.1`.
+
+The supported Kubernetes API-server minors and exact model protocol are listed
+in [Kubernetes Compatibility](kubernetes-compatibility.md) and
+[Model Compatibility](model-compatibility.md).
+
 ## Deterministic evaluation
 
 Scenario evaluation uses scripted model turns and synthetic Kubernetes
@@ -76,3 +112,8 @@ verifies that it does not change Tool selection or authorization.
 No scenario adds a Tool, Kubernetes kind, relationship, permission, write path,
 or remediation behavior. Recommended actions are guidance for the user to
 evaluate and perform independently.
+
+The complete cloud category and local retention boundary is documented in the
+[Privacy Overview](privacy-overview.md). Scenario support never makes
+credentials, Secret data, raw objects, raw model traffic, or raw container
+output eligible for transfer or persistence.

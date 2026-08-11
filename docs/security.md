@@ -414,11 +414,53 @@ This threat model must be reviewed before any of the following:
 - Discovering a credential, cross-scope, terminal, persistence, approval, or
   audit bypass in implementation or evaluation.
 
+## 11. Operator controls and current limitations
+
+Operators must preserve the following independent controls for the reachable
+`v0.1` composition:
+
+- Bind the rules in [Least-Privilege RBAC](rbac/README.md) to the selected
+  kubeconfig identity. Do not grant `cluster-admin`, wildcard permissions, a
+  namespaced read ClusterRole through a ClusterRoleBinding, Secret access,
+  Watch, or a write verb for KuPilot.
+- Keep configuration, state, database sidecars, and local logs in the resolved
+  owner-only non-symlink paths. KuPilot does not encrypt these files or protect
+  them from another process with the same local-user authority.
+- Supply the model API key only through `KUPILOT_MODEL_API_KEY` in the KuPilot
+  process environment. Do not place it in YAML, argv, history, user questions,
+  issue reports, or diagnostic fixtures.
+- Review the exact canonical model origin and enabled categories before
+  accepting consent. Container output is disabled by default; enabling it
+  invalidates prior consent and does not weaken local projection, sensitive-
+  value, or byte limits.
+- Set `kubernetes.exec_credentials: deny` when the selected kubeconfig must not
+  launch an exec credential program. Allowed exec programs run with the local
+  user's authority and are not sandboxed by KuPilot.
+- Treat a Diagnosis as a bounded snapshot, not a guaranteed root cause or proof
+  of current cluster state. Every `v0.1` recommendation is unexecuted.
+
+The current public CLI/TUI always creates standard-persistence Sessions and
+does not expose per-Session deletion, clear-history, delete-all, or a
+minimal-persistence selector. The repository enforces the underlying retention,
+minimal-mode, and transactional deletion contracts for compatible callers, but
+operators using the current binary must follow the exact stopped-process file
+cleanup boundary in
+[Privacy and Local Data](user-guide/privacy-and-local-data.md). This limitation
+must not be hidden behind a claim of data minimization or secure erasure.
+
+KuPilot has no product telemetry, analytics, remote crash reporting, update
+checker, account service, or KuPilot-operated control plane. A different
+outbound destination, cross-Namespace read, Secret read, terminal-control
+effect, or Kubernetes write is a security event and should be reported privately
+under the [Security Policy](../SECURITY.md).
+
 ## References
 
 - [Architecture](architecture.md)
 - [Data Retention Contract](data-retention.md)
 - [Privacy Overview](privacy-overview.md)
+- [Least-Privilege RBAC](rbac/README.md)
+- [Troubleshooting](troubleshooting.md)
 - [Product Contract](product.md)
 - [Scope](scope.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](adr/0012-require-digest-bound-write-approval.md)

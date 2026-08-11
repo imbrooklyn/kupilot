@@ -46,3 +46,49 @@ func TestReadDoesNotIncludeEnvironmentValues(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyReleaseMetadata(t *testing.T) {
+	t.Parallel()
+
+	base := Info{
+		Version:   "dev",
+		Commit:    unknown,
+		BuildTime: unknown,
+	}
+	got := applyReleaseMetadata(
+		base,
+		"v0.1.0",
+		"0123456789abcdef0123456789abcdef01234567",
+		"2026-08-11T00:22:27+08:00",
+	)
+
+	if got.Version != "v0.1.0" {
+		t.Fatalf("Version = %q, want v0.1.0", got.Version)
+	}
+	if got.Commit != "0123456789ab" {
+		t.Fatalf("Commit = %q, want 0123456789ab", got.Commit)
+	}
+	if got.BuildTime != "2026-08-10T16:22:27Z" {
+		t.Fatalf("BuildTime = %q, want normalized UTC time", got.BuildTime)
+	}
+}
+
+func TestApplyReleaseMetadataRejectsUnsafeValues(t *testing.T) {
+	t.Parallel()
+
+	base := Info{
+		Version:   "dev",
+		Commit:    unknown,
+		BuildTime: unknown,
+	}
+	got := applyReleaseMetadata(
+		base,
+		"v0.1.0\nsecret",
+		"not-a-commit",
+		"not-a-time",
+	)
+
+	if got != base {
+		t.Fatalf("unsafe release metadata changed Info: %#v", got)
+	}
+}
