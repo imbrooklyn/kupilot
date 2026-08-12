@@ -27,7 +27,7 @@ type ApprovalService interface {
 	Expire(context.Context, domain.ApprovalID) (domain.ApprovalRequest, error)
 	Cancel(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
 	Invalidate(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
-	Consume(context.Context, ConsumeCommand) (domain.ApprovalRequest, error)
+	Consume(context.Context, ConsumeCommand) (ConsumeResult, error)
 }
 
 // ServiceConfig supplies controlled policy dependencies without infrastructure.
@@ -351,58 +351,58 @@ func (service *Service) Invalidate(
 // Consume revalidates one durably approved request, commits its consumed state
 // and pre-write audit, then invokes the fixed executor at most once. Kubernetes
 // I/O never occurs inside the durable transaction.
-func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (domain.ApprovalRequest, error) {
+func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (ConsumeResult, error) {
 	if service == nil {
-		return domain.ApprovalRequest{}, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidConfiguration)
+		return ConsumeResult{}, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidConfiguration)
 	}
 	if err := validateRequestIdentity(command.RequestID); err != nil {
-		return domain.ApprovalRequest{}, err
+		return ConsumeResult{}, err
 	}
 	now, err := currentApprovalTime(service.clock)
 	if err != nil {
-		return domain.ApprovalRequest{}, err
+		return ConsumeResult{}, err
 	}
 
 	service.mu.Lock()
 	record, exists := service.records[command.RequestID]
 	if !exists {
 		service.mu.Unlock()
-		return domain.ApprovalRequest{}, domain.NewApprovalError(domain.ApprovalErrorCodeRequestNotFound)
+		return ConsumeResult{}, domain.NewApprovalError(domain.ApprovalErrorCodeRequestNotFound)
 	}
 	if record.request.State.Terminated() || record.executing {
 		request := record.request
 		service.mu.Unlock()
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
 	if expiredAt(record.request, now) {
 		updated := service.expireLocked(record, now)
 		service.mu.Unlock()
-		return updated, domain.NewApprovalError(domain.ApprovalErrorCodeExpired)
+		return consumeNotAttempted(updated), domain.NewApprovalError(domain.ApprovalErrorCodeExpired)
 	}
 	if contextApprovalError(ctx) != nil {
 		updated := service.cancelLocked(record, now, domain.ApprovalReasonContextCancelled)
 		service.mu.Unlock()
-		return updated, domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
+		return consumeNotAttempted(updated), domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
 	}
 	if record.request.State != domain.ApprovalStateApproved {
 		request := record.request
 		service.mu.Unlock()
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
 	if record.decision == nil || record.decision.Choice != domain.ApprovalDecisionApprove {
 		updated := service.invalidateLocked(record, now, domain.ApprovalReasonDecisionReplayed)
 		service.mu.Unlock()
-		return updated, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+		return consumeNotAttempted(updated), domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
 	if proofCode, reason := verifyProof(record.request, command.ShownDigest, command.Nonce, command.CurrentScope); proofCode != "" {
 		updated := service.invalidateLocked(record, now, reason)
 		service.mu.Unlock()
-		return updated, domain.NewApprovalError(proofCode)
+		return consumeNotAttempted(updated), domain.NewApprovalError(proofCode)
 	}
 	if !record.decision.ShownDigest.Equal(command.ShownDigest) || !record.decision.Nonce.Equal(command.Nonce) {
 		updated := service.invalidateLocked(record, now, domain.ApprovalReasonDecisionReplayed)
 		service.mu.Unlock()
-		return updated, domain.NewApprovalError(domain.ApprovalErrorCodeDecisionReplayed)
+		return consumeNotAttempted(updated), domain.NewApprovalError(domain.ApprovalErrorCodeDecisionReplayed)
 	}
 	record.executing = true
 	approved := record.request
@@ -411,20 +411,20 @@ func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (do
 
 	storedApproved, err := NewStoredRequest(approved)
 	if err != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	storedDecision, err := NewStoredDecision(decision)
 	if err != nil || service.store.VerifyApproved(ctx, storedApproved, storedDecision) != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	if err := contextApprovalError(ctx); err != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonContextCancelled, domain.ApprovalErrorCodeCancelled)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonContextCancelled, domain.ApprovalErrorCodeCancelled)
 	}
 	if !service.scopeMatches(approved.Intent.Scope) {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonScopeChanged, domain.ApprovalErrorCodeStaleScope)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonScopeChanged, domain.ApprovalErrorCodeStaleScope)
 	}
 	if _, err := service.executionClaim(command.RequestID); err != nil {
-		return service.snapshotOrZero(command.RequestID), err
+		return consumeNotAttempted(service.snapshotOrZero(command.RequestID)), err
 	}
 
 	observation, targetErr := service.target.RevalidateApprovedRestart(ctx, approved.Intent)
@@ -433,26 +433,27 @@ func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (do
 		if ctx.Err() != nil {
 			code = domain.ApprovalErrorCodeCancelled
 		}
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, code)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, code)
 	}
 	if !service.scopeMatches(approved.Intent.Scope) {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonScopeChanged, domain.ApprovalErrorCodeStaleScope)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonScopeChanged, domain.ApprovalErrorCodeStaleScope)
 	}
 	execution, err := NewRestartDeploymentExecution(approved.Intent, observation)
 	if err != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInvalidIntent)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInvalidIntent)
 	}
 	freshNow, timeErr := currentApprovalTime(service.clock)
 	if timeErr != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	now = freshNow
 	claim, claimErr := service.executionClaim(command.RequestID)
 	if claimErr != nil {
-		return claim, claimErr
+		return consumeNotAttempted(claim), claimErr
 	}
 	if expiredAt(claim, now) {
-		return service.expireExecution(command.RequestID, now)
+		request, expireErr := service.expireExecution(command.RequestID, now)
+		return consumeNotAttempted(request), expireErr
 	}
 
 	consumed := approved
@@ -461,15 +462,15 @@ func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (do
 	consumed.StateChangedAt = now
 	storedConsumed, err := NewStoredRequest(consumed)
 	if err != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	auditID, err := service.auditIDs.NewAuditEventID()
 	if err != nil || !auditID.Valid() {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	audit, err := writeIntentAudit(auditID, storedConsumed)
 	if err != nil {
-		return service.failBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
+		return service.failConsumeBeforePreWrite(command.RequestID, now, domain.ApprovalReasonDigestMismatch, domain.ApprovalErrorCodeInternal)
 	}
 	if err := service.store.ConsumeWithAudit(ctx, storedApproved, storedDecision, storedConsumed, audit); err != nil {
 		updated, approvalErr := service.failBeforePreWrite(
@@ -478,14 +479,14 @@ func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (do
 			domain.ApprovalReasonDigestMismatch,
 			domain.ApprovalErrorCodeInternal,
 		)
-		return updated, errors.Join(ErrPreWritePersistenceUnavailable, approvalErr)
+		return consumeNotAttempted(updated), errors.Join(ErrPreWritePersistenceUnavailable, approvalErr)
 	}
 
 	service.mu.Lock()
 	record, exists = service.records[command.RequestID]
 	if !exists || !record.request.Digest.Equal(consumed.Digest) {
 		service.mu.Unlock()
-		return consumed, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+		return consumeNotAttempted(consumed), domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
 	eligible := record.executing && record.request == approved
 	record.request = consumed
@@ -493,39 +494,87 @@ func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (do
 	request := record.request
 	service.mu.Unlock()
 	if !eligible {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
 
 	freshNow, timeErr = currentApprovalTime(service.clock)
 	if timeErr != nil {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeInternal)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeInternal)
 	}
 	now = freshNow
 	if expiredAt(request, now) {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeExpired)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeExpired)
 	}
 	if contextApprovalError(ctx) != nil {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
 	}
 	if !service.scopeMatches(request.Intent.Scope) {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeStaleScope)
+		return consumeNotAttempted(request), domain.NewApprovalError(domain.ApprovalErrorCodeStaleScope)
 	}
 	result, executeErr := service.executor.ExecuteApprovedRestart(ctx, execution)
 	if executeErr != nil {
+		attempt := classifyRestartDeploymentAttempt(executeErr)
 		if ctx.Err() != nil {
-			return request, domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
+			return ConsumeResult{ApprovalRequest: request, Attempt: attempt}, domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
 		}
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeExecutorFailed)
+		return ConsumeResult{ApprovalRequest: request, Attempt: attempt}, domain.NewApprovalError(domain.ApprovalErrorCodeExecutorFailed)
 	}
 	if result.Validate() != nil || result.Scope != observation.Scope ||
 		result.DeploymentName != observation.DeploymentName || result.DeploymentUID != observation.DeploymentUID ||
-		result.PreviousResourceVersion != observation.ResourceVersion {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeExecutorFailed)
+		result.PreviousResourceVersion != observation.ResourceVersion ||
+		result.ResourceVersion == observation.ResourceVersion ||
+		result.TargetGeneration-observation.DeploymentGeneration != 1 {
+		return ConsumeResult{ApprovalRequest: request, Attempt: RestartDeploymentAttempt{
+			State: RestartDeploymentPatchUnknown, ErrorClass: domain.SafeErrorClassInvalidExternalResponse,
+		}}, domain.NewApprovalError(domain.ApprovalErrorCodeExecutorFailed)
+	}
+	attempt := RestartDeploymentAttempt{
+		State: RestartDeploymentPatchAccepted,
+		Acceptance: RestartDeploymentAcceptance{
+			TargetGeneration: result.TargetGeneration,
+			TargetReplicas:   result.TargetReplicas,
+		},
 	}
 	if !service.scopeMatches(request.Intent.Scope) {
-		return request, domain.NewApprovalError(domain.ApprovalErrorCodeStaleScope)
+		return ConsumeResult{ApprovalRequest: request, Attempt: attempt}, domain.NewApprovalError(domain.ApprovalErrorCodeStaleScope)
 	}
-	return request, nil
+	return ConsumeResult{ApprovalRequest: request, Attempt: attempt}, nil
+}
+
+func consumeNotAttempted(request domain.ApprovalRequest) ConsumeResult {
+	return ConsumeResult{
+		ApprovalRequest: request,
+		Attempt:         RestartDeploymentAttempt{State: RestartDeploymentNotAttempted},
+	}
+}
+
+func (service *Service) failConsumeBeforePreWrite(
+	requestID domain.ApprovalID,
+	now time.Time,
+	reason domain.ApprovalStateReason,
+	code domain.ApprovalErrorCode,
+) (ConsumeResult, error) {
+	request, err := service.failBeforePreWrite(requestID, now, reason, code)
+	return consumeNotAttempted(request), err
+}
+
+func classifyRestartDeploymentAttempt(err error) RestartDeploymentAttempt {
+	errorClass := domain.SafeErrorClassInternal
+	var classified interface{ Class() domain.SafeErrorClass }
+	if errors.As(err, &classified) && classified.Class().Valid() {
+		errorClass = classified.Class()
+	}
+	state := RestartDeploymentPatchFailed
+	switch errorClass {
+	case domain.SafeErrorClassCancelled,
+		domain.SafeErrorClassTimeout,
+		domain.SafeErrorClassUnavailable,
+		domain.SafeErrorClassStaleScope,
+		domain.SafeErrorClassInvalidExternalResponse,
+		domain.SafeErrorClassInternal:
+		state = RestartDeploymentPatchUnknown
+	}
+	return RestartDeploymentAttempt{State: state, ErrorClass: errorClass}
 }
 
 // Snapshot returns a value copy for supervision and deterministic tests.

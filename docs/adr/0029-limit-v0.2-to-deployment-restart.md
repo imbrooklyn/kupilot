@@ -57,9 +57,23 @@ KuPilot reports request acceptance, observed rollout progress, timeout, failure,
 unavailable Evidence, and verified completion as separate states. It never
 equates an accepted API request with a completed rollout.
 
+The default observation window is 90 seconds with a two-second poll interval
+and at most 45 exact Deployment `GET` requests. Composition may shorten the
+window or slow the poll interval, but cannot lengthen the window or poll faster.
+The observer owns no background goroutine, Watch, informer, or write method and
+stops when its Context is cancelled or its scope generation becomes stale.
+
+Verification succeeds only after the target generation is observed and both
+updated and available replicas meet the post-PATCH replica target. A replaced
+UID, a later Deployment generation, `ProgressDeadlineExceeded`, or a current
+`ReplicaFailure` is a rollout failure. Reaching the observation deadline is a
+timeout: the PATCH remains accepted, while rollout success or failure remains
+unverified. Cancellation, permission loss, and read failure are reported as
+verification unavailable and never cause another PATCH.
+
 The concrete client-go mutation method and wire representation must preserve
-this semantic contract. Rollout timeout and poll interval are fixed, bounded,
-and code-defined rather than model- or user-selected.
+this semantic contract. Rollout policy is fixed, bounded, and code-defined
+rather than model- or user-selected.
 
 ## Consequences
 
@@ -123,6 +137,12 @@ Application code.
 
 Audit stores safe target and outcome metadata, not raw Deployment or wire bodies.
 Minimal-persistence cannot disable the default 180-day write-audit contract.
+The consumed intent, PATCH accepted/failed/unknown outcome, each changed rollout
+progress transition, and the terminal verified/timeout/failure/unavailable
+result are separate structured records. Post-attempt audit uses at most three
+immediate idempotent attempts for one immutable audit-event ID. Exhaustion is a
+visible high-priority error, stops further verification, and never repeats the
+Kubernetes write.
 
 ## Validation
 
@@ -141,10 +161,11 @@ request-recording HTTP fixture tests must prove:
    produces zero writes.
 5. The chosen API and client-go version satisfy ADR-0007's compatibility gate.
 
-Fixtures must prove that the fixed rollout timeout and poll interval distinguish
-request accepted, progress observed, timeout, failure, unknown, and verified
-completion by using
-`observedGeneration` and updated and available replica targets.
+Fixtures must lock the 90-second default timeout, two-second default poll,
+45-observation ceiling, and tightening-only configuration. They must distinguish
+request accepted, progress observed, timeout, failure, unknown, unavailable,
+and verified completion by using `observedGeneration` and updated and available
+replica targets, and must prove cancellation produces no additional write.
 
 The selected mutation API and rollout parameters remain documented with their
 compatibility evidence.

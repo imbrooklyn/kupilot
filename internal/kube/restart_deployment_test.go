@@ -33,6 +33,12 @@ func TestDeploymentRestarterUsesFreshResourceVersionAndFixedPatch(t *testing.T) 
 	}
 	restarter, closeClient, fakeClient := newFakeDeploymentRestarter(t, now, deployment)
 	defer closeClient()
+	fakeClient.PrependReactor("patch", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		response := deployment.DeepCopy()
+		response.ResourceVersion = "18"
+		response.Generation = 12
+		return true, response, nil
+	})
 	approved := deployment.DeepCopy()
 	approved.ResourceVersion = "16"
 	intent := restartTestIntent(t, approved)
@@ -49,7 +55,8 @@ func TestDeploymentRestarterUsesFreshResourceVersionAndFixedPatch(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ExecuteApprovedRestart() error = %v", err)
 	}
-	if result.Validate() != nil || result.RestartedAt != wantRestartedAt || result.PreviousResourceVersion != "17" {
+	if result.Validate() != nil || result.RestartedAt != wantRestartedAt || result.PreviousResourceVersion != "17" ||
+		result.TargetGeneration != 12 || result.TargetReplicas != 1 {
 		t.Fatalf("restart result = %#v", result)
 	}
 
@@ -73,6 +80,51 @@ func TestDeploymentRestarterUsesFreshResourceVersionAndFixedPatch(t *testing.T) 
 	assertFixedRestartPatchShape(t, patchAction.GetPatch())
 }
 
+func TestDeploymentRestarterRejectsInvalidSuccessfulPatchProjection(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*appsv1.Deployment)
+	}{
+		{name: "unchanged resource version", mutate: func(value *appsv1.Deployment) { value.ResourceVersion = "17" }},
+		{name: "unchanged generation", mutate: func(value *appsv1.Deployment) { value.Generation = 11 }},
+		{name: "skipped generation", mutate: func(value *appsv1.Deployment) { value.Generation = 13 }},
+		{name: "negative target replicas", mutate: func(value *appsv1.Deployment) {
+			replicas := int32(-1)
+			value.Spec.Replicas = &replicas
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deployment := restartTestDeployment("17")
+			restarter, closeClient, fakeClient := newFakeDeploymentRestarter(
+				t, time.Date(2026, time.August, 12, 9, 10, 11, 0, time.UTC), deployment,
+			)
+			defer closeClient()
+			fakeClient.PrependReactor("patch", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+				response := deployment.DeepCopy()
+				response.ResourceVersion = "18"
+				response.Generation = 12
+				test.mutate(response)
+				return true, response, nil
+			})
+			intent := restartTestIntent(t, deployment)
+			observation, err := restarter.RevalidateApprovedRestart(context.Background(), intent)
+			if err != nil {
+				t.Fatalf("RevalidateApprovedRestart() error = %v", err)
+			}
+			execution, err := approval.NewRestartDeploymentExecution(intent, observation)
+			if err != nil {
+				t.Fatalf("NewRestartDeploymentExecution() error = %v", err)
+			}
+			_, err = restarter.ExecuteApprovedRestart(context.Background(), execution)
+			assertRestartSafeClass(t, err, domain.SafeErrorClassInvalidExternalResponse)
+			if gets, writes := countRestartActions(fakeClient.Actions(), "get"), countRestartActions(fakeClient.Actions(), "patch"); gets != 1 || writes != 1 {
+				t.Fatalf("GET/PATCH actions = %d/%d, want 1/1", gets, writes)
+			}
+		})
+	}
+}
+
 func TestDeploymentRestarterSendsOnlyTheFixedWirePatch(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 9, 10, 11, 123_000_000, time.UTC)
 	deployment := restartTestDeployment("17")
@@ -91,6 +143,7 @@ func TestDeploymentRestarterSendsOnlyTheFixedWirePatch(t *testing.T) {
 		response := deployment.DeepCopy()
 		if request.Method == http.MethodPatch {
 			response.ResourceVersion = "18"
+			response.Generation = 12
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(writer).Encode(response); err != nil {

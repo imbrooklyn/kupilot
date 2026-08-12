@@ -330,6 +330,22 @@ prevents execution. After a process interruption KuPilot never retries the
 write automatically. Request acceptance and bounded post-operation verification
 are different outcomes and are recorded separately.
 
+After an accepted PATCH, Application coordinates an exact Deployment observer
+with a 90-second default window, a two-second minimum polling interval, and a
+45-observation ceiling. Configuration can only shorten the window or slow the
+poll. Success requires the target `observedGeneration` and both updated and
+available replicas to reach the post-PATCH target. Replaced or subsequently
+changed targets and fixed controller failure conditions are failures; deadline,
+cancellation, stale scope, and read unavailability remain distinct outcomes.
+None of them grants or attempts another write.
+
+Every changed progress transition and terminal verification result produces a
+bounded structured audit record. Post-attempt audit makes at most three attempts
+for one immutable event ID. Exhaustion stops observation and raises a
+high-priority UI result; it never retries the PATCH. Raw Deployment conditions,
+API response bodies, resource versions, patches, and vendor errors are excluded
+from UI and audit sinks.
+
 ## 7. Threat-to-control-to-test mapping
 
 All tests in this table are deterministic and use local fakes, fixtures, fake
@@ -359,7 +375,7 @@ security test oracle.
 | T17 | A database failure bypasses approval audit or causes an automatic duplicate write | C08 and C12 durable pre-operation gate, consumed state, no automatic retry | Fail each transaction boundary and interrupt before and after the fake external request; assert no request before durable consumed/audit state, at most one request, visible unknown outcome where needed, and no startup replay |
 | T18 | A kubeconfig exec program is selected or influenced by the model, launched through a shell, leaks output, hangs, inherits the model key, or bypasses strict deny | C02 fixed selected config, direct launch, cleaned environment, bounded streams, deadline, and strict mode | Use a fake executable and launcher recorder; vary model and Tool content, arguments, environment, output, error, cancellation, timeout, and strict mode; assert exact argv ownership, no shell or key inheritance, no sink leakage, and zero launches under strict deny |
 | T19 | A model recommendation or TUI event bypasses Application and invokes the future executor | C11/C12 composition isolation and typed commands | Contract and import tests prove TUI and Agent see no executor; send forged UI/model events and assert rejection before approval state or external I/O changes |
-| T20 | Restart executes a broader patch, another write, multiple requests, or reports request acceptance as verified success | C12 one semantic operation, fixed parameters, one request, and separate verification | Compare the fake Kubernetes request to the fixed operation contract, reject every extra field or Kind, force accepted/timeout/verification variants, and assert the UI and audit keep them distinct |
+| T20 | Restart executes a broader patch, another write, multiple requests, or reports request acceptance as verified success | C12 one semantic operation, fixed parameters, one request, and separate verification | Compare the fake Kubernetes request to the fixed operation contract; lock the 90-second/two-second/45-observation policy; force reject, expiry, change, forbidden, conflict, accepted, progress, success, failure, timeout, cancellation, stale scope, restart recovery, and result-audit failure; assert exact write counts and distinct bounded UI/audit states |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -397,7 +413,9 @@ separate Accepted ADR and threat review.
   durable work and is never silently treated as successful cleanup.
 - Any failure before the `v0.2` pre-operation audit commit prevents execution.
   A failure after an external write may produce an explicit unknown or
-  unverified outcome; it never causes an automatic retry.
+  unverified outcome; it never causes an automatic retry. Post-attempt audit
+  uses at most three idempotent attempts for the same record. If all fail,
+  verification stops and the TUI displays a high-priority audit error.
 - Missing permissions, blocked sensitive data, unsupported capabilities, and
   hard-limit truncation become explicit gaps. They never trigger broader access.
 
@@ -438,6 +456,12 @@ Operators must preserve the following independent controls for the reachable
   user's authority and are not sandboxed by KuPilot.
 - Treat a Diagnosis as a bounded snapshot, not a guaranteed root cause or proof
   of current cluster state. Every `v0.1` recommendation is unexecuted.
+
+For a `v0.2` composition, add only the exact namespaced Deployment `get` and
+`patch` rule in [Least-Privilege RBAC](rbac/README.md) for approved targets.
+Do not replace it with wildcard write permissions, `update`, `delete`, Watch,
+or a ClusterRoleBinding. A rollout timeout or unavailable verification requires
+operator review; it is not a reason to repeat the PATCH automatically.
 
 The current public CLI/TUI always creates standard-persistence Sessions and
 does not expose per-Session deletion, clear-history, delete-all, or a

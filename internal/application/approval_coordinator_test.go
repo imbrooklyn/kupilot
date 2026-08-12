@@ -537,6 +537,7 @@ type approvalCoordinatorFixture struct {
 	persistence *fakeApprovalPersistence
 	ui          *fakeApprovalUIEvents
 	executor    *fakeApprovalExecutor
+	rollout     *fakeApprovalRolloutObserver
 	clock       *approvalCoordinatorClock
 	scope       *fakeApprovalCurrentScope
 	runID       domain.AgentRunID
@@ -554,6 +555,7 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	}}
 	persistence := &fakeApprovalPersistence{}
 	ui := &fakeApprovalUIEvents{}
+	rollout := newFakeApprovalRolloutObserver(clock.now.Add(2 * time.Millisecond))
 	ids := &approvalCoordinatorIDs{}
 	service, err := approval.NewService(approval.ServiceConfig{
 		Clock: clock, Nonces: approvalNonceSource{value: 0x71},
@@ -563,8 +565,8 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 		t.Fatalf("approval.NewService() error = %v", err)
 	}
 	coordinator, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
-		Service: service, Persistence: persistence, Scope: scope,
-		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Now: clock.Now,
+		Service: service, Persistence: persistence, ResultAudits: persistence, Scope: scope,
+		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Rollout: rollout, Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("NewApprovalCoordinator() error = %v", err)
@@ -578,7 +580,7 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	}
 	return &approvalCoordinatorFixture{
 		coordinator: coordinator, service: service, persistence: persistence, ui: ui,
-		executor: executor, clock: clock, scope: scope,
+		executor: executor, rollout: rollout, clock: clock, scope: scope,
 		runID:     "00000000-0000-7000-8000-000000008101",
 		sessionID: "00000000-0000-7000-8000-000000008102", intent: intent,
 	}
@@ -663,8 +665,90 @@ type fakeApprovalExecutor struct {
 	calls             int
 	revalidates       int
 	err               error
+	revalidateErr     error
+	revalidateRV      string
+	resultRV          string
 	revalidateStarted chan struct{}
 	revalidateRelease <-chan struct{}
+}
+
+type fakeApprovalRolloutObserver struct {
+	calls          int
+	requests       []RestartRolloutRequest
+	observedAt     time.Time
+	state          RestartRolloutState
+	failureCode    RestartRolloutFailureCode
+	err            error
+	noObservations bool
+	progressNumber int64
+	beforeProgress func()
+	beforeReturn   func()
+}
+
+func newFakeApprovalRolloutObserver(observedAt time.Time) *fakeApprovalRolloutObserver {
+	return &fakeApprovalRolloutObserver{observedAt: observedAt, state: RestartRolloutSucceeded}
+}
+
+func (observer *fakeApprovalRolloutObserver) ObserveRestartRollout(
+	ctx context.Context,
+	request RestartRolloutRequest,
+	sink RestartRolloutProgressSink,
+) (RestartRolloutResult, error) {
+	observer.calls++
+	observer.requests = append(observer.requests, request)
+	if err := ctx.Err(); err != nil {
+		return RestartRolloutResult{}, err
+	}
+	if observer.err != nil {
+		return RestartRolloutResult{}, observer.err
+	}
+	if observer.noObservations {
+		return RestartRolloutResult{
+			State:     RestartRolloutTimedOut,
+			StartedAt: observer.observedAt.Add(-time.Millisecond), FinishedAt: observer.observedAt,
+		}, nil
+	}
+	if observer.beforeProgress != nil {
+		observer.beforeProgress()
+	}
+	progressNumber := observer.progressNumber
+	if progressNumber == 0 {
+		progressNumber = 1
+	}
+	progress := RestartRolloutObservation{
+		Scope: request.Scope, DeploymentName: request.DeploymentName, DeploymentUID: request.DeploymentUID,
+		DeploymentGeneration: request.TargetGeneration, TargetGeneration: request.TargetGeneration,
+		ObservedGeneration: request.TargetGeneration - 1, TargetReplicas: request.TargetReplicas,
+		ObservationNumber: progressNumber, State: RestartRolloutProgress, ObservedAt: observer.observedAt,
+	}
+	if err := sink.PublishRestartRolloutProgress(ctx, progress); err != nil {
+		return RestartRolloutResult{}, err
+	}
+	final := progress
+	final.ObservationNumber = progressNumber + 1
+	final.ObservedAt = observer.observedAt.Add(time.Millisecond)
+	result := RestartRolloutResult{
+		State: observer.state, ObservationCount: final.ObservationNumber,
+		StartedAt: observer.observedAt.Add(-time.Millisecond), FinishedAt: final.ObservedAt,
+	}
+	switch observer.state {
+	case RestartRolloutSucceeded:
+		final.State = RestartRolloutSucceeded
+		final.ObservedGeneration = request.TargetGeneration
+		final.UpdatedReplicas = request.TargetReplicas
+		final.AvailableReplicas = request.TargetReplicas
+	case RestartRolloutFailed:
+		final.State = RestartRolloutFailed
+		final.FailureCode = observer.failureCode
+		final.ObservedGeneration = request.TargetGeneration
+	case RestartRolloutTimedOut:
+		final.State = RestartRolloutProgress
+	}
+	result.Final = final
+	if observer.beforeReturn != nil {
+		observer.beforeReturn()
+	}
+	return result, nil
 }
 
 func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
@@ -672,6 +756,9 @@ func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
 	intent domain.OperationIntent,
 ) (approval.RestartDeploymentObservation, error) {
 	executor.revalidates++
+	if executor.revalidateErr != nil {
+		return approval.RestartDeploymentObservation{}, executor.revalidateErr
+	}
 	if executor.revalidateStarted != nil {
 		close(executor.revalidateStarted)
 	}
@@ -682,10 +769,14 @@ func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
 			return approval.RestartDeploymentObservation{}, ctx.Err()
 		}
 	}
+	resourceVersion := executor.revalidateRV
+	if resourceVersion == "" {
+		resourceVersion = "fresh-resource-version"
+	}
 	return approval.RestartDeploymentObservation{
 		Scope: intent.Scope, DeploymentName: intent.DeploymentName, DeploymentUID: intent.DeploymentUID,
 		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
-		ResourceVersion: "fresh-resource-version",
+		ResourceVersion: resourceVersion,
 	}, nil
 }
 
@@ -697,12 +788,18 @@ func (executor *fakeApprovalExecutor) ExecuteApprovedRestart(
 	if executor.err != nil {
 		return approval.RestartDeploymentResult{}, executor.err
 	}
+	resourceVersion := executor.resultRV
+	if resourceVersion == "" {
+		resourceVersion = "post-restart-rv-19"
+	}
 	return approval.RestartDeploymentResult{
 		Scope:                   execution.Observation().Scope,
 		DeploymentName:          execution.Observation().DeploymentName,
 		DeploymentUID:           execution.Observation().DeploymentUID,
 		PreviousResourceVersion: execution.Observation().ResourceVersion,
-		ResourceVersion:         execution.Observation().ResourceVersion,
+		ResourceVersion:         resourceVersion,
+		TargetGeneration:        execution.Observation().DeploymentGeneration + 1,
+		TargetReplicas:          1,
 		RestartedAt:             time.UnixMilli(1_700_000_500_001).UTC(),
 	}, nil
 }
@@ -754,6 +851,26 @@ type fakeApprovalPersistence struct {
 	lastConsumeAudit                                         domain.AuditEvent
 	recoverable                                              []approval.StoredRequest
 	recovered                                                []approval.RecoveryTransition
+	writeResultAudits                                        []domain.AuditEvent
+	writeResultCalls                                         int
+	writeResultFailures                                      int
+	writeResultFailAfter                                     int
+}
+
+func (persistence *fakeApprovalPersistence) AppendWriteResult(_ context.Context, event domain.AuditEvent) error {
+	persistence.writeResultCalls++
+	if persistence.writeResultFailures > 0 {
+		persistence.writeResultFailures--
+		return errors.New("synthetic write result audit failure")
+	}
+	if persistence.writeResultFailAfter > 0 && persistence.writeResultCalls > persistence.writeResultFailAfter {
+		return errors.New("synthetic write result audit failure")
+	}
+	if event.Validate() != nil {
+		return errors.New("synthetic invalid write result audit")
+	}
+	persistence.writeResultAudits = append(persistence.writeResultAudits, event)
+	return nil
 }
 
 func (persistence *fakeApprovalPersistence) VerifyApproved(

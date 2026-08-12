@@ -112,6 +112,13 @@ func TestApprovalConsumeRequiresDurableApprovalFreshTargetAndPreWriteAudit(t *te
 			if updated.State != test.wantState {
 				t.Fatalf("state = %q, want %q", updated.State, test.wantState)
 			}
+			wantAttempt := RestartDeploymentNotAttempted
+			if test.wantWrites == 1 && test.wantCode == "" {
+				wantAttempt = RestartDeploymentPatchAccepted
+			}
+			if updated.Attempt.State != wantAttempt || updated.Attempt.Validate() != nil {
+				t.Fatalf("attempt = %#v, want state %q", updated.Attempt, wantAttempt)
+			}
 			if fixture.target.RevalidateCount() != test.wantRevalidates ||
 				fixture.store.CommitCount() != test.wantAuditCommits || fixture.target.WriteCount() != test.wantWrites {
 				t.Fatalf(
@@ -180,19 +187,53 @@ func TestApprovalConsumeRejectsChangedDurablePolicyAndCanonicalParametersBeforeK
 	}
 }
 
-func TestApprovalConsumeConflictIsTerminalAndNeverRetries(t *testing.T) {
+func TestApprovalConsumeUnclassifiedExecutorFailureIsUnknownAndNeverRetries(t *testing.T) {
 	fixture := newExecutionFixture(t)
-	fixture.target.executeErr = errors.New("synthetic conflict")
+	fixture.target.executeErr = errors.New("synthetic unclassified executor failure")
 
 	updated, err := fixture.service.Consume(context.Background(), consumeCommand(fixture.approved))
 	requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExecutorFailed)
-	if updated.State != domain.ApprovalStateConsumed || fixture.target.WriteCount() != 1 || fixture.store.CommitCount() != 1 {
+	if updated.State != domain.ApprovalStateConsumed || updated.Attempt.State != RestartDeploymentPatchUnknown ||
+		updated.Attempt.ErrorClass != domain.SafeErrorClassInternal || fixture.target.WriteCount() != 1 || fixture.store.CommitCount() != 1 {
 		t.Fatalf("first attempt state/writes/commits = %q/%d/%d", updated.State, fixture.target.WriteCount(), fixture.store.CommitCount())
 	}
 	_, err = fixture.service.Consume(context.Background(), consumeCommand(fixture.approved))
 	requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeInvalidTransition)
 	if fixture.target.WriteCount() != 1 || fixture.target.RevalidateCount() != 1 {
-		t.Fatalf("replayed conflict writes/revalidates = %d/%d, want 1/1", fixture.target.WriteCount(), fixture.target.RevalidateCount())
+		t.Fatalf("replayed executor failure writes/revalidates = %d/%d, want 1/1", fixture.target.WriteCount(), fixture.target.RevalidateCount())
+	}
+}
+
+func TestApprovalConsumeTreatsInvalidSuccessfulExecutorProjectionAsUnknown(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RestartDeploymentResult)
+	}{
+		{name: "unchanged resource version", mutate: func(result *RestartDeploymentResult) {
+			result.ResourceVersion = result.PreviousResourceVersion
+		}},
+		{name: "skipped generation", mutate: func(result *RestartDeploymentResult) {
+			result.TargetGeneration++
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newExecutionFixture(t)
+			fixture.target.resultMutate = test.mutate
+			result, err := fixture.service.Consume(context.Background(), consumeCommand(fixture.approved))
+			requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExecutorFailed)
+			if result.State != domain.ApprovalStateConsumed ||
+				result.Attempt.State != RestartDeploymentPatchUnknown ||
+				result.Attempt.ErrorClass != domain.SafeErrorClassInvalidExternalResponse ||
+				fixture.target.WriteCount() != 1 || fixture.store.CommitCount() != 1 {
+				t.Fatalf("invalid result/attempt/writes/commits = %#v/%#v/%d/%d", result, result.Attempt, fixture.target.WriteCount(), fixture.store.CommitCount())
+			}
+			_, replayErr := fixture.service.Consume(context.Background(), consumeCommand(fixture.approved))
+			requireApprovalErrorCode(t, replayErr, domain.ApprovalErrorCodeInvalidTransition)
+			if fixture.target.WriteCount() != 1 {
+				t.Fatalf("invalid result replay writes = %d, want 1", fixture.target.WriteCount())
+			}
+		})
 	}
 }
 
@@ -314,6 +355,7 @@ type fakeRestartTarget struct {
 	observation     RestartDeploymentObservation
 	revalidateErr   error
 	executeErr      error
+	resultMutate    func(*RestartDeploymentResult)
 	revalidates     int
 	writes          int
 	executions      []RestartDeploymentExecution
@@ -351,14 +393,20 @@ func (target *fakeRestartTarget) ExecuteApprovedRestart(
 	if target.executeErr != nil {
 		return RestartDeploymentResult{}, target.executeErr
 	}
-	return RestartDeploymentResult{
+	result := RestartDeploymentResult{
 		Scope:                   execution.Observation().Scope,
 		DeploymentName:          execution.Observation().DeploymentName,
 		DeploymentUID:           execution.Observation().DeploymentUID,
 		PreviousResourceVersion: execution.Observation().ResourceVersion,
-		ResourceVersion:         execution.Observation().ResourceVersion,
+		ResourceVersion:         "post-restart-rv-19",
+		TargetGeneration:        execution.Observation().DeploymentGeneration + 1,
+		TargetReplicas:          1,
 		RestartedAt:             time.UnixMilli(1_700_000_000_001).UTC(),
-	}, nil
+	}
+	if target.resultMutate != nil {
+		target.resultMutate(&result)
+	}
+	return result, nil
 }
 
 func (target *fakeRestartTarget) RevalidateCount() int {

@@ -1,7 +1,8 @@
 # Least-Privilege Kubernetes RBAC
 
-KuPilot `v0.1` needs only read access. Do not grant it `cluster-admin`, wildcard
-verbs, wildcard resources, write verbs, Secret access, or an all-Namespace
+KuPilot `v0.1` needs only read access. A `v0.2` composition adds one optional,
+exact namespaced Deployment restart rule. Do not grant `cluster-admin`, wildcard
+verbs, wildcard resources, Secret access, or an all-Namespace
 ClusterRoleBinding for convenience.
 
 RBAC is attached to the Kubernetes identity selected by kubeconfig. KuPilot does
@@ -30,11 +31,11 @@ actual user, group, or ServiceAccount.
 
 <!-- markdownlint-enable MD013 -->
 
-All Kubernetes HTTP operations are reads. Kubernetes client-go represents
+All `v0.1` Kubernetes HTTP operations are reads. Kubernetes client-go represents
 `list` and `pods/log` retrieval as HTTP `GET`; the RBAC verbs above are the
 authorization verbs evaluated by the API server.
 
-KuPilot has no request path for `create`, `update`, `patch`, `delete`,
+The `v0.1` composition has no request path for `create`, `update`, `patch`, `delete`,
 `deletecollection`, `watch`, `impersonate`, `bind`, `escalate`, or `approve`.
 It has no Secret, ConfigMap, Node, StatefulSet, custom-resource, discovery,
 SubjectAccessReview, TokenRequest, exec, attach, port-forward, or ephemeral-
@@ -54,6 +55,28 @@ run boundary.
 
 A Role and the reusable ClusterRole are alternatives for namespaced resources;
 do not bind both unless another reviewed consumer needs both objects.
+
+## Add the exact `v0.2` restart rule
+
+[restart-role.yaml](restart-role.yaml) is the only write-bearing RBAC fixture.
+It grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
+placeholder Namespace. Replace both placeholders and bind the Role only to the
+identity used by a `v0.2` composition. Create another reviewed Role rule for
+each additional Deployment; do not remove `resourceNames` merely for
+convenience.
+
+The `get` verb supports mandatory fresh revalidation and bounded rollout
+observation. The `patch` verb supports the sole fixed restart request. The rule
+does not grant Deployment `list`, `watch`, `create`, `update`, or `delete`, and
+does not grant any Pod write. Kubernetes RBAC cannot restrict a permitted
+Deployment patch to one JSON field, so KuPilot's fixed executor, digest-bound
+approval, fresh resource-version precondition, and one-attempt tests remain
+independent controls.
+
+Use this Role in addition to the required read and Namespace-verification rules.
+Never bind it with a ClusterRoleBinding. Do not grant it to a `v0.1`
+composition, whose write absence remains enforced by code and composition
+guards.
 
 ## Choose Namespace verification or picker access
 
@@ -97,8 +120,9 @@ are not copied into model content, local logs, SQLite, or the TUI.
 RBAC does not replace KuPilot's runtime controls. Even if the selected identity
 has broader permissions, KuPilot still binds every request to one verified
 Namespace, rejects unlisted Kinds and subresources, uses fixed selectors and
-limits, projects allowlisted fields, strips EndpointSlice addresses, checks
-scope generation, and has no reachable write method.
+limits, projects allowlisted fields, strips EndpointSlice addresses, and checks
+scope generation. The `v0.1` composition has no reachable write method; `v0.2`
+has only the digest-bound, fixed-field, single-attempt Deployment restart.
 
 Review [Security](../security.md), [Privacy](../privacy-overview.md), and
 [Diagnostic Capabilities](../diagnostic-capabilities.md) before changing these

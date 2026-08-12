@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
@@ -17,6 +19,14 @@ import (
 const (
 	insertAuditEventSQL = `
 		INSERT INTO audit_events (
+			id, session_id, run_id, event_type, actor, outcome,
+			scope_context, scope_namespace, scope_generation,
+			subject_ref_json, details_json, correlation_id,
+			integrity_hash, occurred_at_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	insertWriteResultAuditEventSQL = `
+		INSERT OR IGNORE INTO audit_events (
 			id, session_id, run_id, event_type, actor, outcome,
 			scope_context, scope_namespace, scope_generation,
 			subject_ref_json, details_json, correlation_id,
@@ -85,8 +95,9 @@ const (
 )
 
 var (
-	_ auditcontract.EventAppender = (*AuditRepository)(nil)
-	_ auditcontract.EventReader   = (*AuditRepository)(nil)
+	_ application.ApprovalResultAudits = (*AuditRepository)(nil)
+	_ auditcontract.EventAppender      = (*AuditRepository)(nil)
+	_ auditcontract.EventReader        = (*AuditRepository)(nil)
 )
 
 type auditEventRow struct {
@@ -136,20 +147,58 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 	return nil
 }
 
-func insertAuditEvent(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent) error {
-	if event.Validate() != nil {
+// AppendWriteResult idempotently inserts one fixed post-attempt write audit.
+// Retrying the same immutable ID is safe; a mismatched duplicate fails closed.
+func (repository *AuditRepository) AppendWriteResult(ctx context.Context, event domain.AuditEvent) error {
+	if err := repositoryContext(ctx, repository.db, "append_write_result_audit"); err != nil {
+		return err
+	}
+	if event.Validate() != nil || !writeResultAuditType(event.Type) {
 		return auditcontract.ErrInvalidRepositoryRequest
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		inserted, err := insertAuditEventUsing(ctx, tx, event, insertWriteResultAuditEventSQL)
+		if err != nil || inserted {
+			return err
+		}
+		var row auditEventRow
+		if err := tx.GetContext(ctx, &row, getAuditEventByIDSQL, event.ID); err != nil {
+			return err
+		}
+		stored, err := row.domainAuditEvent()
+		if err != nil || !reflect.DeepEqual(stored, event) {
+			return auditcontract.ErrInvalidRepositoryRequest
+		}
+		return nil
+	})
+	if isAuditContractError(err) || isSessionContractError(err) {
+		return err
+	}
+	if err != nil {
+		return repositoryFailure(repository.db, "write_result_audit_append_failed", "append_write_result_audit", "KuPilot could not store the write result AuditEvent.", err)
+	}
+	return nil
+}
+
+func insertAuditEvent(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent) error {
+	_, err := insertAuditEventUsing(ctx, tx, event, insertAuditEventSQL)
+	return err
+}
+
+func insertAuditEventUsing(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent, statement string) (bool, error) {
+	if event.Validate() != nil {
+		return false, auditcontract.ErrInvalidRepositoryRequest
 	}
 	detailsJSON, err := json.Marshal(event.Details)
 	if err != nil {
-		return auditcontract.ErrInvalidRepositoryRequest
+		return false, auditcontract.ErrInvalidRepositoryRequest
 	}
 	subjectJSON, err := encodeSelectedResource(event.Subject)
 	if err != nil {
-		return auditcontract.ErrInvalidRepositoryRequest
+		return false, auditcontract.ErrInvalidRepositoryRequest
 	}
 	if err := validateAuditRelationships(ctx, tx, event, true); err != nil {
-		return err
+		return false, err
 	}
 	var scopeContextValue any
 	var scopeNamespaceValue any
@@ -159,9 +208,9 @@ func insertAuditEvent(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent)
 		scopeNamespaceValue = event.Scope.Namespace
 		scopeGenerationValue = event.Scope.Generation
 	}
-	_, err = tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
-		insertAuditEventSQL,
+		statement,
 		event.ID,
 		nullableSessionID(event.SessionID),
 		nullableRunID(event.RunID),
@@ -177,7 +226,26 @@ func insertAuditEvent(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent)
 		nullableString(event.IntegrityHash),
 		event.OccurredAt.UTC().UnixMilli(),
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return changed == 1, nil
+}
+
+func writeResultAuditType(eventType domain.AuditEventType) bool {
+	switch eventType {
+	case domain.AuditEventWriteAttempted,
+		domain.AuditEventWriteOutcomeUnknown,
+		domain.AuditEventWriteVerified,
+		domain.AuditEventWriteVerificationFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 // GetByID returns one exact strictly mapped AuditEvent.

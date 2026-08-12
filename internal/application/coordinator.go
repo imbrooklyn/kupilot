@@ -653,7 +653,9 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 			}
 		}
 		if err != nil && !errors.Is(err, ErrApprovalExpired) && !errors.Is(err, ErrApprovalInvalidated) &&
-			!errors.Is(err, ErrApprovalExecutionFailed) {
+			!errors.Is(err, ErrApprovalExecutionFailed) && !errors.Is(err, ErrApprovalPatchOutcomeUnknown) &&
+			!errors.Is(err, ErrApprovalRolloutTimedOut) && !errors.Is(err, ErrApprovalRolloutFailed) &&
+			!errors.Is(err, ErrApprovalRolloutUnavailable) && !errors.Is(err, ErrApprovalResultAuditUnavailable) {
 			return UICommandOutcome{}, err
 		}
 		return UICommandOutcome{

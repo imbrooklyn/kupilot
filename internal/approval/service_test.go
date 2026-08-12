@@ -87,7 +87,7 @@ func TestApprovalServiceLegalLifecycleTransitions(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Consume() error = %v", err)
 				}
-				return updated
+				return updated.ApprovalRequest
 			},
 			wantState:  domain.ApprovalStateConsumed,
 			writeCount: 1,
@@ -187,7 +187,8 @@ func TestApprovalTTLBoundaryPrecedesCancelReplayAndConsume(t *testing.T) {
 				return request
 			},
 			apply: func(service *Service, request domain.ApprovalRequest) (domain.ApprovalRequest, error) {
-				return service.Consume(context.Background(), consumeCommand(request))
+				result, err := service.Consume(context.Background(), consumeCommand(request))
+				return result.ApprovalRequest, err
 			},
 		},
 		{

@@ -10,7 +10,10 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-const maxApprovalRecoveryBatch = 1000
+const (
+	maxApprovalRecoveryBatch       = 1000
+	maxApprovalResultAuditAttempts = 3
+)
 
 var (
 	// ErrApprovalCoordinatorDependency reports an invalid approval composition.
@@ -27,6 +30,17 @@ var (
 	ErrApprovalInvalidated = errors.New("the approval request was invalidated")
 	// ErrApprovalExecutionFailed reports one terminal fixed executor attempt.
 	ErrApprovalExecutionFailed = errors.New("the approved Deployment restart request failed")
+	// ErrApprovalPatchOutcomeUnknown reports an ambiguous sole PATCH attempt.
+	ErrApprovalPatchOutcomeUnknown = errors.New("the Deployment restart PATCH outcome is unknown")
+	// ErrApprovalRolloutTimedOut reports an accepted PATCH whose rollout did not
+	// reach a terminal conclusion inside the fixed observation window.
+	ErrApprovalRolloutTimedOut = errors.New("the Deployment rollout observation timed out")
+	// ErrApprovalRolloutFailed reports an accepted PATCH with a fixed rollout failure.
+	ErrApprovalRolloutFailed = errors.New("the Deployment rollout failed")
+	// ErrApprovalRolloutUnavailable reports an accepted PATCH that could not be verified.
+	ErrApprovalRolloutUnavailable = errors.New("the Deployment rollout verification is unavailable")
+	// ErrApprovalResultAuditUnavailable reports exhausted bounded post-attempt audit writes.
+	ErrApprovalResultAuditUnavailable = errors.New("the Deployment restart result audit is unavailable")
 )
 
 // ApprovalLifecycle is the narrow approval service surface used by Application.
@@ -36,7 +50,7 @@ type ApprovalLifecycle interface {
 	Expire(context.Context, domain.ApprovalID) (domain.ApprovalRequest, error)
 	Cancel(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
 	Invalidate(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
-	Consume(context.Context, approval.ConsumeCommand) (domain.ApprovalRequest, error)
+	Consume(context.Context, approval.ConsumeCommand) (approval.ConsumeResult, error)
 }
 
 // ConsumeApprovedRestart performs the deterministic post-decision execution
@@ -69,10 +83,11 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	if currentOK {
 		currentScope = current.Snapshot()
 	}
-	updated, consumeErr := coordinator.service.Consume(ctx, approval.ConsumeCommand{
+	consumeResult, consumeErr := coordinator.service.Consume(ctx, approval.ConsumeCommand{
 		RequestID: command.ApprovalID, ShownDigest: command.ApprovalDigest,
 		Nonce: command.ApprovalNonce, CurrentScope: currentScope,
 	})
+	updated := consumeResult.ApprovalRequest
 
 	coordinator.mu.Lock()
 	currentTracked, stillTracked := coordinator.active[command.ApprovalID]
@@ -101,14 +116,19 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	}
 	coordinator.mu.Unlock()
 	result := projectUIApprovalResult(updated, tracked.sequence)
-	if result.Validate() != nil {
-		return UIApprovalResult{}, ErrApprovalUnavailable
-	}
-	if consumeErr == nil {
-		if updated.State != domain.ApprovalStateConsumed {
+	if updated.State == domain.ApprovalStateConsumed {
+		if consumeResult.Validate() != nil {
 			return UIApprovalResult{}, ErrApprovalUnavailable
 		}
-		return result, nil
+		execution, executionErr := coordinator.finishRestartExecution(ctx, tracked, consumeResult.Attempt, consumeErr)
+		result.Execution = &execution
+		if result.Validate() != nil {
+			return UIApprovalResult{}, ErrApprovalUnavailable
+		}
+		return result, executionErr
+	}
+	if result.Validate() != nil {
+		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	if errors.Is(consumeErr, approval.ErrPreWritePersistenceUnavailable) {
 		return result, ErrApprovalPersistenceUnavailable
@@ -116,9 +136,6 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	if updated.State == domain.ApprovalStateInvalidated || updated.State == domain.ApprovalStateCancelled ||
 		updated.State == domain.ApprovalStateExpired || approvalErrorCode(consumeErr) == domain.ApprovalErrorCodeStaleScope {
 		return result, ErrApprovalInvalidated
-	}
-	if updated.State == domain.ApprovalStateConsumed {
-		return result, ErrApprovalExecutionFailed
 	}
 	return result, ErrApprovalUnavailable
 }
@@ -131,6 +148,11 @@ type ApprovalPersistence interface {
 	Get(context.Context, domain.ApprovalID) (approval.StoredRequest, *approval.StoredDecision, error)
 	ListRecoverable(context.Context, int) ([]approval.StoredRequest, error)
 	RecoverWithAudits(context.Context, []approval.RecoveryTransition) error
+}
+
+// ApprovalResultAudits owns idempotent post-attempt write-result records.
+type ApprovalResultAudits interface {
+	AppendWriteResult(context.Context, domain.AuditEvent) error
 }
 
 // ApprovalIdentifierSource supplies application-owned UUIDv7 request IDs.
@@ -148,10 +170,12 @@ type ApprovalCurrentScope interface {
 type ApprovalCoordinatorConfig struct {
 	Service            ApprovalLifecycle
 	Persistence        ApprovalPersistence
+	ResultAudits       ApprovalResultAudits
 	Scope              ApprovalCurrentScope
 	ApprovalIDs        ApprovalIdentifierSource
 	AuditIDs           AuditIdentifierSource
 	UIEvents           UIEventSink
+	Rollout            RestartRolloutObserver
 	Now                func() time.Time
 	PersistenceTimeout time.Duration
 }
@@ -163,10 +187,12 @@ type ApprovalCoordinator struct {
 
 	service          ApprovalLifecycle
 	persistence      ApprovalPersistence
+	resultAudits     ApprovalResultAudits
 	scope            ApprovalCurrentScope
 	approvalIDs      ApprovalIdentifierSource
 	auditIDs         AuditIdentifierSource
 	uiEvents         UIEventSink
+	rollout          RestartRolloutObserver
 	now              func() time.Time
 	persistenceLimit time.Duration
 	active           map[domain.ApprovalID]trackedApproval
@@ -184,15 +210,15 @@ func NewApprovalCoordinator(config ApprovalCoordinatorConfig) (*ApprovalCoordina
 	if limit == 0 {
 		limit = DefaultPersistenceTimeout
 	}
-	if config.Service == nil || config.Persistence == nil || config.Scope == nil || config.ApprovalIDs == nil ||
-		config.AuditIDs == nil || config.UIEvents == nil || config.Now == nil || !validCoordinatorTime(config.Now()) ||
+	if config.Service == nil || config.Persistence == nil || config.ResultAudits == nil || config.Scope == nil || config.ApprovalIDs == nil ||
+		config.AuditIDs == nil || config.UIEvents == nil || config.Rollout == nil || config.Now == nil || !validCoordinatorTime(config.Now()) ||
 		limit <= 0 || limit > MaxPersistenceTimeout {
 		return nil, ErrApprovalCoordinatorDependency
 	}
 	return &ApprovalCoordinator{
-		service: config.Service, persistence: config.Persistence, scope: config.Scope,
+		service: config.Service, persistence: config.Persistence, resultAudits: config.ResultAudits, scope: config.Scope,
 		approvalIDs: config.ApprovalIDs, auditIDs: config.AuditIDs, uiEvents: config.UIEvents,
-		now: config.Now, persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
+		rollout: config.Rollout, now: config.Now, persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
 	}, nil
 }
 

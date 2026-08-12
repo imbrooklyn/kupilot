@@ -136,7 +136,9 @@ func (executor *fakeRestartExecutor) ExecuteApprovedRestart(
 		DeploymentName:          execution.Observation().DeploymentName,
 		DeploymentUID:           execution.Observation().DeploymentUID,
 		PreviousResourceVersion: execution.Observation().ResourceVersion,
-		ResourceVersion:         execution.Observation().ResourceVersion,
+		ResourceVersion:         "post-restart-rv-19",
+		TargetGeneration:        execution.Observation().DeploymentGeneration + 1,
+		TargetReplicas:          1,
 		RestartedAt:             time.UnixMilli(2).UTC(),
 	}, nil
 }

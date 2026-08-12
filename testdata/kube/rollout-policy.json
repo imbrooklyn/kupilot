@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "timeout_milliseconds": 90000,
+  "poll_interval_milliseconds": 2000,
+  "maximum_observations": 45
+}

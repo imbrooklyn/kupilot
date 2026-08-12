@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -86,6 +87,8 @@ type RestartDeploymentResult struct {
 	DeploymentUID           string
 	PreviousResourceVersion string
 	ResourceVersion         string
+	TargetGeneration        int64
+	TargetReplicas          int64
 	RestartedAt             time.Time
 }
 
@@ -100,9 +103,86 @@ func (result RestartDeploymentResult) Validate() error {
 	current.ResourceVersion = result.ResourceVersion
 	if result.Scope.Validate() != nil || !domain.ValidContextName(result.Scope.Context) ||
 		!domain.ValidNamespaceName(result.Scope.Namespace) || result.Scope.Generation < 1 ||
-		previous.Validate() != nil || current.Validate() != nil || result.RestartedAt.IsZero() ||
+		previous.Validate() != nil || current.Validate() != nil ||
+		result.PreviousResourceVersion == result.ResourceVersion || result.TargetGeneration < 1 ||
+		result.TargetReplicas < 0 || result.TargetReplicas > math.MaxInt32 || result.RestartedAt.IsZero() ||
 		result.RestartedAt.Location() != time.UTC || result.RestartedAt.UnixMilli() < 0 ||
 		!result.RestartedAt.Equal(time.UnixMilli(result.RestartedAt.UnixMilli()).UTC()) {
+		return ErrInvalidRestartDeploymentExecution
+	}
+	return nil
+}
+
+// RestartDeploymentAttemptState distinguishes an accepted PATCH from a
+// definitive rejection and an ambiguous transport outcome. It never implies
+// that rollout verification has completed.
+type RestartDeploymentAttemptState string
+
+const (
+	RestartDeploymentNotAttempted  RestartDeploymentAttemptState = "not_attempted"
+	RestartDeploymentPatchAccepted RestartDeploymentAttemptState = "patch_accepted"
+	RestartDeploymentPatchFailed   RestartDeploymentAttemptState = "patch_failed"
+	RestartDeploymentPatchUnknown  RestartDeploymentAttemptState = "patch_outcome_unknown"
+)
+
+// RestartDeploymentAcceptance is the only successful PATCH projection allowed
+// to leave approval execution. Resource versions remain confined to the
+// executor validation boundary.
+type RestartDeploymentAcceptance struct {
+	TargetGeneration int64
+	TargetReplicas   int64
+}
+
+// Validate checks the bounded post-PATCH rollout target.
+func (acceptance RestartDeploymentAcceptance) Validate() error {
+	if acceptance.TargetGeneration < 1 || acceptance.TargetReplicas < 0 ||
+		acceptance.TargetReplicas > math.MaxInt32 {
+		return ErrInvalidRestartDeploymentExecution
+	}
+	return nil
+}
+
+// RestartDeploymentAttempt is the safe projection of the sole executor call.
+type RestartDeploymentAttempt struct {
+	State      RestartDeploymentAttemptState
+	Acceptance RestartDeploymentAcceptance
+	ErrorClass domain.SafeErrorClass
+}
+
+// Validate enforces mutually exclusive accepted, failed, unknown, and
+// not-attempted shapes.
+func (attempt RestartDeploymentAttempt) Validate() error {
+	zeroAcceptance := RestartDeploymentAcceptance{}
+	switch attempt.State {
+	case RestartDeploymentNotAttempted:
+		if attempt.Acceptance != zeroAcceptance || attempt.ErrorClass != "" {
+			return ErrInvalidRestartDeploymentExecution
+		}
+	case RestartDeploymentPatchAccepted:
+		if attempt.Acceptance.Validate() != nil || attempt.ErrorClass != "" {
+			return ErrInvalidRestartDeploymentExecution
+		}
+	case RestartDeploymentPatchFailed, RestartDeploymentPatchUnknown:
+		if attempt.Acceptance != zeroAcceptance || !attempt.ErrorClass.Valid() {
+			return ErrInvalidRestartDeploymentExecution
+		}
+	default:
+		return ErrInvalidRestartDeploymentExecution
+	}
+	return nil
+}
+
+// ConsumeResult returns both the durable approval state and the separate
+// fixed executor outcome. A consumed approval can never authorize a retry.
+type ConsumeResult struct {
+	domain.ApprovalRequest
+	Attempt RestartDeploymentAttempt
+}
+
+// Validate checks that only a consumed request may carry an executor result.
+func (result ConsumeResult) Validate() error {
+	if result.ApprovalRequest.Validate() != nil || result.Attempt.Validate() != nil ||
+		result.ApprovalRequest.State != domain.ApprovalStateConsumed && result.Attempt.State != RestartDeploymentNotAttempted {
 		return ErrInvalidRestartDeploymentExecution
 	}
 	return nil

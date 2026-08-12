@@ -152,7 +152,16 @@ func (restarter *DeploymentRestarter) ExecuteApprovedRestart(
 	if object == nil || object.APIVersion != "" && object.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
 		object.Kind != "" && object.Kind != domain.RestartDeploymentTargetKind ||
 		object.Namespace != observation.Scope.Namespace || object.Name != observation.DeploymentName ||
-		string(object.UID) != observation.DeploymentUID || object.ResourceVersion == "" {
+		string(object.UID) != observation.DeploymentUID || object.ResourceVersion == "" || object.Generation < 1 ||
+		object.ResourceVersion == observation.ResourceVersion ||
+		object.Generation-observation.DeploymentGeneration != 1 {
+		return approval.RestartDeploymentResult{}, invalidKubernetesProjectionError("execute_restart_deployment")
+	}
+	targetReplicas := int64(1)
+	if object.Spec.Replicas != nil {
+		targetReplicas = int64(*object.Spec.Replicas)
+	}
+	if targetReplicas < 0 {
 		return approval.RestartDeploymentResult{}, invalidKubernetesProjectionError("execute_restart_deployment")
 	}
 	if !restarter.bindingCurrent(client, observation.Scope) {
@@ -161,6 +170,7 @@ func (restarter *DeploymentRestarter) ExecuteApprovedRestart(
 	result := approval.RestartDeploymentResult{
 		Scope: observation.Scope, DeploymentName: object.Name, DeploymentUID: string(object.UID),
 		PreviousResourceVersion: observation.ResourceVersion, ResourceVersion: object.ResourceVersion,
+		TargetGeneration: object.Generation, TargetReplicas: targetReplicas,
 		RestartedAt: restartedAt,
 	}
 	if result.Validate() != nil {

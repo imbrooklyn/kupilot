@@ -53,8 +53,25 @@ func TestApprovalDialogSelectionSubmissionAndExpiryAreFailClosed(t *testing.T) {
 	if !dialog.MarkSubmitted() || dialog.MarkSubmitted() {
 		t.Fatal("submission was not exactly once")
 	}
+	if !dialog.Open() || !dialog.Submitted() || !strings.Contains(dialog.View(100), "Submitting the one-time approval") {
+		t.Fatal("submitted approval status is not visible")
+	}
+	if dialog.SetExecutionStatus(2, "Out of order.", false) ||
+		!dialog.SetExecutionStatus(1, "PATCH accepted. Observing rollout.", false) ||
+		!strings.Contains(dialog.View(100), "PATCH accepted. Observing rollout.") {
+		t.Fatal("ordered nonterminal execution status is not enforced or visible")
+	}
+	if dialog.SetExecutionStatus(1, "Duplicate.", false) ||
+		!dialog.SetExecutionStatus(2, "Rollout verified.", true) || !dialog.Terminal() ||
+		dialog.ExecutionIndex() != 2 ||
+		!strings.Contains(dialog.View(100), "Enter or Esc closes this result.") {
+		t.Fatal("terminal execution result is not visible")
+	}
+	if dialog.SetExecutionStatus(3, "Late progress.", false) {
+		t.Fatal("terminal execution result accepted a later event")
+	}
 	dialog.Close()
-	if dialog.Open() || dialog.ApproveSelected() || dialog.MarkSubmitted() {
+	if dialog.Open() || dialog.ApproveSelected() || dialog.MarkSubmitted() || dialog.ExecutionIndex() != 0 {
 		t.Fatal("Close() did not clear authority and restore default Reject")
 	}
 	dialog.Show(ApprovalDialogContent{

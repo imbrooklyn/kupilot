@@ -43,12 +43,125 @@ func TestApprovalDialogDefaultsRejectAndEmitsOneBoundDecision(t *testing.T) {
 		!decision.ApprovalNonce.Equal(request.Nonce) || decision.ApprovalSequence != request.Sequence {
 		t.Fatalf("reject command = %#v", decision)
 	}
-	if model.approvalDialog.Open() || model.pendingApproval == nil {
-		t.Fatal("submitted dialog did not close while awaiting its bound result")
+	if !model.approvalDialog.Open() || !model.approvalDialog.Submitted() || model.pendingApproval == nil ||
+		!strings.Contains(model.render(), "Submitting rejection") {
+		t.Fatal("submitted dialog did not remain visible while awaiting its bound result")
 	}
 	model, duplicate := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if duplicate != nil {
 		t.Fatal("duplicate Enter emitted a second command")
+	}
+}
+
+func TestApprovalDialogRendersOrderedPatchAndRolloutResults(t *testing.T) {
+	now := time.UnixMilli(1_700_000_750_000).UTC()
+	model := newTestModel()
+	model.now = func() time.Time { return now }
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	request := testUIApprovalRequest(t, now, 2)
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventApprovalRequested, RunID: testRunID,
+		ScopeGeneration: 7, Sequence: 2, Approval: &request,
+	}})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyTab, Text: "\t"})
+	model, command := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	approve := commandFromCmd(t, command)
+
+	accepted := testRestartExecution(request, 1, application.UIRestartPatchAccepted)
+	accepted.TargetGeneration, accepted.TargetReplicas = 9, 3
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(accepted)})
+	if !strings.Contains(model.render(), "PATCH accepted. Observing Deployment generation 9") {
+		t.Fatal("approval dialog did not render PATCH acceptance")
+	}
+	progress := testRestartExecution(request, 2, application.UIRestartRolloutProgress)
+	progress.TargetGeneration, progress.ObservedGeneration = 9, 8
+	progress.UpdatedReplicas, progress.AvailableReplicas, progress.TargetReplicas = 2, 1, 3
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(progress)})
+	if view := model.render(); !strings.Contains(view, "updated 2/3") || !strings.Contains(view, "available 1/3") {
+		t.Fatalf("approval dialog did not render rollout progress:\n%s", view)
+	}
+	stale := progress
+	stale.EventIndex = 4
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(stale)})
+	if model.approvalDialog.ExecutionIndex() != 2 {
+		t.Fatal("out-of-order rollout event was accepted")
+	}
+	terminal := testRestartExecution(request, 3, application.UIRestartRolloutTimedOut)
+	terminal.TargetGeneration, terminal.ObservedGeneration = 9, 8
+	terminal.UpdatedReplicas, terminal.AvailableReplicas, terminal.TargetReplicas = 2, 1, 3
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(terminal)})
+	if view := model.render(); !model.approvalDialog.Terminal() || !strings.Contains(view, "timed out") ||
+		!strings.Contains(view, "PATCH failure") {
+		t.Fatalf("approval dialog did not distinguish rollout timeout:\n%s", view)
+	}
+	result := application.UIApprovalResult{
+		RequestID: request.RequestID, RunID: request.RunID, ScopeGeneration: 7,
+		Sequence: request.Sequence, Digest: request.Digest,
+		State: domain.ApprovalStateConsumed, StateReason: domain.ApprovalReasonConsumed,
+		Execution: &terminal,
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandApproveRestart, RequestID: approve.RequestID,
+		Approval: &result, RunID: request.RunID,
+	}})
+	if model.pendingApproval != nil || !model.approvalDialog.Open() || !model.approvalDialog.Terminal() {
+		t.Fatal("terminal result retained authority or disappeared before acknowledgement")
+	}
+	model, closeCommand := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if closeCommand != nil || model.approvalDialog.Open() {
+		t.Fatal("terminal result did not close locally without another external command")
+	}
+}
+
+func testRestartExecution(
+	request application.UIApprovalRequest,
+	eventIndex int64,
+	state application.UIRestartExecutionState,
+) application.UIRestartExecution {
+	return application.UIRestartExecution{
+		RequestID: request.RequestID, RunID: request.RunID, ScopeGeneration: request.Scope.Generation,
+		Sequence: request.Sequence, EventIndex: eventIndex, Digest: request.Digest, State: state,
+	}
+}
+
+func restartExecutionUIEvent(execution application.UIRestartExecution) application.UIEvent {
+	return application.UIEvent{
+		Kind: application.UIEventRestartExecution, RunID: execution.RunID,
+		ScopeGeneration: execution.ScopeGeneration, Sequence: execution.Sequence,
+		RestartExecution: &execution,
+	}
+}
+
+func TestRestartExecutionStatusDistinguishesTerminalOutcomes(t *testing.T) {
+	tests := []struct {
+		state   application.UIRestartExecutionState
+		failure application.RestartRolloutFailureCode
+		want    string
+	}{
+		{state: application.UIRestartPatchFailed, want: "will not be retried"},
+		{state: application.UIRestartPatchOutcomeUnknown, want: "outcome is unknown"},
+		{state: application.UIRestartNotAttempted, want: "was not attempted"},
+		{state: application.UIRestartRolloutSucceeded, want: "Rollout verified"},
+		{
+			state:   application.UIRestartRolloutFailed,
+			failure: application.RestartRolloutFailureProgressDeadline,
+			want:    "progress_deadline_exceeded",
+		},
+		{state: application.UIRestartRolloutTimedOut, want: "timed out"},
+		{state: application.UIRestartRolloutUnavailable, want: "became unavailable"},
+		{state: application.UIRestartResultAuditFailed, want: "High-priority error"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.state), func(t *testing.T) {
+			execution := application.UIRestartExecution{
+				State: test.state, FailureCode: test.failure,
+				TargetGeneration: 9, ObservedGeneration: 9,
+				UpdatedReplicas: 3, AvailableReplicas: 3, TargetReplicas: 3,
+			}
+			if status := restartExecutionStatus(execution); !strings.Contains(status, test.want) {
+				t.Fatalf("restartExecutionStatus(%q) = %q, want substring %q", test.state, status, test.want)
+			}
+		})
 	}
 }
 

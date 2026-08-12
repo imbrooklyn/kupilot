@@ -60,6 +60,40 @@ func TestAuditRepositoryRoundTripsTypedEventsWithStablePaging(t *testing.T) {
 	}
 }
 
+func TestAuditRepositoryAppendWriteResultIsIdempotentAndTypeRestricted(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "write-result-audit")
+	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000005051", "00000000-0000-7000-8000-000000005052", "00000000-0000-7000-8000-000000005053", time.UnixMilli(405).UTC())
+	repository := NewAuditRepository(db)
+	event := testAuditEvent(
+		"00000000-0000-7000-8000-000000005054", run,
+		domain.AuditEventWriteAttempted, time.UnixMilli(406).UTC(),
+	)
+	if err := repository.AppendWriteResult(context.Background(), event); err != nil {
+		t.Fatalf("AppendWriteResult(first) error = %v", err)
+	}
+	if err := repository.AppendWriteResult(context.Background(), event); err != nil {
+		t.Fatalf("AppendWriteResult(idempotent retry) error = %v", err)
+	}
+	var count int
+	if err := db.handle.GetContext(context.Background(), &count, `SELECT COUNT(*) FROM audit_events WHERE id = ?`, event.ID); err != nil {
+		t.Fatalf("count write result audit error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("write result audit rows = %d, want 1", count)
+	}
+	mismatched := event
+	mismatched.Outcome = domain.AuditOutcomeFailure
+	if err := repository.AppendWriteResult(context.Background(), mismatched); !errors.Is(err, auditcontract.ErrInvalidRepositoryRequest) {
+		t.Fatalf("AppendWriteResult(mismatched duplicate) error = %v", err)
+	}
+	nonWrite := event
+	nonWrite.ID = "00000000-0000-7000-8000-000000005055"
+	nonWrite.Type = domain.AuditEventRunCompleted
+	if err := repository.AppendWriteResult(context.Background(), nonWrite); !errors.Is(err, auditcontract.ErrInvalidRepositoryRequest) {
+		t.Fatalf("AppendWriteResult(non-write type) error = %v", err)
+	}
+}
+
 func TestAuditRepositoryEnforcesMinimalAllowlistAndRelationships(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "audit-minimal")
 	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000005101", "00000000-0000-7000-8000-000000005102", "00000000-0000-7000-8000-000000005103", time.UnixMilli(410).UTC())

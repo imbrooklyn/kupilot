@@ -259,6 +259,7 @@ const (
 	UIEventPersistenceDegraded UIEventKind = "persistence_degraded"
 	UIEventApprovalRequested   UIEventKind = "approval_requested"
 	UIEventApprovalClosed      UIEventKind = "approval_closed"
+	UIEventRestartExecution    UIEventKind = "restart_execution"
 )
 
 // ToolStepStatus is the delivery-safe state of one inline Tool step.
@@ -287,14 +288,15 @@ type ToolStep struct {
 
 // UIEvent carries publisher-owned identity and exactly one projected payload.
 type UIEvent struct {
-	Kind            UIEventKind
-	RunID           domain.AgentRunID
-	ScopeGeneration int64
-	Sequence        int64
-	Text            string
-	ToolStep        *ToolStep
-	Approval        *UIApprovalRequest
-	ApprovalResult  *UIApprovalResult
+	Kind             UIEventKind
+	RunID            domain.AgentRunID
+	ScopeGeneration  int64
+	Sequence         int64
+	Text             string
+	ToolStep         *ToolStep
+	Approval         *UIApprovalRequest
+	ApprovalResult   *UIApprovalResult
+	RestartExecution *UIRestartExecution
 }
 
 // Terminal reports whether later events for the same run must be ignored.
@@ -309,27 +311,34 @@ func (event UIEvent) Validate() error {
 	}
 	switch event.Kind {
 	case UIEventRunStarted:
-		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil {
+		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventTextDelta, UIEventRunCompleted, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
-		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil {
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventToolStep:
-		if event.Text != "" || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil {
+		if event.Text != "" || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalRequested:
-		if event.Text != "" || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil ||
+		if event.Text != "" || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil || event.RestartExecution != nil ||
 			event.Approval.Validate() != nil || event.Approval.RunID != event.RunID ||
 			event.Approval.Scope.Generation != event.ScopeGeneration || event.Approval.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalClosed:
-		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil ||
+		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil || event.RestartExecution != nil ||
 			event.ApprovalResult.Validate() != nil || event.ApprovalResult.RunID != event.RunID ||
 			event.ApprovalResult.ScopeGeneration != event.ScopeGeneration || event.ApprovalResult.Sequence != event.Sequence {
+			return ErrInvalidUIEvent
+		}
+	case UIEventRestartExecution:
+		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil ||
+			event.RestartExecution == nil || event.RestartExecution.Validate() != nil ||
+			event.RestartExecution.RunID != event.RunID || event.RestartExecution.ScopeGeneration != event.ScopeGeneration ||
+			event.RestartExecution.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	default:
@@ -402,6 +411,7 @@ type UIApprovalResult struct {
 	Digest          domain.ApprovalDigest
 	State           domain.ApprovalState
 	StateReason     domain.ApprovalStateReason
+	Execution       *UIRestartExecution
 }
 
 // Validate checks one bounded non-pending dialog outcome.
@@ -409,6 +419,16 @@ func (result UIApprovalResult) Validate() error {
 	if !result.RequestID.Valid() || !result.RunID.Valid() || result.ScopeGeneration < 1 ||
 		result.Sequence < 1 || result.Sequence > 4096 || !result.Digest.Valid() ||
 		!validApprovalResultState(result.State, result.StateReason) {
+		return ErrInvalidUIEvent
+	}
+	if result.State == domain.ApprovalStateConsumed {
+		if result.Execution == nil || result.Execution.Validate() != nil || !result.Execution.State.Terminal() ||
+			result.Execution.RequestID != result.RequestID || result.Execution.RunID != result.RunID ||
+			result.Execution.ScopeGeneration != result.ScopeGeneration || result.Execution.Sequence != result.Sequence ||
+			!result.Execution.Digest.Equal(result.Digest) {
+			return ErrInvalidUIEvent
+		}
+	} else if result.Execution != nil {
 		return ErrInvalidUIEvent
 	}
 	return nil

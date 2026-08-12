@@ -37,7 +37,10 @@ type ApprovalDialog struct {
 	open            bool
 	approveSelected bool
 	submitted       bool
+	terminal        bool
+	executionIndex  int64
 	remaining       time.Duration
+	status          string
 	content         ApprovalDialogContent
 	styles          ApprovalDialogStyles
 }
@@ -66,7 +69,10 @@ func (dialog *ApprovalDialog) Close() {
 	dialog.open = false
 	dialog.approveSelected = false
 	dialog.submitted = false
+	dialog.terminal = false
+	dialog.executionIndex = 0
 	dialog.remaining = 0
+	dialog.status = ""
 	dialog.content = ApprovalDialogContent{}
 }
 
@@ -83,11 +89,40 @@ func (dialog *ApprovalDialog) MarkSubmitted() bool {
 		return false
 	}
 	dialog.submitted = true
+	if dialog.approveSelected {
+		dialog.status = "Submitting the one-time approval..."
+	} else {
+		dialog.status = "Submitting rejection..."
+	}
+	return true
+}
+
+// SetStatus replaces the code-defined execution status. A terminal status is
+// display-only and carries no remaining approval authority.
+func (dialog *ApprovalDialog) SetStatus(status string, terminal bool) bool {
+	if !dialog.open || !dialog.submitted || status == "" || len(status) > 256 || strings.ContainsAny(status, "\r\n") {
+		return false
+	}
+	dialog.status = status
+	dialog.terminal = terminal
+	return true
+}
+
+// SetExecutionStatus accepts only the next request-bound execution projection.
+// Ordering remains local display state and carries no approval authority.
+func (dialog *ApprovalDialog) SetExecutionStatus(eventIndex int64, status string, terminal bool) bool {
+	if dialog.terminal || eventIndex != dialog.executionIndex+1 || !dialog.SetStatus(status, terminal) {
+		return false
+	}
+	dialog.executionIndex = eventIndex
 	return true
 }
 
 func (dialog ApprovalDialog) Open() bool            { return dialog.open }
 func (dialog ApprovalDialog) ApproveSelected() bool { return dialog.approveSelected }
+func (dialog ApprovalDialog) Submitted() bool       { return dialog.submitted }
+func (dialog ApprovalDialog) Terminal() bool        { return dialog.terminal }
+func (dialog ApprovalDialog) ExecutionIndex() int64 { return dialog.executionIndex }
 
 // View renders the exact digest and fixed current-to-proposed summary.
 func (dialog ApprovalDialog) View(width int) string {
@@ -115,9 +150,20 @@ func (dialog ApprovalDialog) View(width int) string {
 		dialog.styles.Danger.Render("Risk: " + dialog.content.Risk),
 		dialog.styles.Muted.Render("Digest: " + dialog.content.Digest),
 		dialog.styles.Muted.Render(fmt.Sprintf("TTL: %ds · Expires: %s", seconds, dialog.content.ExpiresAt.UTC().Format(time.RFC3339))),
-		rejectStyle.Render(rejectMarker + "Reject"),
-		approveStyle.Render(approveMarker + "Approve"),
-		dialog.styles.Muted.Render("Enter confirms the selected choice. Tab or arrows change it. Esc rejects."),
+	}
+	if dialog.submitted {
+		content = append(content, dialog.styles.Body.Render("Status: "+dialog.status))
+		if dialog.terminal {
+			content = append(content, dialog.styles.Muted.Render("Enter or Esc closes this result."))
+		} else {
+			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The PATCH will not be retried."))
+		}
+	} else {
+		content = append(content,
+			rejectStyle.Render(rejectMarker+"Reject"),
+			approveStyle.Render(approveMarker+"Approve"),
+			dialog.styles.Muted.Render("Enter confirms the selected choice. Tab or arrows change it. Esc rejects."),
+		)
 	}
 	return dialog.styles.Frame.Width(max(1, min(width-6, 96))).Render(strings.Join(content, "\n"))
 }

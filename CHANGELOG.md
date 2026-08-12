@@ -26,6 +26,11 @@ release; current behavior is recorded under `Unreleased`.
   setting.
 - Source-build, user, configuration, privacy, security, troubleshooting,
   diagnostic-capability, and least-privilege RBAC documentation.
+- The isolated `v0.2` `restart_deployment` workflow with a default-reject,
+  digest-bound, 60-second, single-use local approval for one exact Deployment.
+- Bounded post-PATCH Deployment observation with distinct accepted, progress,
+  success, failure, timeout, unavailable, and unknown outcomes in the Approval
+  Dialog and structured audit history.
 
 ### Security
 
@@ -37,6 +42,14 @@ release; current behavior is recorded under `Unreleased`.
   model content and durable storage by source, projection, and sink contracts.
 - Context and Namespace generation checks reject stale work before external I/O,
   after return, and again at Application event acceptance.
+- The `v0.2` executor has one code-generated merge-patch entry point and one
+  approval-service caller. Target change, replay, expiry, pre-write audit
+  failure, and stale scope produce zero writes; an approved attempt is never
+  retried automatically.
+- Rollout observation is limited to exact Deployment reads for at most 90
+  seconds and 45 observations at a minimum two-second interval. Post-attempt
+  audit uses at most three idempotent attempts and fails visibly without
+  repeating the Kubernetes write.
 
 ### Known limitations
 

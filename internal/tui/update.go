@@ -337,6 +337,15 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if model.approvalDialog.Terminal() &&
+		(key.Matches(message, model.keymap.Submit) || key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Quit)) {
+		model.approvalDialog.Close()
+		if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+			_ = model.composer.Focus()
+			model.focus = FocusComposer
+		}
+		return model, nil
+	}
 	switch {
 	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
 		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
@@ -374,7 +383,6 @@ func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd)
 		return model, nil
 	}
 	model.pendingApprovalID = requestID
-	model.approvalDialog.Close()
 	return model, applicationCommand(command)
 }
 
@@ -864,6 +872,15 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		case domain.ApprovalStateExpired:
 			model.clearApproval()
 			model.transcript.AppendNotice("The restart approval expired. No operation was executed.")
+		case domain.ApprovalStateConsumed:
+			status := restartExecutionStatus(*result.Approval.Execution)
+			if model.approvalDialog.Open() {
+				model.approvalDialog.SetStatus(status, true)
+			}
+			model.pendingApproval = nil
+			model.pendingApprovalID = 0
+			model.approvalState = ""
+			model.transcript.AppendNotice(status)
 		default:
 			model.clearApproval()
 			model.transcript.AppendNotice("The restart approval was invalidated. No operation was executed.")
@@ -1119,6 +1136,21 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation {
 		return nil
 	}
+	if event.Kind == application.UIEventRestartExecution {
+		if model.pendingApproval == nil || event.RestartExecution == nil ||
+			event.RestartExecution.RequestID != model.pendingApproval.RequestID ||
+			event.RunID != model.pendingApproval.RunID || event.Sequence != model.pendingApproval.Sequence ||
+			!event.RestartExecution.Digest.Equal(model.pendingApproval.Digest) ||
+			event.RestartExecution.EventIndex != model.approvalDialog.ExecutionIndex()+1 ||
+			!model.approvalDialog.Open() || !model.approvalDialog.Submitted() {
+			return nil
+		}
+		model.approvalDialog.SetExecutionStatus(
+			event.RestartExecution.EventIndex, restartExecutionStatus(*event.RestartExecution),
+			event.RestartExecution.State.Terminal(),
+		)
+		return nil
+	}
 	if event.Kind == application.UIEventApprovalClosed {
 		if model.pendingApproval == nil || event.ApprovalResult.RequestID != model.pendingApproval.RequestID ||
 			event.RunID != model.pendingApproval.RunID || event.Sequence != model.pendingApproval.Sequence ||
@@ -1252,4 +1284,40 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	}
 	model.run.LastSequence = event.Sequence
 	return nil
+}
+
+func restartExecutionStatus(execution application.UIRestartExecution) string {
+	switch execution.State {
+	case application.UIRestartPatchAccepted:
+		return fmt.Sprintf("PATCH accepted. Observing Deployment generation %d with %d target replicas.", execution.TargetGeneration, execution.TargetReplicas)
+	case application.UIRestartPatchFailed:
+		return "The PATCH failed and will not be retried."
+	case application.UIRestartPatchOutcomeUnknown:
+		return "The PATCH outcome is unknown. It will not be retried automatically."
+	case application.UIRestartNotAttempted:
+		return "The approved PATCH was not attempted. The approval cannot be reused."
+	case application.UIRestartRolloutProgress:
+		return fmt.Sprintf(
+			"Rollout progress: observed generation %d/%d; updated %d/%d; available %d/%d.",
+			execution.ObservedGeneration, execution.TargetGeneration,
+			execution.UpdatedReplicas, execution.TargetReplicas,
+			execution.AvailableReplicas, execution.TargetReplicas,
+		)
+	case application.UIRestartRolloutSucceeded:
+		return fmt.Sprintf(
+			"Rollout verified: generation %d observed; updated %d/%d; available %d/%d.",
+			execution.ObservedGeneration, execution.UpdatedReplicas, execution.TargetReplicas,
+			execution.AvailableReplicas, execution.TargetReplicas,
+		)
+	case application.UIRestartRolloutTimedOut:
+		return "PATCH accepted; rollout verification timed out without claiming success or PATCH failure."
+	case application.UIRestartRolloutFailed:
+		return "PATCH accepted; rollout failed (" + string(execution.FailureCode) + ")."
+	case application.UIRestartRolloutUnavailable:
+		return "PATCH accepted; rollout verification became unavailable. The PATCH will not be retried."
+	case application.UIRestartResultAuditFailed:
+		return "High-priority error: the write result audit could not be stored after bounded retries."
+	default:
+		return "The restart result is unavailable."
+	}
 }

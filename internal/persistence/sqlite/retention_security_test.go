@@ -169,13 +169,15 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 	applicationPrefix := filepath.Join(repositoryRoot, "internal", "application") + string(filepath.Separator)
 	proposalBridge := filepath.Join(repositoryRoot, "internal", "tools", "restart_deployment.go")
 	restartAdapter := filepath.Join(repositoryRoot, "internal", "kube", "restart_deployment.go")
+	rolloutAdapter := filepath.Join(repositoryRoot, "internal", "kube", "rollout.go")
 	kubePrefix := filepath.Join(repositoryRoot, "internal", "kube") + string(filepath.Separator)
 	kubeGateway := filepath.Join(repositoryRoot, "internal", "kube", "gateway.go")
 	kubeRuntimeGateway := filepath.Join(repositoryRoot, "internal", "kube", "runtime_gateway.go")
 	forbiddenEverywhere := []string{"WriteExecutor", "RestartDeployment("}
 	approvalOnly := []string{
 		"ApprovalService", "RestartDeploymentExecution", "RestartDeploymentExecutor",
-		"RestartDeploymentRevalidator", "ExecuteApprovedRestart(", "DeploymentRestarter",
+		"RestartDeploymentRevalidator", "RestartDeploymentAcceptance",
+		"ExecuteApprovedRestart(", "DeploymentRestarter",
 	}
 	executeCaller := filepath.Join(repositoryRoot, "internal", "approval", "service.go")
 	executeContract := filepath.Join(repositoryRoot, "internal", "approval", "execution.go")
@@ -207,9 +209,12 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		if bytes.Contains(content, []byte("ApprovalCoordinator")) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("ApprovalCoordinator escaped the Application package: %s", path)
 		}
+		if strings.HasPrefix(path, applicationPrefix) && bytes.Contains(content, []byte("ResourceVersion")) {
+			t.Errorf("Kubernetes resource-version metadata escaped into Application production code: %s", path)
+		}
 		if bytes.Contains(content, []byte("restart_deployment")) &&
 			filepath.Clean(path) != domainApproval && filepath.Clean(path) != proposalBridge &&
-			filepath.Clean(path) != restartAdapter &&
+			filepath.Clean(path) != restartAdapter && filepath.Clean(path) != rolloutAdapter &&
 			!strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("restart_deployment escaped the isolated domain or approval packages: %s", path)
 		}
