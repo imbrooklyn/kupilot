@@ -21,6 +21,15 @@ type ApplicationEventMsg struct {
 	Event application.UIEvent
 }
 
+// ApprovalExpiryMsg is a local deadline signal bound to one tracked request.
+type ApprovalExpiryMsg struct {
+	RequestID       domain.ApprovalID
+	RunID           domain.AgentRunID
+	ScopeGeneration int64
+	Sequence        int64
+	Digest          domain.ApprovalDigest
+}
+
 // ApplicationCommandMsg is the deferred typed intent emitted by a TUI Cmd.
 type ApplicationCommandMsg struct {
 	Command application.UICommand
@@ -64,13 +73,16 @@ type CommandResultMsg struct {
 // ApplicationFailureMsg carries code-authored delivery-safe text and the
 // applicable request identity needed to reject stale asynchronous failures.
 type ApplicationFailureMsg struct {
-	Message         string
-	RequestID       uint64
-	ScopeGeneration int64
-	RunID           domain.AgentRunID
-	Command         application.UICommandKind
-	Query           application.UICompletionKind
-	Resume          application.UIResumeMode
+	Message          string
+	RequestID        uint64
+	ScopeGeneration  int64
+	RunID            domain.AgentRunID
+	ApprovalID       domain.ApprovalID
+	ApprovalDigest   domain.ApprovalDigest
+	ApprovalSequence int64
+	Command          application.UICommandKind
+	Query            application.UICompletionKind
+	Resume           application.UIResumeMode
 }
 
 func sanitizeExternalText(value string, limit int) string {

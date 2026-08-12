@@ -389,7 +389,25 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 		{`INSERT INTO tool_invocations (id, run_id, sequence, tool_name, tool_version, arguments_json, arguments_digest, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{toolID, runID, 1, "get_resource", "tools-v1", `{}`, strings.Repeat("2", 64), "succeeded"}},
 		{`INSERT INTO evidence_items (id, run_id, invocation_id, category, resource_ref_json, fact, fingerprint, observed_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{evidenceID, runID, toolID, "condition", `{"api_version":"v1","kind":"Pod","namespace":"test-namespace","name":"sample-pod"}`, "Synthetic safe fact", strings.Repeat("3", 64), 1}},
 		{`INSERT INTO diagnoses (id, run_id, confirmed_json, hypotheses_json, missing_json, actions_json, answer_markdown, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{diagnosisID, runID, `[]`, `[]`, `[]`, `[]`, "Safe answer", 2}},
-		{`INSERT INTO approvals (id, run_id, session_id, operation, scope_context, scope_namespace, scope_generation, target_ref_json, canonical_parameters_json, operation_digest, human_summary, risk_summary, status, policy_version, requested_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, []any{approvalID, runID, sessionID, "restart_deployment", "test-context", "test-namespace", 1, `{"kind":"Deployment","namespace":"test-namespace","name":"sample-workload"}`, `{}`, strings.Repeat("4", 64), "Synthetic request", "Synthetic risk", "rejected", "policy-v1", 1, 61_001}},
+		{`
+			INSERT INTO approvals (
+				id, run_id, session_id, operation, operation_schema_version,
+				policy_version, scope_context, scope_namespace, scope_generation,
+				target_api_version, target_kind, target_namespace,
+				deployment_name, deployment_uid, template_fingerprint,
+				deployment_generation, reason_summary, risk_summary,
+				operation_digest, nonce_hash, status, state_reason,
+				requested_at_ms, expires_at_ms, state_changed_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, []any{
+			approvalID, runID, sessionID, "restart_deployment", "restart_deployment/v1",
+			"restart-deployment-approval/v1", "test-context", "test-namespace", 1,
+			"apps/v1", "Deployment", "test-namespace",
+			"sample-workload", "synthetic-deployment-uid", strings.Repeat("5", 64),
+			1, "Synthetic request", domain.RestartDeploymentRiskSummary,
+			strings.Repeat("4", 64), strings.Repeat("6", 64), "rejected", "user_rejected",
+			1_001, 61_001, 2_000,
+		}},
 		{`INSERT INTO audit_events (id, session_id, run_id, event_type, actor, outcome, details_json, occurred_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{auditID, sessionID, runID, "run_completed", "system", "success", `{}`, 2}},
 	}
 	for index, statement := range statements {

@@ -19,6 +19,7 @@ type FooterStatus struct {
 	Namespace      string
 	ReadOnly       bool
 	ScopeSwitching bool
+	Approval       string
 	Resource       string
 	Run            string
 	Model          string
@@ -57,7 +58,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if accessOnSecond {
 		lineTwo = access
 	}
-	for _, value := range []string{status.Resource, status.Run, status.Model, status.Privacy} {
+	for _, value := range []string{status.Approval, status.Resource, status.Run, status.Model, status.Privacy} {
 		if value == "" {
 			continue
 		}
@@ -67,7 +68,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	lines := []string{footer.styles.Primary.Render(lineOne)}
 	if lineTwo != "" {
 		style := footer.styles.Secondary
-		if status.ScopeSwitching {
+		if status.ScopeSwitching || status.Approval != "" {
 			style = footer.styles.Warning
 		}
 		lines = append(lines, style.Render(clipFooterColumns(lineTwo, width)))

@@ -3,8 +3,11 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
+	"github.com/imbrooklyn/kupilot/internal/approval"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
@@ -60,12 +63,18 @@ type UICommandOutcome struct {
 	Resource  *UIResourceSelectionResult
 	Status    *UIStatusResult
 	Privacy   *PrivacyReview
+	Approval  *UIApprovalResult
 	RunID     domain.AgentRunID
 	Failure   UIQueryFailureCode
 }
 
 // Validate checks command/result correlation and exclusive payload shapes.
 func (result UICommandOutcome) Validate() error {
+	approvalCommand := result.Command == UICommandApproveRestart || result.Command == UICommandRejectRestart ||
+		result.Command == UICommandExpireRestart
+	if approvalCommand != (result.Approval != nil) || result.Approval != nil && result.Approval.Validate() != nil {
+		return ErrInvalidUIEvent
+	}
 	if result.Failure != "" && (!result.Failure.valid() ||
 		result.Failure == UIQueryNotResumable && result.Command != UICommandResumeSession) {
 		return ErrInvalidUIEvent
@@ -176,6 +185,12 @@ func (result UICommandOutcome) Validate() error {
 			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
+	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+		if result.RequestID == 0 || result.Failure != "" || result.Session != nil || result.Resumed != nil ||
+			result.Scope != nil || result.Resource != nil || result.Status != nil || result.Privacy != nil ||
+			result.RunID != result.Approval.RunID {
+			return ErrInvalidUIEvent
+		}
 	case UICommandResumeSession:
 		if result.RequestID == 0 || result.Failure == "" || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
 			result.Resource != nil || result.Status != nil || result.RunID != "" {
@@ -242,6 +257,8 @@ const (
 	// UIEventPersistenceDegraded is a visible nonterminal warning. It never
 	// claims that incomplete data is resumable.
 	UIEventPersistenceDegraded UIEventKind = "persistence_degraded"
+	UIEventApprovalRequested   UIEventKind = "approval_requested"
+	UIEventApprovalClosed      UIEventKind = "approval_closed"
 )
 
 // ToolStepStatus is the delivery-safe state of one inline Tool step.
@@ -276,6 +293,8 @@ type UIEvent struct {
 	Sequence        int64
 	Text            string
 	ToolStep        *ToolStep
+	Approval        *UIApprovalRequest
+	ApprovalResult  *UIApprovalResult
 }
 
 // Terminal reports whether later events for the same run must be ignored.
@@ -290,21 +309,150 @@ func (event UIEvent) Validate() error {
 	}
 	switch event.Kind {
 	case UIEventRunStarted:
-		if event.Text != "" || event.ToolStep != nil {
+		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventTextDelta, UIEventRunCompleted, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
-		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil {
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventToolStep:
-		if event.Text != "" || event.ToolStep == nil || !event.ToolStep.valid() {
+		if event.Text != "" || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil {
+			return ErrInvalidUIEvent
+		}
+	case UIEventApprovalRequested:
+		if event.Text != "" || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil ||
+			event.Approval.Validate() != nil || event.Approval.RunID != event.RunID ||
+			event.Approval.Scope.Generation != event.ScopeGeneration || event.Approval.Sequence != event.Sequence {
+			return ErrInvalidUIEvent
+		}
+	case UIEventApprovalClosed:
+		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil ||
+			event.ApprovalResult.Validate() != nil || event.ApprovalResult.RunID != event.RunID ||
+			event.ApprovalResult.ScopeGeneration != event.ScopeGeneration || event.ApprovalResult.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	default:
 		return ErrInvalidUIEvent
 	}
 	return nil
+}
+
+const approvalProposedSummary = "Update only the KuPilot-owned restart annotation to create a new Pod template revision."
+
+// UIApprovalRequest is the complete safe dialog projection. The opaque nonce
+// is memory-only decision authority whose type cannot render or marshal bytes.
+type UIApprovalRequest struct {
+	RequestID            domain.ApprovalID
+	RunID                domain.AgentRunID
+	SessionID            domain.SessionID
+	Sequence             int64
+	Operation            domain.ApprovalOperation
+	Scope                domain.ScopeSnapshot
+	Target               domain.ResourceRef
+	TemplateFingerprint  string
+	DeploymentGeneration int64
+	ReasonSummary        string
+	RiskSummary          string
+	CurrentSummary       string
+	ProposedSummary      string
+	Digest               domain.ApprovalDigest
+	Nonce                domain.ApprovalNonce
+	RequestedAt          time.Time
+	ExpiresAt            time.Time
+}
+
+// Validate recomputes the operation digest from every displayed parameter.
+func (request UIApprovalRequest) Validate() error {
+	intent := domain.OperationIntent{
+		Operation: request.Operation, Scope: request.Scope,
+		DeploymentName: request.Target.Name, DeploymentUID: request.Target.UID,
+		TemplateFingerprint: request.TemplateFingerprint, DeploymentGeneration: request.DeploymentGeneration,
+		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion, ReasonSummary: request.ReasonSummary,
+	}
+	domainRequest := domain.ApprovalRequest{
+		ID: request.RequestID, RunID: request.RunID, SessionID: request.SessionID,
+		Intent: intent, Digest: request.Digest, Nonce: request.Nonce,
+		State: domain.ApprovalStatePending, RequestedAt: request.RequestedAt,
+		ExpiresAt: request.ExpiresAt, StateChangedAt: request.RequestedAt,
+	}
+	wantCurrent := fmt.Sprintf(
+		"Deployment generation %d with Pod template fingerprint %s.",
+		request.DeploymentGeneration,
+		request.TemplateFingerprint,
+	)
+	digest, err := approval.OperationDigest(domainRequest)
+	if request.Sequence < 1 || request.Sequence > 4096 || request.Target.Validate() != nil ||
+		request.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
+		request.Target.Kind != domain.RestartDeploymentTargetKind || request.Target.Namespace != request.Scope.Namespace ||
+		request.RiskSummary != domain.RestartDeploymentRiskSummary || request.CurrentSummary != wantCurrent ||
+		request.ProposedSummary != approvalProposedSummary || domainRequest.Validate() != nil ||
+		err != nil || !request.Digest.Equal(digest) {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// UIApprovalResult closes one exact dialog request without carrying its nonce.
+type UIApprovalResult struct {
+	RequestID       domain.ApprovalID
+	RunID           domain.AgentRunID
+	ScopeGeneration int64
+	Sequence        int64
+	Digest          domain.ApprovalDigest
+	State           domain.ApprovalState
+	StateReason     domain.ApprovalStateReason
+}
+
+// Validate checks one bounded non-pending dialog outcome.
+func (result UIApprovalResult) Validate() error {
+	if !result.RequestID.Valid() || !result.RunID.Valid() || result.ScopeGeneration < 1 ||
+		result.Sequence < 1 || result.Sequence > 4096 || !result.Digest.Valid() ||
+		!validApprovalResultState(result.State, result.StateReason) {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+func validApprovalResultState(state domain.ApprovalState, reason domain.ApprovalStateReason) bool {
+	switch state {
+	case domain.ApprovalStateApproved:
+		return reason == domain.ApprovalReasonUserApproved
+	case domain.ApprovalStateRejected:
+		return reason == domain.ApprovalReasonUserRejected
+	case domain.ApprovalStateExpired:
+		return reason == domain.ApprovalReasonTTLExpired
+	case domain.ApprovalStateCancelled:
+		return reason.ValidCancellation()
+	case domain.ApprovalStateInvalidated:
+		return reason == domain.ApprovalReasonScopeChanged || reason == domain.ApprovalReasonDigestMismatch ||
+			reason == domain.ApprovalReasonNonceMismatch || reason == domain.ApprovalReasonDecisionReplayed
+	default:
+		return false
+	}
+}
+
+func projectUIApprovalRequest(request domain.ApprovalRequest, sequence int64) UIApprovalRequest {
+	return UIApprovalRequest{
+		RequestID: request.ID, RunID: request.RunID, SessionID: request.SessionID, Sequence: sequence,
+		Operation: request.Intent.Operation, Scope: request.Intent.Scope,
+		Target: domain.ResourceRef{
+			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
+			Namespace: request.Intent.Scope.Namespace, Name: request.Intent.DeploymentName, UID: request.Intent.DeploymentUID,
+		},
+		TemplateFingerprint: request.Intent.TemplateFingerprint, DeploymentGeneration: request.Intent.DeploymentGeneration,
+		ReasonSummary: request.Intent.ReasonSummary, RiskSummary: domain.RestartDeploymentRiskSummary,
+		CurrentSummary:  fmt.Sprintf("Deployment generation %d with Pod template fingerprint %s.", request.Intent.DeploymentGeneration, request.Intent.TemplateFingerprint),
+		ProposedSummary: approvalProposedSummary, Digest: request.Digest, Nonce: request.Nonce,
+		RequestedAt: request.RequestedAt, ExpiresAt: request.ExpiresAt,
+	}
+}
+
+func projectUIApprovalResult(request domain.ApprovalRequest, sequence int64) UIApprovalResult {
+	return UIApprovalResult{
+		RequestID: request.ID, RunID: request.RunID, ScopeGeneration: request.Intent.Scope.Generation,
+		Sequence: sequence, Digest: request.Digest, State: request.State, StateReason: request.StateReason,
+	}
 }
 
 // RunObservationKind identifies fixed text-free lifecycle metadata admitted to

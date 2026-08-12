@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -35,13 +36,17 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case ApplicationEventMsg:
-		model.acceptApplicationEvent(message.Event)
+		cmd := model.acceptApplicationEvent(message.Event)
 		model.reflow()
 		if model.quitAfterCancel && !model.run.Active && model.run.Terminal {
 			model.quitAfterCancel = false
 			return model, quitCommand()
 		}
-		return model, nil
+		return model, cmd
+	case ApprovalExpiryMsg:
+		cmd := model.acceptApprovalExpiry(message)
+		model.reflow()
+		return model, cmd
 	case CompletionResultMsg:
 		model.acceptCompletionResult(message.Result)
 		model.reflow()
@@ -82,20 +87,20 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.FocusMsg:
 		model.terminalFocused = true
-		if !model.dialog.Open() && !model.scopeConflict.Open() {
+		if !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
 			_ = model.composer.Focus()
 			model.focus = FocusComposer
 		}
 		return model, nil
 	case tea.PasteMsg:
-		if model.dialog.Open() || model.scopeConflict.Open() || !model.terminalFocused {
+		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() || !model.terminalFocused {
 			return model, nil
 		}
 		return model.updatePaste(message)
 	case tea.KeyPressMsg:
 		return model.updateKey(message)
 	default:
-		if model.dialog.Open() {
+		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() {
 			return model, nil
 		}
 		updated, cmd, err := model.composer.Update(msg)
@@ -107,6 +112,18 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
+	if message.Command == application.UICommandApproveRestart || message.Command == application.UICommandRejectRestart ||
+		message.Command == application.UICommandExpireRestart {
+		if model.pendingApproval == nil || model.pendingApprovalID == 0 || message.RequestID != model.pendingApprovalID ||
+			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
+			message.ApprovalID != model.pendingApproval.RequestID ||
+			!message.ApprovalDigest.Equal(model.pendingApproval.Digest) ||
+			message.ApprovalSequence != model.pendingApproval.Sequence {
+			return false
+		}
+		model.clearApproval()
+		return true
+	}
 	if message.Command == application.UICommandSubmitQuestion {
 		if model.pendingSubmitID == 0 || message.RequestID != model.pendingSubmitID ||
 			message.ScopeGeneration != model.scope.Generation {
@@ -202,6 +219,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	message.Text = sanitizeExternalText(message.Text, 0)
 	if !model.terminalFocused {
 		return model, nil
+	}
+	if model.approvalDialog.Open() {
+		return model.updateApprovalDialogKey(message)
 	}
 	if key.Matches(message, model.keymap.Quit) {
 		if model.run.Active {
@@ -314,6 +334,48 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	queryCmd := model.syncSuggestionsAfterEdit()
 	model.reflow()
 	return model, combineCommands(cmd, queryCmd)
+}
+
+func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
+		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
+		key.Matches(message, model.keymap.Complete), key.Matches(message, model.keymap.Reverse):
+		model.approvalDialog.Move(1)
+		return model, nil
+	case key.Matches(message, model.keymap.Submit):
+		return model.submitApprovalDecision(false)
+	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Quit):
+		return model.submitApprovalDecision(true)
+	default:
+		return model, nil
+	}
+}
+
+func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd) {
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 || !model.approvalDialog.MarkSubmitted() {
+		return model, nil
+	}
+	request := *model.pendingApproval
+	kind := application.UICommandRejectRestart
+	if !forceReject && model.approvalDialog.ApproveSelected() {
+		kind = application.UICommandApproveRestart
+	}
+	requestID := model.nextUIRequestID()
+	command := application.UICommand{
+		Kind: kind, RequestID: requestID, RunID: request.RunID,
+		ExpectedScopeGeneration: request.Scope.Generation,
+		ApprovalID:              request.RequestID, ApprovalDigest: request.Digest,
+		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
+	}
+	if command.Validate() != nil {
+		model.clearApproval()
+		model.showDialog("Approval unavailable", "The approval decision could not be submitted safely.")
+		return model, nil
+	}
+	model.pendingApprovalID = requestID
+	model.approvalDialog.Close()
+	return model, applicationCommand(command)
 }
 
 func (model Model) submitDraft() (tea.Model, tea.Cmd) {
@@ -536,7 +598,7 @@ func (model *Model) showDialog(title, body string) {
 
 func (model *Model) closeDialog() {
 	model.dialog.Close()
-	if model.terminalFocused {
+	if model.terminalFocused && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
 		_ = model.composer.Focus()
 	}
 	model.focus = FocusComposer
@@ -776,8 +838,84 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active AgentRun was cancelled.")
 	case application.UICommandCancelPrivacy:
 		model.finishPrivacyAction(result.RequestID)
+	case application.UICommandApproveRestart, application.UICommandRejectRestart, application.UICommandExpireRestart:
+		if model.pendingApproval == nil || model.pendingApprovalID == 0 || result.RequestID != model.pendingApprovalID ||
+			result.Approval.RequestID != model.pendingApproval.RequestID ||
+			result.Approval.RunID != model.pendingApproval.RunID ||
+			result.Approval.ScopeGeneration != model.pendingApproval.Scope.Generation ||
+			result.Approval.Sequence != model.pendingApproval.Sequence ||
+			!result.Approval.Digest.Equal(model.pendingApproval.Digest) {
+			return
+		}
+		state := result.Approval.State
+		switch state {
+		case domain.ApprovalStateApproved:
+			model.pendingApprovalID = 0
+			model.approvalState = domain.ApprovalStateApproved
+			model.approvalDialog.Close()
+			if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+				_ = model.composer.Focus()
+				model.focus = FocusComposer
+			}
+			model.transcript.AppendNotice("The restart request was approved but not executed.")
+		case domain.ApprovalStateRejected:
+			model.clearApproval()
+			model.transcript.AppendNotice("The restart request was rejected. No operation was executed.")
+		case domain.ApprovalStateExpired:
+			model.clearApproval()
+			model.transcript.AppendNotice("The restart approval expired. No operation was executed.")
+		default:
+			model.clearApproval()
+			model.transcript.AppendNotice("The restart approval was invalidated. No operation was executed.")
+		}
 	case application.UICommandResumeSession:
 		model.showDialog("Command unavailable", "The command is not available in the current flow.")
+	}
+}
+
+func (model *Model) acceptApprovalExpiry(message ApprovalExpiryMsg) tea.Cmd {
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 ||
+		message.RequestID != model.pendingApproval.RequestID || message.RunID != model.pendingApproval.RunID ||
+		message.ScopeGeneration != model.pendingApproval.Scope.Generation || message.Sequence != model.pendingApproval.Sequence ||
+		!message.Digest.Equal(model.pendingApproval.Digest) {
+		return nil
+	}
+	now := model.now().UTC().Truncate(time.Millisecond)
+	if now.IsZero() || now.UnixMilli() < 0 || now.Before(model.pendingApproval.ExpiresAt) {
+		return nil
+	}
+	return model.expirePendingApproval()
+}
+
+func (model *Model) expirePendingApproval() tea.Cmd {
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 {
+		return nil
+	}
+	request := *model.pendingApproval
+	requestID := model.nextUIRequestID()
+	command := application.UICommand{
+		Kind: application.UICommandExpireRestart, RequestID: requestID, RunID: request.RunID,
+		ExpectedScopeGeneration: request.Scope.Generation,
+		ApprovalID:              request.RequestID, ApprovalDigest: request.Digest,
+		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
+	}
+	if command.Validate() != nil {
+		model.clearApproval()
+		return nil
+	}
+	model.pendingApprovalID = requestID
+	model.approvalDialog.Close()
+	return applicationCommand(command)
+}
+
+func (model *Model) clearApproval() {
+	model.approvalDialog.Close()
+	model.pendingApproval = nil
+	model.pendingApprovalID = 0
+	model.approvalState = ""
+	if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+		_ = model.composer.Focus()
+		model.focus = FocusComposer
 	}
 }
 
@@ -917,6 +1055,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	changed := result.ScopeGeneration > result.ExpectedGeneration
 	if result.Failure != "" {
 		if changed {
+			model.clearApproval()
 			model.finishRunForScopeChange()
 			model.resource = ResourceView{}
 			model.pendingResourceID = 0
@@ -928,6 +1067,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 		return
 	}
 	if changed {
+		model.clearApproval()
 		model.finishRunForScopeChange()
 		model.resource = ResourceView{}
 		model.pendingResourceID = 0
@@ -975,24 +1115,81 @@ func statusText(status application.UIStatusResult) string {
 	return fmt.Sprintf("Context: %s · Namespace: %s · %s · %s", contextName, namespace, access, run)
 }
 
-func (model *Model) acceptApplicationEvent(event application.UIEvent) {
+func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation {
-		return
+		return nil
+	}
+	if event.Kind == application.UIEventApprovalClosed {
+		if model.pendingApproval == nil || event.ApprovalResult.RequestID != model.pendingApproval.RequestID ||
+			event.RunID != model.pendingApproval.RunID || event.Sequence != model.pendingApproval.Sequence ||
+			!event.ApprovalResult.Digest.Equal(model.pendingApproval.Digest) {
+			return nil
+		}
+		state := event.ApprovalResult.State
+		model.clearApproval()
+		if state == domain.ApprovalStateExpired {
+			model.transcript.AppendNotice("The restart approval expired. No operation was executed.")
+		} else {
+			model.transcript.AppendNotice("The restart approval was cancelled or invalidated. No operation was executed.")
+		}
+		return nil
 	}
 	if event.Kind == application.UIEventRunStarted {
 		if event.Sequence != 1 || model.run.Active || !model.startup.Ready || !model.scope.ReadOnly {
-			return
+			return nil
 		}
 		model.run = RunView{
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
 			LastSequence: event.Sequence, Active: true, Status: "active",
 		}
 		model.transcript.StartAgent()
-		return
+		return nil
 	}
 	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
 		event.ScopeGeneration != model.run.ScopeGeneration || event.Sequence != model.run.LastSequence+1 {
-		return
+		return nil
+	}
+	if event.Kind == application.UIEventApprovalRequested {
+		if model.pendingApproval != nil || model.approvalDialog.Open() {
+			return nil
+		}
+		request := *event.Approval
+		content := components.ApprovalDialogContent{
+			Operation: string(request.Operation),
+			Scope: fmt.Sprintf("%s / %s / generation %d",
+				sanitizeExternalText(request.Scope.Context, 253),
+				sanitizeExternalText(request.Scope.Namespace, 63), request.Scope.Generation),
+			Resource: fmt.Sprintf("%s %s %s/%s (UID %s)",
+				sanitizeExternalText(request.Target.APIVersion, 253),
+				sanitizeExternalText(request.Target.Kind, 63),
+				sanitizeExternalText(request.Target.Namespace, 63),
+				sanitizeExternalText(request.Target.Name, 253),
+				sanitizeExternalText(request.Target.UID, 1024)),
+			Current:  sanitizeExternalText(request.CurrentSummary, 4096),
+			Proposed: sanitizeExternalText(request.ProposedSummary, 4096),
+			Reason:   sanitizeExternalText(request.ReasonSummary, domain.MaxApprovalReasonSummaryBytes),
+			Risk:     sanitizeExternalText(request.RiskSummary, 4096),
+			Digest:   string(request.Digest), ExpiresAt: request.ExpiresAt,
+		}
+		now := model.now().UTC().Truncate(time.Millisecond)
+		if now.IsZero() || now.UnixMilli() < 0 {
+			return nil
+		}
+		model.pendingApproval = &request
+		model.pendingApprovalID = 0
+		model.approvalState = domain.ApprovalStatePending
+		model.run.LastSequence = event.Sequence
+		if !now.Before(request.ExpiresAt) {
+			return model.expirePendingApproval()
+		}
+		model.approvalDialog.Show(content, now)
+		if !model.approvalDialog.Open() {
+			model.clearApproval()
+			return nil
+		}
+		model.composer.Blur()
+		model.focus = FocusModal
+		return approvalExpiry(request, now)
 	}
 
 	switch event.Kind {
@@ -1026,6 +1223,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) {
 			Truncated:     step.Truncated,
 		})
 	case application.UIEventRunCompleted, application.UIEventRunFailed, application.UIEventRunCancelled:
+		model.clearApproval()
 		text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
 		if text == "" {
 			switch event.Kind {
@@ -1050,7 +1248,8 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) {
 		}
 		model.transcript.FinishAgent(text)
 	default:
-		return
+		return nil
 	}
 	model.run.LastSequence = event.Sequence
+	return nil
 }

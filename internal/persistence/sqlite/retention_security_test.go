@@ -166,7 +166,9 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 	}
 	approvalPrefix := filepath.Join(repositoryRoot, "internal", "approval") + string(filepath.Separator)
 	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
-	forbiddenEverywhere := []string{"ApprovalCoordinator", "WriteExecutor", "RestartDeployment("}
+	applicationPrefix := filepath.Join(repositoryRoot, "internal", "application") + string(filepath.Separator)
+	proposalBridge := filepath.Join(repositoryRoot, "internal", "tools", "restart_deployment.go")
+	forbiddenEverywhere := []string{"WriteExecutor", "RestartDeployment("}
 	approvalOnly := []string{"ApprovalService", "RestartDeploymentExecutor", "ExecuteApprovedRestart("}
 	err := filepath.WalkDir(filepath.Join(repositoryRoot, "internal"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -191,14 +193,43 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 				}
 			}
 		}
+		if bytes.Contains(content, []byte("ApprovalCoordinator")) && !strings.HasPrefix(path, applicationPrefix) {
+			t.Errorf("ApprovalCoordinator escaped the Application package: %s", path)
+		}
 		if bytes.Contains(content, []byte("restart_deployment")) &&
-			filepath.Clean(path) != domainApproval && !strings.HasPrefix(path, approvalPrefix) {
+			filepath.Clean(path) != domainApproval && filepath.Clean(path) != proposalBridge &&
+			!strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("restart_deployment escaped the isolated domain or approval packages: %s", path)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("WalkDir(internal) error = %v", err)
+	}
+	commandRoot := filepath.Join(repositoryRoot, "cmd", "kupilot")
+	err = filepath.WalkDir(commandRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, symbol := range []string{
+			"ApprovalCoordinator", "RestartDeploymentProposal", "RestartDeploymentExecutor",
+			"ExecuteApprovedRestart(", "restart_deployment",
+		} {
+			if bytes.Contains(content, []byte(symbol)) {
+				t.Errorf("v0.1 composition contains prohibited approval capability %q in %s", symbol, path)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir(cmd/kupilot) error = %v", err)
 	}
 }
 

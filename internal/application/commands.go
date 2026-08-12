@@ -84,6 +84,9 @@ const (
 	UICommandAcceptResume    UICommandKind = "accept_resume"
 	UICommandCancelResume    UICommandKind = "cancel_resume"
 	UICommandShowStatus      UICommandKind = "show_status"
+	UICommandApproveRestart  UICommandKind = "approve_restart"
+	UICommandRejectRestart   UICommandKind = "reject_restart"
+	UICommandExpireRestart   UICommandKind = "expire_restart"
 )
 
 // UICommand contains only the typed intent data needed by the current TUI.
@@ -98,11 +101,20 @@ type UICommand struct {
 	Resource                *domain.ResourceRef
 	PrivacyRevision         string
 	LogsEnabled             *bool
+	ApprovalID              domain.ApprovalID
+	ApprovalDigest          domain.ApprovalDigest
+	ApprovalNonce           domain.ApprovalNonce
+	ApprovalSequence        int64
 }
 
 // Validate checks payload exclusivity and bounded delivery data.
 func (command UICommand) Validate() error {
 	if command.ExpectedScopeGeneration < 0 {
+		return ErrInvalidUICommand
+	}
+	approvalCommand := command.Kind == UICommandApproveRestart || command.Kind == UICommandRejectRestart ||
+		command.Kind == UICommandExpireRestart
+	if !approvalCommand && command.hasApprovalPayload() {
 		return ErrInvalidUICommand
 	}
 	switch command.Kind {
@@ -183,6 +195,13 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
+	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+		if command.RequestID == 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
+			!command.ApprovalID.Valid() || !command.ApprovalDigest.Valid() || !command.ApprovalNonce.Valid() ||
+			command.ApprovalSequence < 1 || command.ApprovalSequence > 4096 {
+			return ErrInvalidUICommand
+		}
 	default:
 		return ErrInvalidUICommand
 	}
@@ -191,6 +210,10 @@ func (command UICommand) Validate() error {
 
 func (command UICommand) hasPrivacyPayload() bool {
 	return command.PrivacyRevision != "" || command.LogsEnabled != nil
+}
+
+func (command UICommand) hasApprovalPayload() bool {
+	return command.ApprovalID != "" || command.ApprovalDigest != "" || command.ApprovalNonce.Valid() || command.ApprovalSequence != 0
 }
 
 func validUICommandText(value string, limit int) bool {

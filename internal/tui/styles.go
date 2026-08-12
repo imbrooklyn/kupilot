@@ -82,6 +82,7 @@ type styleSet struct {
 	slashMenu     components.SlashMenuStyles
 	picker        components.PickerStyles
 	dialog        components.DialogStyles
+	approval      components.ApprovalDialogStyles
 	scopeConflict components.ScopeConflictStyles
 	footer        components.FooterStyles
 }
@@ -148,6 +149,12 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			Title: lipgloss.NewStyle().Foreground(palette.Danger).Bold(true),
 			Body:  base,
 			Hint:  muted,
+		},
+		approval: components.ApprovalDialogStyles{
+			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),
+			Title: lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
+			Body:  base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
+			Muted: muted, Danger: lipgloss.NewStyle().Foreground(palette.Danger),
 		},
 		picker: components.PickerStyles{
 			Normal: base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -80,6 +81,7 @@ type Config struct {
 	Resource       ResourceView
 	ModelName      string
 	PrivacyMode    domain.PrivacyMode
+	Now            func() time.Time
 }
 
 type resumeOrigin uint8
@@ -102,6 +104,7 @@ type Model struct {
 	run         RunView
 	modelName   string
 	privacyMode domain.PrivacyMode
+	now         func() time.Time
 
 	composer        components.Composer
 	transcript      components.Transcript
@@ -111,6 +114,7 @@ type Model struct {
 	resourcePicker  components.ResourcePicker
 	sessionPicker   components.SessionPicker
 	dialog          components.ErrorDialog
+	approvalDialog  components.ApprovalDialog
 	scopeConflict   components.ScopeConflictDialog
 	footer          components.Footer
 
@@ -127,7 +131,10 @@ type Model struct {
 	pendingResource   ResourceView
 	pendingSubmitID   uint64
 	pendingPrivacyID  uint64
+	pendingApprovalID uint64
 	privacyReview     *application.PrivacyReview
+	pendingApproval   *application.UIApprovalRequest
+	approvalState     domain.ApprovalState
 	privacyPending    bool
 	quitAfterCancel   bool
 	terminalFocused   bool
@@ -155,10 +162,17 @@ func NewModel(config Config) Model {
 	if privacy != domain.PrivacyModeStandard && privacy != domain.PrivacyModeMinimal {
 		privacy = domain.PrivacyModeStandard
 	}
+	now := config.Now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
+	}
+	if value := now(); value.IsZero() || value.UnixMilli() < 0 {
+		now = func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
+	}
 	model := Model{
 		width: width, height: height, focus: FocusComposer,
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
-		modelName: sanitizeExternalText(config.ModelName, 256), privacyMode: privacy,
+		modelName: sanitizeExternalText(config.ModelName, 256), privacyMode: privacy, now: now,
 		composer:        components.NewComposer(styles.composer, application.MaxQuestionBytes),
 		transcript:      components.NewTranscript(styles.transcript, styles.toolSteps),
 		slashMenu:       components.NewSlashMenu(styles.slashMenu),
@@ -167,6 +181,7 @@ func NewModel(config Config) Model {
 		resourcePicker:  components.NewResourcePicker(styles.picker),
 		sessionPicker:   components.NewSessionPicker(styles.picker),
 		dialog:          components.NewErrorDialog(styles.dialog),
+		approvalDialog:  components.NewApprovalDialog(styles.approval),
 		scopeConflict:   components.NewScopeConflictDialog(styles.scopeConflict),
 		footer:          components.NewFooter(styles.footer),
 		styles:          styles, keymap: DefaultKeyMap(), terminalFocused: true,

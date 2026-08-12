@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -61,6 +62,9 @@ func applicationFailure(message tea.Msg, safeMessage string) ApplicationFailureM
 		result.RequestID = request.Command.RequestID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
 		result.RunID = request.Command.RunID
+		result.ApprovalID = request.Command.ApprovalID
+		result.ApprovalDigest = request.Command.ApprovalDigest
+		result.ApprovalSequence = request.Command.ApprovalSequence
 		result.Command = request.Command.Kind
 	}
 	return result
@@ -82,4 +86,17 @@ func applicationResume(request application.UIResumeRequest) tea.Cmd {
 	return func() tea.Msg {
 		return ApplicationResumeMsg{Request: request}
 	}
+}
+
+func approvalExpiry(request application.UIApprovalRequest, now time.Time) tea.Cmd {
+	delay := request.ExpiresAt.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return ApprovalExpiryMsg{
+			RequestID: request.RequestID, RunID: request.RunID,
+			ScopeGeneration: request.Scope.Generation, Sequence: request.Sequence, Digest: request.Digest,
+		}
+	})
 }

@@ -82,6 +82,13 @@ func TestScopeManagerSwitchContextInvalidatesBeforeCreatingTarget(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewScopeManager() error = %v", err)
 	}
+	approvalHook := &fakeScopeInvalidationHook{invalidateFn: func(int64) error {
+		recorder.add("approval-invalidation-hook")
+		return nil
+	}}
+	if err := manager.BindApprovalInvalidationHook(approvalHook); err != nil {
+		t.Fatalf("BindApprovalInvalidationHook() error = %v", err)
+	}
 
 	oldScope, err := manager.SwitchContext(context.Background(), oldClient.context.Name, 0)
 	if err != nil {
@@ -142,6 +149,7 @@ func TestScopeManagerSwitchContextInvalidatesBeforeCreatingTarget(t *testing.T) 
 	wantEvents := []string{
 		"contexts",
 		"cancel-run",
+		"approval-invalidation-hook",
 		"invalidation-hook",
 		"close:old-context",
 		"create:new-context",

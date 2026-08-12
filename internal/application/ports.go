@@ -126,6 +126,11 @@ func (generator *IdentifierGenerator) NewAuditEventID() (domain.AuditEventID, er
 	return domain.AuditEventID(value), err
 }
 
+func (generator *IdentifierGenerator) NewApprovalID() (domain.ApprovalID, error) {
+	value, err := generator.next()
+	return domain.ApprovalID(value), err
+}
+
 func (generator *IdentifierGenerator) NewModelRequestID() (domain.ModelRequestID, error) {
 	value, err := generator.next()
 	return domain.ModelRequestID(value), err

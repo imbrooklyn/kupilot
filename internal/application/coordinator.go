@@ -57,10 +57,11 @@ type CoordinatorConfig struct {
 // needed by CLI/TUI composition. Core run tests may omit it when no delivery
 // use case is exercised.
 type CoordinatorUIConfig struct {
-	Sessions SessionResumeStore
-	Titles   SessionTitleStore
-	Startup  StartupMaintenance
-	Scopes   *ScopeManager
+	Sessions  SessionResumeStore
+	Titles    SessionTitleStore
+	Startup   StartupMaintenance
+	Scopes    *ScopeManager
+	Approvals *ApprovalCoordinator
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -96,6 +97,7 @@ type Coordinator struct {
 	titles           SessionTitleStore
 	startup          StartupMaintenance
 	uiScopes         *ScopeManager
+	approvals        *ApprovalCoordinator
 	startupPrepared  bool
 	currentSession   *domain.Session
 	currentResumed   bool
@@ -203,15 +205,23 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.UI != nil && (config.UI.Sessions == nil || config.UI.Titles == nil || config.UI.Startup == nil) {
 		return nil, ErrCoordinatorDependency
 	}
+	if config.UI != nil && config.UI.Approvals != nil && config.UI.Scopes == nil {
+		return nil, ErrCoordinatorDependency
+	}
 	var resumeSessions SessionResumeStore
 	var titles SessionTitleStore
 	var startup StartupMaintenance
 	var uiScopes *ScopeManager
+	var approvals *ApprovalCoordinator
 	if config.UI != nil {
 		resumeSessions = config.UI.Sessions
 		titles = config.UI.Titles
 		startup = config.UI.Startup
 		uiScopes = config.UI.Scopes
+		approvals = config.UI.Approvals
+		if approvals != nil && uiScopes.BindApprovalInvalidationHook(approvals) != nil {
+			return nil, ErrCoordinatorDependency
+		}
 	}
 	return &Coordinator{
 		sessions: config.Sessions, runs: config.Runs, tools: config.Tools,
@@ -222,7 +232,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, titles: titles, startup: startup,
-		uiScopes: uiScopes,
+		uiScopes:  uiScopes,
+		approvals: approvals,
 	}, nil
 }
 
@@ -322,6 +333,12 @@ func (coordinator *Coordinator) prepareStartup(ctx context.Context) error {
 	now := coordinator.now()
 	if !validCoordinatorTime(now) {
 		return ErrCoordinatorDependency
+	}
+	if coordinator.approvals != nil {
+		if err := coordinator.approvals.Recover(ctx); err != nil {
+			coordinator.markGlobalPersistenceDegraded()
+			return fmt.Errorf("%w: approval recovery failed", ErrPersistenceUnavailable)
+		}
 	}
 	if err := coordinator.startup.RecoverInterrupted(ctx, now); err != nil {
 		coordinator.markGlobalPersistenceDegraded()
@@ -619,6 +636,26 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
 	case UICommandSubmitQuestion:
 		return coordinator.executeQuestionCommand(ctx, command)
+	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+		if coordinator.approvals == nil {
+			return UICommandOutcome{}, ErrApprovalUnavailable
+		}
+		var (
+			result UIApprovalResult
+			err    error
+		)
+		if command.Kind == UICommandExpireRestart {
+			result, err = coordinator.approvals.ExpireCommand(ctx, command)
+		} else {
+			result, err = coordinator.approvals.Decide(ctx, command)
+		}
+		if err != nil && !errors.Is(err, ErrApprovalExpired) && !errors.Is(err, ErrApprovalInvalidated) {
+			return UICommandOutcome{}, err
+		}
+		return UICommandOutcome{
+			Command: command.Kind, RequestID: command.RequestID,
+			Approval: &result, RunID: result.RunID,
+		}, nil
 	}
 
 	requireIdle := command.Kind == UICommandAcceptResume
@@ -1534,6 +1571,16 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 
 	bridgeFailed := false
+	if event.Terminal() && coordinator.approvals != nil {
+		approvalContext, cancelApproval := context.WithTimeout(ctx, coordinator.persistenceLimit)
+		approvalErr := coordinator.approvals.CancelRun(approvalContext, state.run.ID)
+		cancelApproval()
+		if approvalErr != nil {
+			degradedContext, cancelDegraded := context.WithTimeout(ctx, coordinator.persistenceLimit)
+			bridgeFailed = coordinator.markRunPersistenceDegraded(degradedContext, state) != nil
+			cancelDegraded()
+		}
+	}
 	retentionFailed := false
 	if event.Terminal() && coordinator.startup != nil && !state.persistenceBad {
 		cleanupErr := coordinator.persist(ctx, func(operationContext context.Context) error {
@@ -1581,13 +1628,49 @@ func (coordinator *Coordinator) CancelRun(ctx context.Context, command CancelRun
 		return err
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	if coordinator.active == nil || coordinator.active.terminal || coordinator.active.run.ID != command.RunID ||
 		coordinator.active.run.Scope.Generation != command.ScopeGeneration {
+		coordinator.mu.Unlock()
 		return ErrRunNotActive
 	}
-	coordinator.active.cancel()
+	cancel := coordinator.active.cancel
+	approvals := coordinator.approvals
+	coordinator.mu.Unlock()
+	cancel()
+	if approvals != nil {
+		if err := approvals.CancelRun(ctx, command.RunID); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// SubmitRestartDeploymentProposal delegates the isolated v0.2 proposal bridge
+// to the optional approval coordinator. The v0.1 composition leaves it nil.
+func (coordinator *Coordinator) SubmitRestartDeploymentProposal(
+	ctx context.Context,
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	sequence int64,
+	intent domain.OperationIntent,
+) (domain.ApprovalRequest, error) {
+	if coordinator == nil || coordinator.approvals == nil {
+		return domain.ApprovalRequest{}, ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.active == nil || coordinator.active.terminal || coordinator.active.run.ID != runID ||
+		coordinator.active.publishing || coordinator.active.bridge == nil ||
+		coordinator.active.run.SessionID != sessionID || coordinator.active.run.Scope != intent.Scope ||
+		sequence != coordinator.active.bridge.sequence+1 {
+		return domain.ApprovalRequest{}, ErrApprovalUnavailable
+	}
+	request, err := coordinator.approvals.SubmitRestartDeploymentProposal(ctx, runID, sessionID, sequence, intent)
+	if err != nil {
+		return domain.ApprovalRequest{}, err
+	}
+	coordinator.active.bridge.sequence = sequence
+	return request, nil
 }
 
 // WaitRun waits for the exact active or most recently completed run without

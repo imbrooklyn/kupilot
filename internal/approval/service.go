@@ -31,6 +31,7 @@ type ApprovalService interface {
 	Decide(context.Context, DecisionCommand) (domain.ApprovalRequest, domain.ApprovalDecision, error)
 	Expire(context.Context, domain.ApprovalID) (domain.ApprovalRequest, error)
 	Cancel(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
+	Invalidate(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
 	Consume(context.Context, ConsumeCommand) (domain.ApprovalRequest, error)
 }
 
@@ -302,6 +303,42 @@ func (service *Service) Cancel(
 	return updated, nil
 }
 
+// Invalidate closes one pending or approved request after a proof or scope
+// mismatch. It does not invoke the executor.
+func (service *Service) Invalidate(
+	ctx context.Context,
+	requestID domain.ApprovalID,
+	reason domain.ApprovalStateReason,
+) (domain.ApprovalRequest, error) {
+	if service == nil {
+		return domain.ApprovalRequest{}, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidConfiguration)
+	}
+	if err := validateRequestIdentity(requestID); err != nil || !validInvalidationReason(reason) {
+		return domain.ApprovalRequest{}, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidRequest)
+	}
+	now, err := currentApprovalTime(service.clock)
+	if err != nil {
+		return domain.ApprovalRequest{}, err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	record, exists := service.records[requestID]
+	if !exists {
+		return domain.ApprovalRequest{}, domain.NewApprovalError(domain.ApprovalErrorCodeRequestNotFound)
+	}
+	if record.request.State.Terminated() {
+		return record.request, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
+	}
+	if expiredAt(record.request, now) {
+		return service.expireLocked(record, now), domain.NewApprovalError(domain.ApprovalErrorCodeExpired)
+	}
+	if contextApprovalError(ctx) != nil {
+		updated := service.cancelLocked(record, now, domain.ApprovalReasonContextCancelled)
+		return updated, domain.NewApprovalError(domain.ApprovalErrorCodeCancelled)
+	}
+	return service.invalidateLocked(record, now, reason), nil
+}
+
 // Consume atomically spends one approved request before invoking the fixed seam.
 // A consumed request is never made available for an automatic retry.
 func (service *Service) Consume(ctx context.Context, command ConsumeCommand) (domain.ApprovalRequest, error) {
@@ -454,4 +491,11 @@ func (service *Service) invalidateLocked(
 	record.request.StateReason = reason
 	record.request.StateChangedAt = now
 	return record.request
+}
+
+func validInvalidationReason(reason domain.ApprovalStateReason) bool {
+	return reason == domain.ApprovalReasonScopeChanged ||
+		reason == domain.ApprovalReasonDigestMismatch ||
+		reason == domain.ApprovalReasonNonceMismatch ||
+		reason == domain.ApprovalReasonDecisionReplayed
 }

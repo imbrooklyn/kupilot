@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 func TestMigrateFreshDatabaseAndRepeatedOpen(t *testing.T) {
@@ -39,6 +42,62 @@ func TestMigrateFreshDatabaseAndRepeatedOpen(t *testing.T) {
 	t.Cleanup(func() { _ = reopened.Close() })
 	assertInitialSchema(t, reopened.handle.DB)
 	assertMigrationRecord(t, reopened.handle.DB, "first-version")
+}
+
+func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t *testing.T) {
+	stateDir := testStateDir(t)
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
+	db := sqlx.NewDb(raw, driverName)
+	t.Cleanup(func() { _ = db.Close() })
+	migrations, err := loadMigrations()
+	if err != nil || len(migrations) != 3 {
+		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
+	}
+	for index := 0; index < 2; index++ {
+		if err := applyMigration(context.Background(), db, migrations[index], "upgrade-fixture", index == 0); err != nil {
+			t.Fatalf("applyMigration(%d) error = %v", index+1, err)
+		}
+	}
+	sessionID := "00000000-0000-7000-8000-000000009701"
+	messageID := "00000000-0000-7000-8000-000000009702"
+	runID := "00000000-0000-7000-8000-000000009703"
+	approvalID := "00000000-0000-7000-8000-000000009704"
+	now := time.UnixMilli(1_000).UTC()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO sessions (id, title, status, privacy_mode, version, created_at_ms, updated_at_ms) VALUES (?, ?, 'active', 'standard', 1, ?, ?)`, []any{sessionID, "Upgrade fixture", now.UnixMilli(), now.UnixMilli()}},
+		{`INSERT INTO messages (id, session_id, role, content, content_format, status, content_hash, created_at_ms) VALUES (?, ?, 'user', 'Safe fixture', 'plain', 'committed', ?, ?)`, []any{messageID, sessionID, strings.Repeat("1", 64), now.UnixMilli()}},
+		{`INSERT INTO agent_runs (id, session_id, request_message_id, status, scope_context, scope_namespace, scope_generation, prompt_version, tool_catalog_version, started_at_ms) VALUES (?, ?, ?, 'running', 'test-context', 'test-namespace', 1, 'prompt-v1', 'tools-v1', ?)`, []any{runID, sessionID, messageID, now.UnixMilli()}},
+		{`INSERT INTO approvals (id, run_id, session_id, operation, scope_context, scope_namespace, scope_generation, target_ref_json, canonical_parameters_json, operation_digest, human_summary, risk_summary, status, policy_version, requested_at_ms, expires_at_ms) VALUES (?, ?, ?, 'restart_deployment', 'test-context', 'test-namespace', 1, ?, '{}', ?, 'Safe legacy summary', 'Safe legacy risk', 'pending', 'policy-v1', ?, ?)`, []any{approvalID, runID, sessionID, `{"api_version":"apps/v1","kind":"Deployment","namespace":"test-namespace","name":"sample"}`, strings.Repeat("2", 64), now.UnixMilli(), now.Add(time.Minute).UnixMilli()}},
+	}
+	for index, statement := range statements {
+		if _, err := db.ExecContext(context.Background(), statement.query, statement.args...); err != nil {
+			t.Fatalf("upgrade fixture statement %d error = %v", index, err)
+		}
+	}
+	if err := applyMigration(context.Background(), db, migrations[2], "upgrade-fixture", false); err == nil {
+		t.Fatal("approval runtime migration error = nil")
+	}
+	var preserved int
+	if err := db.GetContext(context.Background(), &preserved, `SELECT count(id) FROM approvals WHERE id = ?`, approvalID); err != nil {
+		t.Fatalf("released approval query error = %v", err)
+	}
+	var migrationRows int
+	if err := db.GetContext(context.Background(), &migrationRows, `SELECT count(version) FROM schema_migrations WHERE version = 3`); err != nil {
+		t.Fatalf("migration record query error = %v", err)
+	}
+	var decisionTableRows int
+	if err := db.GetContext(context.Background(), &decisionTableRows, `SELECT count(name) FROM sqlite_schema WHERE type = 'table' AND name = 'approval_decisions'`); err != nil {
+		t.Fatalf("runtime table query error = %v", err)
+	}
+	if preserved != 1 || migrationRows != 0 || decisionTableRows != 0 {
+		t.Fatalf("preserved/migration/runtime table = %d/%d/%d, want 1/0/0", preserved, migrationRows, decisionTableRows)
+	}
 }
 
 func TestMigrateLegacyFixture(t *testing.T) {
@@ -106,7 +165,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 3, "000003_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 4, "000004_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -279,6 +338,7 @@ func assertInitialSchema(t *testing.T, db *sql.DB) {
 	}
 	want := []string{
 		"agent_runs",
+		"approval_decisions",
 		"approvals",
 		"audit_events",
 		"diagnoses",
@@ -308,7 +368,11 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		t.Fatalf("migration record query error = %v", err)
 	}
 	defer rows.Close()
-	wantNames := []string{"000001_initial.sql", "000002_privacy_consent.sql"}
+	wantNames := []string{
+		"000001_initial.sql",
+		"000002_privacy_consent.sql",
+		"000003_approval_runtime.sql",
+	}
 	count := 0
 	for rows.Next() {
 		var version int

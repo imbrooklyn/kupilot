@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
 
@@ -32,6 +33,8 @@ func (model Model) render() string {
 
 	overlay := ""
 	switch {
+	case model.approvalDialog.Open():
+		overlay = model.approvalDialog.View(model.width)
 	case model.scopeConflict.Open():
 		overlay = model.scopeConflict.View(model.width)
 	case model.dialog.Open():
@@ -66,10 +69,19 @@ func (model Model) footerView() string {
 	if model.modelName != "" {
 		modelStatus = "model/" + model.modelName
 	}
+	approvalStatus := ""
+	if model.pendingApproval != nil {
+		approvalStatus = "approval/pending"
+		if model.approvalState == domain.ApprovalStateApproved {
+			approvalStatus = "approval/approved-not-executed"
+		} else if model.pendingApprovalID != 0 {
+			approvalStatus = "approval/deciding"
+		}
+	}
 	return model.footer.View(model.width, components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
-		Resource: resource, Run: run, Model: modelStatus,
+		Approval: approvalStatus, Resource: resource, Run: run, Model: modelStatus,
 		Privacy: "privacy/" + string(model.privacyMode),
 	})
 }

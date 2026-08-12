@@ -91,11 +91,12 @@ type ScopeManager struct {
 	switchMu sync.Mutex
 	mu       sync.RWMutex
 
-	factory    ScopeClientFactory
-	namespaces NamespaceReader
-	resources  ResourceService
-	hook       ScopeInvalidationHook
-	now        func() time.Time
+	factory      ScopeClientFactory
+	namespaces   NamespaceReader
+	resources    ResourceService
+	hook         ScopeInvalidationHook
+	approvalHook ScopeInvalidationHook
+	now          func() time.Time
 
 	state      ScopeState
 	generation int64
@@ -108,6 +109,34 @@ type ScopeManager struct {
 	selectedResource *domain.ResourceRef
 	namespaceCache   map[namespaceCacheKey]domain.NamespaceList
 	resourceCache    map[resourceCacheKey]domain.ResourceList
+}
+
+// BindApprovalInvalidationHook attaches the admitted approval lifecycle before
+// the first scope activation. Both invalidation hooks run before client reuse
+// or construction; a failure keeps the new scope unavailable.
+func (manager *ScopeManager) BindApprovalInvalidationHook(hook ScopeInvalidationHook) error {
+	if manager == nil || hook == nil {
+		return newScopeError(
+			domain.SafeErrorClassConfigurationInvalid,
+			"scope_approval_hook_invalid",
+			"bind_approval_invalidation",
+			"Approval invalidation could not be bound safely.",
+		)
+	}
+	manager.switchMu.Lock()
+	defer manager.switchMu.Unlock()
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.state != ScopeStateUnavailable || manager.generation != 0 || manager.client != nil || manager.approvalHook != nil {
+		return newScopeError(
+			domain.SafeErrorClassConflict,
+			"scope_approval_hook_conflict",
+			"bind_approval_invalidation",
+			"Approval invalidation could not be bound safely.",
+		)
+	}
+	manager.approvalHook = hook
+	return nil
 }
 
 // NewScopeManager validates all required consumer ports and creates an
@@ -687,7 +716,12 @@ func (manager *ScopeManager) finishLocalInvalidation(generation int64, cancel co
 }
 
 func (manager *ScopeManager) invalidateHook(generation int64) error {
-	if err := manager.hook.InvalidateScope(generation); err != nil {
+	var approvalErr error
+	if manager.approvalHook != nil {
+		approvalErr = manager.approvalHook.InvalidateScope(generation)
+	}
+	runtimeErr := manager.hook.InvalidateScope(generation)
+	if approvalErr != nil || runtimeErr != nil {
 		return newScopeError(
 			domain.SafeErrorClassInternal,
 			"scope_invalidation_failed",

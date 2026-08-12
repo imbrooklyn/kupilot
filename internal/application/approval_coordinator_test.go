@@ -1,0 +1,639 @@
+package application
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/agent"
+	"github.com/imbrooklyn/kupilot/internal/approval"
+	"github.com/imbrooklyn/kupilot/internal/domain"
+)
+
+func TestApprovalCoordinatorPersistsProposalBeforePublishingDialog(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request, err := fixture.coordinator.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 12, fixture.intent,
+	)
+	if err != nil {
+		t.Fatalf("SubmitRestartDeploymentProposal() error = %v", err)
+	}
+	if request.State != domain.ApprovalStatePending || fixture.persistence.creates != 1 || len(fixture.ui.events) != 1 {
+		t.Fatalf("request/create/events = %#v/%d/%d", request, fixture.persistence.creates, len(fixture.ui.events))
+	}
+	event := fixture.ui.events[0]
+	if event.Validate() != nil || event.Kind != UIEventApprovalRequested || event.Approval == nil ||
+		event.Approval.RequestID != request.ID || event.Approval.Digest != request.Digest ||
+		event.Approval.ReasonSummary != fixture.intent.ReasonSummary || event.Approval.RiskSummary != domain.RestartDeploymentRiskSummary {
+		t.Fatalf("approval UI event = %#v", event)
+	}
+	if fixture.persistence.lastCreateAudit.Validate() != nil ||
+		fixture.persistence.lastCreateAudit.Type != domain.AuditEventApprovalRequested ||
+		fixture.persistence.lastCreateAudit.IntegrityHash != string(request.Digest) {
+		t.Fatalf("request audit = %#v", fixture.persistence.lastCreateAudit)
+	}
+	if fixture.executor.calls != 0 {
+		t.Fatalf("fake executor calls = %d, want 0", fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorApprovalPersistsDecisionWithoutExecutionAndRejectsReplay(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 20)
+	command := approvalDecisionCommand(UICommandApproveRestart, request, 20, 101)
+	result, err := fixture.coordinator.Decide(context.Background(), command)
+	if err != nil {
+		t.Fatalf("Decide(approve) error = %v", err)
+	}
+	if result.Validate() != nil || result.State != domain.ApprovalStateApproved || fixture.persistence.resolves != 1 {
+		t.Fatalf("approve result/resolves = %#v/%d", result, fixture.persistence.resolves)
+	}
+	if fixture.persistence.lastDecision.Choice != domain.ApprovalDecisionApprove ||
+		fixture.persistence.lastResolveAudit.Type != domain.AuditEventApprovalApproved {
+		t.Fatalf("approved decision/audit = %#v/%#v", fixture.persistence.lastDecision, fixture.persistence.lastResolveAudit)
+	}
+	if fixture.executor.calls != 0 {
+		t.Fatalf("fake executor calls = %d, want 0", fixture.executor.calls)
+	}
+	replayed, err := fixture.coordinator.Decide(context.Background(), command)
+	if !errors.Is(err, ErrApprovalInvalidated) || replayed.State != domain.ApprovalStateInvalidated ||
+		replayed.StateReason != domain.ApprovalReasonDecisionReplayed {
+		t.Fatalf("Decide(replay) error = %v", err)
+	}
+	if fixture.persistence.resolves != 1 || fixture.persistence.closes != 1 || fixture.executor.calls != 0 {
+		t.Fatalf("replay resolves/closes/executor = %d/%d/%d", fixture.persistence.resolves, fixture.persistence.closes, fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorRejectionPersistsTerminalDecisionWithoutExecution(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 21)
+	result, err := fixture.coordinator.Decide(
+		context.Background(), approvalDecisionCommand(UICommandRejectRestart, request, 21, 107),
+	)
+	if err != nil || result.State != domain.ApprovalStateRejected ||
+		result.StateReason != domain.ApprovalReasonUserRejected || fixture.persistence.resolves != 1 ||
+		fixture.persistence.lastDecision.Choice != domain.ApprovalDecisionReject ||
+		fixture.persistence.lastResolveAudit.Type != domain.AuditEventApprovalRejected ||
+		fixture.executor.calls != 0 {
+		t.Fatalf("reject result/error/decision/audit/executor = %#v/%v/%#v/%#v/%d", result, err, fixture.persistence.lastDecision, fixture.persistence.lastResolveAudit, fixture.executor.calls)
+	}
+	if _, err := fixture.coordinator.Decide(
+		context.Background(), approvalDecisionCommand(UICommandRejectRestart, request, 21, 108),
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("Decide(rejected replay) error = %v", err)
+	}
+}
+
+func TestApprovalCoordinatorApprovedNotExecutedStillExpiresAndInvalidates(t *testing.T) {
+	tests := []struct {
+		name string
+		act  func(*testing.T, *approvalCoordinatorFixture, domain.ApprovalRequest)
+		want domain.ApprovalStateReason
+	}{
+		{
+			name: "expiry",
+			act: func(t *testing.T, fixture *approvalCoordinatorFixture, request domain.ApprovalRequest) {
+				fixture.clock.set(request.ExpiresAt)
+				result, err := fixture.coordinator.Expire(context.Background(), request.ID)
+				if err != nil || result.State != domain.ApprovalStateExpired {
+					t.Fatalf("Expire() result/error = %#v/%v", result, err)
+				}
+			},
+			want: domain.ApprovalReasonTTLExpired,
+		},
+		{
+			name: "run cancellation",
+			act: func(t *testing.T, fixture *approvalCoordinatorFixture, request domain.ApprovalRequest) {
+				if err := fixture.coordinator.CancelRun(context.Background(), request.RunID); err != nil {
+					t.Fatalf("CancelRun() error = %v", err)
+				}
+			},
+			want: domain.ApprovalReasonRunCancelled,
+		},
+		{
+			name: "scope invalidation",
+			act: func(t *testing.T, fixture *approvalCoordinatorFixture, _ domain.ApprovalRequest) {
+				if err := fixture.coordinator.InvalidateScope(8); err != nil {
+					t.Fatalf("InvalidateScope() error = %v", err)
+				}
+			},
+			want: domain.ApprovalReasonScopeChanged,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApprovalCoordinatorFixture(t)
+			request := fixture.submit(t, 25)
+			approved, err := fixture.coordinator.Decide(
+				context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 25, 106),
+			)
+			if err != nil || approved.State != domain.ApprovalStateApproved {
+				t.Fatalf("Decide() result/error = %#v/%v", approved, err)
+			}
+			test.act(t, fixture, request)
+			if fixture.persistence.lastCloseExpected != domain.ApprovalStateApproved ||
+				fixture.persistence.lastClosed.StateReason != test.want || fixture.executor.calls != 0 {
+				t.Fatalf("close expected/request/executor = %s/%#v/%d", fixture.persistence.lastCloseExpected, fixture.persistence.lastClosed, fixture.executor.calls)
+			}
+		})
+	}
+}
+
+func TestCoordinatorProposalBridgeRequiresExactActiveRunBinding(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	outer, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), runnerFunc(func(
+		context.Context,
+		agent.RunInput,
+		agent.EventSink,
+	) agent.RunOutcome {
+		return agent.RunOutcome{}
+	}))
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("v0.1 proposal error = %v", err)
+	}
+	outer.approvals = fixture.coordinator
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("inactive proposal error = %v", err)
+	}
+	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.ui)
+	if err != nil {
+		t.Fatalf("newEventBridge() error = %v", err)
+	}
+	bridge.started = true
+	bridge.sequence = 1
+	outer.active = &activeRun{run: domain.AgentRun{
+		ID: fixture.runID, SessionID: fixture.sessionID, Scope: fixture.intent.Scope,
+	}, bridge: bridge}
+	otherSession := domain.SessionID("00000000-0000-7000-8000-000000008199")
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, otherSession, 2, fixture.intent,
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("session mismatch error = %v", err)
+	}
+	staleIntent := fixture.intent
+	staleIntent.Scope.Generation++
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 2, staleIntent,
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("scope mismatch error = %v", err)
+	}
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 3, fixture.intent,
+	); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("sequence mismatch error = %v", err)
+	}
+	request, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
+	)
+	if err != nil || request.State != domain.ApprovalStatePending || fixture.persistence.creates != 1 ||
+		fixture.executor.calls != 0 || bridge.sequence != 2 {
+		t.Fatalf("bound proposal request/error/create/executor/sequence = %#v/%v/%d/%d/%d", request, err, fixture.persistence.creates, fixture.executor.calls, bridge.sequence)
+	}
+}
+
+func TestCoordinatorTerminalEventCancelsUnexecutedApproval(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	clock := newCoordinatorClock()
+	var outer *Coordinator
+	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+		if err != nil {
+			t.Fatalf("NewEventPublisher() error = %v", err)
+		}
+		if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
+			t.Fatalf("Publish(started) error = %v", err)
+		}
+		intent := fixture.intent
+		intent.Scope = input.Scope().Snapshot()
+		if _, err := outer.SubmitRestartDeploymentProposal(
+			ctx, input.RunID(), input.SessionID(), 2, intent,
+		); err != nil {
+			t.Fatalf("SubmitRestartDeploymentProposal() error = %v", err)
+		}
+		class := domain.SafeErrorClassInternal
+		if _, err := publisher.Publish(ctx, agent.RunEvent{
+			Kind: agent.RunEventRunFailed,
+			Failure: &agent.RunEventFailure{
+				Class: class, SafeMessage: "The AgentRun failed safely.",
+			},
+		}); err != nil {
+			t.Fatalf("Publish(failed) error = %v", err)
+		}
+		return agent.RunOutcome{
+			Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+			SafeMessage: "The AgentRun failed safely.",
+		}
+	})
+	var scope *coordinatorScope
+	outer, _, scope, _ = newCoordinatorHarness(t, clock, runner)
+	outer.approvals = fixture.coordinator
+	fixture.scope.scope = scope.scope
+	session := createCoordinatorSession(t, outer)
+	runID, err := outer.StartRun(context.Background(), StartRunCommand{
+		SessionID: session.ID, Question: "Inspect the selected Deployment.",
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if _, err := outer.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+	if fixture.persistence.lastCloseExpected != domain.ApprovalStatePending ||
+		fixture.persistence.lastClosed.State != domain.ApprovalStateCancelled ||
+		fixture.persistence.lastClosed.StateReason != domain.ApprovalReasonRunCancelled ||
+		fixture.executor.calls != 0 {
+		t.Fatalf("terminal close expected/request/executor = %s/%#v/%d", fixture.persistence.lastCloseExpected, fixture.persistence.lastClosed, fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T, *approvalCoordinatorFixture)
+	}{
+		{name: "proposal persistence failure", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			fixture.persistence.createErr = errors.New("synthetic storage failure")
+			if _, err := fixture.coordinator.SubmitRestartDeploymentProposal(context.Background(), fixture.runID, fixture.sessionID, 30, fixture.intent); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
+				t.Fatalf("proposal error = %v", err)
+			}
+			if len(fixture.ui.events) != 0 {
+				t.Fatalf("UI events = %d, want 0", len(fixture.ui.events))
+			}
+		}},
+		{name: "decision persistence failure", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			request := fixture.submit(t, 31)
+			fixture.persistence.resolveErr = errors.New("synthetic audit failure")
+			if _, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 31, 102)); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
+				t.Fatalf("Decide() error = %v", err)
+			}
+			if snapshot, ok := fixture.service.Snapshot(request.ID); !ok || snapshot.State != domain.ApprovalStateCancelled {
+				t.Fatalf("in-memory state after persistence failure = %#v/%v", snapshot, ok)
+			}
+		}},
+		{name: "expired", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			request := fixture.submit(t, 32)
+			fixture.clock.set(request.ExpiresAt)
+			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 32, 103))
+			if !errors.Is(err, ErrApprovalExpired) || result.State != domain.ApprovalStateExpired || fixture.persistence.closes != 1 {
+				t.Fatalf("expired result/error/closes = %#v/%v/%d", result, err, fixture.persistence.closes)
+			}
+		}},
+		{name: "scope changed", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			request := fixture.submit(t, 33)
+			fixture.scope.scope.Generation++
+			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 33, 104))
+			if !errors.Is(err, ErrApprovalInvalidated) || result.State != domain.ApprovalStateInvalidated ||
+				result.StateReason != domain.ApprovalReasonScopeChanged || fixture.persistence.closes != 1 {
+				t.Fatalf("stale result/error/closes = %#v/%v/%d", result, err, fixture.persistence.closes)
+			}
+		}},
+		{name: "run cancelled", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			request := fixture.submit(t, 34)
+			if err := fixture.coordinator.CancelRun(context.Background(), request.RunID); err != nil {
+				t.Fatalf("CancelRun() error = %v", err)
+			}
+			if fixture.persistence.lastClosed.State != domain.ApprovalStateCancelled ||
+				fixture.persistence.lastClosed.StateReason != domain.ApprovalReasonRunCancelled || len(fixture.ui.events) != 2 {
+				t.Fatalf("cancelled request/events = %#v/%d", fixture.persistence.lastClosed, len(fixture.ui.events))
+			}
+		}},
+		{name: "scope generation invalidated", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			fixture.submit(t, 35)
+			if err := fixture.coordinator.InvalidateScope(8); err != nil {
+				t.Fatalf("InvalidateScope() error = %v", err)
+			}
+			if fixture.persistence.lastClosed.State != domain.ApprovalStateInvalidated ||
+				fixture.persistence.lastClosed.StateReason != domain.ApprovalReasonScopeChanged || len(fixture.ui.events) != 2 {
+				t.Fatalf("invalidated request/events = %#v/%d", fixture.persistence.lastClosed, len(fixture.ui.events))
+			}
+		}},
+		{name: "scope invalidation persistence failure", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
+			fixture.submit(t, 36)
+			fixture.persistence.closeErr = errors.New("synthetic close failure")
+			if err := fixture.coordinator.InvalidateScope(8); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
+				t.Fatalf("InvalidateScope() error = %v", err)
+			}
+			if len(fixture.ui.events) != 2 {
+				t.Fatalf("UI events = %d, want request and close", len(fixture.ui.events))
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApprovalCoordinatorFixture(t)
+			test.run(t, fixture)
+			if fixture.executor.calls != 0 {
+				t.Fatalf("fake executor calls = %d, want 0", fixture.executor.calls)
+			}
+		})
+	}
+}
+
+func TestApprovalCoordinatorDecisionProofMismatchIsPersistedAndCleared(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 40)
+	command := approvalDecisionCommand(UICommandApproveRestart, request, 40, 105)
+	command.ApprovalDigest = domain.ApprovalDigest(fmt.Sprintf("%064d", 7))
+	result, err := fixture.coordinator.Decide(context.Background(), command)
+	if !errors.Is(err, ErrApprovalInvalidated) || result.State != domain.ApprovalStateInvalidated ||
+		result.StateReason != domain.ApprovalReasonDigestMismatch || fixture.persistence.closes != 1 {
+		t.Fatalf("mismatch result/error/closes = %#v/%v/%d", result, err, fixture.persistence.closes)
+	}
+	if fixture.executor.calls != 0 {
+		t.Fatalf("fake executor calls = %d, want 0", fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorRecoveryInvalidatesPendingAndApprovedWithoutExecution(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	pending := storedApprovalForRecovery(t, fixture, "00000000-0000-7000-8000-000000008201", domain.ApprovalStatePending)
+	approved := storedApprovalForRecovery(t, fixture, "00000000-0000-7000-8000-000000008202", domain.ApprovalStateApproved)
+	fixture.persistence.recoverable = []approval.StoredRequest{pending, approved}
+	fixture.clock.set(pending.RequestedAt.Add(5 * time.Second))
+	if err := fixture.coordinator.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if len(fixture.persistence.recovered) != 2 {
+		t.Fatalf("recovered transitions = %d, want 2", len(fixture.persistence.recovered))
+	}
+	for _, transition := range fixture.persistence.recovered {
+		if transition.Validate() != nil || transition.After.State != domain.ApprovalStateCancelled ||
+			transition.After.StateReason != domain.ApprovalReasonProcessRestarted {
+			t.Fatalf("recovery transition = %#v", transition)
+		}
+	}
+	if fixture.executor.calls != 0 || len(fixture.ui.events) != 0 {
+		t.Fatalf("recovery executor/UI = %d/%d", fixture.executor.calls, len(fixture.ui.events))
+	}
+}
+
+func TestCoordinatorStartupRecoveryFailsClosedBeforeRunMaintenance(t *testing.T) {
+	tests := []struct {
+		name       string
+		recoverErr error
+		wantErr    bool
+		wantCalls  int
+	}{
+		{name: "success", wantCalls: 1},
+		{name: "approval audit failure", recoverErr: errors.New("synthetic recovery audit failure"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApprovalCoordinatorFixture(t)
+			pending := storedApprovalForRecovery(t, fixture, "00000000-0000-7000-8000-000000008203", domain.ApprovalStatePending)
+			fixture.persistence.recoverable = []approval.StoredRequest{pending}
+			fixture.persistence.recoveryErr = test.recoverErr
+			fixture.clock.set(pending.RequestedAt.Add(time.Second))
+			outer, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), runnerFunc(func(
+				context.Context,
+				agent.RunInput,
+				agent.EventSink,
+			) agent.RunOutcome {
+				return agent.RunOutcome{}
+			}))
+			maintenance := new(recordingStartupMaintenance)
+			outer.approvals = fixture.coordinator
+			outer.startup = maintenance
+			err := outer.prepareStartup(context.Background())
+			if test.wantErr != errors.Is(err, ErrPersistenceUnavailable) {
+				t.Fatalf("prepareStartup() error = %v", err)
+			}
+			if maintenance.recoveryCalls != test.wantCalls || maintenance.retentionCalls != test.wantCalls ||
+				fixture.executor.calls != 0 {
+				t.Fatalf("startup recovery/retention/executor calls = %d/%d/%d", maintenance.recoveryCalls, maintenance.retentionCalls, fixture.executor.calls)
+			}
+			if !test.wantErr {
+				if len(fixture.persistence.recovered) != 1 {
+					t.Fatalf("recovered transitions = %d, want 1", len(fixture.persistence.recovered))
+				}
+				if err := outer.prepareStartup(context.Background()); err != nil || maintenance.recoveryCalls != 1 {
+					t.Fatalf("repeated prepareStartup() error/calls = %v/%d", err, maintenance.recoveryCalls)
+				}
+			}
+		})
+	}
+}
+
+type approvalCoordinatorFixture struct {
+	coordinator *ApprovalCoordinator
+	service     *approval.Service
+	persistence *fakeApprovalPersistence
+	ui          *fakeApprovalUIEvents
+	executor    *fakeApprovalExecutor
+	clock       *approvalCoordinatorClock
+	scope       *fakeApprovalCurrentScope
+	runID       domain.AgentRunID
+	sessionID   domain.SessionID
+	intent      domain.OperationIntent
+}
+
+func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
+	t.Helper()
+	clock := &approvalCoordinatorClock{now: time.UnixMilli(1_700_000_500_000).UTC()}
+	executor := &fakeApprovalExecutor{}
+	service, err := approval.NewService(approval.ServiceConfig{
+		Clock: clock, Nonces: approvalNonceSource{value: 0x71}, Executor: executor,
+	})
+	if err != nil {
+		t.Fatalf("approval.NewService() error = %v", err)
+	}
+	scope := &fakeApprovalCurrentScope{scope: domain.ClusterScope{
+		Context: "test-context", Namespace: "test-namespace", Generation: 7,
+		ActivatedAt: clock.now,
+	}}
+	persistence := &fakeApprovalPersistence{}
+	ui := &fakeApprovalUIEvents{}
+	ids := &approvalCoordinatorIDs{}
+	coordinator, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
+		Service: service, Persistence: persistence, Scope: scope,
+		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewApprovalCoordinator() error = %v", err)
+	}
+	intent := domain.OperationIntent{
+		Operation: domain.ApprovalOperationRestartDeployment, Scope: scope.scope.Snapshot(),
+		DeploymentName: "sample-deployment", DeploymentUID: "sample-deployment-uid",
+		TemplateFingerprint: fmt.Sprintf("%064d", 8), DeploymentGeneration: 8,
+		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion,
+		ReasonSummary: "Restart after the bounded diagnosis.",
+	}
+	return &approvalCoordinatorFixture{
+		coordinator: coordinator, service: service, persistence: persistence, ui: ui,
+		executor: executor, clock: clock, scope: scope,
+		runID:     "00000000-0000-7000-8000-000000008101",
+		sessionID: "00000000-0000-7000-8000-000000008102", intent: intent,
+	}
+}
+
+func (fixture *approvalCoordinatorFixture) submit(t *testing.T, sequence int64) domain.ApprovalRequest {
+	t.Helper()
+	request, err := fixture.coordinator.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, sequence, fixture.intent,
+	)
+	if err != nil {
+		t.Fatalf("SubmitRestartDeploymentProposal() error = %v", err)
+	}
+	return request
+}
+
+func approvalDecisionCommand(kind UICommandKind, request domain.ApprovalRequest, sequence int64, requestID uint64) UICommand {
+	return UICommand{
+		Kind: kind, RequestID: requestID, RunID: request.RunID,
+		ExpectedScopeGeneration: request.Intent.Scope.Generation,
+		ApprovalID:              request.ID, ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce,
+		ApprovalSequence: sequence,
+	}
+}
+
+func storedApprovalForRecovery(
+	t *testing.T,
+	fixture *approvalCoordinatorFixture,
+	id domain.ApprovalID,
+	state domain.ApprovalState,
+) approval.StoredRequest {
+	t.Helper()
+	nonce, err := domain.NewApprovalNonce(bytes.Repeat([]byte{0x72}, domain.ApprovalNonceBytes))
+	if err != nil {
+		t.Fatalf("NewApprovalNonce() error = %v", err)
+	}
+	requestedAt := time.UnixMilli(1_700_000_500_000).UTC()
+	request := domain.ApprovalRequest{
+		ID: id, RunID: fixture.runID, SessionID: fixture.sessionID, Intent: fixture.intent,
+		Nonce: nonce, State: state, RequestedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+	}
+	if state == domain.ApprovalStateApproved {
+		request.StateReason = domain.ApprovalReasonUserApproved
+		request.StateChangedAt = requestedAt.Add(time.Second)
+	}
+	request.Digest, err = approval.OperationDigest(request)
+	if err != nil {
+		t.Fatalf("OperationDigest() error = %v", err)
+	}
+	stored, err := approval.NewStoredRequest(request)
+	if err != nil {
+		t.Fatalf("NewStoredRequest() error = %v", err)
+	}
+	return stored
+}
+
+type approvalCoordinatorClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *approvalCoordinatorClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *approvalCoordinatorClock) set(value time.Time) {
+	clock.mu.Lock()
+	clock.now = value
+	clock.mu.Unlock()
+}
+
+type approvalNonceSource struct{ value byte }
+
+func (source approvalNonceSource) NewNonce(context.Context) (domain.ApprovalNonce, error) {
+	return domain.NewApprovalNonce(bytes.Repeat([]byte{source.value}, domain.ApprovalNonceBytes))
+}
+
+type fakeApprovalExecutor struct{ calls int }
+
+func (executor *fakeApprovalExecutor) ExecuteApprovedRestart(context.Context, domain.OperationIntent) error {
+	executor.calls++
+	return nil
+}
+
+type approvalCoordinatorIDs struct{ next int }
+
+func (source *approvalCoordinatorIDs) nextID() string {
+	source.next++
+	return fmt.Sprintf("00000000-0000-7000-8000-%012d", 8_300+source.next)
+}
+
+func (source *approvalCoordinatorIDs) NewApprovalID() (domain.ApprovalID, error) {
+	return domain.ApprovalID(source.nextID()), nil
+}
+
+func (source *approvalCoordinatorIDs) NewAuditEventID() (domain.AuditEventID, error) {
+	return domain.AuditEventID(source.nextID()), nil
+}
+
+type fakeApprovalCurrentScope struct{ scope domain.ClusterScope }
+
+func (scope *fakeApprovalCurrentScope) CurrentScope() (domain.ClusterScope, bool) {
+	return scope.scope, scope.scope.Validate() == nil
+}
+
+type fakeApprovalUIEvents struct {
+	events []UIEvent
+	err    error
+}
+
+func (sink *fakeApprovalUIEvents) PublishUIEvent(_ context.Context, event UIEvent) error {
+	if sink.err != nil {
+		return sink.err
+	}
+	sink.events = append(sink.events, event)
+	return nil
+}
+
+type fakeApprovalPersistence struct {
+	creates, resolves, closes                    int
+	createErr, resolveErr, closeErr, recoveryErr error
+	lastCreated                                  domain.ApprovalRequest
+	lastClosed                                   domain.ApprovalRequest
+	lastCloseExpected                            domain.ApprovalState
+	lastDecision                                 domain.ApprovalDecision
+	lastCreateAudit                              domain.AuditEvent
+	lastResolveAudit                             domain.AuditEvent
+	recoverable                                  []approval.StoredRequest
+	recovered                                    []approval.RecoveryTransition
+}
+
+func (persistence *fakeApprovalPersistence) CreateWithAudit(_ context.Context, request domain.ApprovalRequest, audit domain.AuditEvent) error {
+	persistence.creates++
+	persistence.lastCreated, persistence.lastCreateAudit = request, audit
+	return persistence.createErr
+}
+
+func (persistence *fakeApprovalPersistence) ResolveWithAudit(_ context.Context, _ domain.ApprovalState, request domain.ApprovalRequest, decision domain.ApprovalDecision, audit domain.AuditEvent) error {
+	persistence.resolves++
+	persistence.lastCreated, persistence.lastDecision, persistence.lastResolveAudit = request, decision, audit
+	return persistence.resolveErr
+}
+
+func (persistence *fakeApprovalPersistence) CloseWithAudit(_ context.Context, expected domain.ApprovalState, request domain.ApprovalRequest, _ domain.AuditEvent) error {
+	persistence.closes++
+	persistence.lastCloseExpected = expected
+	persistence.lastClosed = request
+	return persistence.closeErr
+}
+
+func (persistence *fakeApprovalPersistence) Get(context.Context, domain.ApprovalID) (approval.StoredRequest, *approval.StoredDecision, error) {
+	return approval.StoredRequest{}, nil, approval.ErrStoredApprovalNotFound
+}
+
+func (persistence *fakeApprovalPersistence) ListRecoverable(context.Context, int) ([]approval.StoredRequest, error) {
+	result := append([]approval.StoredRequest(nil), persistence.recoverable...)
+	persistence.recoverable = nil
+	return result, nil
+}
+
+func (persistence *fakeApprovalPersistence) RecoverWithAudits(_ context.Context, transitions []approval.RecoveryTransition) error {
+	persistence.recovered = append([]approval.RecoveryTransition(nil), transitions...)
+	return persistence.recoveryErr
+}
