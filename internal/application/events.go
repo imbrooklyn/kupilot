@@ -427,6 +427,8 @@ func validApprovalResultState(state domain.ApprovalState, reason domain.Approval
 	case domain.ApprovalStateInvalidated:
 		return reason == domain.ApprovalReasonScopeChanged || reason == domain.ApprovalReasonDigestMismatch ||
 			reason == domain.ApprovalReasonNonceMismatch || reason == domain.ApprovalReasonDecisionReplayed
+	case domain.ApprovalStateConsumed:
+		return reason == domain.ApprovalReasonConsumed
 	default:
 		return false
 	}

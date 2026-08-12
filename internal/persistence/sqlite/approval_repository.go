@@ -188,6 +188,80 @@ func (repository *ApprovalRepository) Get(
 	return request, &decision, nil
 }
 
+// VerifyApproved proves that the exact durable request and local decision still
+// match the authority held by the approval service before any Kubernetes read.
+func (repository *ApprovalRepository) VerifyApproved(
+	ctx context.Context,
+	request approvalcontract.StoredRequest,
+	decision approvalcontract.StoredDecision,
+) error {
+	if err := repositoryContext(ctx, repository.database(), "verify_approved_request"); err != nil {
+		return err
+	}
+	if request.Validate() != nil || request.State != domain.ApprovalStateApproved ||
+		decision.Validate() != nil || decision.RequestID != request.ID ||
+		decision.Choice != domain.ApprovalDecisionApprove ||
+		!decision.ShownDigest.Equal(request.Digest) || decision.NonceHash != request.NonceHash ||
+		!decision.DecidedAt.Equal(request.StateChangedAt) {
+		return approvalcontract.ErrInvalidStoredApproval
+	}
+	stored, storedDecision, err := readStoredApproval(ctx, repository.db.handle, request.ID)
+	if err != nil {
+		return repository.translateError(
+			err,
+			"approval_request_verify_failed",
+			"verify_approved_request",
+			"KuPilot could not verify the approved request.",
+		)
+	}
+	if stored != request || storedDecision == nil || *storedDecision != decision {
+		return approvalcontract.ErrStoredApprovalConflict
+	}
+	return nil
+}
+
+// ConsumeWithAudit atomically changes one exact approved request to consumed
+// and inserts its pre-write intent audit. The transaction contains no external
+// Kubernetes operation.
+func (repository *ApprovalRepository) ConsumeWithAudit(
+	ctx context.Context,
+	expected approvalcontract.StoredRequest,
+	expectedDecision approvalcontract.StoredDecision,
+	consumed approvalcontract.StoredRequest,
+	audit domain.AuditEvent,
+) error {
+	if err := repositoryContext(ctx, repository.database(), "consume_approved_request"); err != nil {
+		return err
+	}
+	if expected.Validate() != nil || consumed.Validate() != nil ||
+		expected.State != domain.ApprovalStateApproved || consumed.State != domain.ApprovalStateConsumed ||
+		expectedDecision.Validate() != nil || expectedDecision.RequestID != expected.ID ||
+		expectedDecision.Choice != domain.ApprovalDecisionApprove ||
+		!expectedDecision.ShownDigest.Equal(expected.Digest) || expectedDecision.NonceHash != expected.NonceHash ||
+		!expectedDecision.DecidedAt.Equal(expected.StateChangedAt) ||
+		expected.ID != consumed.ID || expected.RunID != consumed.RunID || expected.SessionID != consumed.SessionID ||
+		expected.Intent != consumed.Intent || expected.Digest != consumed.Digest || expected.NonceHash != consumed.NonceHash ||
+		!expected.RequestedAt.Equal(consumed.RequestedAt) || !expected.ExpiresAt.Equal(consumed.ExpiresAt) ||
+		consumed.StateChangedAt.Before(expected.StateChangedAt) ||
+		consumed.ValidateAudit(audit) != nil {
+		return approvalcontract.ErrInvalidStoredApproval
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		stored, decision, err := readStoredApproval(ctx, tx, expected.ID)
+		if err != nil {
+			return err
+		}
+		if stored != expected || decision == nil || *decision != expectedDecision {
+			return approvalcontract.ErrStoredApprovalConflict
+		}
+		if err := updateStoredApprovalState(ctx, tx, expected.State, consumed); err != nil {
+			return err
+		}
+		return insertAuditEvent(ctx, tx, audit)
+	})
+	return repository.translateError(err, "approval_request_consume_failed", "consume_approved_request", "KuPilot could not store the pre-write approval intent.")
+}
+
 // ResolveWithAudit atomically stores one local approve or reject decision.
 func (repository *ApprovalRepository) ResolveWithAudit(
 	ctx context.Context,
@@ -425,4 +499,32 @@ func (repository *ApprovalRepository) translateError(err error, code, operation,
 		return err
 	}
 	return repositoryFailure(repository.database(), code, operation, message, err)
+}
+
+func readStoredApproval(
+	ctx context.Context,
+	getter strictGetter,
+	id domain.ApprovalID,
+) (approvalcontract.StoredRequest, *approvalcontract.StoredDecision, error) {
+	var row approvalRequestRow
+	if err := getter.GetContext(ctx, &row, selectApprovalSQL, id); errors.Is(err, sql.ErrNoRows) {
+		return approvalcontract.StoredRequest{}, nil, approvalcontract.ErrStoredApprovalNotFound
+	} else if err != nil {
+		return approvalcontract.StoredRequest{}, nil, err
+	}
+	request, err := row.storedRequest()
+	if err != nil {
+		return approvalcontract.StoredRequest{}, nil, err
+	}
+	var decisionRow approvalDecisionRow
+	if err := getter.GetContext(ctx, &decisionRow, selectApprovalDecisionSQL, id); errors.Is(err, sql.ErrNoRows) {
+		return request, nil, nil
+	} else if err != nil {
+		return approvalcontract.StoredRequest{}, nil, err
+	}
+	decision, err := decisionRow.storedDecision()
+	if err != nil {
+		return approvalcontract.StoredRequest{}, nil, err
+	}
+	return request, &decision, nil
 }

@@ -94,7 +94,8 @@ func (request StoredRequest) ValidateAudit(event domain.AuditEvent) error {
 	}
 	if request.State != domain.ApprovalStatePending && request.State != domain.ApprovalStateApproved &&
 		request.State != domain.ApprovalStateRejected && request.State != domain.ApprovalStateExpired &&
-		request.State != domain.ApprovalStateCancelled && request.State != domain.ApprovalStateInvalidated {
+		request.State != domain.ApprovalStateCancelled && request.State != domain.ApprovalStateInvalidated &&
+		request.State != domain.ApprovalStateConsumed {
 		return ErrInvalidStoredApproval
 	}
 	eventType, actor, outcome, detail := storedApprovalAuditProjection(request)
@@ -241,6 +242,8 @@ func storedApprovalAuditProjection(request StoredRequest) (domain.AuditEventType
 		return domain.AuditEventApprovalRejected, domain.AuditActorUser, domain.AuditOutcomeDenied, string(request.StateReason)
 	case domain.ApprovalStateExpired:
 		return domain.AuditEventApprovalExpired, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
+	case domain.ApprovalStateConsumed:
+		return domain.AuditEventWriteIntent, domain.AuditActorSystem, domain.AuditOutcomeSuccess, string(request.StateReason)
 	default:
 		return domain.AuditEventApprovalCancelled, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
 	}

@@ -25,15 +25,102 @@ var (
 	ErrApprovalExpired = errors.New("the approval request expired")
 	// ErrApprovalInvalidated reports a durably closed proof or scope mismatch.
 	ErrApprovalInvalidated = errors.New("the approval request was invalidated")
+	// ErrApprovalExecutionFailed reports one terminal fixed executor attempt.
+	ErrApprovalExecutionFailed = errors.New("the approved Deployment restart request failed")
 )
 
-// ApprovalLifecycle is the non-executing subset of the approval domain service.
+// ApprovalLifecycle is the narrow approval service surface used by Application.
 type ApprovalLifecycle interface {
 	Request(context.Context, approval.RequestCommand) (domain.ApprovalRequest, error)
 	Decide(context.Context, approval.DecisionCommand) (domain.ApprovalRequest, domain.ApprovalDecision, error)
 	Expire(context.Context, domain.ApprovalID) (domain.ApprovalRequest, error)
 	Cancel(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
 	Invalidate(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
+	Consume(context.Context, approval.ConsumeCommand) (domain.ApprovalRequest, error)
+}
+
+// ConsumeApprovedRestart performs the deterministic post-decision execution
+// transition. Application supplies proof and projects the terminal result; it
+// never receives an executor, patch, annotation, or client.
+func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
+	ctx context.Context,
+	command UICommand,
+) (UIApprovalResult, error) {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandApproveRestart || command.Validate() != nil {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return UIApprovalResult{}, err
+	}
+	coordinator.mu.Lock()
+	tracked, ok := coordinator.active[command.ApprovalID]
+	if !ok || tracked.request.State != domain.ApprovalStateApproved || tracked.request.RunID != command.RunID ||
+		tracked.consuming || tracked.sequence != command.ApprovalSequence ||
+		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration {
+		coordinator.mu.Unlock()
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	tracked.consuming = true
+	coordinator.active[command.ApprovalID] = tracked
+	coordinator.mu.Unlock()
+
+	current, currentOK := coordinator.scope.CurrentScope()
+	currentScope := domain.ScopeSnapshot{}
+	if currentOK {
+		currentScope = current.Snapshot()
+	}
+	updated, consumeErr := coordinator.service.Consume(ctx, approval.ConsumeCommand{
+		RequestID: command.ApprovalID, ShownDigest: command.ApprovalDigest,
+		Nonce: command.ApprovalNonce, CurrentScope: currentScope,
+	})
+
+	coordinator.mu.Lock()
+	currentTracked, stillTracked := coordinator.active[command.ApprovalID]
+	if stillTracked && (currentTracked.request.ID != tracked.request.ID || currentTracked.sequence != tracked.sequence) {
+		delete(coordinator.active, command.ApprovalID)
+		coordinator.mu.Unlock()
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if updated.ID != tracked.request.ID {
+		if stillTracked {
+			delete(coordinator.active, command.ApprovalID)
+		}
+		coordinator.mu.Unlock()
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if stillTracked && (updated.State == domain.ApprovalStateInvalidated || updated.State == domain.ApprovalStateCancelled ||
+		updated.State == domain.ApprovalStateExpired) {
+		if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
+			delete(coordinator.active, command.ApprovalID)
+			coordinator.mu.Unlock()
+			return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
+		}
+	}
+	if stillTracked {
+		delete(coordinator.active, command.ApprovalID)
+	}
+	coordinator.mu.Unlock()
+	result := projectUIApprovalResult(updated, tracked.sequence)
+	if result.Validate() != nil {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if consumeErr == nil {
+		if updated.State != domain.ApprovalStateConsumed {
+			return UIApprovalResult{}, ErrApprovalUnavailable
+		}
+		return result, nil
+	}
+	if errors.Is(consumeErr, approval.ErrPreWritePersistenceUnavailable) {
+		return result, ErrApprovalPersistenceUnavailable
+	}
+	if updated.State == domain.ApprovalStateInvalidated || updated.State == domain.ApprovalStateCancelled ||
+		updated.State == domain.ApprovalStateExpired || approvalErrorCode(consumeErr) == domain.ApprovalErrorCodeStaleScope {
+		return result, ErrApprovalInvalidated
+	}
+	if updated.State == domain.ApprovalStateConsumed {
+		return result, ErrApprovalExecutionFailed
+	}
+	return result, ErrApprovalUnavailable
 }
 
 // ApprovalPersistence owns each atomic approval and audit transaction intent.
@@ -70,7 +157,7 @@ type ApprovalCoordinatorConfig struct {
 }
 
 // ApprovalCoordinator serializes one pending dialog and its possible
-// approved-not-executed lifetime. It exposes no Consume or execution operation.
+// approved-not-executed lifetime, then asks the approval service to consume it.
 type ApprovalCoordinator struct {
 	mu sync.Mutex
 
@@ -86,8 +173,9 @@ type ApprovalCoordinator struct {
 }
 
 type trackedApproval struct {
-	request  domain.ApprovalRequest
-	sequence int64
+	request   domain.ApprovalRequest
+	sequence  int64
+	consuming bool
 }
 
 // NewApprovalCoordinator constructs a fail-closed non-executing coordinator.
@@ -391,6 +479,10 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 			delete(coordinator.active, id)
 			continue
 		}
+		if updated.State == domain.ApprovalStateConsumed {
+			delete(coordinator.active, id)
+			continue
+		}
 		if persistErr := coordinator.persistClosed(ctx, tracked.request.State, updated); persistErr != nil {
 			resultErr = ErrApprovalPersistenceUnavailable
 		}
@@ -491,4 +583,12 @@ func (coordinator *ApprovalCoordinator) persist(ctx context.Context, operation f
 	operationContext, cancel := context.WithTimeout(ctx, coordinator.persistenceLimit)
 	defer cancel()
 	return operation(operationContext)
+}
+
+func approvalErrorCode(err error) domain.ApprovalErrorCode {
+	var approvalError *domain.ApprovalError
+	if !errors.As(err, &approvalError) {
+		return ""
+	}
+	return approvalError.Code()
 }

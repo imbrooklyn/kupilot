@@ -93,6 +93,27 @@ Costs and constraints:
 - Automatically retrying conflicts or timeouts was rejected because the first
   request may have succeeded and the target may have changed.
 
+## Selected mutation API
+
+The executor uses the typed `apps/v1` Deployment client from the pinned
+`k8s.io/client-go v0.35.7` dependency and calls `DeploymentInterface.Patch`
+with `types.MergePatchType` and empty `metav1.PatchOptions`. The request targets
+the exact namespaced Deployment resource path under the existing 10-second
+Kubernetes request ceiling and does not use a subresource.
+
+The code-generated JSON Merge Patch contains only the fresh
+`metadata.resourceVersion` concurrency precondition and
+`spec.template.metadata.annotations.kupilot.io/restartedAt` with a locally
+generated UTC millisecond value. JSON Merge Patch map semantics create a
+missing annotations map and preserve unrelated existing annotations. An API
+conflict or any ambiguous failure is terminal for that approval and is never
+retried automatically.
+
+Deployment `apps/v1`, JSON Merge Patch, and metadata resource-version
+preconditions are stable within KuPilot's Kubernetes 1.34.x through 1.36.x
+support matrix. The pinned module and server-version evidence remains defined
+by [Kubernetes Compatibility](../kubernetes-compatibility.md).
+
 ## Security and privacy impact
 
 The executor receives a project-owned immutable request only after digest, TTL,

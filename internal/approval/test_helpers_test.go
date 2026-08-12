@@ -55,24 +55,94 @@ func (source *sequenceNonceSource) NewNonce(ctx context.Context) (domain.Approva
 }
 
 type fakeRestartExecutor struct {
-	mu      sync.Mutex
-	calls   int
-	intents []domain.OperationIntent
-	err     error
+	mu           sync.Mutex
+	calls        int
+	intents      []domain.OperationIntent
+	executions   []RestartDeploymentExecution
+	auditCommits int
+	err          error
+}
+
+func (executor *fakeRestartExecutor) VerifyApproved(_ context.Context, request StoredRequest, decision StoredDecision) error {
+	if request.Validate() != nil || request.State != domain.ApprovalStateApproved || decision.Validate() != nil ||
+		decision.RequestID != request.ID || decision.Choice != domain.ApprovalDecisionApprove ||
+		!decision.ShownDigest.Equal(request.Digest) || decision.NonceHash != request.NonceHash {
+		return ErrStoredApprovalConflict
+	}
+	return nil
+}
+
+func (executor *fakeRestartExecutor) ConsumeWithAudit(
+	_ context.Context,
+	expected StoredRequest,
+	expectedDecision StoredDecision,
+	consumed StoredRequest,
+	audit domain.AuditEvent,
+) error {
+	if expected.State != domain.ApprovalStateApproved || consumed.State != domain.ApprovalStateConsumed ||
+		expectedDecision.Validate() != nil || expectedDecision.RequestID != expected.ID ||
+		expectedDecision.Choice != domain.ApprovalDecisionApprove ||
+		!expectedDecision.ShownDigest.Equal(expected.Digest) || expectedDecision.NonceHash != expected.NonceHash ||
+		!sameStoredIdentity(expected, consumed) || consumed.ValidateAudit(audit) != nil {
+		return ErrStoredApprovalConflict
+	}
+	executor.mu.Lock()
+	executor.auditCommits++
+	executor.mu.Unlock()
+	return nil
+}
+
+func (executor *fakeRestartExecutor) CurrentScope() (domain.ClusterScope, bool) {
+	intent := testIntent()
+	return domain.ClusterScope{
+		Context: intent.Scope.Context, Namespace: intent.Scope.Namespace, Generation: intent.Scope.Generation,
+		ActivatedAt: time.UnixMilli(1).UTC(),
+	}, true
+}
+
+func (executor *fakeRestartExecutor) RevalidateApprovedRestart(
+	ctx context.Context,
+	intent domain.OperationIntent,
+) (RestartDeploymentObservation, error) {
+	if err := ctx.Err(); err != nil {
+		return RestartDeploymentObservation{}, err
+	}
+	executor.mu.Lock()
+	executor.intents = append(executor.intents, intent)
+	executor.mu.Unlock()
+	return RestartDeploymentObservation{
+		Scope: intent.Scope, DeploymentName: intent.DeploymentName, DeploymentUID: intent.DeploymentUID,
+		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
+		ResourceVersion: "fresh-resource-version",
+	}, nil
 }
 
 func (executor *fakeRestartExecutor) ExecuteApprovedRestart(
 	ctx context.Context,
-	intent domain.OperationIntent,
-) error {
+	execution RestartDeploymentExecution,
+) (RestartDeploymentResult, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return RestartDeploymentResult{}, err
 	}
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
 	executor.calls++
-	executor.intents = append(executor.intents, intent)
-	return executor.err
+	executor.executions = append(executor.executions, execution)
+	if executor.err != nil {
+		return RestartDeploymentResult{}, executor.err
+	}
+	return RestartDeploymentResult{
+		Scope:                   execution.Observation().Scope,
+		DeploymentName:          execution.Observation().DeploymentName,
+		DeploymentUID:           execution.Observation().DeploymentUID,
+		PreviousResourceVersion: execution.Observation().ResourceVersion,
+		ResourceVersion:         execution.Observation().ResourceVersion,
+		RestartedAt:             time.UnixMilli(2).UTC(),
+	}, nil
+}
+
+func (*fakeRestartExecutor) NewAuditEventID() (domain.AuditEventID, error) {
+	return "00000000-0000-7000-8000-000000003091", nil
 }
 
 func (executor *fakeRestartExecutor) WriteCount() int {
@@ -127,9 +197,8 @@ func newTestService(t *testing.T, now time.Time, nonceValues ...domain.ApprovalN
 	clock := &fakeClock{now: now}
 	executor := &fakeRestartExecutor{}
 	service, err := NewService(ServiceConfig{
-		Clock:    clock,
-		Nonces:   &sequenceNonceSource{values: nonceValues},
-		Executor: executor,
+		Clock: clock, Nonces: &sequenceNonceSource{values: nonceValues},
+		Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
 	})
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)

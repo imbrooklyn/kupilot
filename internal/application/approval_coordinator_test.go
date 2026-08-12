@@ -69,6 +69,114 @@ func TestApprovalCoordinatorApprovalPersistsDecisionWithoutExecutionAndRejectsRe
 	}
 }
 
+func TestApprovalCoordinatorConsumesApprovedRestartAfterDurableDecision(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 26)
+	command := approvalDecisionCommand(UICommandApproveRestart, request, 26, 109)
+	approved, err := fixture.coordinator.Decide(context.Background(), command)
+	if err != nil || approved.State != domain.ApprovalStateApproved || fixture.executor.calls != 0 {
+		t.Fatalf("Decide() result/error/executor = %#v/%v/%d", approved, err, fixture.executor.calls)
+	}
+	consumed, err := fixture.coordinator.ConsumeApprovedRestart(context.Background(), command)
+	if err != nil || consumed.State != domain.ApprovalStateConsumed ||
+		consumed.StateReason != domain.ApprovalReasonConsumed || fixture.persistence.consumes != 1 ||
+		fixture.persistence.lastConsumeAudit.Type != domain.AuditEventWriteIntent ||
+		fixture.executor.revalidates != 1 || fixture.executor.calls != 1 {
+		t.Fatalf(
+			"ConsumeApprovedRestart() result/error/consumes/audit/revalidates/executor = %#v/%v/%d/%#v/%d/%d",
+			consumed, err, fixture.persistence.consumes, fixture.persistence.lastConsumeAudit,
+			fixture.executor.revalidates, fixture.executor.calls,
+		)
+	}
+	if _, err := fixture.coordinator.ConsumeApprovedRestart(context.Background(), command); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Fatalf("ConsumeApprovedRestart(replay) error = %v", err)
+	}
+	if fixture.persistence.consumes != 1 || fixture.executor.calls != 1 {
+		t.Fatalf("replay consumes/executor = %d/%d, want 1/1", fixture.persistence.consumes, fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorPreWriteAuditFailureClosesWithoutExecution(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 27)
+	command := approvalDecisionCommand(UICommandApproveRestart, request, 27, 110)
+	if _, err := fixture.coordinator.Decide(context.Background(), command); err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	fixture.persistence.consumeErr = errors.New("synthetic pre-write audit failure")
+	result, err := fixture.coordinator.ConsumeApprovedRestart(context.Background(), command)
+	if !errors.Is(err, ErrApprovalPersistenceUnavailable) || result.State != domain.ApprovalStateInvalidated ||
+		fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("audit failure result/error/consumes/executor = %#v/%v/%d/%d",
+			result, err, fixture.persistence.consumes, fixture.executor.calls)
+	}
+}
+
+func TestApprovalCoordinatorScopeInvalidationDuringRevalidationPreventsWrite(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 28)
+	command := approvalDecisionCommand(UICommandApproveRestart, request, 28, 111)
+	if _, err := fixture.coordinator.Decide(context.Background(), command); err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fixture.executor.revalidateStarted = started
+	fixture.executor.revalidateRelease = release
+	type consumeOutcome struct {
+		result UIApprovalResult
+		err    error
+	}
+	completed := make(chan consumeOutcome, 1)
+	go func() {
+		result, err := fixture.coordinator.ConsumeApprovedRestart(context.Background(), command)
+		completed <- consumeOutcome{result: result, err: err}
+	}()
+	<-started
+	if err := fixture.coordinator.InvalidateScope(8); err != nil {
+		t.Fatalf("InvalidateScope() error = %v", err)
+	}
+	close(release)
+	outcome := <-completed
+	if !errors.Is(outcome.err, ErrApprovalInvalidated) || outcome.result.State != domain.ApprovalStateInvalidated ||
+		fixture.persistence.closes != 1 || fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("result/error/closes/consumes/writes = %#v/%v/%d/%d/%d, want invalidated/error/1/0/0",
+			outcome.result, outcome.err, fixture.persistence.closes, fixture.persistence.consumes, fixture.executor.calls)
+	}
+}
+
+func TestCoordinatorApprovalCommandReturnsTerminalRestartAttempt(t *testing.T) {
+	tests := []struct {
+		name       string
+		executeErr error
+	}{
+		{name: "request accepted"},
+		{name: "request failed", executeErr: errors.New("synthetic write failure")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newApprovalCoordinatorFixture(t)
+			fixture.executor.err = test.executeErr
+			request := fixture.submit(t, 29)
+			command := approvalDecisionCommand(UICommandApproveRestart, request, 29, 112)
+			outer, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), runnerFunc(func(
+				context.Context,
+				agent.RunInput,
+				agent.EventSink,
+			) agent.RunOutcome {
+				return agent.RunOutcome{}
+			}))
+			outer.approvals = fixture.coordinator
+			outcome, err := outer.ExecuteUICommand(context.Background(), command)
+			if err != nil || outcome.Approval == nil || outcome.Approval.State != domain.ApprovalStateConsumed ||
+				fixture.persistence.consumes != 1 || fixture.executor.calls != 1 {
+				t.Fatalf("outcome/error/consumes/writes = %#v/%v/%d/%d, want consumed/nil/1/1",
+					outcome, err, fixture.persistence.consumes, fixture.executor.calls)
+			}
+		})
+	}
+}
+
 func TestApprovalCoordinatorRejectionPersistsTerminalDecisionWithoutExecution(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 21)
@@ -440,12 +548,6 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	t.Helper()
 	clock := &approvalCoordinatorClock{now: time.UnixMilli(1_700_000_500_000).UTC()}
 	executor := &fakeApprovalExecutor{}
-	service, err := approval.NewService(approval.ServiceConfig{
-		Clock: clock, Nonces: approvalNonceSource{value: 0x71}, Executor: executor,
-	})
-	if err != nil {
-		t.Fatalf("approval.NewService() error = %v", err)
-	}
 	scope := &fakeApprovalCurrentScope{scope: domain.ClusterScope{
 		Context: "test-context", Namespace: "test-namespace", Generation: 7,
 		ActivatedAt: clock.now,
@@ -453,6 +555,13 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	persistence := &fakeApprovalPersistence{}
 	ui := &fakeApprovalUIEvents{}
 	ids := &approvalCoordinatorIDs{}
+	service, err := approval.NewService(approval.ServiceConfig{
+		Clock: clock, Nonces: approvalNonceSource{value: 0x71},
+		Store: persistence, Scope: scope, Revalidator: executor, Executor: executor, AuditIDs: ids,
+	})
+	if err != nil {
+		t.Fatalf("approval.NewService() error = %v", err)
+	}
 	coordinator, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
 		Service: service, Persistence: persistence, Scope: scope,
 		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Now: clock.Now,
@@ -550,11 +659,52 @@ func (source approvalNonceSource) NewNonce(context.Context) (domain.ApprovalNonc
 	return domain.NewApprovalNonce(bytes.Repeat([]byte{source.value}, domain.ApprovalNonceBytes))
 }
 
-type fakeApprovalExecutor struct{ calls int }
+type fakeApprovalExecutor struct {
+	calls             int
+	revalidates       int
+	err               error
+	revalidateStarted chan struct{}
+	revalidateRelease <-chan struct{}
+}
 
-func (executor *fakeApprovalExecutor) ExecuteApprovedRestart(context.Context, domain.OperationIntent) error {
+func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
+	ctx context.Context,
+	intent domain.OperationIntent,
+) (approval.RestartDeploymentObservation, error) {
+	executor.revalidates++
+	if executor.revalidateStarted != nil {
+		close(executor.revalidateStarted)
+	}
+	if executor.revalidateRelease != nil {
+		select {
+		case <-executor.revalidateRelease:
+		case <-ctx.Done():
+			return approval.RestartDeploymentObservation{}, ctx.Err()
+		}
+	}
+	return approval.RestartDeploymentObservation{
+		Scope: intent.Scope, DeploymentName: intent.DeploymentName, DeploymentUID: intent.DeploymentUID,
+		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
+		ResourceVersion: "fresh-resource-version",
+	}, nil
+}
+
+func (executor *fakeApprovalExecutor) ExecuteApprovedRestart(
+	_ context.Context,
+	execution approval.RestartDeploymentExecution,
+) (approval.RestartDeploymentResult, error) {
 	executor.calls++
-	return nil
+	if executor.err != nil {
+		return approval.RestartDeploymentResult{}, executor.err
+	}
+	return approval.RestartDeploymentResult{
+		Scope:                   execution.Observation().Scope,
+		DeploymentName:          execution.Observation().DeploymentName,
+		DeploymentUID:           execution.Observation().DeploymentUID,
+		PreviousResourceVersion: execution.Observation().ResourceVersion,
+		ResourceVersion:         execution.Observation().ResourceVersion,
+		RestartedAt:             time.UnixMilli(1_700_000_500_001).UTC(),
+	}, nil
 }
 
 type approvalCoordinatorIDs struct{ next int }
@@ -592,16 +742,60 @@ func (sink *fakeApprovalUIEvents) PublishUIEvent(_ context.Context, event UIEven
 }
 
 type fakeApprovalPersistence struct {
-	creates, resolves, closes                    int
-	createErr, resolveErr, closeErr, recoveryErr error
-	lastCreated                                  domain.ApprovalRequest
-	lastClosed                                   domain.ApprovalRequest
-	lastCloseExpected                            domain.ApprovalState
-	lastDecision                                 domain.ApprovalDecision
-	lastCreateAudit                              domain.AuditEvent
-	lastResolveAudit                             domain.AuditEvent
-	recoverable                                  []approval.StoredRequest
-	recovered                                    []approval.RecoveryTransition
+	creates, resolves, closes, consumes                      int
+	createErr, resolveErr, closeErr, consumeErr, recoveryErr error
+	lastCreated                                              domain.ApprovalRequest
+	lastClosed                                               domain.ApprovalRequest
+	lastCloseExpected                                        domain.ApprovalState
+	lastDecision                                             domain.ApprovalDecision
+	lastCreateAudit                                          domain.AuditEvent
+	lastResolveAudit                                         domain.AuditEvent
+	lastConsumed                                             approval.StoredRequest
+	lastConsumeAudit                                         domain.AuditEvent
+	recoverable                                              []approval.StoredRequest
+	recovered                                                []approval.RecoveryTransition
+}
+
+func (persistence *fakeApprovalPersistence) VerifyApproved(
+	_ context.Context,
+	request approval.StoredRequest,
+	decision approval.StoredDecision,
+) error {
+	stored, err := approval.NewStoredRequest(persistence.lastCreated)
+	if err != nil {
+		return err
+	}
+	storedDecision, err := approval.NewStoredDecision(persistence.lastDecision)
+	if err != nil {
+		return err
+	}
+	if stored != request || storedDecision != decision {
+		return approval.ErrStoredApprovalConflict
+	}
+	return nil
+}
+
+func (persistence *fakeApprovalPersistence) ConsumeWithAudit(
+	_ context.Context,
+	expected approval.StoredRequest,
+	expectedDecision approval.StoredDecision,
+	consumed approval.StoredRequest,
+	audit domain.AuditEvent,
+) error {
+	if persistence.consumeErr != nil {
+		return persistence.consumeErr
+	}
+	stored, err := approval.NewStoredRequest(persistence.lastCreated)
+	storedDecision, decisionErr := approval.NewStoredDecision(persistence.lastDecision)
+	if err != nil || decisionErr != nil || stored != expected || storedDecision != expectedDecision ||
+		consumed.State != domain.ApprovalStateConsumed ||
+		consumed.ValidateAudit(audit) != nil {
+		return approval.ErrStoredApprovalConflict
+	}
+	persistence.consumes++
+	persistence.lastConsumed = consumed
+	persistence.lastConsumeAudit = audit
+	return nil
 }
 
 func (persistence *fakeApprovalPersistence) CreateWithAudit(_ context.Context, request domain.ApprovalRequest, audit domain.AuditEvent) error {

@@ -143,6 +143,115 @@ func TestApprovalRepositoryTransactionsRollbackWhenAuditPersistenceFails(t *test
 	}
 }
 
+func TestApprovalRepositoryVerifiesAndConsumesApprovedIntentWithAuditAtomically(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "approval-pre-write")
+	repository := NewApprovalRepository(db)
+	requestedAt := time.UnixMilli(1_700_000_125_000).UTC()
+	run := seedApprovalRun(t, db, requestedAt)
+	request := testApprovalRequest(t, testApprovalIDOne, run, requestedAt, 0x49)
+	if err := repository.CreateWithAudit(context.Background(), request,
+		testApprovalAudit(t, request, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", requestedAt)); err != nil {
+		t.Fatalf("CreateWithAudit() error = %v", err)
+	}
+	approved := request
+	approved.State = domain.ApprovalStateApproved
+	approved.StateReason = domain.ApprovalReasonUserApproved
+	approved.StateChangedAt = requestedAt.Add(time.Second)
+	decision := domain.ApprovalDecision{
+		RequestID: request.ID, Choice: domain.ApprovalDecisionApprove,
+		ShownDigest: request.Digest, Nonce: request.Nonce,
+		Actor: domain.ApprovalActorLocalUser, DecidedAt: approved.StateChangedAt,
+	}
+	if err := repository.ResolveWithAudit(context.Background(), request.State, approved, decision,
+		testApprovalAudit(t, approved, domain.AuditEventApprovalApproved, domain.AuditActorUser, domain.AuditOutcomeSuccess, "user_approved", approved.StateChangedAt)); err != nil {
+		t.Fatalf("ResolveWithAudit() error = %v", err)
+	}
+	storedApproved, err := approval.NewStoredRequest(approved)
+	if err != nil {
+		t.Fatalf("NewStoredRequest(approved) error = %v", err)
+	}
+	storedDecision, err := approval.NewStoredDecision(decision)
+	if err != nil {
+		t.Fatalf("NewStoredDecision() error = %v", err)
+	}
+	if err := repository.VerifyApproved(context.Background(), storedApproved, storedDecision); err != nil {
+		t.Fatalf("VerifyApproved() error = %v", err)
+	}
+
+	mismatched := storedApproved
+	mismatched.Intent.PolicyVersion = "changed-policy"
+	if err := repository.VerifyApproved(context.Background(), mismatched, storedDecision); !errors.Is(err, approval.ErrInvalidStoredApproval) {
+		t.Fatalf("VerifyApproved(policy mismatch) error = %v", err)
+	}
+
+	consumed := approved
+	consumed.State = domain.ApprovalStateConsumed
+	consumed.StateReason = domain.ApprovalReasonConsumed
+	consumed.StateChangedAt = requestedAt.Add(2 * time.Second)
+	storedConsumed, err := approval.NewStoredRequest(consumed)
+	if err != nil {
+		t.Fatalf("NewStoredRequest(consumed) error = %v", err)
+	}
+	writeIntent := testApprovalAudit(
+		t, consumed, domain.AuditEventWriteIntent, domain.AuditActorSystem,
+		domain.AuditOutcomeSuccess, "approval_consumed", consumed.StateChangedAt,
+	)
+	if _, err := db.handle.ExecContext(
+		context.Background(),
+		`UPDATE approval_decisions SET decided_at_ms = ? WHERE approval_id = ?`,
+		storedDecision.DecidedAt.Add(time.Millisecond).UnixMilli(), request.ID,
+	); err != nil {
+		t.Fatalf("mutate stored decision error = %v", err)
+	}
+	if err := repository.ConsumeWithAudit(
+		context.Background(), storedApproved, storedDecision, storedConsumed, writeIntent,
+	); !errors.Is(err, approval.ErrStoredApprovalConflict) {
+		t.Fatalf("ConsumeWithAudit(decision mismatch) error = %v", err)
+	}
+	if _, err := db.handle.ExecContext(
+		context.Background(),
+		`UPDATE approval_decisions SET decided_at_ms = ? WHERE approval_id = ?`,
+		storedDecision.DecidedAt.UnixMilli(), request.ID,
+	); err != nil {
+		t.Fatalf("restore stored decision error = %v", err)
+	}
+	duplicateAudit := writeIntent
+	duplicateAudit.ID = domain.AuditEventID(approvalTestUUID(9_200))
+	if err := repository.ConsumeWithAudit(context.Background(), storedApproved, storedDecision, storedConsumed, duplicateAudit); err == nil {
+		t.Fatal("ConsumeWithAudit(duplicate audit) error = nil")
+	}
+	stored, _, err := repository.Get(context.Background(), request.ID)
+	if err != nil || stored.State != domain.ApprovalStateApproved {
+		t.Fatalf("state after rolled-back consume = %#v/%v", stored, err)
+	}
+	var writeIntentCount int
+	if err := db.handle.GetContext(context.Background(), &writeIntentCount,
+		`SELECT count(id) FROM audit_events WHERE event_type = 'write_intent' AND correlation_id = ?`, request.ID); err != nil {
+		t.Fatalf("write_intent count query error = %v", err)
+	}
+	if writeIntentCount != 0 {
+		t.Fatalf("write_intent count after rollback = %d, want 0", writeIntentCount)
+	}
+
+	if err := repository.ConsumeWithAudit(context.Background(), storedApproved, storedDecision, storedConsumed, writeIntent); err != nil {
+		t.Fatalf("ConsumeWithAudit() error = %v", err)
+	}
+	stored, _, err = repository.Get(context.Background(), request.ID)
+	if err != nil || stored.State != domain.ApprovalStateConsumed || stored.StateReason != domain.ApprovalReasonConsumed {
+		t.Fatalf("consumed stored request = %#v/%v", stored, err)
+	}
+	if err := repository.VerifyApproved(context.Background(), storedApproved, storedDecision); !errors.Is(err, approval.ErrStoredApprovalConflict) {
+		t.Fatalf("VerifyApproved(consumed replay) error = %v", err)
+	}
+	if err := db.handle.GetContext(context.Background(), &writeIntentCount,
+		`SELECT count(id) FROM audit_events WHERE event_type = 'write_intent' AND correlation_id = ?`, request.ID); err != nil {
+		t.Fatalf("write_intent count query error = %v", err)
+	}
+	if writeIntentCount != 1 {
+		t.Fatalf("write_intent count = %d, want 1", writeIntentCount)
+	}
+}
+
 func TestApprovalRepositoryPersistsRejectedDecision(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "approval-rejection")
 	repository := NewApprovalRepository(db)
@@ -367,6 +476,7 @@ func testApprovalAudit(
 		domain.AuditEventApprovalRejected:  9_400,
 		domain.AuditEventApprovalExpired:   9_500,
 		domain.AuditEventApprovalCancelled: 9_600,
+		domain.AuditEventWriteIntent:       9_700,
 	}[eventType]
 	if request.ID == testApprovalIDTwo {
 		eventNumber++

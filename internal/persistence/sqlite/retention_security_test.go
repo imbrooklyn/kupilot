@@ -168,8 +168,19 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
 	applicationPrefix := filepath.Join(repositoryRoot, "internal", "application") + string(filepath.Separator)
 	proposalBridge := filepath.Join(repositoryRoot, "internal", "tools", "restart_deployment.go")
+	restartAdapter := filepath.Join(repositoryRoot, "internal", "kube", "restart_deployment.go")
+	kubePrefix := filepath.Join(repositoryRoot, "internal", "kube") + string(filepath.Separator)
+	kubeGateway := filepath.Join(repositoryRoot, "internal", "kube", "gateway.go")
+	kubeRuntimeGateway := filepath.Join(repositoryRoot, "internal", "kube", "runtime_gateway.go")
 	forbiddenEverywhere := []string{"WriteExecutor", "RestartDeployment("}
-	approvalOnly := []string{"ApprovalService", "RestartDeploymentExecutor", "ExecuteApprovedRestart("}
+	approvalOnly := []string{
+		"ApprovalService", "RestartDeploymentExecution", "RestartDeploymentExecutor",
+		"RestartDeploymentRevalidator", "ExecuteApprovedRestart(", "DeploymentRestarter",
+	}
+	executeCaller := filepath.Join(repositoryRoot, "internal", "approval", "service.go")
+	executeContract := filepath.Join(repositoryRoot, "internal", "approval", "execution.go")
+	patchCalls := 0
+	executeOccurrences := 0
 	err := filepath.WalkDir(filepath.Join(repositoryRoot, "internal"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -186,7 +197,7 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 				t.Errorf("%s contains prohibited v0.1 symbol %q", path, symbol)
 			}
 		}
-		if !strings.HasPrefix(path, approvalPrefix) {
+		if !strings.HasPrefix(path, approvalPrefix) && filepath.Clean(path) != restartAdapter {
 			for _, symbol := range approvalOnly {
 				if bytes.Contains(content, []byte(symbol)) {
 					t.Errorf("%s exposes approval authority outside the isolated package: %q", path, symbol)
@@ -198,13 +209,66 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		}
 		if bytes.Contains(content, []byte("restart_deployment")) &&
 			filepath.Clean(path) != domainApproval && filepath.Clean(path) != proposalBridge &&
+			filepath.Clean(path) != restartAdapter &&
 			!strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("restart_deployment escaped the isolated domain or approval packages: %s", path)
+		}
+		patchCount := bytes.Count(content, []byte(".Patch("))
+		patchCalls += patchCount
+		if patchCount != 0 && (filepath.Clean(path) != restartAdapter || patchCount != 1) {
+			t.Errorf("Kubernetes Patch escaped the sole one-call restart adapter: %s", path)
+		}
+		if strings.HasPrefix(path, kubePrefix) {
+			createCount := bytes.Count(content, []byte(".Create("))
+			cleaned := filepath.Clean(path)
+			if cleaned == kubeGateway || cleaned == kubeRuntimeGateway {
+				if createCount != 1 {
+					t.Errorf("opaque client creation count changed in %s: %d", path, createCount)
+				}
+			} else if createCount != 0 {
+				t.Errorf("unexpected Create call entered Kubernetes production code: %s", path)
+			}
+			for _, mutation := range []string{
+				".Update(", ".UpdateStatus(", ".Delete(", ".DeleteCollection(",
+				".Apply(", ".ApplyStatus(", ".UpdateScale(", ".ApplyScale(", ".Evict(",
+			} {
+				if bytes.Contains(content, []byte(mutation)) {
+					t.Errorf("additional Kubernetes mutation selector %q entered %s", mutation, path)
+				}
+			}
+		}
+		executeCount := bytes.Count(content, []byte("ExecuteApprovedRestart("))
+		executeOccurrences += executeCount
+		if executeCount != 0 {
+			cleaned := filepath.Clean(path)
+			if executeCount != 1 || (cleaned != executeCaller && cleaned != executeContract && cleaned != restartAdapter) {
+				t.Errorf("restart executor occurrence escaped its one contract, service call, or adapter method: %s", path)
+			}
+		}
+		for _, deliveryPrefix := range []string{
+			filepath.Join(repositoryRoot, "internal", "agent") + string(filepath.Separator),
+			filepath.Join(repositoryRoot, "internal", "tools") + string(filepath.Separator),
+			filepath.Join(repositoryRoot, "internal", "tui") + string(filepath.Separator),
+		} {
+			if !strings.HasPrefix(path, deliveryPrefix) {
+				continue
+			}
+			for _, authority := range approvalOnly {
+				if bytes.Contains(content, []byte(authority)) {
+					t.Errorf("restart authority %q leaked into Agent, Tool, or TUI code: %s", authority, path)
+				}
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("WalkDir(internal) error = %v", err)
+	}
+	if patchCalls != 1 {
+		t.Fatalf("production Kubernetes Patch call count = %d, want exactly 1", patchCalls)
+	}
+	if executeOccurrences != 3 {
+		t.Fatalf("production restart executor occurrences = %d, want contract, caller, and adapter only", executeOccurrences)
 	}
 	commandRoot := filepath.Join(repositoryRoot, "cmd", "kupilot")
 	err = filepath.WalkDir(commandRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -220,7 +284,7 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		}
 		for _, symbol := range []string{
 			"ApprovalCoordinator", "RestartDeploymentProposal", "RestartDeploymentExecutor",
-			"ExecuteApprovedRestart(", "restart_deployment",
+			"RestartDeploymentExecution", "DeploymentRestarter", "ExecuteApprovedRestart(", "restart_deployment",
 		} {
 			if bytes.Contains(content, []byte(symbol)) {
 				t.Errorf("v0.1 composition contains prohibited approval capability %q in %s", symbol, path)

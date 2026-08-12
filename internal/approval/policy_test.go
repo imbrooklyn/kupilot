@@ -164,7 +164,10 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 	t.Run("invalid intent", func(t *testing.T) {
 		nonces := &sequenceNonceSource{values: []domain.ApprovalNonce{testNonce(t, 111)}}
 		executor := &fakeRestartExecutor{}
-		service, err := NewService(ServiceConfig{Clock: &fakeClock{now: baseTime}, Nonces: nonces, Executor: executor})
+		service, err := NewService(ServiceConfig{
+			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
+			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
 		}
@@ -180,7 +183,10 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 	t.Run("cancelled before nonce", func(t *testing.T) {
 		nonces := &sequenceNonceSource{values: []domain.ApprovalNonce{testNonce(t, 112)}}
 		executor := &fakeRestartExecutor{}
-		service, err := NewService(ServiceConfig{Clock: &fakeClock{now: baseTime}, Nonces: nonces, Executor: executor})
+		service, err := NewService(ServiceConfig{
+			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
+			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
 		}
@@ -196,7 +202,10 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 	t.Run("nonce source", func(t *testing.T) {
 		nonces := &sequenceNonceSource{err: errors.New("nonce canary detail")}
 		executor := &fakeRestartExecutor{}
-		service, err := NewService(ServiceConfig{Clock: &fakeClock{now: baseTime}, Nonces: nonces, Executor: executor})
+		service, err := NewService(ServiceConfig{
+			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
+			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
 		}

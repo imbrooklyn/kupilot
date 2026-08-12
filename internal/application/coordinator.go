@@ -648,8 +648,12 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 			result, err = coordinator.approvals.ExpireCommand(ctx, command)
 		} else {
 			result, err = coordinator.approvals.Decide(ctx, command)
+			if err == nil && command.Kind == UICommandApproveRestart && result.State == domain.ApprovalStateApproved {
+				result, err = coordinator.approvals.ConsumeApprovedRestart(ctx, command)
+			}
 		}
-		if err != nil && !errors.Is(err, ErrApprovalExpired) && !errors.Is(err, ErrApprovalInvalidated) {
+		if err != nil && !errors.Is(err, ErrApprovalExpired) && !errors.Is(err, ErrApprovalInvalidated) &&
+			!errors.Is(err, ErrApprovalExecutionFailed) {
 			return UICommandOutcome{}, err
 		}
 		return UICommandOutcome{
