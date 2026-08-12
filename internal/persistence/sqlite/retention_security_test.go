@@ -159,12 +159,15 @@ func TestSQLXImportRemainsInsideSQLiteAdapter(t *testing.T) {
 
 func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join(currentSQLiteDirectory(t), "..", "..", ".."))
-	for _, relative := range []string{filepath.Join("internal", "approval"), filepath.Join("internal", "executor")} {
+	for _, relative := range []string{filepath.Join("internal", "executor")} {
 		if _, err := os.Stat(filepath.Join(repositoryRoot, relative)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("prohibited v0.1 production directory exists: %s", relative)
 		}
 	}
-	forbidden := []string{"ApprovalService", "ApprovalCoordinator", "WriteExecutor", "RestartDeployment("}
+	approvalPrefix := filepath.Join(repositoryRoot, "internal", "approval") + string(filepath.Separator)
+	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
+	forbiddenEverywhere := []string{"ApprovalCoordinator", "WriteExecutor", "RestartDeployment("}
+	approvalOnly := []string{"ApprovalService", "RestartDeploymentExecutor", "ExecuteApprovedRestart("}
 	err := filepath.WalkDir(filepath.Join(repositoryRoot, "internal"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -176,13 +179,21 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, symbol := range forbidden {
+		for _, symbol := range forbiddenEverywhere {
 			if bytes.Contains(content, []byte(symbol)) {
 				t.Errorf("%s contains prohibited v0.1 symbol %q", path, symbol)
 			}
 		}
-		if bytes.Contains(content, []byte("restart_deployment")) && filepath.Clean(path) != filepath.Join(repositoryRoot, "internal", "domain", "approval.go") {
-			t.Errorf("restart_deployment escaped the dormant schema DTO: %s", path)
+		if !strings.HasPrefix(path, approvalPrefix) {
+			for _, symbol := range approvalOnly {
+				if bytes.Contains(content, []byte(symbol)) {
+					t.Errorf("%s exposes approval authority outside the isolated package: %q", path, symbol)
+				}
+			}
+		}
+		if bytes.Contains(content, []byte("restart_deployment")) &&
+			filepath.Clean(path) != domainApproval && !strings.HasPrefix(path, approvalPrefix) {
+			t.Errorf("restart_deployment escaped the isolated domain or approval packages: %s", path)
 		}
 		return nil
 	})

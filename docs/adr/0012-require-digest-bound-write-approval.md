@@ -36,6 +36,55 @@ proposal; a proposal is never edited or extended in place. The exact digest
 algorithm and canonical byte representation are versioned and fixed before any
 ApprovalRequest is accepted.
 
+The `kupilot.approval.operation-digest.v1` representation uses UTF-8 bytes and
+SHA-256, rendered as 64 lowercase hexadecimal characters. It begins with the
+digest version and a newline, followed by these fields in exact order:
+`request_id`, `session_id`, `run_id`, `operation`,
+`operation_schema_version`, `policy_version`, `scope_context`,
+`scope_namespace`, `scope_generation`, `target_api_version`, `target_kind`,
+`target_namespace`, `deployment_name`, `deployment_uid`,
+`template_fingerprint`, `deployment_generation`, `reason_summary`,
+`risk_summary`, `requested_at_ms`, and `expires_at_ms`. Each field is encoded as
+`name=<UTF-8 byte count>:<value>\n`. Integers use unsigned base-10 spelling
+without leading zeroes, and times are UTC Unix milliseconds. Operation schema,
+target API version, target Kind, and risk summary are code-defined constants.
+The fixed risk summary is `Restarting the Deployment replaces Pods and may
+temporarily reduce availability.` The Pod-template fingerprint covers the
+prior value or absence of the KuPilot restart annotation. Nonce, lifecycle
+state, and resource version are deliberately excluded and are checked
+separately. The validity interval is half-open: a request is eligible only while
+`requested_at_ms <= now_ms < expires_at_ms`.
+
+This synthetic reference vector locks the exact canonical bytes, including the
+final newline:
+
+```text
+kupilot.approval.operation-digest.v1
+request_id=36:00000000-0000-7000-8000-000000003001
+session_id=36:00000000-0000-7000-8000-000000003003
+run_id=36:00000000-0000-7000-8000-000000003002
+operation=18:restart_deployment
+operation_schema_version=21:restart_deployment/v1
+policy_version=30:restart-deployment-approval/v1
+scope_context=12:test-context
+scope_namespace=14:test-namespace
+scope_generation=1:7
+target_api_version=7:apps/v1
+target_kind=10:Deployment
+target_namespace=14:test-namespace
+deployment_name=17:sample-deployment
+deployment_uid=14:deployment-uid
+template_fingerprint=64:df9381f3e70df4545a9a983f4e91b11942c43f2c3dc69b4d6d2e1c2ed2e5fd87
+deployment_generation=2:11
+reason_summary=24:Restart after diagnosis.
+risk_summary=80:Restarting the Deployment replaces Pods and may temporarily reduce availability.
+requested_at_ms=13:1700000000123
+expires_at_ms=13:1700000060123
+```
+
+Its operation digest is
+`b7c0aab6f0a4206709e01a6141697613d10fee2277cd4af69447255c7078a62a`.
+
 The resource version observed while preparing the proposal may be recorded as
 safe observation metadata, but it is not part of the operation digest. Only the
 resource version from the mandatory fresh read is used as the write concurrency
