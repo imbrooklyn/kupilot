@@ -114,30 +114,34 @@ type Model struct {
 	resourcePicker  components.ResourcePicker
 	sessionPicker   components.SessionPicker
 	dialog          components.ErrorDialog
+	evidenceDialog  components.EvidenceDetailDialog
 	approvalDialog  components.ApprovalDialog
 	scopeConflict   components.ScopeConflictDialog
 	footer          components.Footer
 
-	activePicker      application.UICompletionKind
-	pendingCompletion application.UICompletionQuery
-	pendingResume     application.UIResumeRequest
-	pendingResumed    *application.UIResumedSession
-	resumeOrigin      resumeOrigin
-	nextRequestID     uint64
-	initialQuery      application.UICompletionQuery
-	initialResume     application.UIResumeRequest
-	pendingScopeID    uint64
-	pendingResourceID uint64
-	pendingResource   ResourceView
-	pendingSubmitID   uint64
-	pendingPrivacyID  uint64
-	pendingApprovalID uint64
-	privacyReview     *application.PrivacyReview
-	pendingApproval   *application.UIApprovalRequest
-	approvalState     domain.ApprovalState
-	privacyPending    bool
-	quitAfterCancel   bool
-	terminalFocused   bool
+	activePicker       application.UICompletionKind
+	pendingCompletion  application.UICompletionQuery
+	pendingResume      application.UIResumeRequest
+	pendingResumed     *application.UIResumedSession
+	resumeOrigin       resumeOrigin
+	nextRequestID      uint64
+	initialQuery       application.UICompletionQuery
+	initialResume      application.UIResumeRequest
+	pendingScopeID     uint64
+	pendingResourceID  uint64
+	pendingResource    ResourceView
+	pendingSubmitID    uint64
+	pendingPrivacyID   uint64
+	pendingApprovalID  uint64
+	privacyReview      *application.PrivacyReview
+	pendingApproval    *application.UIApprovalRequest
+	evidenceReferences []application.UIEvidenceReference
+	pendingEvidence    application.UIEvidenceDetailQuery
+	evidenceGeneration int64
+	approvalState      domain.ApprovalState
+	privacyPending     bool
+	quitAfterCancel    bool
+	terminalFocused    bool
 
 	styles styleSet
 	keymap KeyMap
@@ -181,6 +185,7 @@ func NewModel(config Config) Model {
 		resourcePicker:  components.NewResourcePicker(styles.picker),
 		sessionPicker:   components.NewSessionPicker(styles.picker),
 		dialog:          components.NewErrorDialog(styles.dialog),
+		evidenceDialog:  components.NewEvidenceDetailDialog(styles.evidence),
 		approvalDialog:  components.NewApprovalDialog(styles.approval),
 		scopeConflict:   components.NewScopeConflictDialog(styles.scopeConflict),
 		footer:          components.NewFooter(styles.footer),

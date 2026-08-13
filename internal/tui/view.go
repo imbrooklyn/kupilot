@@ -37,6 +37,8 @@ func (model Model) render() string {
 		overlay = model.approvalDialog.View(model.width)
 	case model.scopeConflict.Open():
 		overlay = model.scopeConflict.View(model.width)
+	case model.evidenceDialog.Open():
+		overlay = model.evidenceDialog.View(model.width, model.height)
 	case model.dialog.Open():
 		overlay = model.dialog.View(model.width)
 	}

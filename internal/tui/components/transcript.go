@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -18,10 +19,19 @@ const (
 
 // Entry is one bounded, non-editable transcript item.
 type Entry struct {
-	Kind      EntryKind
-	Text      string
-	Streaming bool
-	ToolSteps []ToolStep
+	Kind               EntryKind
+	Text               string
+	Streaming          bool
+	ToolSteps          []ToolStep
+	EvidenceReferences []EvidenceReference
+}
+
+// EvidenceReference is a display-only transcript citation. Index maps back to
+// the TUI-owned typed reference without carrying observation content here.
+type EvidenceReference struct {
+	Index int
+	ID    string
+	State string
 }
 
 // TranscriptStyles defines only semantic surfaces and prose styles.
@@ -30,6 +40,8 @@ type TranscriptStyles struct {
 	AgentText   lipgloss.Style
 	NoticeText  lipgloss.Style
 	Placeholder lipgloss.Style
+	Evidence    lipgloss.Style
+	Selected    lipgloss.Style
 }
 
 // Transcript is a continuous scrollable conversation projection.
@@ -41,6 +53,8 @@ type Transcript struct {
 	height      int
 	styles      TranscriptStyles
 	toolSteps   ToolSteps
+	selecting   bool
+	selected    int
 }
 
 // NewTranscript creates an empty, mouse-free viewport.
@@ -108,6 +122,70 @@ func (transcript *Transcript) FinishAgent(text string) {
 	transcript.refresh(true)
 }
 
+// SetAgentEvidence adds bounded citations to the current terminal Agent item.
+func (transcript *Transcript) SetAgentEvidence(references []EvidenceReference) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) || len(references) > 100 {
+		return
+	}
+	transcript.entries[transcript.activeAgent].EvidenceReferences = append([]EvidenceReference(nil), references...)
+	transcript.refresh(true)
+}
+
+// BeginEvidenceSelection selects the first citation in the newest Agent item.
+func (transcript *Transcript) BeginEvidenceSelection() bool {
+	for entryIndex := len(transcript.entries) - 1; entryIndex >= 0; entryIndex-- {
+		if len(transcript.entries[entryIndex].EvidenceReferences) == 0 {
+			continue
+		}
+		transcript.selecting = true
+		transcript.selected = transcript.entries[entryIndex].EvidenceReferences[0].Index
+		transcript.refresh(false)
+		return true
+	}
+	return false
+}
+
+// EndEvidenceSelection clears keyboard selection without changing citations.
+func (transcript *Transcript) EndEvidenceSelection() {
+	transcript.selecting = false
+	transcript.selected = 0
+	transcript.refresh(false)
+}
+
+// EvidenceSelecting reports whether citation navigation owns arrow keys.
+func (transcript Transcript) EvidenceSelecting() bool { return transcript.selecting }
+
+// MoveEvidence moves through all visible citations with deterministic wrap.
+func (transcript *Transcript) MoveEvidence(delta int) {
+	indexes := transcript.evidenceIndexes()
+	if !transcript.selecting || len(indexes) == 0 {
+		return
+	}
+	position := 0
+	for index, value := range indexes {
+		if value == transcript.selected {
+			position = index
+			break
+		}
+	}
+	position = (position + delta%len(indexes) + len(indexes)) % len(indexes)
+	transcript.selected = indexes[position]
+	transcript.refresh(false)
+}
+
+// SelectedEvidence returns the TUI-owned typed-reference index.
+func (transcript Transcript) SelectedEvidence() (int, bool) {
+	if !transcript.selecting {
+		return 0, false
+	}
+	for _, index := range transcript.evidenceIndexes() {
+		if index == transcript.selected {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
 // UpsertToolStep adds one step beneath the active Agent prose.
 func (transcript *Transcript) UpsertToolStep(step ToolStep) {
 	if transcript.activeAgent < 0 {
@@ -123,6 +201,7 @@ func (transcript Transcript) Entries() []Entry {
 	entries := append([]Entry(nil), transcript.entries...)
 	for index := range entries {
 		entries[index].ToolSteps = append([]ToolStep(nil), entries[index].ToolSteps...)
+		entries[index].EvidenceReferences = append([]EvidenceReference(nil), entries[index].EvidenceReferences...)
 	}
 	return entries
 }
@@ -165,10 +244,29 @@ func (transcript Transcript) renderContent() string {
 			if steps := stepRenderer.View(); steps != "" {
 				rendered += "\n" + steps
 			}
+			for _, reference := range entry.EvidenceReferences {
+				marker := "  "
+				style := transcript.styles.Evidence
+				if transcript.selecting && reference.Index == transcript.selected {
+					marker = "› "
+					style = transcript.styles.Selected
+				}
+				rendered += "\n" + style.Render(fmt.Sprintf("%sEvidence %s · %s", marker, reference.ID, reference.State))
+			}
 		case EntryNotice:
 			rendered = transcript.styles.NoticeText.Render(entry.Text)
 		}
 		parts = append(parts, rendered)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (transcript Transcript) evidenceIndexes() []int {
+	var result []int
+	for _, entry := range transcript.entries {
+		for _, reference := range entry.EvidenceReferences {
+			result = append(result, reference.Index)
+		}
+	}
+	return result
 }

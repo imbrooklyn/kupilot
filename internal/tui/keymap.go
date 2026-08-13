@@ -12,6 +12,7 @@ type KeyMap struct {
 	PreviousAlt    key.Binding
 	NextAlt        key.Binding
 	Reverse        key.Binding
+	Evidence       key.Binding
 	Close          key.Binding
 	TranscriptUp   key.Binding
 	TranscriptDown key.Binding
@@ -30,6 +31,7 @@ func DefaultKeyMap() KeyMap {
 		PreviousAlt:    key.NewBinding(key.WithKeys("ctrl+p")),
 		NextAlt:        key.NewBinding(key.WithKeys("ctrl+n")),
 		Reverse:        key.NewBinding(key.WithKeys("shift+tab")),
+		Evidence:       key.NewBinding(key.WithKeys("ctrl+e")),
 		Close:          key.NewBinding(key.WithKeys("esc")),
 		TranscriptUp:   key.NewBinding(key.WithKeys("pgup")),
 		TranscriptDown: key.NewBinding(key.WithKeys("pgdown")),

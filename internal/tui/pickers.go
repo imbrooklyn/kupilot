@@ -110,6 +110,7 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		if command.Validate() != nil {
 			return nil
 		}
+		model.closeEvidenceInteraction()
 		model.pendingScopeID = requestID
 		model.scope.Switching = true
 		model.composer.Reset()
@@ -128,6 +129,7 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		if command.Validate() != nil {
 			return nil
 		}
+		model.closeEvidenceInteraction()
 		model.pendingScopeID = requestID
 		model.scope.Switching = true
 		model.composer.Reset()

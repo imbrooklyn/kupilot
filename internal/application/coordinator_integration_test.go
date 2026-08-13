@@ -235,6 +235,12 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 			if event.Kind != application.UIEventRunCompleted {
 				t.Fatalf("terminal UI event = %#v", event)
 			}
+			if len(event.EvidenceReferences) != 1 || event.EvidenceReferences[0].EvidenceID != integrationEvidenceID1 ||
+				event.EvidenceReferences[0].RunID != runID || event.EvidenceReferences[0].Scope.Generation != 7 ||
+				event.EvidenceReferences[0].Sequence != event.Sequence ||
+				event.EvidenceReferences[0].State != application.UIEvidenceDetailAvailable {
+				t.Fatalf("terminal Evidence references = %#v", event.EvidenceReferences)
+			}
 		}
 	}
 	if terminalCount != 1 {

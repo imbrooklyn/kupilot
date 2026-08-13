@@ -57,11 +57,12 @@ type CoordinatorConfig struct {
 // needed by CLI/TUI composition. Core run tests may omit it when no delivery
 // use case is exercised.
 type CoordinatorUIConfig struct {
-	Sessions  SessionResumeStore
-	Titles    SessionTitleStore
-	Startup   StartupMaintenance
-	Scopes    *ScopeManager
-	Approvals *ApprovalCoordinator
+	Sessions       SessionResumeStore
+	Titles         SessionTitleStore
+	Startup        StartupMaintenance
+	Scopes         *ScopeManager
+	Approvals      *ApprovalCoordinator
+	EvidenceDetail EvidenceDetailReader
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -98,6 +99,7 @@ type Coordinator struct {
 	startup          StartupMaintenance
 	uiScopes         *ScopeManager
 	approvals        *ApprovalCoordinator
+	evidenceDetails  EvidenceDetailReader
 	startupPrepared  bool
 	currentSession   *domain.Session
 	currentResumed   bool
@@ -114,6 +116,8 @@ type Coordinator struct {
 	operationsDone      chan struct{}
 	active              *activeRun
 	lastResult          *RunResult
+	lastDiagnosis       *domain.Diagnosis
+	lastEvidence        map[domain.EvidenceID]domain.Evidence
 }
 
 type activeRun struct {
@@ -213,12 +217,14 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	var startup StartupMaintenance
 	var uiScopes *ScopeManager
 	var approvals *ApprovalCoordinator
+	var evidenceDetails EvidenceDetailReader
 	if config.UI != nil {
 		resumeSessions = config.UI.Sessions
 		titles = config.UI.Titles
 		startup = config.UI.Startup
 		uiScopes = config.UI.Scopes
 		approvals = config.UI.Approvals
+		evidenceDetails = config.UI.EvidenceDetail
 		if approvals != nil && uiScopes.BindApprovalInvalidationHook(approvals) != nil {
 			return nil, ErrCoordinatorDependency
 		}
@@ -232,8 +238,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, titles: titles, startup: startup,
-		uiScopes:  uiScopes,
-		approvals: approvals,
+		uiScopes:        uiScopes,
+		approvals:       approvals,
+		evidenceDetails: evidenceDetails,
 	}, nil
 }
 
@@ -573,6 +580,9 @@ func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRe
 		return result, nil
 	}
 	projection := projectResumedSession(request.RequestID, record)
+	if err := coordinator.attachHistoryEvidence(ctx, record, &projection); err != nil {
+		return UIResumeResult{}, err
+	}
 	result.Session = &projection
 	if result.Validate() != nil {
 		return UIResumeResult{}, ErrInvalidUIQueryResult
@@ -918,6 +928,8 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	copy := record.Session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = true
+	coordinator.lastDiagnosis = nil
+	coordinator.lastEvidence = nil
 	coordinator.pendingResume = nil
 	coordinator.mu.Unlock()
 	outcome.Session = projectUISession(record.Session, true)
@@ -1233,9 +1245,13 @@ func projectResumedSession(requestID uint64, record ResumedSessionRecord) UIResu
 		result.SavedResource = projectUIResourceCandidate(*record.Session.SelectedResource)
 	}
 	for _, message := range record.Messages {
-		result.History = append(result.History, UIHistoryMessage{
+		projected := UIHistoryMessage{
 			Role: message.Role, Format: message.Format, Content: message.Content,
-		})
+		}
+		if message.RunID != nil {
+			projected.RunID = *message.RunID
+		}
+		result.History = append(result.History, projected)
 		if message.Scope != nil {
 			result.SavedScope = &domain.ScopeCandidate{Context: message.Scope.Context, Namespace: message.Scope.Namespace}
 		}
@@ -1248,6 +1264,47 @@ func projectResumedSession(requestID uint64, record ResumedSessionRecord) UIResu
 		result.Session.Namespace = result.SavedScope.Namespace
 	}
 	return result
+}
+
+func (coordinator *Coordinator) attachHistoryEvidence(
+	ctx context.Context,
+	record ResumedSessionRecord,
+	projection *UIResumedSession,
+) error {
+	if coordinator.evidenceDetails == nil || projection == nil {
+		return nil
+	}
+	for index, message := range record.Messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if index >= len(projection.History) || message.Role != domain.MessageRoleAssistant ||
+			message.RunID == nil || message.Scope == nil {
+			continue
+		}
+		diagnosis, found, err := coordinator.evidenceDetails.ReadDiagnosis(ctx, *message.RunID)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return contextErr
+			}
+			continue
+		}
+		if !found || diagnosis.Validate() != nil || diagnosis.RunID != *message.RunID || diagnosis.Scope != *message.Scope {
+			continue
+		}
+		references := projectUIEvidenceReferences(diagnosis, int64(index+1))
+		valid := true
+		for _, reference := range references {
+			if reference.Validate() != nil {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			projection.History[index].EvidenceReferences = references
+		}
+	}
+	return nil
 }
 
 func cloneScopeCandidate(value *domain.ScopeCandidate) *domain.ScopeCandidate {
@@ -1380,6 +1437,8 @@ func (coordinator *Coordinator) CreateSession(ctx context.Context, command Creat
 	copy := session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = false
+	coordinator.lastDiagnosis = nil
+	coordinator.lastEvidence = nil
 	coordinator.pendingResume = nil
 	coordinator.startupResume = nil
 	coordinator.mu.Unlock()
@@ -2033,6 +2092,27 @@ func (coordinator *Coordinator) executeRun(ctx context.Context, state *activeRun
 		PersistenceDegraded: state.persistenceBad,
 	}
 	coordinator.lastResult = &result
+	if state.terminalStatus == domain.AgentRunStatusCompleted && state.diagnosis != nil {
+		diagnosis := cloneDiagnosis(*state.diagnosis)
+		coordinator.lastDiagnosis = &diagnosis
+		referenceIDs := diagnosis.ReferencedEvidenceIDs()
+		referenced := make(map[domain.EvidenceID]struct{}, len(referenceIDs))
+		for _, evidenceID := range referenceIDs {
+			referenced[evidenceID] = struct{}{}
+		}
+		coordinator.lastEvidence = make(map[domain.EvidenceID]domain.Evidence, len(referenced))
+		for _, pending := range state.tools {
+			if pending == nil {
+				continue
+			}
+			for _, evidence := range pending.evidence {
+				if _, cited := referenced[evidence.ID]; !cited {
+					continue
+				}
+				coordinator.lastEvidence[evidence.ID] = cloneEvidence(evidence)
+			}
+		}
+	}
 	if coordinator.active == state {
 		coordinator.active = nil
 	}

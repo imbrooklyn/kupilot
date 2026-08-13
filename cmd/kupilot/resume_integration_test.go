@@ -67,6 +67,17 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 	if _, err := adapter.ResumeByID(ctx, missingID); !errors.Is(err, application.ErrSessionResumeUnavailable) {
 		t.Fatalf("missing ResumeByID() error = %v", err)
 	}
+	detailAdapter := &applicationEvidenceDetailAdapter{
+		evidence: sqlite.NewEvidenceRepository(database), diagnoses: sqlite.NewDiagnosisRepository(database),
+	}
+	missingRunID := domain.AgentRunID("0198a46e-7d2a-7d34-9b6f-2df5f45a2b05")
+	if _, found, readErr := detailAdapter.ReadDiagnosis(ctx, missingRunID); readErr != nil || found {
+		t.Fatalf("missing Diagnosis detail = found %v, error %v", found, readErr)
+	}
+	missingEvidenceID := domain.EvidenceID("0198a46e-7d2a-7d34-9b6f-2df5f45a2b06")
+	if _, found, readErr := detailAdapter.ReadEvidence(ctx, missingEvidenceID); readErr != nil || found {
+		t.Fatalf("missing Evidence detail = found %v, error %v", found, readErr)
+	}
 
 	emptyRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

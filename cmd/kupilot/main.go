@@ -112,6 +112,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	messageRepository := sqlite.NewMessageRepository(database)
 	runRepository := sqlite.NewAgentRunRepository(database)
 	toolRepository := sqlite.NewToolInvocationRepository(database)
+	evidenceRepository := sqlite.NewEvidenceRepository(database)
+	diagnosisRepository := sqlite.NewDiagnosisRepository(database)
 	auditRepository := sqlite.NewAuditRepository(database)
 	retentionRepository := sqlite.NewRetentionRepository(database)
 	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
@@ -124,6 +126,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		sessionRepository, sessionRepository, messageRepository, runRepository, runRepository,
 	)
 	sessionApplication := &applicationSessionAdapter{service: sessionService, retention: retentionRepository}
+	evidenceApplication := &applicationEvidenceDetailAdapter{
+		evidence: evidenceRepository, diagnoses: diagnosisRepository,
+	}
 
 	loader := kube.NewConfigLoader()
 	factory, err := kube.NewClientFactory(loader, configuredExecPolicy(loaded.Kubernetes.ExecCredentials))
@@ -201,6 +206,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Now: now,
 		UI: &application.CoordinatorUIConfig{
 			Sessions: sessionApplication, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
+			EvidenceDetail: evidenceApplication,
 		},
 	})
 	if err != nil {
@@ -278,6 +284,39 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 type applicationSessionAdapter struct {
 	service   *sessioncontract.Service
 	retention auditcontract.RetentionCleaner
+}
+
+type applicationEvidenceDetailAdapter struct {
+	evidence  *sqlite.EvidenceRepository
+	diagnoses *sqlite.DiagnosisRepository
+}
+
+func (adapter *applicationEvidenceDetailAdapter) ReadDiagnosis(
+	ctx context.Context,
+	runID domain.AgentRunID,
+) (domain.Diagnosis, bool, error) {
+	if adapter == nil || adapter.diagnoses == nil {
+		return domain.Diagnosis{}, false, application.ErrPersistenceUnavailable
+	}
+	diagnosis, err := adapter.diagnoses.GetByRunID(ctx, runID)
+	if errors.Is(err, sqlite.ErrDiagnosisNotFound) {
+		return domain.Diagnosis{}, false, nil
+	}
+	return diagnosis, err == nil, err
+}
+
+func (adapter *applicationEvidenceDetailAdapter) ReadEvidence(
+	ctx context.Context,
+	evidenceID domain.EvidenceID,
+) (domain.Evidence, bool, error) {
+	if adapter == nil || adapter.evidence == nil {
+		return domain.Evidence{}, false, application.ErrPersistenceUnavailable
+	}
+	evidence, err := adapter.evidence.GetByID(ctx, evidenceID)
+	if errors.Is(err, sqlite.ErrEvidenceNotFound) {
+		return domain.Evidence{}, false, nil
+	}
+	return evidence, err == nil, err
 }
 
 func (adapter *applicationSessionAdapter) ListResumable(
@@ -477,7 +516,7 @@ func (sink *deliveryUIEventSink) PublishUIEvent(ctx context.Context, event appli
 func applicationRequestFilter(requests chan<- tea.Msg) func(tea.Model, tea.Msg) tea.Msg {
 	return func(_ tea.Model, message tea.Msg) tea.Msg {
 		switch message.(type) {
-		case tui.ApplicationCommandMsg, tui.ApplicationQueryMsg, tui.ApplicationResumeMsg:
+		case tui.ApplicationCommandMsg, tui.ApplicationQueryMsg, tui.ApplicationResumeMsg, tui.ApplicationEvidenceDetailMsg:
 			select {
 			case requests <- message:
 				return nil
@@ -500,6 +539,11 @@ func rejectedApplicationRequest(message tea.Msg) tui.ApplicationFailureMsg {
 	case tui.ApplicationResumeMsg:
 		result.RequestID = request.Request.RequestID
 		result.Resume = request.Request.Mode
+	case tui.ApplicationEvidenceDetailMsg:
+		result.RequestID = request.Query.RequestID
+		result.ScopeGeneration = request.Query.Reference.Scope.Generation
+		result.RunID = request.Query.Reference.RunID
+		result.Evidence = request.Query.Reference
 	case tui.ApplicationCommandMsg:
 		result.RequestID = request.Command.RequestID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration

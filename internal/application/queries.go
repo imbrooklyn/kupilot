@@ -405,18 +405,31 @@ type UIResumedSession struct {
 	History         []UIHistoryMessage
 }
 
-// UIHistoryMessage is bounded committed conversation content. It is historic
-// display only and contains no Evidence object or live run authority.
+// UIHistoryMessage is bounded committed conversation content. Historic
+// Evidence references carry display correlation only and no live run authority.
 type UIHistoryMessage struct {
-	Role    domain.MessageRole
-	Format  domain.MessageFormat
-	Content string
+	Role               domain.MessageRole
+	Format             domain.MessageFormat
+	Content            string
+	RunID              domain.AgentRunID
+	EvidenceReferences []UIEvidenceReference
 }
 
 func (message UIHistoryMessage) valid() bool {
-	return (message.Role == domain.MessageRoleUser || message.Role == domain.MessageRoleAssistant || message.Role == domain.MessageRoleSystemNotice) &&
-		(message.Format == domain.MessageFormatPlain || message.Format == domain.MessageFormatMarkdown) &&
-		validUIBoundedText(message.Content, 1, MaxQuestionBytes)
+	if (message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant && message.Role != domain.MessageRoleSystemNotice) ||
+		(message.Format != domain.MessageFormatPlain && message.Format != domain.MessageFormatMarkdown) ||
+		!validUIBoundedText(message.Content, 1, MaxQuestionBytes) || len(message.EvidenceReferences) > 100 {
+		return false
+	}
+	if message.RunID != "" && !message.RunID.Valid() || len(message.EvidenceReferences) > 0 && message.Role != domain.MessageRoleAssistant {
+		return false
+	}
+	for _, reference := range message.EvidenceReferences {
+		if reference.Validate() != nil || reference.RunID != message.RunID {
+			return false
+		}
+	}
+	return true
 }
 
 // UIResumeResult returns either one eligible Session or one fixed failure.

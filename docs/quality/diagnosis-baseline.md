@@ -111,6 +111,30 @@ accepted public decision. It is generalized or replaced when it duplicates an
 existing boundary. It must not be retained if its value depends on sensitive or
 unverifiable source data.
 
+## Evidence detail supervision
+
+The single-screen TUI exposes a non-editable detail for machine-checked
+Diagnosis citations. Every detail request is bound to an Evidence ID, AgentRun
+ID, complete historic scope, UI request ID, and ordered sequence. A changed
+scope generation, cancellation, mismatched identity, duplicate terminal result,
+or late result cannot replace current display state.
+
+The ViewModel contains only the Evidence category, allowlisted projected source
+path, Context and Namespace with generation, resource API version/Kind/name,
+UTC observation time, partial/truncation state, sensitive-filter status, and a
+revalidated concise projection capped at 512 UTF-8 bytes. UID, resource version,
+annotations, addresses, raw Tool results, raw logs, Kubernetes objects, model
+traffic, credentials, and adapter errors are excluded by the typed projection,
+local filtering, and deterministic sink tests.
+
+Current accepted Evidence remains inspectable from bounded Application memory
+when later read-only persistence is degraded. Explicitly resumed history
+restores references only from a retained same-run Diagnosis. Deleted or expired
+Evidence produces `expired`; an invalid source, unreferenced identifier, or
+run/scope mismatch produces `unavailable`; neither state carries observation
+content. Partial source data or display projection truncation remains visibly
+`partial` and cannot be interpreted as a complete root-cause proof.
+
 ## Interpretation limits
 
 These tests prove structural provenance and reviewed semantics for bounded

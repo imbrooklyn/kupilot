@@ -6,7 +6,8 @@ palette enabled=false base=none muted=none surface=none border=none accent=none 
 The Deployment has no available replicas.
 └─ ✓ get_resource · succeeded · Inspect the selected Deployment. · No av
 ailable replicas. · 2 evidence
-<blank rows=6>
+  Evidence 0198a46e-7d2a-7d34-9b6f-2df5f45a2a12 · available
+<blank rows=5>
 ╭──────────────────────────────────────────────────────────────────╮
 │ /resource pay                                                    │
 │                                                                  │

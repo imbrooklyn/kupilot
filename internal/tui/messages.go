@@ -45,6 +45,11 @@ type ApplicationResumeMsg struct {
 	Request application.UIResumeRequest
 }
 
+// ApplicationEvidenceDetailMsg is a deferred safe citation query.
+type ApplicationEvidenceDetailMsg struct {
+	Query application.UIEvidenceDetailQuery
+}
+
 // CompletionResultMsg carries one bounded typed Picker result.
 type CompletionResultMsg struct {
 	Result application.UICompletionResult
@@ -53,6 +58,11 @@ type CompletionResultMsg struct {
 // ResumeResultMsg carries one safe resumed Session container result.
 type ResumeResultMsg struct {
 	Result application.UIResumeResult
+}
+
+// EvidenceDetailResultMsg carries one fully correlated safe detail result.
+type EvidenceDetailResultMsg struct {
+	Result application.UIEvidenceDetailResult
 }
 
 // ScopeResultMsg carries one request-bound fake scope activation result.
@@ -83,6 +93,7 @@ type ApplicationFailureMsg struct {
 	Command          application.UICommandKind
 	Query            application.UICompletionKind
 	Resume           application.UIResumeMode
+	Evidence         application.UIEvidenceReference
 }
 
 func sanitizeExternalText(value string, limit int) string {

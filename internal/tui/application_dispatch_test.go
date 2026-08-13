@@ -24,18 +24,39 @@ func TestDispatchApplicationMapsTypedRequestsWithoutAdapterLeakage(t *testing.T)
 	if message := DispatchApplication(context.Background(), consumer, ApplicationResumeMsg{Request: request}); message.(ResumeResultMsg).Result.RequestID != request.RequestID {
 		t.Fatalf("resume dispatch message = %#v", message)
 	}
+	evidenceQuery := application.UIEvidenceDetailQuery{
+		RequestID: 3,
+		Reference: application.UIEvidenceReference{
+			EvidenceID: testEvidenceID, RunID: testRunID,
+			Scope:    domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
+			Sequence: 2, State: application.UIEvidenceDetailAvailable,
+		},
+	}
+	consumer.evidenceResult = evidenceDetailResult(evidenceQuery, "Safe projected detail.")
+	message := DispatchApplication(context.Background(), consumer, ApplicationEvidenceDetailMsg{Query: evidenceQuery})
+	if message.(EvidenceDetailResultMsg).Result.RequestID != evidenceQuery.RequestID {
+		t.Fatalf("Evidence dispatch message = %#v", message)
+	}
 
 	command := application.UICommand{Kind: application.UICommandShowStatus}
 	if message := DispatchApplication(context.Background(), consumer, ApplicationCommandMsg{Command: command}); message.(CommandResultMsg).Result.Command != command.Kind {
 		t.Fatalf("command dispatch message = %#v", message)
 	}
-	if consumer.queryCalls != 1 || consumer.resumeCalls != 1 || consumer.commandCalls != 1 {
-		t.Fatalf("dispatch calls = query %d resume %d command %d", consumer.queryCalls, consumer.resumeCalls, consumer.commandCalls)
+	if consumer.queryCalls != 1 || consumer.evidenceCalls != 1 || consumer.resumeCalls != 1 || consumer.commandCalls != 1 {
+		t.Fatalf("dispatch calls = query %d Evidence %d resume %d command %d",
+			consumer.queryCalls, consumer.evidenceCalls, consumer.resumeCalls, consumer.commandCalls)
 	}
 	failure, ok := DispatchApplication(context.Background(), nil, ApplicationQueryMsg{Query: query}).(ApplicationFailureMsg)
 	if !ok || failure.RequestID != query.RequestID || failure.Query != query.Kind ||
 		failure.ScopeGeneration != query.ScopeGeneration {
 		t.Fatalf("query failure identity = %#v", failure)
+	}
+	evidenceFailure, ok := DispatchApplication(
+		context.Background(), nil, ApplicationEvidenceDetailMsg{Query: evidenceQuery},
+	).(ApplicationFailureMsg)
+	if !ok || evidenceFailure.RequestID != evidenceQuery.RequestID ||
+		!sameUIEvidenceIdentity(evidenceFailure.Evidence, evidenceQuery.Reference) {
+		t.Fatalf("Evidence failure identity = %#v", evidenceFailure)
 	}
 }
 
@@ -109,9 +130,19 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 }
 
 type dispatchApplication struct {
-	queryCalls   int
-	resumeCalls  int
-	commandCalls int
+	queryCalls     int
+	evidenceCalls  int
+	evidenceResult application.UIEvidenceDetailResult
+	resumeCalls    int
+	commandCalls   int
+}
+
+func (fake *dispatchApplication) QueryEvidenceDetail(
+	context.Context,
+	application.UIEvidenceDetailQuery,
+) (application.UIEvidenceDetailResult, error) {
+	fake.evidenceCalls++
+	return fake.evidenceResult, nil
 }
 
 func (fake *dispatchApplication) QueryUI(

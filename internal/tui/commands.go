@@ -13,6 +13,7 @@ import (
 // It contains no persistence, Kubernetes, model, Tool, or framework type.
 type ApplicationConsumer interface {
 	QueryUI(context.Context, application.UICompletionQuery) (application.UICompletionResult, error)
+	QueryEvidenceDetail(context.Context, application.UIEvidenceDetailQuery) (application.UIEvidenceDetailResult, error)
 	ResumeUI(context.Context, application.UIResumeRequest) (application.UIResumeResult, error)
 	ExecuteUICommand(context.Context, application.UICommand) (application.UICommandOutcome, error)
 }
@@ -37,6 +38,12 @@ func DispatchApplication(ctx context.Context, consumer ApplicationConsumer, mess
 			return applicationFailure(message, "The Session could not be resumed safely.")
 		}
 		return ResumeResultMsg{Result: result}
+	case ApplicationEvidenceDetailMsg:
+		result, err := consumer.QueryEvidenceDetail(ctx, request.Query)
+		if err != nil || result.Validate() != nil {
+			return applicationFailure(message, "Evidence detail is unavailable.")
+		}
+		return EvidenceDetailResultMsg{Result: result}
 	case ApplicationCommandMsg:
 		result, err := consumer.ExecuteUICommand(ctx, request.Command)
 		if err != nil || result.Validate() != nil {
@@ -58,6 +65,11 @@ func applicationFailure(message tea.Msg, safeMessage string) ApplicationFailureM
 	case ApplicationResumeMsg:
 		result.RequestID = request.Request.RequestID
 		result.Resume = request.Request.Mode
+	case ApplicationEvidenceDetailMsg:
+		result.RequestID = request.Query.RequestID
+		result.ScopeGeneration = request.Query.Reference.Scope.Generation
+		result.RunID = request.Query.Reference.RunID
+		result.Evidence = request.Query.Reference
 	case ApplicationCommandMsg:
 		result.RequestID = request.Command.RequestID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
@@ -85,6 +97,12 @@ func applicationQuery(query application.UICompletionQuery) tea.Cmd {
 func applicationResume(request application.UIResumeRequest) tea.Cmd {
 	return func() tea.Msg {
 		return ApplicationResumeMsg{Request: request}
+	}
+}
+
+func applicationEvidenceDetail(query application.UIEvidenceDetailQuery) tea.Cmd {
+	return func() tea.Msg {
+		return ApplicationEvidenceDetailMsg{Query: query}
 	}
 }
 

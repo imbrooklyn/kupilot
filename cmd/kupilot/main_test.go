@@ -6,10 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/cli"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
+	"github.com/imbrooklyn/kupilot/internal/tui"
 )
 
 func TestCompositionRoot(t *testing.T) {
@@ -80,6 +83,37 @@ func TestCompositionRoot(t *testing.T) {
 				t.Fatalf("stderr = %q, want %q", stderr.String(), tt.wantError)
 			}
 		})
+	}
+}
+
+func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t *testing.T) {
+	t.Parallel()
+
+	reference := application.UIEvidenceReference{
+		EvidenceID: "0198a46e-7d2a-7d34-9b6f-2df5f45a2a31",
+		RunID:      "0198a46e-7d2a-7d34-9b6f-2df5f45a2a32",
+		Scope: domain.ScopeSnapshot{
+			Context: "test-context", Namespace: "test-namespace", Generation: 7,
+		},
+		Sequence: 3, State: application.UIEvidenceDetailAvailable,
+	}
+	request := tui.ApplicationEvidenceDetailMsg{Query: application.UIEvidenceDetailQuery{
+		RequestID: 9, Reference: reference,
+	}}
+	requests := make(chan tea.Msg, 1)
+	filter := applicationRequestFilter(requests)
+	if result := filter(nil, request); result != nil {
+		t.Fatalf("routed Evidence detail result = %#v", result)
+	}
+	if routed := (<-requests).(tui.ApplicationEvidenceDetailMsg); routed.Query != request.Query {
+		t.Fatalf("routed Evidence detail request = %#v", routed)
+	}
+
+	requests <- tui.ApplicationQueryMsg{}
+	failure, ok := filter(nil, request).(tui.ApplicationFailureMsg)
+	if !ok || failure.RequestID != request.Query.RequestID || failure.Evidence != reference ||
+		failure.RunID != reference.RunID || failure.ScopeGeneration != reference.Scope.Generation {
+		t.Fatalf("overflow Evidence failure identity = %#v", failure)
 	}
 }
 

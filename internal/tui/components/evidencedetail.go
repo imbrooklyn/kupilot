@@ -1,0 +1,150 @@
+package components
+
+import (
+	"fmt"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
+
+// EvidenceDetailStyles distinguish neutral, partial, and unavailable states
+// without relying on color alone.
+type EvidenceDetailStyles struct {
+	Frame   lipgloss.Style
+	Title   lipgloss.Style
+	Body    lipgloss.Style
+	Muted   lipgloss.Style
+	Warning lipgloss.Style
+}
+
+// EvidenceDetailContent contains only Application-projected display strings.
+type EvidenceDetailContent struct {
+	EvidenceID      string
+	RunID           string
+	Category        string
+	Source          string
+	Scope           string
+	Resource        string
+	ObservedAt      string
+	State           string
+	Partial         string
+	Truncated       string
+	SensitiveFilter string
+	Projection      string
+}
+
+type evidenceDialogState uint8
+
+const (
+	evidenceDialogClosed evidenceDialogState = iota
+	evidenceDialogLoading
+	evidenceDialogAvailable
+	evidenceDialogPartial
+	evidenceDialogExpired
+	evidenceDialogUnavailable
+)
+
+// EvidenceDetailDialog is one non-editable bounded overlay. It owns no query,
+// repository, raw payload, or second input control.
+type EvidenceDetailDialog struct {
+	state      evidenceDialogState
+	evidenceID string
+	content    EvidenceDetailContent
+	styles     EvidenceDetailStyles
+}
+
+// NewEvidenceDetailDialog creates a closed display-only overlay.
+func NewEvidenceDetailDialog(styles EvidenceDetailStyles) EvidenceDetailDialog {
+	return EvidenceDetailDialog{styles: styles}
+}
+
+// ShowLoading opens a request-bound placeholder without observation content.
+func (dialog *EvidenceDetailDialog) ShowLoading(evidenceID string) {
+	dialog.state = evidenceDialogLoading
+	dialog.evidenceID = evidenceID
+	dialog.content = EvidenceDetailContent{}
+}
+
+// ShowDetail opens one terminal safe detail result.
+func (dialog *EvidenceDetailDialog) ShowDetail(content EvidenceDetailContent, partial bool) {
+	dialog.state = evidenceDialogAvailable
+	if partial {
+		dialog.state = evidenceDialogPartial
+	}
+	dialog.evidenceID = content.EvidenceID
+	dialog.content = content
+}
+
+// ShowExpired reports deleted or expired supporting detail without revealing
+// which retention or lookup condition occurred.
+func (dialog *EvidenceDetailDialog) ShowExpired(evidenceID string) {
+	dialog.state = evidenceDialogExpired
+	dialog.evidenceID = evidenceID
+	dialog.content = EvidenceDetailContent{}
+}
+
+// ShowUnavailable reports a fail-closed lookup or identity failure.
+func (dialog *EvidenceDetailDialog) ShowUnavailable(evidenceID string) {
+	dialog.state = evidenceDialogUnavailable
+	dialog.evidenceID = evidenceID
+	dialog.content = EvidenceDetailContent{}
+}
+
+// Close clears every projected detail string.
+func (dialog *EvidenceDetailDialog) Close() {
+	dialog.state = evidenceDialogClosed
+	dialog.evidenceID = ""
+	dialog.content = EvidenceDetailContent{}
+}
+
+// Open reports whether this overlay owns keyboard focus.
+func (dialog EvidenceDetailDialog) Open() bool { return dialog.state != evidenceDialogClosed }
+
+// View renders within the current terminal bounds and clips excess safe
+// projection text instead of adding scrolling or another navigation surface.
+func (dialog EvidenceDetailDialog) View(width, height int) string {
+	if !dialog.Open() {
+		return ""
+	}
+	lines := []string{
+		dialog.styles.Title.Render("Evidence detail"),
+		dialog.styles.Muted.Render("Esc or Enter to close"),
+	}
+	switch dialog.state {
+	case evidenceDialogLoading:
+		lines = append(lines,
+			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
+			dialog.styles.Body.Render("Loading the safe projected detail…"),
+		)
+	case evidenceDialogExpired:
+		lines = append(lines,
+			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
+			dialog.styles.Warning.Render("State: expired"),
+			dialog.styles.Body.Render("Supporting detail was deleted, expired, or is no longer retained."),
+		)
+	case evidenceDialogUnavailable:
+		lines = append(lines,
+			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
+			dialog.styles.Warning.Render("State: unavailable"),
+			dialog.styles.Body.Render("The detail could not be matched to the cited run and scope safely."),
+		)
+	case evidenceDialogAvailable, evidenceDialogPartial:
+		content := dialog.content
+		lines = append(lines,
+			dialog.styles.Body.Render("Evidence ID: "+content.EvidenceID),
+			dialog.styles.Muted.Render("Run ID: "+content.RunID),
+			dialog.styles.Body.Render("Category: "+content.Category),
+			dialog.styles.Body.Render("Source: "+content.Source),
+			dialog.styles.Body.Render("Scope: "+content.Scope),
+			dialog.styles.Body.Render("Resource: "+content.Resource),
+			dialog.styles.Body.Render("Observed at: "+content.ObservedAt),
+			dialog.styles.Body.Render(fmt.Sprintf("State: %s · partial: %s · truncated: %s", content.State, content.Partial, content.Truncated)),
+			dialog.styles.Body.Render("Sensitive filtering: "+content.SensitiveFilter),
+			dialog.styles.Muted.Render("Bounded projection:"),
+			dialog.styles.Body.Render(content.Projection),
+		)
+	}
+	contentWidth := max(1, min(width-6, 82))
+	contentHeight := max(1, height-4)
+	return dialog.styles.Frame.Width(contentWidth).MaxHeight(contentHeight).Render(strings.Join(lines, "\n"))
+}

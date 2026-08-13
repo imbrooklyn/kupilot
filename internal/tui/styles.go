@@ -82,6 +82,7 @@ type styleSet struct {
 	slashMenu     components.SlashMenuStyles
 	picker        components.PickerStyles
 	dialog        components.DialogStyles
+	evidence      components.EvidenceDetailStyles
 	approval      components.ApprovalDialogStyles
 	scopeConflict components.ScopeConflictStyles
 	footer        components.FooterStyles
@@ -121,6 +122,12 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			Blink: true,
 		},
 	}
+	evidenceSelected := lipgloss.NewStyle()
+	evidenceTitle := lipgloss.NewStyle()
+	if palette.ColorEnabled {
+		evidenceSelected = evidenceSelected.Foreground(palette.Accent).Bold(true)
+		evidenceTitle = evidenceTitle.Foreground(palette.Accent).Bold(true)
+	}
 
 	return styleSet{
 		palette: palette,
@@ -134,6 +141,8 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			AgentText:   base,
 			NoticeText:  muted,
 			Placeholder: muted,
+			Evidence:    muted,
+			Selected:    evidenceSelected,
 		},
 		toolSteps: components.ToolStepStyles{
 			Muted: muted, Success: lipgloss.NewStyle().Foreground(palette.Success),
@@ -149,6 +158,11 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			Title: lipgloss.NewStyle().Foreground(palette.Danger).Bold(true),
 			Body:  base,
 			Hint:  muted,
+		},
+		evidence: components.EvidenceDetailStyles{
+			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Accent).Padding(1, 2),
+			Title: evidenceTitle,
+			Body:  base, Muted: muted, Warning: lipgloss.NewStyle().Foreground(palette.Warning),
 		},
 		approval: components.ApprovalDialogStyles{
 			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),

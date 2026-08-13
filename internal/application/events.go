@@ -288,15 +288,16 @@ type ToolStep struct {
 
 // UIEvent carries publisher-owned identity and exactly one projected payload.
 type UIEvent struct {
-	Kind             UIEventKind
-	RunID            domain.AgentRunID
-	ScopeGeneration  int64
-	Sequence         int64
-	Text             string
-	ToolStep         *ToolStep
-	Approval         *UIApprovalRequest
-	ApprovalResult   *UIApprovalResult
-	RestartExecution *UIRestartExecution
+	Kind               UIEventKind
+	RunID              domain.AgentRunID
+	ScopeGeneration    int64
+	Sequence           int64
+	Text               string
+	EvidenceReferences []UIEvidenceReference
+	ToolStep           *ToolStep
+	Approval           *UIApprovalRequest
+	ApprovalResult     *UIApprovalResult
+	RestartExecution   *UIRestartExecution
 }
 
 // Terminal reports whether later events for the same run must be ignored.
@@ -311,31 +312,41 @@ func (event UIEvent) Validate() error {
 	}
 	switch event.Kind {
 	case UIEventRunStarted:
-		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
-	case UIEventTextDelta, UIEventRunCompleted, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
-		if event.Text == "" || len(event.Text) > MaxQuestionBytes || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+	case UIEventRunCompleted:
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+			return ErrInvalidUIEvent
+		}
+		for _, reference := range event.EvidenceReferences {
+			if reference.Validate() != nil || reference.RunID != event.RunID ||
+				reference.Scope.Generation != event.ScopeGeneration || reference.Sequence != event.Sequence {
+				return ErrInvalidUIEvent
+			}
+		}
+	case UIEventTextDelta, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventToolStep:
-		if event.Text != "" || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalRequested:
-		if event.Text != "" || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil || event.RestartExecution != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil || event.RestartExecution != nil ||
 			event.Approval.Validate() != nil || event.Approval.RunID != event.RunID ||
 			event.Approval.Scope.Generation != event.ScopeGeneration || event.Approval.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalClosed:
-		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil || event.RestartExecution != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil || event.RestartExecution != nil ||
 			event.ApprovalResult.Validate() != nil || event.ApprovalResult.RunID != event.RunID ||
 			event.ApprovalResult.ScopeGeneration != event.ScopeGeneration || event.ApprovalResult.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRestartExecution:
-		if event.Text != "" || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil ||
 			event.RestartExecution == nil || event.RestartExecution.Validate() != nil ||
 			event.RestartExecution.RunID != event.RunID || event.RestartExecution.ScopeGeneration != event.ScopeGeneration ||
 			event.RestartExecution.Sequence != event.Sequence {
@@ -525,7 +536,7 @@ type eventBridge struct {
 	started         bool
 	terminal        bool
 	pendingDelta    string
-	diagnosis       string
+	diagnosis       *domain.Diagnosis
 }
 
 func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, sink UIEventSink) (*eventBridge, error) {
@@ -568,7 +579,8 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 	case agent.RunEventModelStreamStarted, agent.RunEventEvidenceCollected:
 		return nil
 	case agent.RunEventDiagnosisReady:
-		bridge.diagnosis = event.Diagnosis.AnswerMarkdown
+		diagnosis := cloneDiagnosis(*event.Diagnosis)
+		bridge.diagnosis = &diagnosis
 		return nil
 	case agent.RunEventToolCallRequested, agent.RunEventToolCallStarted,
 		agent.RunEventToolCallCompleted, agent.RunEventToolCallFailed, agent.RunEventToolCallDenied:
@@ -578,10 +590,13 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		}
 		return bridge.emit(ctx, UIEvent{Kind: UIEventToolStep, ToolStep: &step})
 	case agent.RunEventRunCompleted:
-		if bridge.diagnosis == "" {
+		if bridge.diagnosis == nil {
 			return ErrInvalidUIEvent
 		}
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCompleted, Text: bridge.diagnosis})
+		return bridge.emitTerminal(ctx, UIEvent{
+			Kind: UIEventRunCompleted, Text: bridge.diagnosis.AnswerMarkdown,
+			EvidenceReferences: projectUIEvidenceReferences(*bridge.diagnosis, bridge.sequence+1),
+		})
 	case agent.RunEventRunFailed:
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage})
 	case agent.RunEventRunCancelled:

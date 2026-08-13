@@ -25,7 +25,8 @@ const helpText = `/help                 Show commands and key bindings
 /cancel               Cancel the active AgentRun
 /quit                 Exit KuPilot
 
-Enter sends. Ctrl+J inserts a newline. Tab completes a command.`
+Enter sends. Ctrl+J inserts a newline. Tab completes a command.
+Ctrl+E selects cited Evidence.`
 
 // Update reduces one message into pure UI state and deferred typed commands.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -55,6 +56,10 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := model.stageResumeResult(message.Result)
 		model.reflow()
 		return model, cmd
+	case EvidenceDetailResultMsg:
+		model.acceptEvidenceDetailResult(message.Result)
+		model.reflow()
+		return model, nil
 	case ScopeResultMsg:
 		model.applyScopeResult(message.Result)
 		model.reflow()
@@ -68,6 +73,10 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case ApplicationFailureMsg:
+		if model.acceptEvidenceFailure(message) {
+			model.reflow()
+			return model, nil
+		}
 		if !model.acceptApplicationFailure(message) {
 			return model, nil
 		}
@@ -87,20 +96,23 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.FocusMsg:
 		model.terminalFocused = true
-		if !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
+		if !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() &&
+			!model.evidenceDialog.Open() && !model.transcript.EvidenceSelecting() {
 			_ = model.composer.Focus()
 			model.focus = FocusComposer
 		}
 		return model, nil
 	case tea.PasteMsg:
-		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() || !model.terminalFocused {
+		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
+			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || !model.terminalFocused {
 			return model, nil
 		}
 		return model.updatePaste(message)
 	case tea.KeyPressMsg:
 		return model.updateKey(message)
 	default:
-		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() {
+		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
+			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
 			return model, nil
 		}
 		updated, cmd, err := model.composer.Update(msg)
@@ -202,6 +214,19 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 	return true
 }
 
+func (model *Model) acceptEvidenceFailure(message ApplicationFailureMsg) bool {
+	if message.Evidence.EvidenceID == "" || model.pendingEvidence.RequestID == 0 ||
+		message.RequestID != model.pendingEvidence.RequestID ||
+		!sameUIEvidenceIdentity(message.Evidence, model.pendingEvidence.Reference) ||
+		model.evidenceGeneration != model.scope.Generation {
+		return false
+	}
+	model.pendingEvidence = application.UIEvidenceDetailQuery{}
+	model.evidenceGeneration = 0
+	model.evidenceDialog.ShowUnavailable(string(message.Evidence.EvidenceID))
+	return true
+}
+
 func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	message.Content = sanitizeExternalText(message.Content, 0)
 	updated, cmd, err := model.composer.Update(message)
@@ -233,6 +258,13 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.scopeConflict.Open() {
 		return model.updateScopeConflictKey(message)
 	}
+	if model.evidenceDialog.Open() {
+		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
+			key.Matches(message, model.keymap.Evidence) {
+			model.closeEvidenceInteraction()
+		}
+		return model, nil
+	}
 	if model.dialog.Open() {
 		if model.privacyReview != nil {
 			return model.updatePrivacyDialogKey(message)
@@ -246,6 +278,41 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if model.resumeOrigin == resumeOriginInTUI && model.startup.Ready {
 				model.resumeOrigin = resumeOriginNone
 			}
+		}
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Evidence) {
+		if model.transcript.EvidenceSelecting() {
+			model.closeEvidenceInteraction()
+			return model, nil
+		}
+		if model.transcript.BeginEvidenceSelection() {
+			model.closePickers()
+			model.slashMenu.Close()
+			model.composer.Blur()
+			model.focus = FocusTranscript
+			model.reflow()
+		}
+		return model, nil
+	}
+	if model.transcript.EvidenceSelecting() {
+		switch {
+		case key.Matches(message, model.keymap.Close):
+			model.closeEvidenceInteraction()
+		case key.Matches(message, model.keymap.Cancel):
+			if model.run.Active {
+				return model, model.cancelRunCommand()
+			}
+		case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.PreviousAlt):
+			model.transcript.MoveEvidence(-1)
+		case key.Matches(message, model.keymap.Next), key.Matches(message, model.keymap.NextAlt):
+			model.transcript.MoveEvidence(1)
+		case key.Matches(message, model.keymap.TranscriptUp):
+			model.transcript.PageUp()
+		case key.Matches(message, model.keymap.TranscriptDown):
+			model.transcript.PageDown()
+		case key.Matches(message, model.keymap.Submit):
+			return model.openEvidenceDetail()
 		}
 		return model, nil
 	}
@@ -599,6 +666,7 @@ func (model *Model) completeSlashSelection() {
 }
 
 func (model *Model) showDialog(title, body string) {
+	model.closeEvidenceInteraction()
 	model.dialog.Show(title, body)
 	model.composer.Blur()
 	model.focus = FocusModal
@@ -610,6 +678,122 @@ func (model *Model) closeDialog() {
 		_ = model.composer.Focus()
 	}
 	model.focus = FocusComposer
+}
+
+func (model Model) openEvidenceDetail() (tea.Model, tea.Cmd) {
+	index, selected := model.transcript.SelectedEvidence()
+	if !selected || model.scope.Switching || index < 0 || index >= len(model.evidenceReferences) ||
+		model.pendingEvidence.RequestID != 0 {
+		return model, nil
+	}
+	reference := model.evidenceReferences[index]
+	query := application.UIEvidenceDetailQuery{RequestID: model.nextUIRequestID(), Reference: reference}
+	if query.Validate() != nil {
+		model.closeEvidenceInteraction()
+		return model, nil
+	}
+	model.pendingEvidence = query
+	model.evidenceGeneration = model.scope.Generation
+	model.evidenceDialog.ShowLoading(string(reference.EvidenceID))
+	model.composer.Blur()
+	model.focus = FocusModal
+	return model, applicationEvidenceDetail(query)
+}
+
+func (model *Model) acceptEvidenceDetailResult(result application.UIEvidenceDetailResult) {
+	if model.scope.Switching {
+		model.closeEvidenceInteraction()
+		return
+	}
+	if result.Validate() != nil || model.pendingEvidence.RequestID == 0 ||
+		result.RequestID != model.pendingEvidence.RequestID ||
+		!sameUIEvidenceIdentity(result.Reference, model.pendingEvidence.Reference) ||
+		model.evidenceGeneration != model.scope.Generation {
+		return
+	}
+	model.pendingEvidence = application.UIEvidenceDetailQuery{}
+	model.evidenceGeneration = 0
+	switch result.Reference.State {
+	case application.UIEvidenceDetailExpired:
+		model.evidenceDialog.ShowExpired(string(result.Reference.EvidenceID))
+	case application.UIEvidenceDetailUnavailable:
+		model.evidenceDialog.ShowUnavailable(string(result.Reference.EvidenceID))
+	case application.UIEvidenceDetailAvailable, application.UIEvidenceDetailPartial:
+		detail := result.Detail
+		if detail == nil {
+			model.evidenceDialog.ShowUnavailable(string(result.Reference.EvidenceID))
+			return
+		}
+		filter := "not applied"
+		if detail.SensitiveFilter == application.UIEvidenceSensitiveFilterApplied {
+			filter = "applied"
+		}
+		partial := result.Reference.State == application.UIEvidenceDetailPartial
+		model.evidenceDialog.ShowDetail(components.EvidenceDetailContent{
+			EvidenceID: string(result.Reference.EvidenceID),
+			RunID:      string(result.Reference.RunID),
+			Category:   string(detail.Category),
+			Source:     sanitizeExternalText(detail.SourcePath, 1024),
+			Scope: fmt.Sprintf("%s / %s / generation %d",
+				sanitizeExternalText(result.Reference.Scope.Context, 253),
+				sanitizeExternalText(result.Reference.Scope.Namespace, 63),
+				result.Reference.Scope.Generation),
+			Resource: fmt.Sprintf("%s %s %s/%s",
+				sanitizeExternalText(detail.Resource.APIVersion, 253),
+				sanitizeExternalText(detail.Resource.Kind, 63),
+				sanitizeExternalText(detail.Resource.Namespace, 63),
+				sanitizeExternalText(detail.Resource.Name, 253)),
+			ObservedAt:      detail.ObservedAt.UTC().Format(time.RFC3339Nano),
+			State:           string(result.Reference.State),
+			Partial:         yesNo(partial),
+			Truncated:       yesNo(detail.Truncated),
+			SensitiveFilter: filter,
+			Projection:      sanitizeExternalText(detail.Projection, application.MaxUIEvidenceProjectionBytes),
+		}, partial)
+	}
+}
+
+func (model *Model) appendEvidenceReferences(references []application.UIEvidenceReference) {
+	if len(references) == 0 || len(references) > 100 {
+		return
+	}
+	for _, reference := range references {
+		if reference.Validate() != nil {
+			return
+		}
+	}
+	display := make([]components.EvidenceReference, 0, len(references))
+	for _, reference := range references {
+		index := len(model.evidenceReferences)
+		model.evidenceReferences = append(model.evidenceReferences, reference)
+		display = append(display, components.EvidenceReference{
+			Index: index, ID: string(reference.EvidenceID), State: string(reference.State),
+		})
+	}
+	model.transcript.SetAgentEvidence(display)
+}
+
+func (model *Model) closeEvidenceInteraction() {
+	model.pendingEvidence = application.UIEvidenceDetailQuery{}
+	model.evidenceGeneration = 0
+	model.evidenceDialog.Close()
+	model.transcript.EndEvidenceSelection()
+	if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
+		_ = model.composer.Focus()
+		model.focus = FocusComposer
+	}
+}
+
+func sameUIEvidenceIdentity(left, right application.UIEvidenceReference) bool {
+	return left.EvidenceID == right.EvidenceID && left.RunID == right.RunID &&
+		left.Scope == right.Scope && left.Sequence == right.Sequence
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func quitCommand() tea.Cmd {
@@ -714,6 +898,7 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 			model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 			return model, nil
 		}
+		model.closeEvidenceInteraction()
 		model.pendingScopeID = requestID
 		model.scope.Switching = true
 		model.scopeConflict.Close()
@@ -744,6 +929,7 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 	explicitTopLevelScope := model.resumeOrigin == resumeOriginTopLevel && model.startup.Intent.ExplicitScope
 	if !explicitTopLevelScope && resumed.SavedScope != nil &&
 		(resumed.SavedScope.Context != model.scope.Context || resumed.SavedScope.Namespace != model.scope.Namespace) {
+		model.closeEvidenceInteraction()
 		model.scopeConflict.Show(scopeLabel(model.scope.Context, model.scope.Namespace), scopeLabel(resumed.SavedScope.Context, resumed.SavedScope.Namespace))
 		model.composer.Blur()
 		model.focus = FocusModal
@@ -761,6 +947,7 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 		return nil
 	}
+	model.closeEvidenceInteraction()
 	model.pendingScopeID = command.RequestID
 	model.scope.Switching = true
 	return applicationCommand(command)
@@ -1047,6 +1234,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 		case domain.MessageRoleAssistant:
 			model.transcript.StartAgent()
 			model.transcript.FinishAgent(text)
+			model.appendEvidenceReferences(message.EvidenceReferences)
 		default:
 			model.transcript.AppendNotice(text)
 		}
@@ -1059,6 +1247,10 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 }
 
 func (model *Model) resetTranscript() {
+	model.pendingEvidence = application.UIEvidenceDetailQuery{}
+	model.evidenceGeneration = 0
+	model.evidenceDialog.Close()
+	model.evidenceReferences = nil
 	model.transcript = components.NewTranscript(model.styles.transcript, model.styles.toolSteps)
 }
 
@@ -1070,6 +1262,9 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	model.pendingScopeID = 0
 	model.scope.Switching = false
 	changed := result.ScopeGeneration > result.ExpectedGeneration
+	if changed {
+		model.closeEvidenceInteraction()
+	}
 	if result.Failure != "" {
 		if changed {
 			model.clearApproval()
@@ -1174,6 +1369,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
 			LastSequence: event.Sequence, Active: true, Status: "active",
 		}
+		model.closeEvidenceInteraction()
 		model.transcript.StartAgent()
 		return nil
 	}
@@ -1207,6 +1403,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		if now.IsZero() || now.UnixMilli() < 0 {
 			return nil
 		}
+		model.closeEvidenceInteraction()
 		model.pendingApproval = &request
 		model.pendingApprovalID = 0
 		model.approvalState = domain.ApprovalStatePending
@@ -1279,6 +1476,9 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 			model.run.Status = "failed"
 		}
 		model.transcript.FinishAgent(text)
+		if event.Kind == application.UIEventRunCompleted {
+			model.appendEvidenceReferences(event.EvidenceReferences)
+		}
 	default:
 		return nil
 	}
