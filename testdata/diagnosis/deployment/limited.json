@@ -73,8 +73,8 @@
     "hypotheses": [
       {
         "statement": "The rollout may be stalled, but the incomplete relationship result does not identify a Pod cause.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001611", "00000000-0000-7000-8000-000000001612", "00000000-0000-7000-8000-000000001613"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001611", "00000000-0000-7000-8000-000000001612", "00000000-0000-7000-8000-000000001613", "00000000-0000-7000-8000-000000009906"],
+        "confidence": "high",
         "falsifier": "A complete fresh rollout graph shows available related Pods or a different controller state."
       }
     ],
@@ -101,7 +101,7 @@
     "recommended_actions": [{"index": 0, "assertion": "collect_complete_rollout_graph"}]
   },
   "required_confirmed_assertions": ["deployment_zero_available", "deployment_available_false"],
-  "required_missing_kinds": ["forbidden", "truncated", "absent"],
+  "required_missing_kinds": ["forbidden", "truncated", "absent", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "partial"
 }

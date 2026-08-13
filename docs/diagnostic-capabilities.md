@@ -11,9 +11,12 @@ has a discoverable root cause or that a particular model sentence is guaranteed.
 Every evaluated Diagnosis contains four distinct collections: confirmed facts,
 hypotheses, missing information, and recommended actions. Each confirmed fact
 cites accepted Evidence from the same AgentRun. Hypotheses retain bounded
-confidence and a falsifier. Forbidden, absent, stale, conflicting, sensitive-
-blocked, partial, or truncated observations remain visible as missing
-information. Every recommendation is marked as not executed.
+confidence and a falsifier. If validation removes an unregistered or duplicate
+hypothesis citation, the affected hypothesis is reduced to low confidence and
+the unsupported provenance remains visible as missing information. Forbidden,
+absent, stale, conflicting, sensitive-blocked, partial, or truncated
+observations also remain visible as missing information. Every recommendation
+is marked as not executed.
 
 The Agent uses only the six fixed read-only Tools. A scenario changes query
 guidance and required caution, not ClusterScope, Tool schemas, permissions,
@@ -90,7 +93,8 @@ The evaluator checks:
   Evidence, without comparing complete natural-language sentences.
 - Required permission, absence, stale, conflict, partial, and truncation gaps,
   including the partial Evidence-detail state.
-- Hypothesis confidence and falsifiers.
+- Hypothesis confidence, falsifiers, and direct semantic support for any
+  declared supporting Evidence citations.
 - Structured `executed=false` state and the rendered not-executed marker for
   every recommendation.
 

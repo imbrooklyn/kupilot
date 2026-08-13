@@ -40,7 +40,14 @@
     "confirmed_facts": [
       {"statement": "The projected Service has one selector key.", "evidence_ids": ["00000000-0000-7000-8000-000000001811"]}
     ],
-    "hypotheses": [],
+    "hypotheses": [
+      {
+        "statement": "A selector mismatch remains possible, but the denied relationship read provides no backend Evidence.",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001811", "00000000-0000-7000-8000-000000009908"],
+        "confidence": "high",
+        "falsifier": "A permitted bounded relationship read shows matching ready Pods and a ready endpoint count."
+      }
+    ],
     "missing_information": [
       {"kind": "forbidden", "detail": "The fixed matching Pod and EndpointSlice relationship read was denied.", "impact": "No matching Pod readiness or ready endpoint count can be confirmed."}
     ],
@@ -55,11 +62,11 @@
   },
   "annotations": {
     "confirmed_facts": [{"index": 0, "assertion": "service_selector_present"}],
-    "hypotheses": [],
+    "hypotheses": [{"index": 0, "assertion": "selector_mismatch_possible"}],
     "recommended_actions": [{"index": 0, "assertion": "obtain_service_relationship_access"}]
   },
   "required_confirmed_assertions": ["service_selector_present"],
-  "required_missing_kinds": ["forbidden"],
+  "required_missing_kinds": ["forbidden", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

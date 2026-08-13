@@ -18,7 +18,7 @@
             "fact": "Container example-container is waiting, ready=false, restarts=0, reason ImagePullBackOff, image example-image:v2.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_imagepull_waiting"]
+            "supports": ["container_imagepull_waiting", "registry_network_or_authorization_possible"]
           }
         ]
       }
@@ -43,8 +43,8 @@
     "hypotheses": [
       {
         "statement": "The image reference, registry reachability, or authorization may contribute, but none is confirmed.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001311"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001311", "00000000-0000-7000-8000-000000009903"],
+        "confidence": "high",
         "falsifier": "A permitted Event observation or authorized external check identifies a different pull outcome."
       }
     ],
@@ -66,7 +66,7 @@
     "recommended_actions": [{"index": 0, "assertion": "obtain_event_access"}]
   },
   "required_confirmed_assertions": ["container_imagepull_waiting"],
-  "required_missing_kinds": ["forbidden"],
+  "required_missing_kinds": ["forbidden", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

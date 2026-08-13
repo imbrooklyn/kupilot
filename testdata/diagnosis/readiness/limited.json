@@ -64,8 +64,8 @@
     "hypotheses": [
       {
         "statement": "An application health issue remains possible, but the available observations are incomplete.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001511", "00000000-0000-7000-8000-000000001513"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001511", "00000000-0000-7000-8000-000000001513", "00000000-0000-7000-8000-000000009905"],
+        "confidence": "high",
         "falsifier": "A complete bounded observation shows the application healthy or identifies a different readiness cause."
       }
     ],
@@ -88,7 +88,7 @@
     "recommended_actions": [{"index": 0, "assertion": "collect_complete_bounded_observation"}]
   },
   "required_confirmed_assertions": ["pod_not_ready"],
-  "required_missing_kinds": ["absent", "truncated"],
+  "required_missing_kinds": ["absent", "truncated", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "partial"
 }

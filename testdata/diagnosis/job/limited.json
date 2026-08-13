@@ -80,8 +80,8 @@
     "hypotheses": [
       {
         "statement": "Different observation times or Pod attempts may explain the inconsistent Job count and owned Pod phase.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001711", "00000000-0000-7000-8000-000000001712", "00000000-0000-7000-8000-000000001713", "00000000-0000-7000-8000-000000001714"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001711", "00000000-0000-7000-8000-000000001712", "00000000-0000-7000-8000-000000001713", "00000000-0000-7000-8000-000000001714", "00000000-0000-7000-8000-000000009907"],
+        "confidence": "high",
         "falsifier": "One fresh bounded observation reconciles the Job counts with all returned owned Pod phases."
       }
     ],
@@ -109,7 +109,7 @@
     "recommended_actions": [{"index": 0, "assertion": "collect_fresh_job_and_pod_state"}]
   },
   "required_confirmed_assertions": ["job_failed_count_observed", "job_failed_condition_observed", "job_owned_pod_succeeded_observed", "job_pod_owner_observed"],
-  "required_missing_kinds": ["conflicting", "absent"],
+  "required_missing_kinds": ["conflicting", "absent", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

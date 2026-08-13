@@ -173,6 +173,18 @@ func TestDiagnosisRubricRejectsForbiddenUnsupportedAndIncompleteResults(t *testi
 		}
 	})
 
+	t.Run("unrelated hypothesis Evidence", func(t *testing.T) {
+		mutated := fixture
+		mutated.Steps = append([]fixtureStep(nil), fixture.Steps...)
+		mutated.Steps[0] = fixture.Steps[0]
+		mutated.Steps[0].Result.Evidence = append([]fixtureEvidence(nil), fixture.Steps[0].Result.Evidence...)
+		mutated.Steps[0].Result.Evidence[0] = fixture.Steps[0].Result.Evidence[0]
+		mutated.Steps[0].Result.Evidence[0].Supports = []string{"container_imagepull_waiting"}
+		if err := evaluateDiagnosisRubric(policy, mutated, run); err == nil {
+			t.Fatal("rubric accepted hypothesis Evidence unrelated to its reviewed assertion")
+		}
+	})
+
 	t.Run("unknown Evidence reference", func(t *testing.T) {
 		mutated := run
 		mutated.diagnosis = run.diagnosis
@@ -920,10 +932,19 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 			addProblem("hypothesis assertion %q is not allowed by the scenario policy", assertion)
 		}
 		hypothesis := run.diagnosis.Hypotheses[index]
+		hasSemanticSupport := len(hypothesis.SupportingEvidenceIDs) == 0
 		for _, id := range hypothesis.SupportingEvidenceIDs {
 			if _, exists := accepted[id]; !exists {
 				addProblem("hypothesis %d cites unknown Evidence %q", index, id)
+				continue
 			}
+			definition := definitions[id]
+			if !definition.Truncated && containsString(definition.Supports, assertion) {
+				hasSemanticSupport = true
+			}
+		}
+		if !hasSemanticSupport {
+			addProblem("hypothesis assertion %q lacks direct non-truncated supporting Evidence semantics", assertion)
 		}
 		if confidenceRank(hypothesis.Confidence) > confidenceRank(fixture.MaximumHypothesisConfidence) {
 			addProblem("hypothesis %d confidence %q exceeds fixture maximum %q", index, hypothesis.Confidence, fixture.MaximumHypothesisConfidence)

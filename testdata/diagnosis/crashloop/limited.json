@@ -18,7 +18,7 @@
             "fact": "Container example-container is waiting, ready=false, restarts=3, reason CrashLoopBackOff; previous state terminated, reason Error, exit_code=1.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_crashloop_waiting"]
+            "supports": ["container_crashloop_waiting", "application_startup_failure_possible"]
           }
         ]
       }
@@ -85,8 +85,8 @@
     "hypotheses": [
       {
         "statement": "An application startup failure remains possible, but its precise cause is unknown.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001111", "00000000-0000-7000-8000-000000001112"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001111", "00000000-0000-7000-8000-000000001112", "00000000-0000-7000-8000-000000009901"],
+        "confidence": "high",
         "falsifier": "A permitted previous log observation or a later successful start contradicts this possibility."
       }
     ],
@@ -112,7 +112,7 @@
     "recommended_actions": [{"index": 0, "assertion": "inspect_owner_configuration"}]
   },
   "required_confirmed_assertions": ["container_crashloop_waiting", "restart_backoff_observed", "pod_owner_observed"],
-  "required_missing_kinds": ["forbidden"],
+  "required_missing_kinds": ["forbidden", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

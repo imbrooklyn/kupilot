@@ -82,8 +82,8 @@
     "hypotheses": [
       {
         "statement": "A previous scheduling block may have cleared, leaving a different Pending-stage issue.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001412", "00000000-0000-7000-8000-000000001413"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001412", "00000000-0000-7000-8000-000000001413", "00000000-0000-7000-8000-000000009904"],
+        "confidence": "high",
         "falsifier": "A fresh bounded observation again reports PodScheduled=False with a current FailedScheduling Event."
       }
     ],
@@ -111,7 +111,7 @@
     "recommended_actions": [{"index": 0, "assertion": "collect_fresh_scheduling_evidence"}]
   },
   "required_confirmed_assertions": ["pod_pending_phase", "pod_scheduled_condition", "historical_failed_scheduling_event", "pod_owner_observed"],
-  "required_missing_kinds": ["stale", "conflicting"],
+  "required_missing_kinds": ["stale", "conflicting", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

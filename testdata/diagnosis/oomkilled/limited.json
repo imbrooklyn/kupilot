@@ -72,8 +72,8 @@
     "hypotheses": [
       {
         "statement": "A memory-related application failure remains possible, but OOMKilled is not confirmed.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001211", "00000000-0000-7000-8000-000000001212"],
-        "confidence": "low",
+        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001211", "00000000-0000-7000-8000-000000001212", "00000000-0000-7000-8000-000000009902"],
+        "confidence": "high",
         "falsifier": "A fresh projected termination reason or an independent bounded observation identifies a non-memory failure."
       }
     ],
@@ -98,7 +98,7 @@
     "recommended_actions": [{"index": 0, "assertion": "collect_fresh_termination_state"}]
   },
   "required_confirmed_assertions": ["previous_termination_not_oomkilled", "pod_owner_observed"],
-  "required_missing_kinds": ["conflicting"],
+  "required_missing_kinds": ["conflicting", "unsupported"],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

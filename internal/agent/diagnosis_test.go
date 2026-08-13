@@ -32,7 +32,7 @@ func TestDiagnosisValidatorRejectsUnregisteredEvidenceAndExecutionClaims(t *test
 		},
 		Hypotheses: []domain.Hypothesis{{
 			Statement:             "The application may still be starting.",
-			SupportingEvidenceIDs: []domain.EvidenceID{testEvidenceID, forgedID},
+			SupportingEvidenceIDs: []domain.EvidenceID{testEvidenceID, testEvidenceID, forgedID},
 			Confidence:            domain.DiagnosisConfidenceLow,
 			Falsifier:             "A later bounded observation reports the Pod Ready.",
 		}},
@@ -64,6 +64,43 @@ func TestDiagnosisValidatorRejectsUnregisteredEvidenceAndExecutionClaims(t *test
 	}
 	if !strings.Contains(diagnosis.AnswerMarkdown, string(testEvidenceID)) || !strings.Contains(diagnosis.AnswerMarkdown, "Not executed") {
 		t.Fatalf("rendered Diagnosis = %s", diagnosis.AnswerMarkdown)
+	}
+}
+
+func TestDiagnosisValidatorDowngradesHypothesisWhenReferencesAreRemoved(t *testing.T) {
+	input := testRunInput(t, "Why is this Pod not Ready?")
+	call := testBoundCall(t, input, testInvocationID, "sample-pod")
+	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(1_000).UTC())
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if _, err := registry.AcceptToolResult(call, result); err != nil {
+		t.Fatalf("AcceptToolResult() error = %v", err)
+	}
+	forgedID := domain.EvidenceID("00000000-0000-7000-8000-000000004099")
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		ConfirmedFacts: []domain.ConfirmedFact{{
+			Statement: "The projected Pod condition is not Ready.", EvidenceIDs: []domain.EvidenceID{testEvidenceID},
+		}},
+		Hypotheses: []domain.Hypothesis{{
+			Statement:             "The application may still be starting.",
+			SupportingEvidenceIDs: []domain.EvidenceID{testEvidenceID, forgedID},
+			Confidence:            domain.DiagnosisConfidenceHigh,
+			Falsifier:             "A later bounded observation reports the Pod Ready.",
+		}},
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC()}, registry)
+	if err != nil {
+		t.Fatalf("ValidateDiagnosis() error = %v", err)
+	}
+	if got := diagnosis.Hypotheses[0].SupportingEvidenceIDs; len(got) != 1 || got[0] != testEvidenceID {
+		t.Fatalf("hypothesis Evidence IDs = %#v", got)
+	}
+	if got := diagnosis.Hypotheses[0].Confidence; got != domain.DiagnosisConfidenceLow {
+		t.Fatalf("hypothesis confidence = %q, want low", got)
+	}
+	if !hasMissingKind(diagnosis.MissingInformation, domain.MissingInformationUnsupported) {
+		t.Fatalf("missing information = %#v", diagnosis.MissingInformation)
 	}
 }
 

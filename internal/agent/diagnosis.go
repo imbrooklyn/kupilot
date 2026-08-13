@@ -159,7 +159,7 @@ type DiagnosisMetadata struct {
 
 const (
 	warningConfirmedFactRemoved = "A confirmed fact was removed because it did not cite accepted Evidence from this AgentRun."
-	warningHypothesisReference  = "Unsupported Evidence references were removed from a hypothesis."
+	warningHypothesisReference  = "Invalid or duplicate Evidence references were removed from a hypothesis."
 	warningExecutionRejected    = "An execution claim was rejected; recommendations are not executed in v0.1."
 	maxDiagnosisDraftTextBytes  = 16 * 1024
 )
@@ -194,23 +194,34 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		confirmed = append(confirmed, fact)
 	}
 	hypotheses := make([]domain.Hypothesis, len(draft.Hypotheses))
+	removedHypothesisReference := false
 	for index, hypothesis := range draft.Hypotheses {
 		hypotheses[index] = hypothesis
 		filtered := make([]domain.EvidenceID, 0, len(hypothesis.SupportingEvidenceIDs))
 		seen := make(map[domain.EvidenceID]struct{}, len(hypothesis.SupportingEvidenceIDs))
+		removedReference := false
 		for _, id := range hypothesis.SupportingEvidenceIDs {
 			if _, exists := snapshot.items[id]; !exists {
 				warnings = appendUnique(warnings, warningHypothesisReference)
+				removedReference = true
 				continue
 			}
 			if _, duplicate := seen[id]; duplicate {
 				warnings = appendUnique(warnings, warningHypothesisReference)
+				removedReference = true
 				continue
 			}
 			seen[id] = struct{}{}
 			filtered = append(filtered, id)
 		}
 		hypotheses[index].SupportingEvidenceIDs = sortedEvidenceIDs(filtered)
+		if removedReference {
+			removedHypothesisReference = true
+			switch hypotheses[index].Confidence {
+			case domain.DiagnosisConfidenceMedium, domain.DiagnosisConfidenceHigh:
+				hypotheses[index].Confidence = domain.DiagnosisConfidenceLow
+			}
+		}
 	}
 	missing := append([]domain.MissingInformation(nil), draft.MissingInformation...)
 	actions := make([]domain.RecommendedAction, len(draft.RecommendedActions))
@@ -247,6 +258,13 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 			Kind:   domain.MissingInformationUnsupported,
 			Detail: "At least one draft confirmed fact did not cite accepted Evidence from this AgentRun.",
 			Impact: "The rejected draft entry was excluded from the final Diagnosis.",
+		})
+	}
+	if removedHypothesisReference && !hasMissingKind(missing, domain.MissingInformationUnsupported) {
+		missing = append(missing, domain.MissingInformation{
+			Kind:   domain.MissingInformationUnsupported,
+			Detail: "At least one hypothesis citation was invalid or duplicated after binding to accepted Evidence from this AgentRun.",
+			Impact: "The citation was removed and the affected hypothesis confidence was reduced.",
 		})
 	}
 	if observedTo != nil && metadata.CreatedAt.Before(*observedTo) {
