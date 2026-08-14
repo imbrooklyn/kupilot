@@ -70,7 +70,7 @@ tar -xzf "$archive"
 ```
 
 The version output must match the release, selected platform, and expected
-source commit. It also reports Go 1.25.12 and a UTC source-commit time. Stop if
+source commit. It also reports Go 1.25.13 and a UTC source-commit time. Stop if
 any field is unexpected.
 
 ## Install for one user

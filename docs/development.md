@@ -7,12 +7,14 @@ steps.
 
 ## Required versions
 
-The module's supported minimum remains Go 1.25.0. CI pins Go 1.25.12 as the
+The module's supported minimum remains Go 1.25.0. CI pins Go 1.25.13 as the
 reviewed patch version on that minimum-version line. `GOTOOLCHAIN` is set to
 `local` in CI so a job cannot silently replace the selected toolchain.
 Aggregate gate targets verify that exact Go patch version before running. With
 Go toolchain management enabled, the complete local equivalent can be selected
-explicitly with `GOTOOLCHAIN=go1.25.12 make check-all`.
+explicitly with `GOTOOLCHAIN=go1.25.13 make check-all`. The supporting version,
+security, platform, and maintenance evidence is recorded in
+[Dependency Compatibility](compatibility.md).
 
 The following development tools are installed into the ignored `bin/tools`
 tree by versioned Makefile rules. They are development dependencies and do not

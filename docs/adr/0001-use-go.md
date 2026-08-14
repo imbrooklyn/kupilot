@@ -27,6 +27,13 @@ bound required by the selected dependency versions. Any change to that lower
 bound must be supported by official module metadata and verified by compile and
 platform checks.
 
+The reproducible CI and release toolchain is Go 1.25.13, the reviewed security
+patch on the Go 1.25 line. This exact patch pin is independent of the module's
+minimum language version and must remain synchronized across CI, local gates,
+release builds, and the public compatibility record. A later patch on the same
+Go minor does not change this decision or raise the minimum when it passes the
+same compatibility and security validation.
+
 ## Consequences
 
 Positive consequences:
@@ -92,5 +99,6 @@ All four checks are release requirements.
 ## References
 
 - [Architecture](../architecture.md)
+- [Dependency Compatibility](../compatibility.md)
 - [Product Contract](../product.md)
 - [Scope](../scope.md)

@@ -18,14 +18,14 @@ rate.
 The primary quality command is:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 go test -count=1 ./internal/agent \
+GOTOOLCHAIN=go1.25.13 go test -count=1 ./internal/agent \
   -run '^(TestDiagnosisScenarioFixtures|TestDiagnosisRubric.*)$'
 ```
 
 The offline integration command is:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 make test-e2e
+GOTOOLCHAIN=go1.25.13 make test-e2e
 ```
 
 Both commands use the scripted local model, fixed Tool binding, synthetic Tool

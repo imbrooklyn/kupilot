@@ -9,7 +9,7 @@ builds:
     binary: kupilot
     env:
       - CGO_ENABLED=0
-      - GOTOOLCHAIN=go1.25.12
+      - GOTOOLCHAIN=go1.25.13
     goos:
       - darwin
       - linux

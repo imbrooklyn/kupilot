@@ -16,7 +16,7 @@ ADR-0016 remain security limits. Performance results cannot relax them.
 Every comparison records the exact source commit, dirty state, Go version,
 `GOOS`, `GOARCH`, `CGO_ENABLED`, operating-system version, CPU class, physical
 memory, power mode, terminal dimensions when relevant, and command line. Use
-Go 1.25.12, `CGO_ENABLED=0` for product binaries, fixed synthetic inputs, a
+Go 1.25.13, `CGO_ENABLED=0` for product binaries, fixed synthetic inputs, a
 local temporary SQLite database, no real kubeconfig, no model credential, and
 no network service.
 
@@ -56,7 +56,7 @@ threshold solely to make a regression pass is not acceptance.
 Build and artifact measurements use the repository gates:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 make build cross-build
+GOTOOLCHAIN=go1.25.13 make build cross-build
 ```
 
 The native binary is measured with the platform process tool by repeatedly
@@ -70,9 +70,9 @@ SQLite and stream-render measurements use Go benchmark output with memory
 accounting:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 go test -run '^$' -bench '^BenchmarkSQLite' \
+GOTOOLCHAIN=go1.25.13 go test -run '^$' -bench '^BenchmarkSQLite' \
   -benchmem -count=10 ./internal/persistence/sqlite
-GOTOOLCHAIN=go1.25.12 go test -run '^$' -bench '^BenchmarkStreamRender' \
+GOTOOLCHAIN=go1.25.13 go test -run '^$' -bench '^BenchmarkStreamRender' \
   -benchmem -count=10 ./internal/tui
 ```
 

@@ -37,7 +37,7 @@ an issue or pull request.
 ## Development environment
 
 KuPilot requires Go 1.25.0 or newer. The reproducible repository gates pin Go
-1.25.12 and versioned development tools. Build the current platform binary with:
+1.25.13 and versioned development tools. Build the current platform binary with:
 
 ```sh
 make build
@@ -46,20 +46,22 @@ make build
 Run the fast gate while developing:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 make check
+GOTOOLCHAIN=go1.25.13 make check
 ```
 
 Before requesting review, run the complete local equivalent of the required
 fast and slow gates:
 
 ```sh
-GOTOOLCHAIN=go1.25.12 make check-all
+GOTOOLCHAIN=go1.25.13 make check-all
 ```
 
 The complete target list, network policy, and hosted job matrix are documented
-in [Development and CI Gates](docs/development.md). A cold Go or tool cache and
-`govulncheck` require network access to their configured official sources. Do
-not turn a download or vulnerability-database failure into a skip.
+in [Development and CI Gates](docs/development.md). The reviewed Go toolchain
+baseline is recorded in [Dependency Compatibility](docs/compatibility.md). A
+cold Go or tool cache and `govulncheck` require network access to their
+configured official sources. Do not turn a download or vulnerability-database
+failure into a skip.
 
 ## Make a focused change
 
