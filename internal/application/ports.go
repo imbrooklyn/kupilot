@@ -14,10 +14,10 @@ import (
 
 var ErrIdentifierUnavailable = errors.New("an application identifier is unavailable")
 
-// SessionPersistence owns the atomic Session and creation-audit intent needed
-// by CreateSession.
+// SessionPersistence owns Session creation plus the current lifecycle controls.
 type SessionPersistence interface {
 	CreateWithAudit(context.Context, domain.Session, domain.AuditEvent) error
+	SessionLifecyclePersistence
 }
 
 // RunPersistence owns the three atomic lifecycle transaction intents. It

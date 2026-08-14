@@ -63,6 +63,9 @@ type UICommandOutcome struct {
 	Resource  *UIResourceSelectionResult
 	Status    *UIStatusResult
 	Privacy   *PrivacyReview
+	Lifecycle *SessionLifecycleReview
+	Deletion  *SessionDeletionResult
+	Export    *SessionExportResult
 	Approval  *UIApprovalResult
 	RunID     domain.AgentRunID
 	Failure   UIQueryFailureCode
@@ -82,9 +85,23 @@ func (result UICommandOutcome) Validate() error {
 	if result.Privacy != nil {
 		if result.Privacy.Validate() != nil ||
 			result.Command != UICommandShowPrivacy && result.Command != UICommandToggleLogs &&
+				result.Command != UICommandTightenRetention && result.Command != UICommandSetPersistenceMode &&
 				!(result.Command == UICommandSubmitQuestion && result.Failure == UIQueryConsentRequired) {
 			return ErrInvalidUIEvent
 		}
+	}
+	if result.Lifecycle != nil {
+		if result.Lifecycle.Validate() != nil ||
+			result.Command != UICommandShowPrivacy && result.Command != UICommandToggleLogs &&
+				result.Command != UICommandTightenRetention && result.Command != UICommandSetPersistenceMode {
+			return ErrInvalidUIEvent
+		}
+	}
+	if result.Deletion != nil && (result.Deletion.Validate() != nil || result.Command != UICommandDeleteSession) {
+		return ErrInvalidUIEvent
+	}
+	if result.Export != nil && (result.Export.Validate() != nil || result.Command != UICommandExportSession) {
+		return ErrInvalidUIEvent
 	}
 	switch result.Command {
 	case UICommandAcceptResume:
@@ -171,13 +188,53 @@ func (result UICommandOutcome) Validate() error {
 			return ErrInvalidUIEvent
 		}
 	case UICommandShowPrivacy:
-		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Session != nil ||
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Lifecycle == nil || result.Session != nil ||
 			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
 	case UICommandToggleLogs:
-		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Session != nil ||
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Lifecycle == nil || result.Session != nil ||
 			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandTightenRetention:
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Lifecycle == nil || result.Session != nil ||
+			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandSetPersistenceMode:
+		if result.RequestID == 0 || result.Failure != "" || result.Privacy == nil || result.Lifecycle == nil ||
+			result.Session == nil || !result.Session.validate() || result.Session.Resumed || result.Resumed != nil ||
+			result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandDeleteSession:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if !result.Failure.validOperational() || result.Deletion != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.Deletion == nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandExportSession:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil ||
+			result.Deletion != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if !result.Failure.validOperational() || result.Export != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.Export == nil {
 			return ErrInvalidUIEvent
 		}
 	case UICommandAcceptPrivacy, UICommandRejectPrivacy, UICommandRevokePrivacy, UICommandCancelPrivacy:

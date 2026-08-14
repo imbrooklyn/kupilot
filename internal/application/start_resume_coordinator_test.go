@@ -45,9 +45,9 @@ func TestCoordinatorStartUIKeepsHistoryBehindExplicitResumeActions(t *testing.T)
 			if result.Session != nil && (!result.Session.ID.Valid() || result.Session.Resumed) {
 				t.Fatalf("new Session state = %#v", result.Session)
 			}
-			if history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
-				t.Fatalf("history calls = list %d resume %d latest %d, want zero",
-					history.listCalls, history.resumeCalls, history.latestCalls)
+			if history.searchCalls != 0 || history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
+				t.Fatalf("history calls = search %d list %d resume %d latest %d, want zero",
+					history.searchCalls, history.listCalls, history.resumeCalls, history.latestCalls)
 			}
 			if maintenance.recoveryCalls != 1 || maintenance.retentionCalls != 1 {
 				t.Fatalf("startup maintenance calls = recovery %d retention %d, want 1/1",
@@ -85,8 +85,10 @@ func TestCoordinatorSessionPickerAndResumeStayReadOnlyUntilAcceptance(t *testing
 	if completion.Validate() != nil || len(completion.Sessions) != 1 || completion.Sessions[0].ID != resumedID {
 		t.Fatalf("session completion = %#v", completion)
 	}
-	if store.listCalls != 1 || store.resumeCalls != 0 || store.latestCalls != 0 {
-		t.Fatalf("picker history calls = list %d resume %d latest %d", store.listCalls, store.resumeCalls, store.latestCalls)
+	if store.searchCalls != 1 || store.listCalls != 0 || store.resumeCalls != 0 || store.latestCalls != 0 ||
+		store.searchRequest.Filter != "payment" || store.searchRequest.Limit != MaxUIQueryCandidates {
+		t.Fatalf("picker history calls = search %d list %d resume %d latest %d request %#v",
+			store.searchCalls, store.listCalls, store.resumeCalls, store.latestCalls, store.searchRequest)
 	}
 
 	request := UIResumeRequest{RequestID: 2, Mode: UIResumeExact, SessionID: resumedID}
@@ -545,19 +547,39 @@ func TestCoordinatorRenamePersistsOnlyProcessedCurrentSessionTitle(t *testing.T)
 }
 
 type recordingSessionResumeStore struct {
-	listCalls    int
-	resumeCalls  int
-	latestCalls  int
-	candidates   []ResumeSessionRecord
-	history      ResumedSessionRecord
-	err          error
-	renameCalls  int
-	renameRecord RenameSessionRecord
-	renameErr    error
+	searchCalls   int
+	searchRequest SessionSearchRequest
+	listCalls     int
+	resumeCalls   int
+	latestCalls   int
+	candidates    []ResumeSessionRecord
+	history       ResumedSessionRecord
+	err           error
+	renameCalls   int
+	renameRecord  RenameSessionRecord
+	renameErr     error
 }
 
 func newRecordingSessionResumeStore() *recordingSessionResumeStore {
 	return new(recordingSessionResumeStore)
+}
+
+func (store *recordingSessionResumeStore) SearchResumable(
+	_ context.Context,
+	request SessionSearchRequest,
+) ([]ResumeSessionRecord, error) {
+	store.searchCalls++
+	store.searchRequest = request
+	result := make([]ResumeSessionRecord, 0, min(len(store.candidates), request.Limit))
+	for _, candidate := range store.candidates {
+		if sessionRecordMatches(candidate, request.Filter) {
+			result = append(result, candidate)
+			if len(result) == request.Limit {
+				break
+			}
+		}
+	}
+	return result, store.err
 }
 
 func (store *recordingSessionResumeStore) ListResumable(context.Context, int) ([]ResumeSessionRecord, error) {
@@ -748,7 +770,7 @@ func newUIScopeCoordinatorHarness(t *testing.T, manager *ScopeManager, history *
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{
-			Sessions: history, Titles: history, Startup: new(recordingStartupMaintenance), Scopes: manager,
+			Sessions: history, Search: history, Titles: history, Startup: new(recordingStartupMaintenance), Scopes: manager,
 		},
 	})
 	if err != nil {
@@ -788,7 +810,7 @@ func newUICoordinatorHarness(
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
-		UI: &CoordinatorUIConfig{Sessions: history, Titles: history, Startup: maintenance},
+		UI: &CoordinatorUIConfig{Sessions: history, Search: history, Titles: history, Startup: maintenance},
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)

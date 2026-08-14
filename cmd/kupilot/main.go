@@ -19,6 +19,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/kube"
 	"github.com/imbrooklyn/kupilot/internal/llm/openaicompat"
+	"github.com/imbrooklyn/kupilot/internal/persistence/filesystem"
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 	platformlogging "github.com/imbrooklyn/kupilot/internal/platform/logging"
@@ -202,10 +203,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		Runner: agentAdapter, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: redactor, Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
+		Questions: redactor, Exports: sessionRepository, ExportFiles: filesystem.NewExportWriter(), ExportText: redactor,
+		Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now,
 		UI: &application.CoordinatorUIConfig{
-			Sessions: sessionApplication, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
+			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
 			EvidenceDetail: evidenceApplication,
 		},
 	})

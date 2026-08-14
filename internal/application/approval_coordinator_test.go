@@ -299,9 +299,18 @@ func TestCoordinatorProposalBridgeRequiresExactActiveRunBinding(t *testing.T) {
 	); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Fatalf("sequence mismatch error = %v", err)
 	}
+	outer.deletingSession = fixture.sessionID
+	if _, err := outer.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
+	); !errors.Is(err, ErrApprovalUnavailable) || fixture.persistence.creates != 0 {
+		t.Fatalf("lifecycle operation proposal error/creates = %v/%d", err, fixture.persistence.creates)
+	}
+	outer.deletingSession = ""
+	outer.operations = 1
 	request, err := outer.SubmitRestartDeploymentProposal(
 		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
 	)
+	outer.operations = 0
 	if err != nil || request.State != domain.ApprovalStatePending || fixture.persistence.creates != 1 ||
 		fixture.executor.calls != 0 || bridge.sequence != 2 {
 		t.Fatalf("bound proposal request/error/create/executor/sequence = %#v/%v/%d/%d/%d", request, err, fixture.persistence.creates, fixture.executor.calls, bridge.sequence)

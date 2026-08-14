@@ -128,6 +128,7 @@ type CleanupResult struct {
 	ModelRequests    int64
 	ReadAuditEvents  int64
 	WriteAuditEvents int64
+	ApprovalRecords  int64
 	MinimalSessions  int64
 	More             bool
 }

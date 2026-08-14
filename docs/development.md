@@ -7,8 +7,8 @@ steps.
 
 ## Required versions
 
-The module's supported minimum remains Go 1.25.0. CI pins Go 1.25.12, a
-security-patched release on that minimum-version line. `GOTOOLCHAIN` is set to
+The module's supported minimum remains Go 1.25.0. CI pins Go 1.25.12 as the
+reviewed patch version on that minimum-version line. `GOTOOLCHAIN` is set to
 `local` in CI so a job cannot silently replace the selected toolchain.
 Aggregate gate targets verify that exact Go patch version before running. With
 Go toolchain management enabled, the complete local equivalent can be selected
@@ -83,6 +83,29 @@ reviewed together with the Makefile, workflow, and this document. A scanner
 finding must be fixed or handled through the project's documented security
 decision process; the CI command must not suppress it merely to restore a green
 status.
+
+## Work-item and release-gate scope
+
+Work-item acceptance, subsequent work sequencing, and release-candidate
+admission are separate decisions. A repository-wide vulnerability gate may
+remain open across independently scoped work only when review establishes all
+of the following:
+
+- The finding originates entirely in the pinned toolchain or dependency
+  baseline rather than the work item's code or dependency changes.
+- The work item neither introduces the affected dependency or call path nor
+  makes the finding newly reachable.
+- The finding does not invalidate the work item's boundary-specific security,
+  privacy, migration, or sink tests.
+- The scanner remains enabled, the finding remains visible, and remediation is
+  owned by release-critical toolchain or dependency work.
+
+Under those conditions, the finding does not reopen independently accepted
+work, prevent that work from being committed, or prevent later separately
+scoped work from starting. It still blocks a release candidate, tag,
+publication, and any claim that the complete repository gate is green. A
+finding introduced or made reachable by the current work remains a blocking
+failure for that work item and cannot use this separation.
 
 The platform policy is defined by
 [ADR-0028](adr/0028-support-macos-and-linux-with-experimental-windows.md).

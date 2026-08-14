@@ -19,11 +19,13 @@ KuPilot adopts the normative
 - Session metadata, sanitized user Messages, final validated assistant Messages,
   and Diagnosis remain until the user deletes the Session or clears history.
 - Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata
-  remain for 30 days. Local configuration may select zero days or an explicit
-  longer period without making any prohibited raw category eligible.
+  remain for 30 days. The public control may only shorten the current value,
+  including to zero days, without making any prohibited raw category eligible.
 - Ordinary `v0.1` read and lifecycle AuditEvents remain for 90 days.
-- `v0.2` approval, write-intent, write-attempt, and verification AuditEvents
-  remain for 180 days.
+- Terminal `v0.2` approval and decision records, and approval, write-intent,
+  write-attempt, and verification AuditEvents remain for 180 days. Retention
+  cleanup never removes pending or approved authority; startup recovery first
+  makes those requests terminal.
 - Raw container output, full Kubernetes objects, assembled prompts, raw model
   streams or responses, raw Tool output, and credentials remain for zero days:
   they are never persisted.
@@ -40,11 +42,23 @@ run lifecycle and audit fields, the consent tuple, and future approval/write
 audit. It stores no user or assistant Message content, final answer, Diagnosis,
 Tool detail, Evidence, or model-request detail. A minimal Session never appears
 in a picker or `--last`; exact-ID resume returns `session_not_resumable`.
+The run keeps an opaque request identity for lifecycle correlation but has no
+retained-Message relationship and creates no Message row.
+
+The existing `/privacy` dialog displays the current persistence mode, the
+effective 30/90/180-day category periods, and minimal mode's non-resumable
+effect. Its retention command is an atomic compare-and-tighten operation and
+cannot increase the current value. Its mode command starts a new Session rather
+than changing an existing Session's frozen mode. The current Session and a
+resume-picker selection are the only per-Session deletion targets; KuPilot adds
+no Session-management page or second composer.
 
 Automatic purge runs at validated startup and during bounded idle batches. It
-uses category timestamps and explicit relationships. It does not run frequent
-automatic `VACUUM`; checkpoint, `secure_delete`, sidecar, and compaction behavior
-must satisfy ADR-0018's driver requirements.
+uses category timestamps and explicit relationships. A terminal approval is
+removed only after every related AuditEvent has expired, and its decision then
+cascades in the same transaction. It does not run frequent automatic `VACUUM`;
+checkpoint, `secure_delete`, sidecar, and compaction behavior must satisfy
+ADR-0018's driver requirements.
 
 Deleting one Session cascades through Messages, runs, model metadata,
 ToolInvocations, Evidence, Diagnoses, approval records, and linked read/write
@@ -52,6 +66,16 @@ audit. This deletion may occur before 90 or 180 days because KuPilot is not a
 compliance ledger. Clear-history removes every Session graph. Delete-all local
 state additionally removes settings and consent from the validated KuPilot data
 paths. A failed deletion transaction is reported as not deleted.
+
+Deletion requires an explicit target-bound confirmation. A starting, active, or
+terminal-but-not-yet-quiesced run is cancelled and awaited first. Pending and
+approved-but-not-executed approvals are durably cancelled; a consuming approval
+or approval-persistence
+failure denies graph deletion. If durable approval cancellation fails, its
+in-memory authority is still removed so the failure leaves no executable
+approval in the process. A graph commit is the only deletion success signal.
+Cancellation, a database failure, or a restart cannot produce a partial-success
+claim or restore run or approval authority.
 
 Storage failure behavior remains asymmetric:
 
@@ -65,6 +89,11 @@ Storage failure behavior remains asymmetric:
 
 Logical deletion and file removal are not described as forensic erasure from
 SQLite free pages, WAL, backups, snapshots, swap, or storage media.
+
+ADR-0034 separately admits one explicitly confirmed versioned redacted Markdown
+summary outside SQLite. That user-controlled file does not change SQLite
+eligibility or retention, is never available for minimal Sessions, and is not
+removed when its source Session is later deleted.
 
 ## Consequences
 
@@ -81,8 +110,8 @@ Costs and constraints:
 - Safe conversation content remains indefinitely by default until user action.
 - After 30 days, a Diagnosis may remain while its detailed Evidence is no longer
   inspectable.
-- Longer configured operational-detail retention increases local exposure and
-  must be visible in the privacy UI.
+- A previously stored bounded operational-detail value above the default remains
+  visible until tightened, but the public control cannot create or increase it.
 - Purge, cascade, WAL, clock, and failure behavior require real-file tests.
 
 ## Alternatives considered
@@ -116,7 +145,8 @@ the loss clear.
 Deterministic driver, repository, integration, and user-interface tests must
 cover:
 
-- Exact 30-, 90-, and 180-day boundaries and a zero or longer detail setting.
+- Exact 30-, 90-, and 180-day boundaries, zero-day detail, stale-setting
+  conflicts, and zero writes for every attempted retention increase.
 - Standard content retained until explicit deletion.
 - Minimal rows, absence from picker and `--last`, and exact-resume rejection
   with `session_not_resumable`.
@@ -131,8 +161,8 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 ## Revisit triggers
 
 - A default lifetime changes or a new durable category is proposed.
-- Export, backup, synchronization, telemetry, crash reporting, shared state, or
-  encrypted storage is proposed.
+- The summary export expands beyond ADR-0034, or backup, synchronization,
+  telemetry, crash reporting, shared state, or encrypted storage is proposed.
 - Minimal-persistence becomes resumable or a no-database mode is proposed.
 - A compliance requirement would prevent user cascade deletion of write audit.
 
@@ -144,3 +174,4 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 - [ADR-0008: Use SQLite for Local Persistence](0008-use-sqlite-for-local-persistence.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
+- [ADR-0034: Export Only Versioned Redacted Session Summaries](0034-export-only-versioned-redacted-session-summaries.md)

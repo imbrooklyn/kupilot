@@ -44,9 +44,10 @@ the user's controls for storage outside KuPilot.
 | Category | Default lifetime | Authoritative clock and behavior |
 | --- | --- | --- |
 | Session shell, safe Session summary, committed user Messages, final validated assistant Messages, and structured Diagnosis | Until the user deletes the Session or clears history | There is no automatic age expiry in the accepted default. Viewing or resuming does not create a second copy or restore live authority. |
-| Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. Configuration may select 0 days, which keeps detail only in process memory, or an explicit longer period. |
+| Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. The public control may only shorten the current value, including to 0 days, which keeps detail only in process memory. |
 | Ordinary `v0.1` read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
-| `v0.2` approval, decision, pre-write intent, write-attempt, and verification AuditEvents | 180 days | Measured from the relevant event time; user Session deletion or clear-all may remove them earlier because KuPilot is not a compliance ledger. |
+| Terminal `v0.2` approval and decision records, and approval, pre-write intent, write-attempt, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because KuPilot is not a compliance ledger. Pending and approved requests are first made terminal by their owning lifecycle, never by retention cleanup. |
+| Explicit `kupilot.export-summary.v1` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
 | Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
 
@@ -68,10 +69,12 @@ Diagnosis remain, the UI must say that supporting detail was removed by policy.
 It must not render a broken Evidence reference as current proof or silently
 invent replacement detail.
 
-An explicit longer operational-detail period is a local user configuration, not
-a new data category. It must remain bounded by validated integer and storage
-limits, be visible in the privacy UI, and never affect the zero-day categories
-in Section 5. Defaults remain 30, 90, and 180 days.
+The `/privacy` control may only lower the current operational-detail value; it
+never raises it. A previously stored bounded value above the 30-day default is
+read and displayed accurately until the user tightens it, but the public control
+cannot create or increase such a value. Retention changes use an atomic
+compare-and-tighten operation so a stale review cannot overwrite a stricter
+concurrent value. Defaults remain 30, 90, and 180 days.
 
 ## 3. Eligible standard data
 
@@ -179,8 +182,8 @@ SQLite may store only:
 - A necessary non-resumable Session shell: opaque ID, privacy mode, status, and
   creation and terminal timestamps.
 - The minimum run-start and terminal fields required for interruption recovery:
-  run and Session identity, safe scope snapshot, state, timestamps, stable
-  termination reason, and `persistence_degraded` state.
+  run, Session, and opaque request identity; safe scope snapshot; state;
+  timestamps; stable termination reason; and `persistence_degraded` state.
 - Minimal allowlisted AuditEvents needed to explain lifecycle, consent, scope,
   policy denial, or a future write.
 - The consent tuple from Section 3.5.
@@ -194,6 +197,11 @@ The following remains in memory only and is discarded at process exit:
 - ToolInvocation purpose, arguments, summaries, and detail.
 - Evidence and model-request detail.
 - Safe model context assembled for the current run.
+
+The opaque request identity in a minimal run is lifecycle correlation, not a
+retained Message. Its retained-Message relationship is absent, and no Message
+row or content hash is created. Standard runs keep the same identity plus a
+foreign-key relationship to the committed request Message.
 
 A minimal Session never appears in the resume picker, exact-ID resume, or
 `--last`. Exact-ID lookup returns the stable `session_not_resumable` outcome
@@ -250,10 +258,35 @@ per-record or aggregate maxima before a repository call:
 - One complete structured Diagnosis: 128 KiB.
 - One safe summary: 4 KiB.
 - One Evidence fact: 2 KiB.
+- One complete `kupilot.export-summary.v1` Markdown file: 2 MiB after the final
+  redaction and output guard.
 
 The Tool and run byte budgets in ADR-0016 remain independent and may impose a
 smaller bound. Oversized input is rejected or explicitly truncated according to
 its field contract; it is never silently moved to a raw attachment.
+
+### 6.1 User-controlled redacted summary export
+
+ADR-0034 admits one durable output outside SQLite: an explicitly confirmed,
+versioned Markdown summary of the current resumable standard-persistence
+Session. Application projects a consistent SQLite snapshot through an explicit
+allowlist. Only safe Session display metadata, committed user and final
+assistant text, the four structured Diagnosis collections, and referenced
+Evidence summaries or expired markers are eligible. Every eligible free-text
+field is redacted and bounded before rendering, and the complete document is
+processed and capped again.
+
+Raw Tool input or output, raw or complete logs, raw Events, Kubernetes objects,
+full prompts, model traffic, credentials, Secrets, kubeconfig data or paths,
+approval authority, and arbitrary repository serialization remain ineligible.
+Minimal Sessions have no retained content eligible for this export.
+
+The content-free pre-export AuditEvent is ordinary read audit and follows its
+90-day retention or earlier Session deletion. It records no output content or
+target-path detail. The exported file has no automatic KuPilot retention: it is
+a separate user-controlled copy and survives source Session deletion. Owner-only
+permissions and atomic no-replace publication do not provide encryption,
+tamper resistance, or forensic erasure.
 
 ## 7. Automatic retention enforcement
 
@@ -268,11 +301,15 @@ tests. Cleanup runs:
    the implementation's bounded freshness policy.
 
 Cleanup uses category-specific timestamps and explicit relationships, not a
-search through serialized content. It removes expired ToolInvocations, Evidence,
-and model-request metadata at their configured detail cutoff; ordinary read
-AuditEvents at 90 days; and future write AuditEvents at 180 days. It then removes
-an otherwise empty minimal Session shell when no required retained record needs
-it.
+search through serialized content. In the same transaction, it reads the
+current typed operational-detail setting and applies that cutoff to expired
+ToolInvocations, Evidence, and model-request metadata; it removes ordinary read
+AuditEvents at 90 days and future write AuditEvents at 180 days. After every
+related AuditEvent has expired, it removes terminal approval and decision
+records at the same 180-day boundary. It never removes pending or approved
+authority; startup recovery first makes those requests terminal. Cleanup then
+removes an otherwise empty minimal Session shell when no required retained
+record needs it.
 
 The remaining Diagnosis records that operational detail was removed by policy.
 Cleanup never changes a historic item into current Evidence.
@@ -300,6 +337,26 @@ This cascade is intentional: KuPilot is a personal local application, not a
 compliance ledger. A 90- or 180-day audit default does not override explicit
 user deletion. If any required step fails, the transaction rolls back and the UI
 states that the Session was not deleted.
+
+The deletion command follows this fail-closed state machine:
+
+<!-- markdownlint-disable MD013 -->
+
+| State before deletion | Required transition | Result visible to the user |
+| --- | --- | --- |
+| Confirmation is cancelled | Send no Application deletion command and perform no repository or executor call. | The current `/privacy` review or resume picker remains open. |
+| Current Session has a starting or active AgentRun | Cancel the exact run and wait for bounded termination before the graph transaction. | Failure or caller cancellation reports not deleted; no new run may start inside the deletion operation. |
+| Session has a pending or approved-but-not-executed approval | Durably cancel each approval before the graph transaction. If that durable close fails, remove in-memory authority and deny deletion. | No approval left by the deletion path is executable, and the executor receives no call from deletion. |
+| A matching approval is already consuming | Deny graph deletion; do not reinterpret or retry the already consumed operation. | The Session remains and deletion reports failure. |
+| Repository deletion fails or the Context is cancelled | Roll back the Session graph transaction. Prerequisite run or approval cancellation that already committed remains terminal. | The UI keeps the Session and reports not deleted, never partial success. |
+| Repository deletion commits | Accept only the matching request and Session identity, then clear current or picker state. | The UI reports logical deletion and no forensic-erasure claim. |
+| Process restarts before a later deletion attempt | Normal startup recovery makes persisted running runs interrupted and pending or approved-but-not-executed approvals terminal. It restores no execution authority. | A new explicit confirmation is required. |
+| Retention cleanup races with explicit deletion | SQLite serializes the transactions. If cleanup commits first and removes the target shell, the explicit delete cannot claim that it deleted one Session; if explicit deletion commits first, cleanup observes no graph. | Only a committed matching delete is reported as deletion success. |
+
+<!-- markdownlint-enable MD013 -->
+
+Deletion stores and logs no deleted content and creates no content-bearing
+tombstone. Delivery and repository errors use stable content-free classes.
 
 ### 8.2 Clear history and delete all local state
 
@@ -398,8 +455,10 @@ before:
 
 - Changing a default lifetime, removing user cascade deletion, or persisting a
   new category.
-- Adding export, backup, synchronization, telemetry, crash reporting, shared
-  state, an encrypted database, or a server.
+- Expanding the accepted summary export with another format, source field,
+  overwrite mode, automatic destination, multiple Sessions, or remote transfer;
+  or adding backup, synchronization, telemetry, crash reporting, shared state,
+  an encrypted database, or a server.
 - Making minimal-persistence resumable or adding a no-database mode.
 - Retaining raw prompts, raw model responses, raw Tool output, raw container
   output, or credentials for debugging.
@@ -416,3 +475,4 @@ before:
 - [ADR-0018: Require One Pure-Go SQLite Driver](adr/0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](adr/0030-use-sqlx-inside-the-sqlite-adapter.md)
+- [ADR-0034: Export Only Versioned Redacted Session Summaries](adr/0034-export-only-versioned-redacted-session-summaries.md)

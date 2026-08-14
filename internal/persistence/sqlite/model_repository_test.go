@@ -8,9 +8,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
+
+func TestModelRequestRepositoryRejectsZeroDayOperationalDetailWithoutWrite(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "model-request-zero-retention")
+	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000002301", "00000000-0000-7000-8000-000000002302", "00000000-0000-7000-8000-000000002303", time.UnixMilli(130).UTC())
+	if err := NewSessionRepository(db).TightenOperationalDetailRetention(context.Background(), application.RetentionSettingUpdate{
+		ExpectedDays: application.DefaultOperationalDetailRetentionDays,
+		Days:         0,
+		UpdatedAt:    time.UnixMilli(131).UTC(),
+	}); err != nil {
+		t.Fatalf("TightenOperationalDetailRetention() error = %v", err)
+	}
+	repository := NewModelRequestRepository(db)
+	request := testModelRequest("00000000-0000-7000-8000-000000002304", run.ID, 1, time.UnixMilli(132).UTC())
+	if err := repository.Save(context.Background(), request); !errors.Is(err, sessioncontract.ErrDurableContentDisabled) {
+		t.Fatalf("Save(zero-day detail) error = %v, want ErrDurableContentDisabled", err)
+	}
+	if _, err := repository.GetByID(context.Background(), request.ID); !errors.Is(err, ErrModelRequestNotFound) {
+		t.Fatalf("zero-day model metadata was persisted: %v", err)
+	}
+}
 
 func TestModelRequestRepositoryRoundTripsBoundedMetadata(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "model-request-round-trip")

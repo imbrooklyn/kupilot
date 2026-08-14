@@ -21,7 +21,7 @@ const helpText = `/help                 Show commands and key bindings
 /new                  Start a new Session
 /resume [filter]      Resume a local Session
 /rename [title]       Rename the current Session
-/privacy              Show model data-sharing information
+/privacy              Show privacy, retention, and Session controls
 /cancel               Cancel the active AgentRun
 /quit                 Exit KuPilot
 
@@ -147,14 +147,37 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 	switch message.Command {
 	case application.UICommandShowPrivacy, application.UICommandAcceptPrivacy,
 		application.UICommandRejectPrivacy, application.UICommandRevokePrivacy,
-		application.UICommandToggleLogs, application.UICommandCancelPrivacy:
+		application.UICommandToggleLogs, application.UICommandCancelPrivacy,
+		application.UICommandTightenRetention, application.UICommandSetPersistenceMode:
 		if model.pendingPrivacyID == 0 || message.RequestID != model.pendingPrivacyID {
 			return false
 		}
 		model.pendingPrivacyID = 0
 		model.privacyReview = nil
+		model.lifecycleReview = nil
 		model.privacyPending = false
 		return true
+	case application.UICommandDeleteSession:
+		if model.pendingDeleteID == 0 || message.RequestID != model.pendingDeleteID || model.sessionDelete == nil {
+			return false
+		}
+		model.pendingDeleteID = 0
+		model.pendingPrivacyID = 0
+		model.privacyReview = nil
+		model.lifecycleReview = nil
+		model.sessionDelete = nil
+		model.privacyPending = false
+		model.showDialog("Session not deleted", "The Session was not deleted. No partial deletion was reported.")
+		model.reflow()
+		return false
+	case application.UICommandExportSession:
+		if model.pendingExportID == 0 || message.RequestID != model.pendingExportID || model.sessionExport == nil {
+			return false
+		}
+		model.clearSessionExportState()
+		model.showDialog("Session not exported", "The Session summary was not published. No successful export was reported.")
+		model.reflow()
+		return false
 	}
 	switch {
 	case message.Query != "":
@@ -229,6 +252,19 @@ func (model *Model) acceptEvidenceFailure(message ApplicationFailureMsg) bool {
 
 func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	message.Content = sanitizeExternalText(message.Content, 0)
+	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
+		if strings.ContainsRune(message.Content, '\n') || len(model.composer.Value())+len(message.Content) > 4096 {
+			model.showSessionExportTargetError("The export target must be one bounded single-line path.")
+			return model, nil
+		}
+		updated, cmd, err := model.composer.Update(message)
+		if err != nil {
+			model.showSessionExportTargetError("The export target exceeds the fixed path limit.")
+			return model, nil
+		}
+		model.composer = updated
+		return model, cmd
+	}
 	updated, cmd, err := model.composer.Update(message)
 	if err != nil {
 		model.showDialog("Input limit", "The draft is too long. The maximum is 65536 bytes.")
@@ -248,6 +284,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.approvalDialog.Open() {
 		return model.updateApprovalDialogKey(message)
 	}
+	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
+		return model.updateSessionExportTargetKey(message)
+	}
 	if key.Matches(message, model.keymap.Quit) {
 		if model.run.Active {
 			model.quitAfterCancel = true
@@ -266,6 +305,15 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	if model.dialog.Open() {
+		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetError {
+			return model.updateSessionExportTargetErrorKey(message)
+		}
+		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportConfirmation {
+			return model.updateSessionExportConfirmationKey(message)
+		}
+		if model.sessionDelete != nil {
+			return model.updateSessionDeleteKey(message)
+		}
 		if model.privacyReview != nil {
 			return model.updatePrivacyDialogKey(message)
 		}
@@ -335,6 +383,10 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if model.pickerOpen() {
 		switch {
+		case model.activePicker == application.UICompletionSession && isSessionPickerDeleteKey(message):
+			model.beginSelectedSessionDelete()
+			model.reflow()
+			return model, nil
 		case key.Matches(message, model.keymap.Reverse), key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.PreviousAlt):
 			model.movePicker(-1)
 			return model, nil
@@ -982,6 +1034,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.acceptResourceSelectionResult(*result.Resource)
 	case application.UICommandNewSession:
 		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title}
+		model.privacyMode = result.Session.PrivacyMode
 		model.resource = ResourceView{}
 		model.pendingResumed = nil
 		model.resumeOrigin = resumeOriginNone
@@ -1004,18 +1057,80 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.pendingSubmitID = 0
 		if result.Failure == application.UIQueryConsentRequired && result.Privacy != nil {
 			model.pendingPrivacyID = result.RequestID
-			model.showPrivacyReview(*result.Privacy)
+			model.showPrivacyReview(*result.Privacy, nil)
 			return
 		}
 		if result.Failure != "" {
 			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
 		}
-	case application.UICommandShowPrivacy, application.UICommandToggleLogs:
-		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil {
+	case application.UICommandShowPrivacy, application.UICommandToggleLogs, application.UICommandTightenRetention:
+		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil || result.Lifecycle == nil {
 			return
 		}
 		model.privacyPending = false
-		model.showPrivacyReview(*result.Privacy)
+		model.showPrivacyReview(*result.Privacy, result.Lifecycle)
+	case application.UICommandSetPersistenceMode:
+		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil ||
+			result.Lifecycle == nil || result.Session == nil {
+			return
+		}
+		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title}
+		model.privacyMode = result.Session.PrivacyMode
+		model.resource = ResourceView{}
+		model.pendingResumed = nil
+		model.resumeOrigin = resumeOriginNone
+		model.resetTranscript()
+		model.transcript.AppendNotice("A new Session was started with the selected persistence mode. No model request was sent.")
+		model.privacyPending = false
+		model.showPrivacyReview(*result.Privacy, result.Lifecycle)
+	case application.UICommandDeleteSession:
+		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.sessionDelete == nil {
+			return
+		}
+		state := *model.sessionDelete
+		if result.Failure == "" && (result.Deletion == nil || result.Deletion.SessionID != state.SessionID ||
+			result.Deletion.WasCurrent != state.ExpectedCurrent) {
+			return
+		}
+		model.pendingDeleteID = 0
+		model.pendingPrivacyID = 0
+		model.privacyReview = nil
+		model.lifecycleReview = nil
+		model.sessionDelete = nil
+		model.privacyPending = false
+		if result.Failure != "" {
+			model.showDialog("Session not deleted", "The Session was not deleted. The transaction did not report a committed deletion.")
+			return
+		}
+		if result.Deletion.WasCurrent {
+			model.closeDialog()
+			model.closePickers()
+			model.composer.Reset()
+			model.session = SessionView{}
+			model.privacyMode = domain.PrivacyModeStandard
+			model.resource = ResourceView{}
+			model.resetTranscript()
+		} else {
+			model.sessionPicker.Remove(string(result.Deletion.SessionID))
+			model.showDialog("Session deleted", "The selected Session was deleted logically in one committed transaction. This is not forensic erasure.")
+		}
+		model.transcript.AppendNotice("The Session was deleted logically in one committed transaction. This is not forensic erasure.")
+	case application.UICommandExportSession:
+		if model.pendingExportID == 0 || result.RequestID != model.pendingExportID || model.sessionExport == nil {
+			return
+		}
+		state := *model.sessionExport
+		if result.Failure == "" && (result.Export == nil || result.Export.SessionID != state.SessionID ||
+			result.Export.SchemaVersion != application.ExportSummarySchemaVersion) {
+			return
+		}
+		model.clearSessionExportState()
+		if result.Failure != "" {
+			model.showDialog("Session not exported", "The Session summary was not published. No successful export was reported.")
+			return
+		}
+		model.transcript.AppendNotice("The redacted Session summary was exported to the explicitly confirmed local target.")
+		model.showDialog("Session summary exported", "The redacted Session summary was published as an owner-only Markdown file.")
 	case application.UICommandAcceptPrivacy:
 		if !model.finishPrivacyAction(result.RequestID) {
 			return
@@ -1123,17 +1238,30 @@ func (model *Model) clearApproval() {
 	}
 }
 
-func (model *Model) showPrivacyReview(review application.PrivacyReview) {
+func (model *Model) showPrivacyReview(review application.PrivacyReview, lifecycle *application.SessionLifecycleReview) {
 	if review.Validate() != nil {
 		model.showDialog("Privacy unavailable", "Model data-sharing information could not be displayed safely.")
+		return
+	}
+	if lifecycle != nil && lifecycle.Validate() != nil {
+		model.showDialog("Privacy unavailable", "Local persistence information could not be displayed safely.")
 		return
 	}
 	copy := review
 	copy.Categories = append([]application.PrivacyCategoryReview(nil), review.Categories...)
 	copy.NeverEligible = append([]string(nil), review.NeverEligible...)
 	model.privacyReview = &copy
+	model.lifecycleReview = nil
+	if lifecycle != nil {
+		lifecycleCopy := cloneLifecycleReview(*lifecycle)
+		model.lifecycleReview = &lifecycleCopy
+	}
 	model.privacyPending = false
-	model.showDialog("Model data sharing", privacyReviewText(copy))
+	title := "Model data sharing"
+	if lifecycle != nil {
+		title = "Privacy and local data"
+	}
+	model.showDialog(title, privacyReviewText(copy, model.lifecycleReview))
 }
 
 func (model *Model) finishPrivacyAction(requestID uint64) bool {
@@ -1142,13 +1270,33 @@ func (model *Model) finishPrivacyAction(requestID uint64) bool {
 	}
 	model.pendingPrivacyID = 0
 	model.privacyReview = nil
+	model.lifecycleReview = nil
 	model.privacyPending = false
 	model.closeDialog()
 	return true
 }
 
-func privacyReviewText(review application.PrivacyReview) string {
+func privacyReviewText(review application.PrivacyReview, lifecycle *application.SessionLifecycleReview) string {
 	var builder strings.Builder
+	if lifecycle != nil {
+		mode := "none"
+		if lifecycle.CurrentSession != nil {
+			mode = string(lifecycle.CurrentSession.PrivacyMode)
+		}
+		fmt.Fprintf(&builder, "Local persistence:\nPersistence mode: %s\n", mode)
+		switch mode {
+		case string(domain.PrivacyModeStandard):
+			builder.WriteString("Session content: retained until explicit Session deletion.\n")
+		case string(domain.PrivacyModeMinimal):
+			builder.WriteString("Session content: memory only and unavailable for cross-process resume.\n")
+		default:
+			builder.WriteString("Session content: no current Session.\n")
+		}
+		fmt.Fprintf(&builder, "Operational detail: %d days (can only be tightened; 0 keeps operational detail in memory only).\n", lifecycle.OperationalDetailRetentionDays)
+		fmt.Fprintf(&builder, "Read/lifecycle audit: %d days.\nApproval/write audit: %d days.\n", lifecycle.ReadAuditRetentionDays, lifecycle.WriteAuditRetentionDays)
+		builder.WriteString("Impact: minimal Sessions cannot be resumed across processes and retain no Message, Diagnosis, Tool, Evidence, or model-request detail.\n")
+		builder.WriteString("Deletion is logical deletion, not forensic erasure; SQLite free pages, WAL, backups, snapshots, swap, and storage media may retain old bytes.\n\n")
+	}
 	fmt.Fprintf(&builder, "Destination: %s\nConsent policy: %s\nDecision: %s\n\nEligible data categories:\n",
 		sanitizeExternalText(review.Origin, 2048), review.PolicyVersion, review.Decision)
 	for _, category := range review.Categories {
@@ -1162,7 +1310,18 @@ func privacyReviewText(review application.PrivacyReview) string {
 	for _, value := range review.NeverEligible {
 		fmt.Fprintf(&builder, "- %s\n", value)
 	}
-	builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
+	if lifecycle != nil {
+		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | T tighten retention | M new Session mode")
+		if lifecycle.CurrentSession != nil && lifecycle.CurrentSession.PrivacyMode == domain.PrivacyModeStandard {
+			builder.WriteString(" | E export redacted summary")
+		}
+		if lifecycle.CurrentSession != nil {
+			builder.WriteString(" | D delete current Session")
+		}
+		builder.WriteString(" | Esc cancel")
+	} else {
+		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
+	}
 	return builder.String()
 }
 
@@ -1179,6 +1338,7 @@ func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, t
 		command.Kind = application.UICommandCancelPrivacy
 		model.dialog.Close()
 		model.privacyReview = nil
+		model.lifecycleReview = nil
 	case message.Code == 'a' || message.Code == 'A':
 		command.Kind = application.UICommandAcceptPrivacy
 		model.privacyPending = true
@@ -1193,6 +1353,41 @@ func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, t
 			command.Kind = application.UICommandRevokePrivacy
 		}
 		model.privacyPending = true
+	case message.Code == 't' || message.Code == 'T':
+		if model.lifecycleReview == nil {
+			return model, nil
+		}
+		days, ok := nextRetentionDays(model.lifecycleReview.OperationalDetailRetentionDays)
+		if !ok {
+			return model, nil
+		}
+		command.Kind = application.UICommandTightenRetention
+		command.Lifecycle = &application.SessionLifecycleIntent{RetentionDays: &days}
+		model.privacyPending = true
+	case message.Code == 'm' || message.Code == 'M':
+		if model.lifecycleReview == nil {
+			return model, nil
+		}
+		mode := domain.PrivacyModeMinimal
+		if model.lifecycleReview.CurrentSession != nil && model.lifecycleReview.CurrentSession.PrivacyMode == domain.PrivacyModeMinimal {
+			mode = domain.PrivacyModeStandard
+		}
+		command.Kind = application.UICommandSetPersistenceMode
+		command.Lifecycle = &application.SessionLifecycleIntent{PrivacyMode: mode}
+		model.privacyPending = true
+	case message.Code == 'd' || message.Code == 'D':
+		if model.lifecycleReview == nil || model.lifecycleReview.CurrentSession == nil {
+			return model, nil
+		}
+		model.beginCurrentSessionDelete()
+		return model, nil
+	case message.Code == 'e' || message.Code == 'E':
+		if model.lifecycleReview == nil || model.lifecycleReview.CurrentSession == nil ||
+			model.lifecycleReview.CurrentSession.PrivacyMode != domain.PrivacyModeStandard {
+			return model, nil
+		}
+		model.beginCurrentSessionExport()
+		return model, nil
 	default:
 		return model, nil
 	}
@@ -1212,6 +1407,7 @@ func resumeUIFailureText(code application.UIQueryFailureCode) string {
 
 func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 	model.session = SessionView{ID: resumed.Session.ID, Title: resumed.Session.Title, Resumed: true}
+	model.privacyMode = resumed.Session.PrivacyMode
 	model.startup.Ready = true
 	model.startup.Failed = false
 	model.resource = ResourceView{}

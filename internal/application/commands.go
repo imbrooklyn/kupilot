@@ -84,6 +84,7 @@ const (
 	UICommandAcceptResume    UICommandKind = "accept_resume"
 	UICommandCancelResume    UICommandKind = "cancel_resume"
 	UICommandShowStatus      UICommandKind = "show_status"
+	UICommandExportSession   UICommandKind = "export_session"
 	UICommandApproveRestart  UICommandKind = "approve_restart"
 	UICommandRejectRestart   UICommandKind = "reject_restart"
 	UICommandExpireRestart   UICommandKind = "expire_restart"
@@ -105,6 +106,8 @@ type UICommand struct {
 	ApprovalDigest          domain.ApprovalDigest
 	ApprovalNonce           domain.ApprovalNonce
 	ApprovalSequence        int64
+	Lifecycle               *SessionLifecycleIntent
+	Export                  *ExportSummaryIntent
 }
 
 // Validate checks payload exclusivity and bounded delivery data.
@@ -115,6 +118,15 @@ func (command UICommand) Validate() error {
 	approvalCommand := command.Kind == UICommandApproveRestart || command.Kind == UICommandRejectRestart ||
 		command.Kind == UICommandExpireRestart
 	if !approvalCommand && command.hasApprovalPayload() {
+		return ErrInvalidUICommand
+	}
+	lifecycleCommand := command.Kind == UICommandTightenRetention || command.Kind == UICommandSetPersistenceMode ||
+		command.Kind == UICommandDeleteSession
+	if lifecycleCommand != (command.Lifecycle != nil) || command.Lifecycle != nil && command.Lifecycle.validateFor(command.Kind) != nil {
+		return ErrInvalidUICommand
+	}
+	exportCommand := command.Kind == UICommandExportSession
+	if exportCommand != (command.Export != nil) || command.Export != nil && command.Export.Validate() != nil {
 		return ErrInvalidUICommand
 	}
 	switch command.Kind {
@@ -171,6 +183,22 @@ func (command UICommand) Validate() error {
 	case UICommandShowPrivacy:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
+			return ErrInvalidUICommand
+		}
+	case UICommandTightenRetention, UICommandSetPersistenceMode:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) || command.LogsEnabled != nil {
+			return ErrInvalidUICommand
+		}
+	case UICommandDeleteSession:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
+			return ErrInvalidUICommand
+		}
+	case UICommandExportSession:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) ||
+			command.LogsEnabled != nil {
 			return ErrInvalidUICommand
 		}
 	case UICommandAcceptPrivacy, UICommandRejectPrivacy, UICommandRevokePrivacy, UICommandCancelPrivacy:

@@ -650,6 +650,12 @@ AgentRun contains its ID, Session ID, request Message ID, immutable ClusterScope
 and ResourceRef snapshot, counters, timing, normalized termination reason,
 optional Diagnosis ID, and `persistence_degraded` state.
 
+SQLite stores the request identity independently from its optional retained
+Message relationship. Standard mode binds that relationship to the committed
+request Message. Minimal mode leaves it absent, so interruption recovery keeps
+an opaque correlation identity without creating a Message row or retaining its
+content.
+
 Allowed states are:
 
 ```text
@@ -758,7 +764,10 @@ their names do not authorize broader method sets.
 | Agent runtime to scope freshness | `application` (`RunScopeGuard`) | Application scope state owner | Exact run scope in; current or `stale_scope` out; no client or credential crosses |
 | Application to scope activation | `application` (`ScopeActivator`) | `kube` | Context/Namespace candidate in; verified safe scope metadata or classified error out |
 | Application to Picker reads | `application` (`PickerReader`) | `kube` | Fixed Kind/query/scope/limit in; safe bounded candidate DTOs out |
+| Application to Session discovery | `application` (`SessionSearchReader`) | `persistence/sqlite` | Bounded literal filter over safe title, timestamp, and display-only scope metadata; stable projected candidates out |
 | Application to durable history | `application` (focused Session, run, Evidence, and audit store ports) | `persistence/sqlite` | Transaction intent and domain values; no SQL, row, DB, or Tx type crosses inward |
+| Application to Session export snapshot | `application` (`SessionExportReader`) | `persistence/sqlite` | One consistent versioned allowlist source projection; no generic entity serialization or raw source field crosses inward |
+| Application to summary file publication | `application` (`ExportFileWriter`) | `persistence/filesystem` | Explicit target plus final bounded Markdown bytes; filesystem and path types remain in the adapter |
 | Agent runtime to model | `agent` (`Model`) | Eino-backed model adapter | Neutral messages, fixed Tool specifications, stream events; no vendor types escape |
 | Agent runtime to Tool | `agent` (`Tool`) | `tools` handlers | Fixed specification plus BoundToolCall; returns safe ToolResult |
 | Tool handler to Kubernetes read | `tools` (`ResourceReader`) | `kube` | Task-specific bounded read request and projected DTO; no generic request surface |
@@ -803,6 +812,7 @@ when no isolation or test seam is needed.
 | Tool to Kubernetes reader | Synchronous bounded request under a child context | Adapter returns a projected DTO or classified error; response bodies are closed by the adapter owner. |
 | Agent events to Application | Ordered asynchronous stream with run ID, generation, and sequence | Text deltas may be coalesced or intermediate render frames dropped. Tool, Evidence, error, and terminal events cannot be dropped. |
 | Application to persistence | Short synchronous transaction on an application worker, never a UI update path | Network I/O and user waits never occur inside a transaction. Degraded policy is decided by Application. |
+| Application summary export | One serialized Application operation after TUI confirmation | Snapshot read, deterministic projection, content-free audit, and atomic file publication occur outside Bubble Tea `Update` and `View`; an active run and concurrent deletion are denied. |
 | Application events to TUI | Asynchronous neutral events converted to Bubble Tea messages | TUI rejects stale request IDs, generations, sequences, and terminal duplicates before rendering. |
 | Scope switch | Serialized Application command | New run acceptance is blocked through the switch commit point; generation invalidation and cancellation happen in the defined order. |
 
@@ -833,6 +843,19 @@ Repository interfaces are use-case-specific and consumer-owned. The SQLite
 adapter uses explicit schema mappings and fixed queries internally; those are
 not domain models. Session resume reconstructs only safe history and candidates,
 then requires a new scope activation and a new AgentRun for any question.
+
+Resume discovery uses a typed Application query and a fixed, bounded SQLite
+ranking over safe display metadata before the result crosses the adapter
+boundary. The TUI continues to use the root composer and the existing picker;
+it neither queries SQLite nor creates a second Session-management surface.
+
+Summary export is also Application-owned. Application selects the fixed schema,
+applies policy, serializes against deletion, renders the deterministic Markdown,
+and persists the path-free audit event. SQLite supplies only the explicit source
+allowlist. The narrow filesystem adapter owns path validation, owner-only
+permissions, same-directory temporary files, and atomic no-replace publication.
+Domain values do not import operating-system or path packages, and the TUI sends
+only the typed export command.
 
 ## 10. Security boundary summary
 

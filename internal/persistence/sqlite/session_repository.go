@@ -442,20 +442,30 @@ func getSessionPersistenceState(ctx context.Context, getter strictGetter, id dom
 }
 
 func ensureStandardActiveSession(ctx context.Context, getter strictGetter, id domain.SessionID) error {
-	state, err := getSessionPersistenceState(ctx, getter, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return sessioncontract.ErrSessionNotFound
-	}
+	mode, err := activeSessionPrivacyMode(ctx, getter, id)
 	if err != nil {
 		return err
 	}
-	if state.PrivacyMode == string(domain.PrivacyModeMinimal) {
+	if mode == domain.PrivacyModeMinimal {
 		return sessioncontract.ErrDurableContentDisabled
 	}
-	if state.PrivacyMode != string(domain.PrivacyModeStandard) || state.Status != string(domain.SessionStatusActive) {
-		return sessioncontract.ErrSessionUnavailable
-	}
 	return nil
+}
+
+func activeSessionPrivacyMode(ctx context.Context, getter strictGetter, id domain.SessionID) (domain.PrivacyMode, error) {
+	state, err := getSessionPersistenceState(ctx, getter, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", sessioncontract.ErrSessionNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	mode := domain.PrivacyMode(state.PrivacyMode)
+	if state.Status != string(domain.SessionStatusActive) ||
+		mode != domain.PrivacyModeStandard && mode != domain.PrivacyModeMinimal {
+		return "", sessioncontract.ErrSessionUnavailable
+	}
+	return mode, nil
 }
 
 func touchSession(ctx context.Context, tx *sqlx.Tx, id domain.SessionID, activityAt time.Time) error {

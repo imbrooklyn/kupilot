@@ -476,7 +476,7 @@ func seedRunningPairWithoutActiveGate(t *testing.T, db *DB, message domain.Messa
 		if err := insertMessage(context.Background(), tx, message); err != nil {
 			return err
 		}
-		if err := insertAgentRun(context.Background(), tx, run); err != nil {
+		if err := insertAgentRun(context.Background(), tx, run, true); err != nil {
 			return err
 		}
 		return touchSession(context.Background(), tx, run.SessionID, *run.StartedAt)

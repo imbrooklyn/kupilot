@@ -44,6 +44,9 @@ type CoordinatorConfig struct {
 	Identifiers        ApplicationIdentifierSource
 	AuditIdentifiers   AuditIdentifierSource
 	Questions          QuestionProcessor
+	Exports            SessionExportReader
+	ExportFiles        ExportFileWriter
+	ExportText         ExportTextProcessor
 	Privacy            *PrivacyManager
 	UIEvents           UIEventSink
 	Observer           RunObserver
@@ -58,6 +61,7 @@ type CoordinatorConfig struct {
 // use case is exercised.
 type CoordinatorUIConfig struct {
 	Sessions       SessionResumeStore
+	Search         SessionSearchReader
 	Titles         SessionTitleStore
 	Startup        StartupMaintenance
 	Scopes         *ScopeManager
@@ -95,11 +99,15 @@ type Coordinator struct {
 	budgetLimits     agent.RunBudgetLimits
 	persistenceLimit time.Duration
 	resumeSessions   SessionResumeStore
+	sessionSearch    SessionSearchReader
 	titles           SessionTitleStore
 	startup          StartupMaintenance
 	uiScopes         *ScopeManager
 	approvals        *ApprovalCoordinator
 	evidenceDetails  EvidenceDetailReader
+	exports          SessionExportReader
+	exportFiles      ExportFileWriter
+	exportText       ExportTextProcessor
 	startupPrepared  bool
 	currentSession   *domain.Session
 	currentResumed   bool
@@ -114,6 +122,7 @@ type Coordinator struct {
 	startingDone        chan struct{}
 	operations          int
 	operationsDone      chan struct{}
+	deletingSession     domain.SessionID
 	active              *activeRun
 	lastResult          *RunResult
 	lastDiagnosis       *domain.Diagnosis
@@ -121,13 +130,15 @@ type Coordinator struct {
 }
 
 type activeRun struct {
-	input     agent.RunInput
-	run       domain.AgentRun
-	cancel    context.CancelFunc
-	done      chan struct{}
-	bridge    *eventBridge
-	tools     map[domain.ToolInvocationID]*pendingTool
-	diagnosis *domain.Diagnosis
+	input                    agent.RunInput
+	run                      domain.AgentRun
+	cancel                   context.CancelFunc
+	done                     chan struct{}
+	bridge                   *eventBridge
+	tools                    map[domain.ToolInvocationID]*pendingTool
+	diagnosis                *domain.Diagnosis
+	persistOperationalDetail bool
+	minimalPersistence       bool
 
 	lastAgentSequence int64
 	publishing        bool
@@ -206,13 +217,27 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
 		return nil, ErrCoordinatorDependency
 	}
-	if config.UI != nil && (config.UI.Sessions == nil || config.UI.Titles == nil || config.UI.Startup == nil) {
+	if config.UI != nil && (config.UI.Sessions == nil || config.UI.Search == nil || config.UI.Titles == nil || config.UI.Startup == nil) {
 		return nil, ErrCoordinatorDependency
 	}
 	if config.UI != nil && config.UI.Approvals != nil && config.UI.Scopes == nil {
 		return nil, ErrCoordinatorDependency
 	}
+	exportDependencies := 0
+	if config.Exports != nil {
+		exportDependencies++
+	}
+	if config.ExportFiles != nil {
+		exportDependencies++
+	}
+	if config.ExportText != nil {
+		exportDependencies++
+	}
+	if exportDependencies != 0 && exportDependencies != 3 {
+		return nil, ErrCoordinatorDependency
+	}
 	var resumeSessions SessionResumeStore
+	var sessionSearch SessionSearchReader
 	var titles SessionTitleStore
 	var startup StartupMaintenance
 	var uiScopes *ScopeManager
@@ -220,6 +245,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	var evidenceDetails EvidenceDetailReader
 	if config.UI != nil {
 		resumeSessions = config.UI.Sessions
+		sessionSearch = config.UI.Search
 		titles = config.UI.Titles
 		startup = config.UI.Startup
 		uiScopes = config.UI.Scopes
@@ -237,10 +263,13 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		privacy:  config.Privacy,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
-		resumeSessions: resumeSessions, titles: titles, startup: startup,
+		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
 		uiScopes:        uiScopes,
 		approvals:       approvals,
 		evidenceDetails: evidenceDetails,
+		exports:         config.Exports,
+		exportFiles:     config.ExportFiles,
+		exportText:      config.ExportText,
 	}, nil
 }
 
@@ -382,11 +411,16 @@ func (coordinator *Coordinator) QueryUI(ctx context.Context, query UICompletionQ
 	}
 	switch query.Kind {
 	case UICompletionSession:
-		if coordinator.resumeSessions == nil {
+		if coordinator.sessionSearch == nil {
 			result.Failure = UIQueryUnavailable
 			break
 		}
-		records, err := coordinator.resumeSessions.ListResumable(ctx, query.Limit)
+		request := SessionSearchRequest{Filter: strings.TrimSpace(query.Filter), Limit: query.Limit}
+		if request.Validate() != nil {
+			result.Failure = UIQueryUnavailable
+			break
+		}
+		records, err := coordinator.sessionSearch.SearchResumable(ctx, request)
 		if err != nil {
 			if contextErr := ctx.Err(); contextErr != nil {
 				return UICompletionResult{}, contextErr
@@ -400,9 +434,6 @@ func (coordinator *Coordinator) QueryUI(ctx context.Context, query UICompletionQ
 				result.Sessions = nil
 				result.Failure = UIQueryUnavailable
 				break
-			}
-			if !sessionRecordMatches(record, query.Filter) {
-				continue
 			}
 			result.Sessions = append(result.Sessions, projectSessionCandidate(record))
 			if len(result.Sessions) == query.Limit {
@@ -646,6 +677,12 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
 	case UICommandSubmitQuestion:
 		return coordinator.executeQuestionCommand(ctx, command)
+	case UICommandSetPersistenceMode:
+		return coordinator.executePersistenceModeCommand(ctx, command)
+	case UICommandDeleteSession:
+		return coordinator.executeDeleteSessionCommand(ctx, command)
+	case UICommandExportSession:
+		return coordinator.executeExportSessionCommand(ctx, command)
 	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
 		if coordinator.approvals == nil {
 			return UICommandOutcome{}, ErrApprovalUnavailable
@@ -674,7 +711,7 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		}, nil
 	}
 
-	requireIdle := command.Kind == UICommandAcceptResume
+	requireIdle := command.Kind == UICommandAcceptResume || command.Kind == UICommandTightenRetention
 	if err := coordinator.beginUIOperation(requireIdle); err != nil {
 		return UICommandOutcome{}, err
 	}
@@ -699,6 +736,8 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	case UICommandShowPrivacy, UICommandAcceptPrivacy, UICommandRejectPrivacy,
 		UICommandRevokePrivacy, UICommandToggleLogs, UICommandCancelPrivacy:
 		return coordinator.executePrivacyCommand(ctx, command)
+	case UICommandTightenRetention:
+		return coordinator.executeRetentionCommand(ctx, command)
 	case UICommandResumeSession:
 		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryUnavailable}, nil
 	default:
@@ -754,10 +793,40 @@ func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, comma
 		if err != nil {
 			return UICommandOutcome{}, err
 		}
-		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Privacy: &review}, nil
+		lifecycle, err := coordinator.sessionLifecycleReview(ctx)
+		if err != nil {
+			coordinator.mu.Lock()
+			if coordinator.privacyChallenge != nil && coordinator.privacyChallenge.requestID == command.RequestID &&
+				coordinator.privacyChallenge.revision == review.Revision {
+				coordinator.privacyChallenge = nil
+			}
+			coordinator.mu.Unlock()
+			coordinator.markGlobalPersistenceDegraded()
+			return UICommandOutcome{}, ErrPersistenceUnavailable
+		}
+		return UICommandOutcome{
+			Command: command.Kind, RequestID: command.RequestID,
+			Privacy: &review, Lifecycle: &lifecycle,
+		}, nil
 	}
 	coordinator.mu.Lock()
 	challenge := coordinator.privacyChallenge
+	if challenge == nil || challenge.requestID != command.RequestID || challenge.revision != command.PrivacyRevision {
+		coordinator.mu.Unlock()
+		return UICommandOutcome{}, ErrPrivacyReviewStale
+	}
+	coordinator.mu.Unlock()
+	var lifecycle *SessionLifecycleReview
+	if command.Kind == UICommandToggleLogs {
+		loaded, lifecycleErr := coordinator.sessionLifecycleReview(ctx)
+		if lifecycleErr != nil {
+			coordinator.markGlobalPersistenceDegraded()
+			return UICommandOutcome{}, ErrPersistenceUnavailable
+		}
+		lifecycle = &loaded
+	}
+	coordinator.mu.Lock()
+	challenge = coordinator.privacyChallenge
 	if challenge == nil || challenge.requestID != command.RequestID || challenge.revision != command.PrivacyRevision {
 		coordinator.mu.Unlock()
 		return UICommandOutcome{}, ErrPrivacyReviewStale
@@ -804,6 +873,7 @@ func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, comma
 		coordinator.privacyChallenge = &privacyChallenge{requestID: command.RequestID, revision: review.Revision}
 		coordinator.mu.Unlock()
 		result.Privacy = &review
+		result.Lifecycle = lifecycle
 	}
 	return result, nil
 }
@@ -1379,30 +1449,23 @@ func (coordinator *Coordinator) CreateSession(ctx context.Context, command Creat
 	if err := ctx.Err(); err != nil {
 		return domain.Session{}, err
 	}
-	coordinator.mu.Lock()
-	if coordinator.closed {
-		coordinator.mu.Unlock()
-		return domain.Session{}, ErrCoordinatorClosed
+	if err := coordinator.beginUIOperation(true); err != nil {
+		return domain.Session{}, err
 	}
-	if coordinator.persistenceDegraded {
-		coordinator.mu.Unlock()
+	defer coordinator.finishOperation()
+	return coordinator.createSessionWithinOperation(ctx, command)
+}
+
+func (coordinator *Coordinator) createSessionWithinOperation(
+	ctx context.Context,
+	command CreateSessionCommand,
+) (domain.Session, error) {
+	coordinator.mu.Lock()
+	persistenceDegraded := coordinator.persistenceDegraded
+	coordinator.mu.Unlock()
+	if persistenceDegraded {
 		return domain.Session{}, ErrPersistenceUnavailable
 	}
-	if coordinator.starting || coordinator.active != nil {
-		coordinator.mu.Unlock()
-		return domain.Session{}, ErrRunAlreadyActive
-	}
-	if coordinator.operations != 0 {
-		coordinator.mu.Unlock()
-		return domain.Session{}, ErrCoordinatorBusy
-	}
-	if coordinator.operations == 0 {
-		coordinator.operationsDone = make(chan struct{})
-	}
-	coordinator.operations++
-	coordinator.mu.Unlock()
-	defer coordinator.finishOperation()
-
 	id, err := coordinator.identifiers.NewSessionID()
 	createdAt := coordinator.now()
 	if err != nil || !id.Valid() || !validCoordinatorTime(createdAt) {
@@ -1455,6 +1518,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		return "", err
 	}
 	runContext, cancelRun := context.WithCancel(ctx)
+	minimalPersistence := false
 	coordinator.mu.Lock()
 	if coordinator.closed {
 		coordinator.mu.Unlock()
@@ -1476,6 +1540,14 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		cancelRun()
 		return "", ErrCoordinatorBusy
 	}
+	if coordinator.currentSession != nil {
+		if coordinator.currentSession.ID != command.SessionID {
+			coordinator.mu.Unlock()
+			cancelRun()
+			return "", ErrCoordinatorDependency
+		}
+		minimalPersistence = coordinator.currentSession.PrivacyMode == domain.PrivacyModeMinimal
+	}
 	coordinator.starting = true
 	coordinator.startingCancel = cancelRun
 	coordinator.startingDone = make(chan struct{})
@@ -1495,6 +1567,16 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		cancelRun()
 		coordinator.finishStarting(startingDone)
 	}()
+
+	persistOperationalDetail := false
+	if !minimalPersistence {
+		var retentionErr error
+		persistOperationalDetail, retentionErr = coordinator.operationalDetailPersistence(runContext)
+		if retentionErr != nil {
+			coordinator.markGlobalPersistenceDegraded()
+			return "", retentionErr
+		}
+	}
 
 	authorized, privacyErr := coordinator.privacy.AuthorizeModel(runContext)
 	if privacyErr != nil {
@@ -1534,7 +1616,8 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	}
 	state := &activeRun{
 		input: input, cancel: cancelRun, done: make(chan struct{}), bridge: bridge,
-		tools: make(map[domain.ToolInvocationID]*pendingTool),
+		tools: make(map[domain.ToolInvocationID]*pendingTool), persistOperationalDetail: persistOperationalDetail,
+		minimalPersistence: minimalPersistence,
 	}
 	requestMessage := domain.Message{
 		ID: messageID, SessionID: command.SessionID, RunID: &runID,
@@ -1719,12 +1802,12 @@ func (coordinator *Coordinator) SubmitRestartDeploymentProposal(
 	sequence int64,
 	intent domain.OperationIntent,
 ) (domain.ApprovalRequest, error) {
-	if coordinator == nil || coordinator.approvals == nil {
+	if coordinator == nil || coordinator.approvals == nil || ctx == nil || ctx.Err() != nil {
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
-	if coordinator.active == nil || coordinator.active.terminal || coordinator.active.run.ID != runID ||
+	if coordinator.deletingSession == sessionID || coordinator.active == nil || coordinator.active.terminal || coordinator.active.run.ID != runID ||
 		coordinator.active.publishing || coordinator.active.bridge == nil ||
 		coordinator.active.run.SessionID != sessionID || coordinator.active.run.Scope != intent.Scope ||
 		sequence != coordinator.active.bridge.sequence+1 {
@@ -1924,6 +2007,12 @@ func (coordinator *Coordinator) performPersistence(ctx context.Context, state *a
 	case persistNone:
 		return nil
 	case persistToolEvidence:
+		if state.minimalPersistence {
+			return nil
+		}
+		if !state.persistOperationalDetail {
+			return coordinator.appendRunAudit(ctx, state, action.audit)
+		}
 		audit, auditErr := coordinator.newRunAudit(state, action.audit)
 		if auditErr != nil {
 			return ErrPersistenceUnavailable
@@ -1934,6 +2023,9 @@ func (coordinator *Coordinator) performPersistence(ctx context.Context, state *a
 	case persistTerminal:
 		return coordinator.persistTerminal(ctx, state, action.event, action.audit)
 	case appendAuditOnly:
+		if state.minimalPersistence && !action.audit.eventType.AllowedInMinimalPersistence() {
+			return nil
+		}
 		return coordinator.appendRunAudit(ctx, state, action.audit)
 	default:
 		return ErrPersistenceUnavailable
@@ -1965,6 +2057,11 @@ func (coordinator *Coordinator) persistTerminal(
 	if err != nil {
 		return ErrPersistenceUnavailable
 	}
+	if state.minimalPersistence {
+		return coordinator.persist(ctx, func(operationContext context.Context) error {
+			return coordinator.runs.FinishWithAudit(operationContext, run, audit)
+		})
+	}
 	if run.Status != domain.AgentRunStatusCompleted || state.persistenceBad {
 		return coordinator.persist(ctx, func(operationContext context.Context) error {
 			return coordinator.runs.FinishWithAudit(operationContext, run, audit)
@@ -1974,18 +2071,22 @@ func (coordinator *Coordinator) persistTerminal(
 	if err != nil || !messageID.Valid() || state.diagnosis == nil {
 		return ErrPersistenceUnavailable
 	}
+	diagnosis := cloneDiagnosis(*state.diagnosis)
+	if !state.persistOperationalDetail && len(diagnosis.ReferencedEvidenceIDs()) > 0 {
+		diagnosis.EvidenceDetailsState = domain.EvidenceDetailExpired
+	}
 	message := domain.Message{
 		ID: messageID, SessionID: run.SessionID, RunID: &run.ID,
-		Role: domain.MessageRoleAssistant, Content: state.diagnosis.AnswerMarkdown,
+		Role: domain.MessageRoleAssistant, Content: diagnosis.AnswerMarkdown,
 		Format: domain.MessageFormatMarkdown, Status: domain.MessageStatusCommitted,
 		Scope: scopeSnapshotPointer(run.Scope), Resource: cloneResource(run.Resource),
-		Hash: domain.MessageContentHash(state.diagnosis.AnswerMarkdown), CreatedAt: finishedAt,
+		Hash: domain.MessageContentHash(diagnosis.AnswerMarkdown), CreatedAt: finishedAt,
 	}
 	if message.Validate() != nil {
 		return ErrPersistenceUnavailable
 	}
 	return coordinator.persist(ctx, func(operationContext context.Context) error {
-		return coordinator.runs.CompleteWithAudit(operationContext, *state.diagnosis, message, run, audit)
+		return coordinator.runs.CompleteWithAudit(operationContext, diagnosis, message, run, audit)
 	})
 }
 

@@ -38,7 +38,7 @@ var fixedSlashCommands = [...]SlashCommand{
 	{Name: "new", Summary: "Start a new Session", action: slashApplication, commandKind: application.UICommandNewSession},
 	{Name: "resume", Usage: "[filter]", Summary: "Resume a local Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandResumeSession},
 	{Name: "rename", Usage: "[title]", Summary: "Rename the current Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandRenameSession},
-	{Name: "privacy", Summary: "Show model data-sharing information", action: slashApplication, commandKind: application.UICommandShowPrivacy},
+	{Name: "privacy", Summary: "Show privacy, retention, and Session controls", action: slashApplication, commandKind: application.UICommandShowPrivacy},
 	{Name: "cancel", Summary: "Cancel the active AgentRun", action: slashApplication, commandKind: application.UICommandCancelRun},
 	{Name: "quit", Aliases: []string{"exit"}, Summary: "Exit KuPilot", action: slashQuit},
 }

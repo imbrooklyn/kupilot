@@ -15,13 +15,13 @@ import (
 const (
 	insertAgentRunSQL = `
 		INSERT INTO agent_runs (
-			id, session_id, request_message_id, status,
+			id, session_id, request_message_id, retained_request_message_id, status,
 			scope_context, scope_namespace, scope_generation,
 			resource_refs_json, prompt_version, tool_catalog_version,
 			step_count, tool_call_count, model_request_count,
 			input_tokens, output_tokens, termination_reason,
 			persistence_degraded, started_at_ms, finished_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getAgentRunByIDSQL = `
 		SELECT
@@ -115,7 +115,9 @@ func NewAgentRunRepository(db *DB) *AgentRunRepository {
 	return &AgentRunRepository{db: db}
 }
 
-// Begin atomically inserts the request Message, running AgentRun, and activity time.
+// Begin atomically inserts one running AgentRun and activity time. Standard
+// mode also retains the request Message; minimal mode retains only its opaque
+// identity in the run lifecycle record.
 func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.Message, run domain.AgentRun) error {
 	if err := repositoryContext(ctx, repository.db, "begin_agent_run"); err != nil {
 		return err
@@ -124,7 +126,8 @@ func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.
 		return sessioncontract.ErrInvalidRepositoryRequest
 	}
 	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		if err := ensureStandardActiveSession(ctx, tx, run.SessionID); err != nil {
+		mode, err := activeSessionPrivacyMode(ctx, tx, run.SessionID)
+		if err != nil {
 			return err
 		}
 		var runningCount int
@@ -134,10 +137,13 @@ func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.
 		if runningCount != 0 {
 			return sessioncontract.ErrAgentRunConflict
 		}
-		if err := insertMessage(ctx, tx, message); err != nil {
-			return err
+		retainMessage := mode == domain.PrivacyModeStandard
+		if retainMessage {
+			if err := insertMessage(ctx, tx, message); err != nil {
+				return err
+			}
 		}
-		if err := insertAgentRun(ctx, tx, run); err != nil {
+		if err := insertAgentRun(ctx, tx, run, retainMessage); err != nil {
 			return err
 		}
 		return touchSession(ctx, tx, run.SessionID, laterTime(message.CreatedAt, *run.StartedAt))
@@ -328,10 +334,14 @@ func validateRunningAgentRunRows(ctx context.Context, tx *sqlx.Tx) error {
 	return rows.Err()
 }
 
-func insertAgentRun(ctx context.Context, tx *sqlx.Tx, run domain.AgentRun) error {
+func insertAgentRun(ctx context.Context, tx *sqlx.Tx, run domain.AgentRun, retainRequestMessage bool) error {
 	resourceRefs, err := encodeResourceRefs(run.Resource)
 	if err != nil {
 		return err
+	}
+	var retainedRequestMessageID any
+	if retainRequestMessage {
+		retainedRequestMessageID = run.RequestMessageID
 	}
 	_, err = tx.ExecContext(
 		ctx,
@@ -339,6 +349,7 @@ func insertAgentRun(ctx context.Context, tx *sqlx.Tx, run domain.AgentRun) error
 		run.ID,
 		run.SessionID,
 		run.RequestMessageID,
+		retainedRequestMessageID,
 		run.Status,
 		run.Scope.Context,
 		run.Scope.Namespace,

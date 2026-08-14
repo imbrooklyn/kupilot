@@ -2,7 +2,7 @@
 
 - Status: Accepted security baseline for `v0.1` and the admitted `v0.2` write
   boundary
-- Date: 2026-08-10
+- Date: 2026-08-14
 
 This document defines KuPilot's security objectives, trust boundaries, runtime
 controls, and deterministic security tests. It is normative for implementation
@@ -27,6 +27,7 @@ KuPilot must protect all of the following:
 - ClusterScope integrity and the provenance of every accepted Evidence item.
 - Tool, budget, endpoint, and model-contract integrity.
 - Local history and audit data stored in SQLite.
+- Explicitly exported local Session summaries and their filesystem targets.
 - Terminal integrity and the user's ability to distinguish data, advice,
   approval, execution, and verification.
 - The absence of a Kubernetes write path in `v0.1` and the integrity of the one
@@ -72,6 +73,7 @@ relationship, and output rules when that identity has broader permissions.
 | KuPilot to Kubernetes API | Fixed, namespaced, read-only requests for allowlisted projections in `v0.1`; one exact approved Deployment restart in `v0.2` | Generic discovery-driven access, Secret reads, ConfigMap data reads, cross-Namespace reads, model-generated requests, or arbitrary writes |
 | KuPilot to model endpoint | Consented, projected, normalized, redacted, and bounded model content plus fixed Tool schemas | Kubernetes or model credentials, raw objects, raw protocol bodies, Secret data, raw container output, SQLite contents, or an unapproved endpoint |
 | Application to SQLite | Explicitly eligible, sanitized domain and audit fields through fixed repository operations | Raw transport bodies, assembled prompts, stream deltas, full Tool results, framework objects, credentials, or raw logs |
+| Application to summary filesystem adapter | One explicit target and the final bounded `kupilot.export-summary.v1` Markdown bytes | Repository entities, raw Tool or log data, model traffic, credentials, approval authority, or target-path details in audit and errors |
 | Application to terminal | Locally styled, normalized, bounded text and typed state | Unprocessed control sequences, model-selected styling, raw external errors, or a model-created approval decision |
 | Approval coordinator to `v0.2` executor | One durable, current, digest-bound, single-use Deployment restart capability | Category approvals, expired or replayed approval, arbitrary parameters, another operation, or any `v0.1` call |
 
@@ -115,6 +117,10 @@ The implementation must preserve these invariants:
 11. A `v0.2` approval is default-reject, short-lived, digest-bound, scope-bound,
     target-bound, single-use, revalidated, durably audited before the write, and
     consumed after at most one external request.
+12. A Session summary export uses only its fixed versioned allowlist, two-pass
+    redaction and bounds, content-free audit, owner-only same-directory temporary
+    file, and atomic no-replace publication. It never calls the model, cluster,
+    Tool, approval path, or executor.
 
 ## 5. Model egress pipeline
 
@@ -346,6 +352,35 @@ high-priority UI result; it never retries the PATCH. Raw Deployment conditions,
 API response bodies, resource versions, patches, and vendor errors are excluded
 from UI and audit sinks.
 
+### C13: Versioned local Session-summary export
+
+Export is available only for the current resumable standard-persistence Session
+through `/privacy`. The sole composer accepts one explicit target, and a
+non-editable category preview defaults to cancellation unless the user presses
+`Y`. Application serializes export against deletion and denies it while a run is
+starting or active. A restart restores no target or confirmation.
+
+SQLite returns one consistent, bounded projection rather than an entity
+serialization. The only eligible fields are safe Session display metadata,
+committed user and final assistant text, the four structured Diagnosis
+collections, and referenced Evidence summaries or expired markers. Source
+allowlisting precedes per-field redaction and bounds; Markdown structure is
+code-defined and escaped; the complete bytes pass the redactor and aggregate cap
+again. Raw Tool inputs and results, raw logs and Events, Kubernetes objects,
+prompts, model traffic, credentials, Secrets, kubeconfig values and paths,
+approval authority, internal fingerprints, and arbitrary errors are excluded.
+
+A fixed `session_export_requested` AuditEvent is durably appended before file
+I/O. It records Session identity, event time, outcome, operation, and schema
+version, but no content or target path. The filesystem adapter requires a clean
+absolute `.md` target under an existing owner-only directory. It rejects
+symlink path components, non-regular or existing targets, and non-sticky
+ancestor directories writable by group or others on supported Unix platforms.
+It uses a `0600` same-directory temporary file plus atomic no-replace
+publication. Every failure removes the temporary file and never publishes
+partial bytes. The output remains unencrypted user-controlled data and is
+outside later Session deletion and forensic-erasure guarantees.
+
 ## 7. Threat-to-control-to-test mapping
 
 All tests in this table are deterministic and use local fakes, fixtures, fake
@@ -366,7 +401,7 @@ security test oracle.
 | T08 | Broad RBAC permits reads outside KuPilot's Kind, relationship, Namespace, or field policy | C06 task-specific ports, code allowlists, projection, and local limits | Run every Tool against a request-recording fake API; compare exact verbs, resources, Namespace, limits, and projected fields to golden allowlists; assert adversarial owner graphs stop at fixed edges and hops |
 | T09 | Model output bypasses structured Tool calling through prose, malformed stream fragments, duplicate calls, or an invented Tool name | C04 strict structured events and no text fallback; C09 repetition and loop limits | Replay chunk-boundary permutations, malformed events, duplicate identifiers, invented names, and prose that resembles a call; assert no unintended handler call and one classified terminal outcome |
 | T10 | SQLite leaks excluded data, accepts SQL injection, opens an unsafe path, or silently loses integrity | C08 fixed path, permissions, schema allowlist, bound SQL, migrations, integrity gates, and the all-accepted-Evidence Diagnosis window invariant | Database and sidecar canary scans, path and mode tests, `TestRepositorySourcesKeepExplicitSQLBoundary`, corruption tests, `TestDiagnosisRepositoryUsesAllAcceptedEvidenceForObservationWindow`, truncation with and without Evidence, cross-run rejection, retention-state tests, and the full sink integration test verify excluded-data absence and exact durable Evidence semantics |
-| T11 | Retained data outlives its contract, minimal-persistence becomes resumable, deletion is partial, or cleanup failure is hidden | C08 plus the Data Retention Contract | Use a fake clock at cutoff boundaries; assert complete transactional cascades, no content rows in minimal mode, no resume candidate, honest deletion failure, and a startup/run gate when mandatory pruning fails |
+| T11 | Retained data outlives its contract, minimal-persistence becomes resumable, deletion is partial, an approval survives deletion, or cleanup failure is hidden | C08, C12, and the Data Retention Contract | Use a fake clock at cutoff boundaries; assert one-way retention updates, complete transactional cascades, no content rows in minimal mode, no resume candidate, target-bound confirmation, active-run cancellation, pending/approved invalidation, zero executor calls on denial, honest deletion failure, and a startup/run gate when mandatory pruning fails |
 | T12 | Kubernetes, model, or user-controlled text executes terminal control sequences, spoofs approval, or hides scope | C07 local-only styling and typed approval state | Golden-test escape, control, invalid UTF-8, bidirectional, wide, combining, and oversized input from every external source; assert rendered bytes contain no forbidden sequence and approval fields cannot originate in text |
 | T13 | Unbounded model streams, Kubernetes results, logs, recursion, retries, or event queues exhaust memory, time, or model budget | C09 atomic hard ceilings and owned cancellation | Test each exact boundary and one-over value with fake clocks and counters; fuzz stream chunks; assert bounded allocations/queues, no call after exhaustion, one terminal result, and an explicit gap |
 | T14 | Raw vendor errors or logs disclose credentials, endpoint bodies, SQL, local paths, or cluster data | C01 and C10 safe classification and allowlisted logging | Wrap synthetic canaries at every adapter error boundary, including joined and formatted errors; enumerate TUI, model, audit, and ordinary-log outputs and assert only stable safe fields remain |
@@ -376,6 +411,7 @@ security test oracle.
 | T18 | A kubeconfig exec program is selected or influenced by the model, launched through a shell, leaks output, hangs, inherits the model key, or bypasses strict deny | C02 fixed selected config, direct launch, cleaned environment, bounded streams, deadline, and strict mode | Use a fake executable and launcher recorder; vary model and Tool content, arguments, environment, output, error, cancellation, timeout, and strict mode; assert exact argv ownership, no shell or key inheritance, no sink leakage, and zero launches under strict deny |
 | T19 | A model recommendation or TUI event bypasses Application and invokes the future executor | C11/C12 composition isolation and typed commands | Contract and import tests prove TUI and Agent see no executor; send forged UI/model events and assert rejection before approval state or external I/O changes |
 | T20 | Restart executes a broader patch, another write, multiple requests, or reports request acceptance as verified success | C12 one semantic operation, fixed parameters, one request, and separate verification | Compare the fake Kubernetes request to the fixed operation contract; lock the 90-second/two-second/45-observation policy; force reject, expiry, change, forbidden, conflict, accepted, progress, success, failure, timeout, cancellation, stale scope, restart recovery, and result-audit failure; assert exact write counts and distinct bounded UI/audit states |
+| T21 | Summary export leaks a prohibited source or target path, overwrites a file, follows a symlink, publishes partial bytes, races deletion, or replays after restart | C08, C10, and C13 versioned projection, two-pass guard, content-free audit, serialized operation, and atomic no-replace publication | Use a temporary database and directory, fake clock, barriers, and distinct raw, credential, path, and approval canaries; assert prohibited byte occurrence is zero, owner-only mode, symlink and unsafe-permission rejection, no overwrite, temporary cleanup, zero filesystem writes on pre-audit denial, stable concurrent deletion, and no restart replay |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -411,6 +447,9 @@ separate Accepted ADR and threat review.
   healthy.
 - A mandatory retention, migration, or startup recovery failure prevents new
   durable work and is never silently treated as successful cleanup.
+- A summary snapshot, projection, pre-export audit, target validation, or file
+  publication failure reports no export success. Pre-audit failure performs zero
+  filesystem writes, and no failure exposes partial output bytes.
 - Any failure before the `v0.2` pre-operation audit commit prevents execution.
   A failure after an external write may produce an explicit unknown or
   unverified outcome; it never causes an automatic retry. Post-attempt audit
@@ -463,14 +502,30 @@ Do not replace it with wildcard write permissions, `update`, `delete`, Watch,
 or a ClusterRoleBinding. A rollout timeout or unavailable verification requires
 operator review; it is not a reason to repeat the PATCH automatically.
 
-The current public CLI/TUI always creates standard-persistence Sessions and
-does not expose per-Session deletion, clear-history, delete-all, or a
-minimal-persistence selector. The repository enforces the underlying retention,
-minimal-mode, and transactional deletion contracts for compatible callers, but
-operators using the current binary must follow the exact stopped-process file
-cleanup boundary in
-[Privacy and Local Data](user-guide/privacy-and-local-data.md). This limitation
-must not be hidden behind a claim of data minimization or secure erasure.
+The existing `/privacy` dialog displays persistence mode, effective retention,
+and minimal mode's non-resumable effect. It can only tighten operational-detail
+retention and starts a new Session when persistence mode changes. It deletes the
+current Session only after a second explicit confirmation; the resume picker can
+confirm deletion of its exact selected historical Session. TUI commands cross
+only the Application boundary. Approval invalidation and run cancellation occur
+before the run is quiescent and before the SQLite adapter's single Session-graph
+transaction. A consuming approval, cancellation, or persistence failure denies
+deletion without an executor call or partial-success claim.
+
+For a current standard-persistence Session, the same `/privacy` flow may use the
+sole composer to collect an explicit Markdown target and then preview and
+confirm the fixed redacted summary categories. Minimal Sessions do not offer
+export. The target is never logged or placed in audit, existing files are not
+overwritten, and the resulting local copy is not encrypted or automatically
+removed with its source Session.
+
+There is no separate Session-management page, clear-history command, delete-all
+UI, or second composer. Operators who need all-state removal must follow the
+exact stopped-process file cleanup boundary in
+[Privacy and Local Data](user-guide/privacy-and-local-data.md). Logical deletion,
+ordinary `DELETE`, file removal, checkpointing, and `VACUUM` must not be described
+as forensic erasure. SQLite free pages, WAL, filesystem journals, backups,
+snapshots, swap, and storage media remain outside that guarantee.
 
 KuPilot has no product telemetry, analytics, remote crash reporting, update
 checker, account service, or KuPilot-operated control plane. A different
@@ -495,3 +550,4 @@ under the [Security Policy](../SECURITY.md).
 - [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0027: Use Stable Safe Error Classes](adr/0027-use-stable-safe-error-classes.md)
 - [ADR-0029: Limit `v0.2` to Deployment Restart](adr/0029-limit-v0.2-to-deployment-restart.md)
+- [ADR-0034: Export Only Versioned Redacted Session Summaries](adr/0034-export-only-versioned-redacted-session-summaries.md)

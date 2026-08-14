@@ -237,7 +237,7 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 				Observer: application.RunObserverFunc(func(context.Context, application.RunObservation) {}),
 				Now:      func() time.Time { return now },
 				UI: &application.CoordinatorUIConfig{
-					Sessions: service, Titles: service, Startup: service, Scopes: scopeManager,
+					Sessions: service, Search: sessions, Titles: service, Startup: service, Scopes: scopeManager,
 				},
 			})
 			if err != nil {

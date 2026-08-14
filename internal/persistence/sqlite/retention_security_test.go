@@ -306,6 +306,7 @@ func TestRetentionAuditSQLMatchesCompleteTypedCatalog(t *testing.T) {
 	readTypes := []domain.AuditEventType{
 		domain.AuditEventSessionCreated,
 		domain.AuditEventSessionDeleted,
+		domain.AuditEventSessionExportRequested,
 		domain.AuditEventRunStarted,
 		domain.AuditEventRunCompleted,
 		domain.AuditEventRunFailed,

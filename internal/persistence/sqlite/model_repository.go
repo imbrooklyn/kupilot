@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
@@ -228,6 +229,13 @@ func ensureRunAllowsDetail(ctx context.Context, getter strictGetter, runID domai
 	}
 	if state.PrivacyMode != string(domain.PrivacyModeStandard) || state.SessionStatus != string(domain.SessionStatusActive) {
 		return sessioncontract.ErrSessionUnavailable
+	}
+	days, err := operationalDetailRetentionDays(ctx, getter, application.DefaultOperationalDetailRetentionDays)
+	if err != nil {
+		return err
+	}
+	if days == 0 {
+		return sessioncontract.ErrDurableContentDisabled
 	}
 	return nil
 }

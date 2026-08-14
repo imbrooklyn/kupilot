@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -274,26 +275,123 @@ func applyMigration(
 	applicationVersion string,
 	createLedger bool,
 ) error {
+	if migration.version == 4 && migration.name == "000004_minimal_run_identity.sql" {
+		return applyMinimalRunIdentityMigration(ctx, db, migration, applicationVersion)
+	}
 	return withTx(ctx, db, func(tx *sqlx.Tx) error {
-		if createLedger {
-			if _, err := tx.ExecContext(ctx, migrationLedgerSQL); err != nil {
-				return err
-			}
-		}
-		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
+		return executeMigration(ctx, tx, migration, applicationVersion, createLedger)
+	})
+}
+
+// Migration 4 rebuilds the AgentRun parent table while preserving all child
+// rows. SQLite requires foreign-key enforcement to be changed before the
+// transaction; the dedicated connection is checked and restored before reuse.
+func applyMinimalRunIdentityMigration(
+	ctx context.Context,
+	db *sqlx.DB,
+	migration migration,
+	applicationVersion string,
+) error {
+	connection, err := db.Connx(ctx)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	var foreignKeys int
+	if err := connection.GetContext(ctx, &foreignKeys, `PRAGMA foreign_keys`); err != nil {
+		return err
+	}
+	if foreignKeys != 1 {
+		return fmt.Errorf("foreign-key enforcement was not enabled before migration")
+	}
+	if _, err := connection.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	migrationErr := withMigrationConnectionTx(ctx, connection, func(tx *sqlx.Tx) error {
+		if err := executeMigration(ctx, tx, migration, applicationVersion, false); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO schema_migrations (
-				version, name, checksum, applied_at_ms, app_version
-			) VALUES (?, ?, ?, ?, ?)
-		`,
-			migration.version,
-			migration.name,
-			migration.checksum,
-			time.Now().UTC().UnixMilli(),
-			applicationVersion,
-		)
-		return err
+		return verifyForeignKeyGraph(ctx, tx)
 	})
+	_, restoreErr := connection.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	if restoreErr == nil {
+		var restored int
+		restoreErr = connection.GetContext(ctx, &restored, `PRAGMA foreign_keys`)
+		if restoreErr == nil && restored != 1 {
+			restoreErr = fmt.Errorf("foreign-key enforcement was not restored after migration")
+		}
+	}
+	return errors.Join(migrationErr, restoreErr)
+}
+
+func withMigrationConnectionTx(
+	ctx context.Context,
+	connection *sqlx.Conn,
+	run func(*sqlx.Tx) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx, err := connection.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := run(tx); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, context.Canceled) {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, context.Canceled) {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return tx.Commit()
+}
+
+type migrationQueryer interface {
+	QueryxContext(context.Context, string, ...any) (*sqlx.Rows, error)
+}
+
+func verifyForeignKeyGraph(ctx context.Context, queryer migrationQueryer) error {
+	rows, err := queryer.QueryxContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return fmt.Errorf("foreign-key validation failed after migration")
+	}
+	return rows.Err()
+}
+
+func executeMigration(
+	ctx context.Context,
+	tx *sqlx.Tx,
+	migration migration,
+	applicationVersion string,
+	createLedger bool,
+) error {
+	if createLedger {
+		if _, err := tx.ExecContext(ctx, migrationLedgerSQL); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO schema_migrations (
+			version, name, checksum, applied_at_ms, app_version
+		) VALUES (?, ?, ?, ?, ?)
+	`,
+		migration.version,
+		migration.name,
+		migration.checksum,
+		time.Now().UTC().UnixMilli(),
+		applicationVersion,
+	)
+	return err
 }

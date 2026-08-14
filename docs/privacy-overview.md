@@ -89,9 +89,11 @@ resource field, user question, or model result appears to contain a high-risk
 value, KuPilot redacts or blocks it. It does not send the original merely to
 preserve diagnostic completeness.
 
-## Local standard persistence
+## Local persistence and deletion
 
-The current public binary always starts standard-persistence Sessions. It may
+`/privacy` displays the current standard or minimal persistence mode, the
+effective operational-detail period, the fixed read/lifecycle and approval/write
+audit periods, and the effect on cross-process resume. A standard Session may
 keep:
 
 - Session and AgentRun metadata.
@@ -105,22 +107,47 @@ keep:
 It does not persist assembled prompts, streaming deltas, raw model traffic, raw
 Tool results, raw Kubernetes objects, raw Events, or raw container output.
 
-Safe Session history and Diagnosis remain until local-state deletion. Detailed
-Tool, Evidence, and model-request metadata expire after 30 days by default;
-read-only lifecycle audit expires after 90 days. If Evidence detail expires
-first, historic Diagnosis text remains history but cannot be presented as
-current proof.
+Safe Session history and Diagnosis remain until explicit Session deletion.
+Detailed Tool, Evidence, and model-request metadata expire after 30 days by
+default; read-only lifecycle audit expires after 90 days. Terminal approval and
+decision records and approval/write audit expire after 180 days; retention
+cleanup never removes pending or approved authority. `/privacy` can only shorten
+the operational-detail period.
+If Evidence detail expires first, historic Diagnosis text remains history but
+cannot be presented as current proof.
 
-The repository enforces minimal-persistence semantics for compatible callers:
-content remains in memory and the Session is non-resumable. The current public
-CLI/TUI does not expose a minimal-persistence selector and must not be relied on
-to start such a Session.
+The persistence-mode control starts a new empty Session; it does not mutate the
+current Session. Minimal content remains in memory and the Session is
+non-resumable across processes. The resume picker, exact-ID resume, and `--last`
+exclude it.
 
-The current public CLI/TUI also does not expose per-Session deletion,
-clear-history, or delete-all. [Privacy and Local Data](user-guide/privacy-and-local-data.md)
-documents the exact database and log paths, known sidecars, retention, and the
-safe manual cleanup boundary. File removal is not forensic erasure from backups,
+`D` in `/privacy` deletes the current Session; `D` on a resume-picker row deletes
+that historical Session. A second explicit confirmation is required. Starting,
+active, and terminal-but-not-yet-quiesced runs are cancelled and awaited, and
+pending or approved-but-not-executed approvals are made
+non-executable before one transactional graph deletion. A consuming approval or
+database failure denies deletion without a partial-success claim. There is no
+separate Session-management surface, clear-history command, or delete-all UI.
+[Privacy and Local Data](user-guide/privacy-and-local-data.md) documents the
+exact database and log paths and the safe manual all-state cleanup boundary.
+Logical deletion and file removal are not forensic erasure from backups,
 snapshots, SQLite free pages, WAL history, swap, or storage media.
+
+A current standard-persistence Session may be exported only through
+`/privacy`. The existing composer accepts one explicit absolute Markdown target,
+and a second view previews the fixed data categories and requires `Y`. The
+versioned allowlist contains safe Session display metadata, bounded redacted
+committed user and final assistant text, the four structured Diagnosis sections,
+and referenced Evidence summaries or expired markers. It excludes raw Tool and
+log data, full prompts and model traffic, credentials, Secrets, kubeconfig data,
+and approval authority. Minimal Sessions cannot be exported.
+
+Export writes a new user-controlled local copy with owner-only permissions,
+same-directory temporary publication, atomic no-replace semantics, and a
+content-free and path-free pre-export audit event. It calls no model, cluster,
+Tool, approval, or executor path. Exported files are not encrypted by KuPilot
+and are not removed by later Session deletion; users control their retention,
+backup, and deletion after publication.
 
 ## Local operational logging
 

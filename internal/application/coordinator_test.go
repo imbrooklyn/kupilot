@@ -449,14 +449,23 @@ func coordinatorUUID(value int) string {
 }
 
 type memoryCoordinatorPersistence struct {
-	mu           sync.Mutex
-	beginCount   int
-	finishCount  int
-	toolCount    int
-	beginFailure bool
-	auditFailure domain.AuditEventType
-	finished     []domain.AgentRun
-	audits       []domain.AuditEvent
+	mu                   sync.Mutex
+	beginCount           int
+	finishCount          int
+	toolCount            int
+	beginFailure         bool
+	auditFailure         domain.AuditEventType
+	finished             []domain.AgentRun
+	diagnoses            []domain.Diagnosis
+	audits               []domain.AuditEvent
+	sessions             map[domain.SessionID]domain.Session
+	retentionDays        int
+	retentionFound       bool
+	retentionLoadFailure bool
+	retentionWriteCount  int
+	deleteWriteCount     int
+	deleteFailure        bool
+	deleteReady          <-chan struct{}
 }
 
 func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
@@ -472,8 +481,94 @@ func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
 	if audit.Type == persistence.auditFailure {
 		return errors.New("generated audit failure")
 	}
+	if persistence.sessions == nil {
+		persistence.sessions = make(map[domain.SessionID]domain.Session)
+	}
+	persistence.sessions[session.ID] = session
 	persistence.audits = append(persistence.audits, audit)
 	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) LoadOperationalDetailRetention(context.Context) (int, bool, error) {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	if persistence.retentionLoadFailure {
+		return 0, false, errors.New("generated retention read failure")
+	}
+	return persistence.retentionDays, persistence.retentionFound, nil
+}
+
+func (persistence *memoryCoordinatorPersistence) TightenOperationalDetailRetention(
+	_ context.Context,
+	update RetentionSettingUpdate,
+) error {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	current := DefaultOperationalDetailRetentionDays
+	if persistence.retentionFound {
+		current = persistence.retentionDays
+	}
+	if update.Validate() != nil || update.Days > current {
+		return ErrRetentionWouldWiden
+	}
+	if update.ExpectedDays != current {
+		return ErrRetentionSettingConflict
+	}
+	persistence.retentionDays = update.Days
+	persistence.retentionFound = true
+	persistence.retentionWriteCount++
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) DeleteSessionGraph(_ context.Context, id domain.SessionID) error {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	persistence.deleteWriteCount++
+	if persistence.deleteReady != nil {
+		select {
+		case <-persistence.deleteReady:
+		default:
+			return errors.New("generated delete before prerequisite termination")
+		}
+	}
+	if persistence.deleteFailure {
+		return errors.New("generated delete failure")
+	}
+	if _, ok := persistence.sessions[id]; !ok {
+		return errors.New("generated missing Session")
+	}
+	delete(persistence.sessions, id)
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) retentionWrites() int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return persistence.retentionWriteCount
+}
+
+func (persistence *memoryCoordinatorPersistence) deleteWrites() int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return persistence.deleteWriteCount
+}
+
+func (persistence *memoryCoordinatorPersistence) setDeleteFailure(value bool) {
+	persistence.mu.Lock()
+	persistence.deleteFailure = value
+	persistence.mu.Unlock()
+}
+
+func (persistence *memoryCoordinatorPersistence) setDeleteReady(ready <-chan struct{}) {
+	persistence.mu.Lock()
+	persistence.deleteReady = ready
+	persistence.mu.Unlock()
+}
+
+func (persistence *memoryCoordinatorPersistence) sessionMode(id domain.SessionID) domain.PrivacyMode {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return persistence.sessions[id].PrivacyMode
 }
 
 func (persistence *memoryCoordinatorPersistence) BeginWithAudit(
@@ -524,6 +619,9 @@ func (persistence *memoryCoordinatorPersistence) CompleteWithAudit(
 	if diagnosis.Validate() != nil || message.Validate() != nil {
 		return errors.New("invalid completion transaction values")
 	}
+	persistence.mu.Lock()
+	persistence.diagnoses = append(persistence.diagnoses, cloneDiagnosis(diagnosis))
+	persistence.mu.Unlock()
 	return persistence.FinishWithAudit(ctx, run, audit)
 }
 
@@ -573,6 +671,21 @@ func (persistence *memoryCoordinatorPersistence) lastFinished() domain.AgentRun 
 	return persistence.finished[len(persistence.finished)-1]
 }
 
+func (persistence *memoryCoordinatorPersistence) lastDiagnosis() domain.Diagnosis {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	if len(persistence.diagnoses) == 0 {
+		return domain.Diagnosis{}
+	}
+	return cloneDiagnosis(persistence.diagnoses[len(persistence.diagnoses)-1])
+}
+
+func (persistence *memoryCoordinatorPersistence) diagnosisCalls() int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return len(persistence.diagnoses)
+}
+
 func (persistence *memoryCoordinatorPersistence) SaveWithAudit(
 	_ context.Context,
 	invocation domain.ToolInvocation,
@@ -596,6 +709,18 @@ func (persistence *memoryCoordinatorPersistence) toolCalls() int {
 	persistence.mu.Lock()
 	defer persistence.mu.Unlock()
 	return persistence.toolCount
+}
+
+func (persistence *memoryCoordinatorPersistence) auditCalls(eventType domain.AuditEventType) int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	count := 0
+	for _, event := range persistence.audits {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 type coordinatorScope struct {

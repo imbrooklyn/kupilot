@@ -12,6 +12,11 @@ import (
 )
 
 func (model *Model) syncSuggestionsAfterEdit() tea.Cmd {
+	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
+		model.closePickers()
+		model.slashMenu.Close()
+		return nil
+	}
 	draft := model.composer.Value()
 	if kind, filter, origin, ok := pickerCompletionDraft(draft); ok {
 		if kind == application.UICompletionSession && model.resumeOrigin == resumeOriginTopLevel && !model.startup.Ready {
@@ -373,6 +378,7 @@ func (model *Model) applyResumedSession(resumed application.UIResumedSession) {
 	model.session = SessionView{
 		ID: resumed.Session.ID, Title: resumed.Session.Title, Resumed: true,
 	}
+	model.privacyMode = resumed.Session.PrivacyMode
 	model.startup.Ready = true
 	model.startup.Failed = false
 	model.resource = ResourceView{}

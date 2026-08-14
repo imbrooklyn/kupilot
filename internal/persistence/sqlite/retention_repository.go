@@ -3,10 +3,13 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const (
@@ -53,7 +56,7 @@ const (
 			SELECT id
 			FROM audit_events
 			WHERE event_type IN (
-				'session_created', 'session_deleted',
+				'session_created', 'session_deleted', 'session_export_requested',
 				'run_started', 'run_completed', 'run_failed', 'run_cancelled',
 				'run_timed_out', 'run_stale_scope', 'run_interrupted',
 				'scope_changed', 'tool_requested', 'tool_completed', 'tool_denied',
@@ -78,6 +81,22 @@ const (
 			)
 				AND occurred_at_ms <= ?
 			ORDER BY occurred_at_ms, id
+			LIMIT ?
+		)
+	`
+	deleteExpiredTerminalApprovalsSQL = `
+		DELETE FROM approvals
+		WHERE id IN (
+			SELECT p.id
+			FROM approvals AS p
+			WHERE p.status IN ('rejected', 'expired', 'cancelled', 'invalidated', 'consumed')
+				AND p.state_changed_at_ms <= ?
+				AND NOT EXISTS (
+					SELECT 1
+					FROM audit_events AS a
+					WHERE a.correlation_id = p.id
+				)
+			ORDER BY p.state_changed_at_ms, p.id
 			LIMIT ?
 		)
 	`
@@ -136,11 +155,15 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 	}
 	var committed auditcontract.CleanupResult
 	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		var err error
+		detailDays, err := operationalDetailRetentionDays(ctx, tx, request.OperationalDetailRetentionDays)
+		if err != nil {
+			return err
+		}
+		detailCutoff := request.Now.UTC().Add(-time.Duration(detailDays) * 24 * time.Hour)
 		committed.EvidenceItems, err = retentionDeleteResult(tx.ExecContext(
 			ctx,
 			deleteExpiredEvidenceSQL,
-			request.DetailCutoff().UnixMilli(),
+			detailCutoff.UnixMilli(),
 			request.BatchSize,
 		))
 		if err != nil {
@@ -149,7 +172,7 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		committed.ToolInvocations, err = retentionDeleteResult(tx.ExecContext(
 			ctx,
 			deleteExpiredToolInvocationsSQL,
-			request.DetailCutoff().UnixMilli(),
+			detailCutoff.UnixMilli(),
 			request.BatchSize,
 		))
 		if err != nil {
@@ -158,7 +181,7 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		committed.ModelRequests, err = retentionDeleteResult(tx.ExecContext(
 			ctx,
 			deleteExpiredModelRequestsSQL,
-			request.DetailCutoff().UnixMilli(),
+			detailCutoff.UnixMilli(),
 			request.BatchSize,
 		))
 		if err != nil {
@@ -182,6 +205,15 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		if err != nil {
 			return err
 		}
+		committed.ApprovalRecords, err = retentionDeleteResult(tx.ExecContext(
+			ctx,
+			deleteExpiredTerminalApprovalsSQL,
+			request.WriteAuditCutoff().UnixMilli(),
+			request.BatchSize,
+		))
+		if err != nil {
+			return err
+		}
 		committed.MinimalSessions, err = retentionDeleteResult(tx.ExecContext(
 			ctx,
 			deleteEmptyMinimalSessionsSQL,
@@ -198,8 +230,26 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		committed.ModelRequests == limit ||
 		committed.ReadAuditEvents == limit ||
 		committed.WriteAuditEvents == limit ||
+		committed.ApprovalRecords == limit ||
 		committed.MinimalSessions == limit
 	return committed, nil
+}
+
+func operationalDetailRetentionDays(ctx context.Context, getter strictGetter, fallback int) (int, error) {
+	var row settingRow
+	if err := getter.GetContext(ctx, &row, getSettingSQL, domain.SettingOperationalDetailRetentionDays); errors.Is(err, sql.ErrNoRows) {
+		return fallback, nil
+	} else if err != nil {
+		return 0, err
+	}
+	setting, err := row.domainSetting()
+	if err != nil {
+		return 0, err
+	}
+	if setting.Key != domain.SettingOperationalDetailRetentionDays {
+		return 0, domain.ErrInvalidSetting
+	}
+	return int(setting.IntegerValue), nil
 }
 
 func retentionDeleteResult(result sql.Result, err error) (int64, error) {

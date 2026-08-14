@@ -7,10 +7,10 @@ current working directory, repository, previous Context, Namespace, environment,
 or crash state to select history. A new empty Session is not eligible for resume
 until it has at least one committed safe Message.
 
-Starting another new Session does not imply that the old one was deleted. Under
-the current standard-persistence composition, eligible history remains in the
-local database until retention removes operational detail or the database is
-removed by the user.
+Starting another new Session does not imply that the old one was deleted. Safe
+standard-persistence history remains in the local database until the user
+explicitly deletes its Session. Operational detail has a separate bounded
+retention period.
 
 ## Explicit resume forms
 
@@ -29,17 +29,57 @@ The identifier above is a synthetic UUIDv7 example.
 - `resume --last` requests the first eligible Session in global last-activity
   order.
 
+The global resume picker reuses the sole composer for a bounded local filter.
+`/resume FILTER` matches only safe display metadata: sanitized title, canonical
+UTC last-activity display time, and display-only Context or Namespace. Exact
+title, title prefix, title substring, scope, and timestamp matches are ranked in
+that order; ties use descending last activity and then descending Session ID.
+The repository returns at most 50 stable results, and the existing picker shows
+at most eight rows at once. Message, Diagnosis, Evidence, Tool, model, approval,
+and audit content is never searched or previewed.
+
 Exact ID and `--last` are mutually exclusive. There is no `--all`, `--cd`,
 cwd/repository filter, Context filter, Namespace filter, or automatic last
 resume. Picker cancellation exits the top-level resume flow. An empty,
 cancelled, invalid, unavailable, or non-resumable result never creates a new
 Session as a fallback.
 
-The current public composition creates standard-persistence Sessions only. The
-storage layer enforces non-resumable minimal-persistence semantics, but the
-public CLI/TUI does not expose a minimal-persistence selector. If a database
-contains a known minimal Session created by another compatible caller, picker
-and `--last` exclude it, and exact resume returns `session_not_resumable`.
+`/privacy` displays the current persistence mode. Its mode control starts a new
+empty Session in standard or minimal mode; it does not mutate an existing
+Session. Minimal-persistence content is memory-only. Picker and `--last` exclude
+minimal Sessions, and exact resume returns `session_not_resumable`.
+
+## Delete a Session
+
+The current Session can be selected for deletion with `D` in `/privacy`. A
+historical standard Session can be selected with `D` in the existing resume
+picker. There is no separate Session-management page or second input field.
+Both paths show the exact target and require `Y`; `Esc` or `Enter` cancels with
+no deletion command.
+
+Deleting the current Session first cancels and waits for any starting, active,
+or terminal-but-not-yet-quiesced AgentRun and invalidates pending or
+approved-but-not-executed approval authority. A consuming approval denies
+deletion. After the Session graph commits as one SQLite
+transaction, the current Session or picker row is cleared. On database failure,
+the graph remains and the UI reports that it was not deleted. A restart never
+restores an AgentRun or approval authority; startup recovery makes persisted
+pending or approved-but-not-executed approvals terminal before lifecycle
+actions continue.
+
+Deletion removes the Session-owned conversation, run, Tool, Evidence, Diagnosis,
+approval, decision, and linked audit rows. It is logical deletion, not forensic
+erasure of SQLite free pages, WAL, backups, snapshots, swap, or storage media.
+
+## Export a Session summary
+
+The current standard-persistence Session can be exported from `/privacy` as the
+versioned, redacted Markdown summary documented in
+[Privacy and Local Data](privacy-and-local-data.md). A historical Session must
+first be resumed explicitly; export does not add a Session page, CLI command,
+file browser, or second composer. It does not call the model or cluster and does
+not make historic Evidence current. Minimal Sessions cannot be resumed or
+exported across processes.
 
 ## What resume restores
 

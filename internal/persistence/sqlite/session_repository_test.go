@@ -3,11 +3,14 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
+	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
@@ -212,6 +215,58 @@ func TestSessionRepositoryResumableQueriesReturnEmptyResults(t *testing.T) {
 	}
 }
 
+func TestSessionRepositorySearchesSafeDisplayMetadataBeforeApplyingBound(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "session-search")
+	repository := NewSessionRepository(db)
+	base := time.Date(2026, 8, 14, 9, 30, 0, 0, time.UTC)
+
+	for index := 0; index < 55; index++ {
+		id := fmt.Sprintf("00000000-0000-7000-8000-%012d", 1_000+index)
+		value := testSession(id, fmt.Sprintf("Recent Session %02d", index), domain.PrivacyModeStandard, base.Add(time.Duration(index+10)*time.Minute))
+		if err := repository.Create(context.Background(), value); err != nil {
+			t.Fatalf("Create(recent %d) error = %v", index, err)
+		}
+		seedCommittedMessage(t, db, value.ID, fmt.Sprintf("00000000-0000-7000-8001-%012d", 1_000+index), value.UpdatedAt)
+	}
+
+	exact := testSession("00000000-0000-7000-8000-000000002001", "payment", domain.PrivacyModeStandard, base)
+	prefix := testSession("00000000-0000-7000-8000-000000002002", "Payment incident", domain.PrivacyModeStandard, base.Add(time.Minute))
+	substring := testSession("00000000-0000-7000-8000-000000002003", "Historic payment review", domain.PrivacyModeStandard, base.Add(2*time.Minute))
+	scope := testSession("00000000-0000-7000-8000-000000002004", "Historic scope", domain.PrivacyModeStandard, base.Add(3*time.Minute))
+	scope.LastScope = &domain.ScopeCandidate{Context: "payment-control", Namespace: "payments"}
+	for index, value := range []domain.Session{exact, prefix, substring, scope} {
+		if err := repository.Create(context.Background(), value); err != nil {
+			t.Fatalf("Create(ranked %d) error = %v", index, err)
+		}
+		seedCommittedMessage(t, db, value.ID, fmt.Sprintf("00000000-0000-7000-8001-00000000200%d", index+1), value.UpdatedAt)
+	}
+
+	results, err := repository.SearchResumable(context.Background(), application.SessionSearchRequest{Filter: "payment", Limit: 4})
+	if err != nil {
+		t.Fatalf("SearchResumable(payment) error = %v", err)
+	}
+	want := []domain.SessionID{exact.ID, prefix.ID, substring.ID, scope.ID}
+	got := make([]domain.SessionID, len(results))
+	for index := range results {
+		got[index] = results[index].ID
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ranked IDs = %v, want %v", got, want)
+	}
+
+	scopeResults, err := repository.SearchResumable(context.Background(), application.SessionSearchRequest{Filter: "ctx/payment-control", Limit: 1})
+	if err != nil || len(scopeResults) != 1 || scopeResults[0].ID != scope.ID {
+		t.Fatalf("scope search = %#v, error = %v", scopeResults, err)
+	}
+	timeResults, err := repository.SearchResumable(context.Background(), application.SessionSearchRequest{Filter: "2026-08-14 09:30Z", Limit: 1})
+	if err != nil || len(timeResults) != 1 || timeResults[0].ID != exact.ID {
+		t.Fatalf("timestamp search = %#v, error = %v", timeResults, err)
+	}
+	if _, err := repository.SearchResumable(context.Background(), application.SessionSearchRequest{Filter: "payment", Limit: application.MaxUIQueryCandidates + 1}); !errors.Is(err, application.ErrInvalidSessionSearch) {
+		t.Fatalf("oversized SearchResumable() error = %v, want ErrInvalidSessionSearch", err)
+	}
+}
+
 func TestResumeByIDLoadsOnlyEligibleSafeHistory(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "session-resume-exact")
 	sessions := NewSessionRepository(db)
@@ -293,7 +348,35 @@ func TestSessionRepositoryDeleteCascadesCompleteGraphAndRollsBack(t *testing.T) 
 		if strings.Contains(err.Error(), "synthetic delete rollback canary") {
 			t.Fatal("Delete() error disclosed driver text")
 		}
-		assertSessionGraphRowCount(t, db, 9)
+		assertSessionGraphRowCount(t, db, 10)
+	})
+
+	t.Run("serialized with retention cleanup", func(t *testing.T) {
+		db := openTestDB(t, context.Background(), testStateDir(t), "session-delete-retention")
+		repository := NewSessionRepository(db)
+		sessionID := seedCompleteSessionGraph(t, db, "00000000-0000-7000-8000-000000000061")
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		go func() {
+			<-start
+			results <- repository.Delete(context.Background(), sessionID)
+		}()
+		go func() {
+			<-start
+			_, err := NewRetentionRepository(db).Cleanup(context.Background(), auditcontract.CleanupRequest{
+				Now:                            time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC),
+				OperationalDetailRetentionDays: application.DefaultOperationalDetailRetentionDays,
+				BatchSize:                      100,
+			})
+			results <- err
+		}()
+		close(start)
+		for range 2 {
+			if err := <-results; err != nil {
+				t.Fatalf("concurrent deletion/retention error = %v", err)
+			}
+		}
+		assertSessionGraphRowCount(t, db, 0)
 	})
 }
 
@@ -377,6 +460,7 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 	diagnosisID := rawSessionID[:len(rawSessionID)-2] + "57"
 	approvalID := rawSessionID[:len(rawSessionID)-2] + "58"
 	auditID := rawSessionID[:len(rawSessionID)-2] + "59"
+	decisionDigest := strings.Repeat("7", 64)
 	content := "Safe graph message"
 	statements := []struct {
 		query string
@@ -408,6 +492,11 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 			strings.Repeat("4", 64), strings.Repeat("6", 64), "rejected", "user_rejected",
 			1_001, 61_001, 2_000,
 		}},
+		{`
+			INSERT INTO approval_decisions (
+				approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, []any{approvalID, strings.Repeat("4", 64), decisionDigest, "reject", "local_user", 1_500}},
 		{`INSERT INTO audit_events (id, session_id, run_id, event_type, actor, outcome, details_json, occurred_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{auditID, sessionID, runID, "run_completed", "system", "success", `{}`, 2}},
 	}
 	for index, statement := range statements {
@@ -431,6 +520,7 @@ func assertSessionGraphRowCount(t *testing.T, db *DB, want int) {
 			+ (SELECT count(id) FROM evidence_items)
 			+ (SELECT count(id) FROM diagnoses)
 			+ (SELECT count(id) FROM approvals)
+			+ (SELECT count(approval_id) FROM approval_decisions)
 			+ (SELECT count(id) FROM audit_events)
 	`); err != nil {
 		t.Fatalf("graph count query error = %v", err)

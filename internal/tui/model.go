@@ -132,8 +132,13 @@ type Model struct {
 	pendingResource    ResourceView
 	pendingSubmitID    uint64
 	pendingPrivacyID   uint64
+	pendingDeleteID    uint64
+	pendingExportID    uint64
 	pendingApprovalID  uint64
 	privacyReview      *application.PrivacyReview
+	lifecycleReview    *application.SessionLifecycleReview
+	sessionDelete      *sessionDeleteState
+	sessionExport      *sessionExportState
 	pendingApproval    *application.UIApprovalRequest
 	evidenceReferences []application.UIEvidenceReference
 	pendingEvidence    application.UIEvidenceDetailQuery

@@ -92,8 +92,8 @@ func (result UIStartResult) Validate() error {
 	return nil
 }
 
-// ResumeSessionRecord is safe global picker metadata returned by a history
-// adapter before UI filtering.
+// ResumeSessionRecord is safe global picker metadata returned by a bounded
+// history or search adapter before delivery projection.
 type ResumeSessionRecord struct {
 	ID          domain.SessionID
 	Title       string
@@ -501,5 +501,11 @@ func (record ResumedSessionRecord) valid() bool {
 }
 
 func sessionRecordMatches(record ResumeSessionRecord, filter string) bool {
-	return filter == "" || strings.Contains(strings.ToLower(record.Title), strings.ToLower(filter))
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" || strings.Contains(strings.ToLower(record.Title), filter) ||
+		strings.Contains(strings.ToLower(record.UpdatedAt.UTC().Format("2006-01-02 15:04Z")), filter) {
+		return true
+	}
+	return record.LastScope != nil && (strings.Contains(strings.ToLower("ctx/"+record.LastScope.Context), filter) ||
+		strings.Contains(strings.ToLower("ns/"+record.LastScope.Namespace), filter))
 }

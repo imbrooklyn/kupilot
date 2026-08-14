@@ -24,6 +24,15 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 	if err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
+	lifecycle := application.SessionLifecycleReview{
+		CurrentSession: &application.UISessionState{
+			ID: testSessionID, PrivacyMode: domain.PrivacyModeStandard,
+		},
+		OperationalDetailRetentionDays: application.DefaultOperationalDetailRetentionDays,
+		ReadAuditRetentionDays:         application.ReadAuditRetentionDays,
+		WriteAuditRetentionDays:        application.WriteAuditRetentionDays,
+		StandardContentUntilDeletion:   true,
+	}
 	blocked := newTestModel()
 	blocked, _ = updateModel(t, blocked, tea.PasteMsg{Content: "Why is the Pod pending?"})
 	blocked, cmd := updateModel(t, blocked, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -43,6 +52,7 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 	}
 
 	model := newTestModel()
+	model.session = SessionView{ID: testSessionID, Title: "Current Session"}
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/privacy"})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	show := applicationCommandFromCmd(t, cmd)
@@ -50,7 +60,7 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 		t.Fatalf("privacy show command = %#v", show)
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandShowPrivacy, RequestID: show.RequestID, Privacy: &review,
+		Command: application.UICommandShowPrivacy, RequestID: show.RequestID, Privacy: &review, Lifecycle: &lifecycle,
 	}})
 	frame := model.render()
 	for _, want := range []string{"https://model.example", application.PrivacyPolicyVersion, "user_question", "redacted_container_output", "Never eligible"} {
@@ -73,7 +83,7 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 		t.Fatalf("ToggleLogs() error = %v", err)
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandToggleLogs, RequestID: show.RequestID, Privacy: &updated,
+		Command: application.UICommandToggleLogs, RequestID: show.RequestID, Privacy: &updated, Lifecycle: &lifecycle,
 	}})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'a'})
 	accept := applicationCommandFromCmd(t, cmd)
@@ -86,6 +96,148 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 	if model.dialog.Open() || model.privacyReview != nil || model.pendingPrivacyID != 0 {
 		t.Fatal("accepted privacy review remained authoritative in the TUI")
 	}
+}
+
+func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t *testing.T) {
+	manager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+		Store: new(tuiPrivacyStore), Origin: "https://model.example",
+		Now: func() time.Time { return time.UnixMilli(31_000).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	privacy, err := manager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	lifecycle := application.SessionLifecycleReview{
+		CurrentSession:                 &application.UISessionState{ID: testSessionID, Title: "Current Session", PrivacyMode: domain.PrivacyModeStandard},
+		OperationalDetailRetentionDays: application.DefaultOperationalDetailRetentionDays,
+		ReadAuditRetentionDays:         application.ReadAuditRetentionDays,
+		WriteAuditRetentionDays:        application.WriteAuditRetentionDays,
+		StandardContentUntilDeletion:   true,
+	}
+	model := newTestModel()
+	model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/privacy"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	show := applicationCommandFromCmd(t, cmd)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandShowPrivacy, RequestID: show.RequestID,
+		Privacy: &privacy, Lifecycle: &lifecycle,
+	}})
+	frame := model.render()
+	for _, want := range []string{
+		"Persistence mode: standard", "Operational detail: 30 days", "Read/lifecycle audit: 90 days",
+		"Approval/write audit: 180 days", "minimal Sessions cannot be resumed", "not forensic erasure",
+	} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("privacy lifecycle frame missing %q", want)
+		}
+	}
+	if model.EditorCount() != 1 {
+		t.Fatalf("privacy lifecycle editor count = %d", model.EditorCount())
+	}
+	minimalLifecycle := lifecycle
+	minimalSession := *lifecycle.CurrentSession
+	minimalSession.PrivacyMode = domain.PrivacyModeMinimal
+	minimalLifecycle.CurrentSession = &minimalSession
+	minimalText := privacyReviewText(privacy, &minimalLifecycle)
+	if !strings.Contains(minimalText, "Session content: memory only") ||
+		strings.Contains(minimalText, "Session content: retained until") {
+		t.Fatalf("minimal persistence impact was not rendered accurately: %q", minimalText)
+	}
+
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 't'})
+	tighten := applicationCommandFromCmd(t, cmd)
+	if tighten.Kind != application.UICommandTightenRetention || tighten.Lifecycle == nil ||
+		tighten.Lifecycle.RetentionDays == nil || *tighten.Lifecycle.RetentionDays != 14 {
+		t.Fatalf("retention command = %#v", tighten)
+	}
+	lifecycle.OperationalDetailRetentionDays = 14
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandTightenRetention, RequestID: show.RequestID,
+		Privacy: &privacy, Lifecycle: &lifecycle,
+	}})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'm'})
+	mode := applicationCommandFromCmd(t, cmd)
+	if mode.Kind != application.UICommandSetPersistenceMode || mode.Lifecycle == nil ||
+		mode.Lifecycle.PrivacyMode != domain.PrivacyModeMinimal {
+		t.Fatalf("persistence-mode command = %#v", mode)
+	}
+
+	model.privacyPending = false
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'd'})
+	if cmd != nil || !model.dialog.Open() || model.sessionDelete == nil || !strings.Contains(model.render(), "Delete current Session?") {
+		t.Fatal("delete key did not open an explicit current-Session confirmation")
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil || model.sessionDelete != nil || !model.dialog.Open() {
+		t.Fatal("delete cancellation dispatched or failed to restore privacy review")
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'd'})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+	deleteCommand := applicationCommandFromCmd(t, cmd)
+	if deleteCommand.Kind != application.UICommandDeleteSession || deleteCommand.Lifecycle == nil ||
+		deleteCommand.Lifecycle.SessionID != testSessionID || !deleteCommand.Lifecycle.ExpectedCurrent ||
+		!deleteCommand.Lifecycle.Confirmed {
+		t.Fatalf("delete command = %#v", deleteCommand)
+	}
+}
+
+func TestSessionDeleteOutcomeChangesCurrentSessionOnlyAfterMatchingCommit(t *testing.T) {
+	newPendingModel := func() Model {
+		model := newTestModel()
+		model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+		model.pendingDeleteID = 73
+		model.sessionDelete = &sessionDeleteState{
+			SessionID: testSessionID, Title: "Current Session", ExpectedCurrent: true, Origin: deleteFromPrivacy,
+		}
+		model.showDialog("Deleting Session", "Waiting for the deletion transaction.")
+		return model
+	}
+
+	t.Run("database failure", func(t *testing.T) {
+		model, _ := updateModel(t, newPendingModel(), CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteSession, RequestID: 73, Failure: application.UIQueryUnavailable,
+		}})
+		if model.session.ID != testSessionID || model.pendingDeleteID != 0 || model.sessionDelete != nil ||
+			!strings.Contains(model.render(), "Session not deleted") {
+			t.Fatalf("failed deletion changed or falsely cleared current Session: %#v", model.session)
+		}
+	})
+
+	t.Run("application failure", func(t *testing.T) {
+		model, _ := updateModel(t, newPendingModel(), ApplicationFailureMsg{
+			Command: application.UICommandDeleteSession, RequestID: 73,
+		})
+		if model.session.ID != testSessionID || model.pendingDeleteID != 0 || model.sessionDelete != nil ||
+			!strings.Contains(model.render(), "No partial deletion was reported") {
+			t.Fatalf("application deletion failure changed or falsely cleared current Session: %#v", model.session)
+		}
+	})
+
+	t.Run("mismatched result", func(t *testing.T) {
+		model, _ := updateModel(t, newPendingModel(), CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteSession, RequestID: 73,
+			Deletion: &application.SessionDeletionResult{SessionID: domain.SessionID("0192a6aa-77bc-7def-8123-456789abcdef"), WasCurrent: true},
+		}})
+		if model.session.ID != testSessionID || model.pendingDeleteID != 73 || model.sessionDelete == nil {
+			t.Fatal("mismatched committed result changed request-bound deletion state")
+		}
+	})
+
+	t.Run("committed success", func(t *testing.T) {
+		model, _ := updateModel(t, newPendingModel(), CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteSession, RequestID: 73,
+			Deletion: &application.SessionDeletionResult{SessionID: testSessionID, WasCurrent: true},
+		}})
+		entries := model.transcript.Entries()
+		if model.session.ID != "" || model.pendingDeleteID != 0 || model.sessionDelete != nil ||
+			len(entries) != 1 || !strings.Contains(entries[0].Text, "not forensic erasure") {
+			t.Fatalf("committed deletion did not clear current Session safely: %#v", model.session)
+		}
+	})
 }
 
 type tuiPrivacyStore struct{}

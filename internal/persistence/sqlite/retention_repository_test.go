@@ -75,6 +75,18 @@ func TestRetentionRepositoryUsesInclusiveCategoryCutoffsAndBoundedBatches(t *tes
 			t.Fatalf("Append(read AuditEvent %d) error = %v", index, err)
 		}
 	}
+	for index, occurredAt := range []time.Time{readCutoff.Add(-time.Millisecond), readCutoff, readCutoff.Add(time.Millisecond)} {
+		event := testSessionAuditEvent(domain.AuditEventID([]string{
+			"00000000-0000-7000-8000-000000006071",
+			"00000000-0000-7000-8000-000000006072",
+			"00000000-0000-7000-8000-000000006073",
+		}[index]), run.SessionID, occurredAt)
+		event.Type = domain.AuditEventSessionExportRequested
+		event.Actor = domain.AuditActorUser
+		if err := auditRepository.Append(context.Background(), event); err != nil {
+			t.Fatalf("Append(export AuditEvent %d) error = %v", index, err)
+		}
+	}
 	for index, occurredAt := range []time.Time{writeCutoff.Add(-time.Millisecond), writeCutoff, writeCutoff.Add(time.Millisecond)} {
 		event := testAuditEvent(domain.AuditEventID([]string{
 			"00000000-0000-7000-8000-000000006061",
@@ -103,6 +115,7 @@ func TestRetentionRepositoryUsesInclusiveCategoryCutoffsAndBoundedBatches(t *tes
 		total.ModelRequests += result.ModelRequests
 		total.ReadAuditEvents += result.ReadAuditEvents
 		total.WriteAuditEvents += result.WriteAuditEvents
+		total.ApprovalRecords += result.ApprovalRecords
 		if !result.More {
 			break
 		}
@@ -111,7 +124,7 @@ func TestRetentionRepositoryUsesInclusiveCategoryCutoffsAndBoundedBatches(t *tes
 		EvidenceItems:    2,
 		ToolInvocations:  2,
 		ModelRequests:    2,
-		ReadAuditEvents:  2,
+		ReadAuditEvents:  4,
 		WriteAuditEvents: 2,
 	}
 	if !reflect.DeepEqual(total, wantTotal) {
@@ -139,7 +152,7 @@ func TestRetentionRepositoryUsesInclusiveCategoryCutoffsAndBoundedBatches(t *tes
 	if err != nil {
 		t.Fatalf("Cleanup(later) error = %v", err)
 	}
-	if result.EvidenceItems != 1 || result.ToolInvocations != 1 || result.ModelRequests != 1 || result.ReadAuditEvents != 1 || result.WriteAuditEvents != 1 {
+	if result.EvidenceItems != 1 || result.ToolInvocations != 1 || result.ModelRequests != 1 || result.ReadAuditEvents != 2 || result.WriteAuditEvents != 1 {
 		t.Fatalf("later cleanup result = %#v", result)
 	}
 	expired, err := NewDiagnosisRepository(db).GetByRunID(context.Background(), run.ID)
@@ -187,13 +200,6 @@ func TestRetentionRepositoryRemovesOnlyEligibleMinimalSessionShells(t *testing.T
 	runningMessageID := domain.MessageID("00000000-0000-7000-8000-000000006113")
 	runningRunID := domain.AgentRunID("00000000-0000-7000-8000-000000006114")
 	if _, err := db.handle.ExecContext(context.Background(), `
-		INSERT INTO messages (
-			id, session_id, role, content, content_format, status, content_hash, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, runningMessageID, runningID, "user", "", "plain", "redacted", domain.MessageContentHash(""), readCutoff.UnixMilli()); err != nil {
-		t.Fatalf("minimal recovery Message setup error = %v", err)
-	}
-	if _, err := db.handle.ExecContext(context.Background(), `
 		INSERT INTO agent_runs (
 			id, session_id, request_message_id, status, scope_context,
 			scope_namespace, scope_generation, prompt_version,
@@ -222,6 +228,128 @@ func TestRetentionRepositoryRemovesOnlyEligibleMinimalSessionShells(t *testing.T
 	for _, retained := range []domain.SessionID{freshID, runningID, standardID} {
 		if _, err := sessions.GetByID(context.Background(), retained); err != nil {
 			t.Fatalf("Session %s was unexpectedly removed: %v", retained, err)
+		}
+	}
+}
+
+func TestRetentionRepositoryRemovesExpiredTerminalApprovalsButPreservesAuthority(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "retention-approvals")
+	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	requestedAt := now.Add(-181 * 24 * time.Hour)
+	sessions := NewSessionRepository(db)
+	runs := NewAgentRunRepository(db)
+	approvals := NewApprovalRepository(db)
+
+	type approvalFixture struct {
+		sessionID  domain.SessionID
+		messageID  domain.MessageID
+		runID      domain.AgentRunID
+		approvalID domain.ApprovalID
+		state      domain.ApprovalState
+		nonceByte  byte
+	}
+	fixtures := []approvalFixture{
+		{
+			sessionID: "00000000-0000-7000-8000-000000006121", messageID: "00000000-0000-7000-8000-000000006122",
+			runID: "00000000-0000-7000-8000-000000006123", approvalID: "00000000-0000-7000-8000-000000006124",
+			state: domain.ApprovalStateRejected, nonceByte: 0x61,
+		},
+		{
+			sessionID: "00000000-0000-7000-8000-000000006131", messageID: "00000000-0000-7000-8000-000000006132",
+			runID: "00000000-0000-7000-8000-000000006133", approvalID: "00000000-0000-7000-8000-000000006134",
+			state: domain.ApprovalStatePending, nonceByte: 0x62,
+		},
+		{
+			sessionID: "00000000-0000-7000-8000-000000006141", messageID: "00000000-0000-7000-8000-000000006142",
+			runID: "00000000-0000-7000-8000-000000006143", approvalID: "00000000-0000-7000-8000-000000006144",
+			state: domain.ApprovalStateApproved, nonceByte: 0x63,
+		},
+	}
+
+	for index, fixture := range fixtures {
+		sessionValue := testSession(string(fixture.sessionID), "", domain.PrivacyModeMinimal, requestedAt)
+		if err := sessions.Create(context.Background(), sessionValue); err != nil {
+			t.Fatalf("Create(Session %d) error = %v", index, err)
+		}
+		message, running := testRunningPair(fixture.messageID, fixture.runID, fixture.sessionID, requestedAt)
+		if err := runs.Begin(context.Background(), message, running); err != nil {
+			t.Fatalf("Begin(AgentRun %d) error = %v", index, err)
+		}
+		if err := runs.Finish(context.Background(), testTerminalRun(running, domain.AgentRunStatusCompleted, requestedAt.Add(time.Millisecond))); err != nil {
+			t.Fatalf("Finish(AgentRun %d) error = %v", index, err)
+		}
+
+		request := testApprovalRequest(t, fixture.approvalID, running, requestedAt.Add(time.Duration(index)*time.Millisecond), fixture.nonceByte)
+		requestedAudit := testApprovalAudit(t, request, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", request.RequestedAt)
+		requestedAudit.ID = domain.AuditEventID([]string{
+			"00000000-0000-7000-8000-000000006125",
+			"00000000-0000-7000-8000-000000006135",
+			"00000000-0000-7000-8000-000000006145",
+		}[index])
+		if err := approvals.CreateWithAudit(context.Background(), request, requestedAudit); err != nil {
+			t.Fatalf("CreateWithAudit(Approval %d) error = %v", index, err)
+		}
+		if fixture.state == domain.ApprovalStatePending {
+			continue
+		}
+
+		decided := request
+		decided.State = fixture.state
+		decided.StateChangedAt = request.RequestedAt.Add(time.Second)
+		choice := domain.ApprovalDecisionReject
+		eventType := domain.AuditEventApprovalRejected
+		outcome := domain.AuditOutcomeDenied
+		detail := "user_rejected"
+		if fixture.state == domain.ApprovalStateApproved {
+			decided.StateReason = domain.ApprovalReasonUserApproved
+			choice = domain.ApprovalDecisionApprove
+			eventType = domain.AuditEventApprovalApproved
+			outcome = domain.AuditOutcomeSuccess
+			detail = "user_approved"
+		} else {
+			decided.StateReason = domain.ApprovalReasonUserRejected
+		}
+		decision := domain.ApprovalDecision{
+			RequestID: request.ID, Choice: choice, ShownDigest: request.Digest,
+			Nonce: request.Nonce, Actor: domain.ApprovalActorLocalUser, DecidedAt: decided.StateChangedAt,
+		}
+		decisionAudit := testApprovalAudit(t, decided, eventType, domain.AuditActorUser, outcome, detail, decided.StateChangedAt)
+		decisionAudit.ID = domain.AuditEventID([]string{
+			"00000000-0000-7000-8000-000000006126",
+			"00000000-0000-7000-8000-000000006136",
+			"00000000-0000-7000-8000-000000006146",
+		}[index])
+		if err := approvals.ResolveWithAudit(context.Background(), request.State, decided, decision, decisionAudit); err != nil {
+			t.Fatalf("ResolveWithAudit(Approval %d) error = %v", index, err)
+		}
+	}
+
+	result, err := NewRetentionRepository(db).Cleanup(context.Background(), auditcontract.CleanupRequest{
+		Now: now, OperationalDetailRetentionDays: 30, BatchSize: auditcontract.MaxCleanupBatchSize,
+	})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if result.WriteAuditEvents != 5 || result.ApprovalRecords != 1 || result.MinimalSessions != 1 {
+		t.Fatalf("Cleanup() = %#v, want five audits, one terminal approval, and one shell", result)
+	}
+
+	var approvalCount, decisionCount int
+	if err := db.handle.GetContext(context.Background(), &approvalCount, `SELECT count(id) FROM approvals`); err != nil {
+		t.Fatalf("approval count error = %v", err)
+	}
+	if err := db.handle.GetContext(context.Background(), &decisionCount, `SELECT count(approval_id) FROM approval_decisions`); err != nil {
+		t.Fatalf("approval decision count error = %v", err)
+	}
+	if approvalCount != 2 || decisionCount != 1 {
+		t.Fatalf("retained approval/decision counts = %d/%d, want 2/1", approvalCount, decisionCount)
+	}
+	if _, err := sessions.GetByID(context.Background(), fixtures[0].sessionID); err == nil {
+		t.Fatal("minimal Session with expired terminal approval was retained")
+	}
+	for _, retained := range fixtures[1:] {
+		if _, err := sessions.GetByID(context.Background(), retained.sessionID); err != nil {
+			t.Fatalf("Session with %s approval was removed: %v", retained.state, err)
 		}
 	}
 }
@@ -378,6 +506,7 @@ func assertCleanupCountsAtMost(t *testing.T, result auditcontract.CleanupResult,
 		"ModelRequests":    result.ModelRequests,
 		"ReadAuditEvents":  result.ReadAuditEvents,
 		"WriteAuditEvents": result.WriteAuditEvents,
+		"ApprovalRecords":  result.ApprovalRecords,
 		"MinimalSessions":  result.MinimalSessions,
 	} {
 		if count > limit {

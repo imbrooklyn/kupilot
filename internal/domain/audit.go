@@ -49,6 +49,7 @@ type AuditEventType string
 const (
 	AuditEventSessionCreated          AuditEventType = "session_created"
 	AuditEventSessionDeleted          AuditEventType = "session_deleted"
+	AuditEventSessionExportRequested  AuditEventType = "session_export_requested"
 	AuditEventRunStarted              AuditEventType = "run_started"
 	AuditEventRunCompleted            AuditEventType = "run_completed"
 	AuditEventRunFailed               AuditEventType = "run_failed"
@@ -94,6 +95,7 @@ func (eventType AuditEventType) RetentionClass() AuditRetentionClass {
 		return AuditRetentionWrite
 	case AuditEventSessionCreated,
 		AuditEventSessionDeleted,
+		AuditEventSessionExportRequested,
 		AuditEventRunStarted,
 		AuditEventRunCompleted,
 		AuditEventRunFailed,

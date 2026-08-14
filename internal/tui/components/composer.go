@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	MinComposerRows = 3
-	MaxComposerRows = 8
-	maxContentRows  = 65_536
+	MinComposerRows    = 3
+	MaxComposerRows    = 8
+	maxContentRows     = 65_536
+	defaultPlaceholder = "Ask a question, or type / for commands"
 )
 
 // ErrComposerLimit reports that an edit would exceed the bounded draft size.
@@ -41,7 +42,7 @@ type Composer struct {
 func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	input := textarea.New()
 	input.Prompt = ""
-	input.Placeholder = "Ask a question, or type / for commands"
+	input.Placeholder = defaultPlaceholder
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
 	input.CharLimit = 0
@@ -125,6 +126,16 @@ func (composer *Composer) SetValue(value string) {
 func (composer *Composer) Reset() {
 	composer.input.Reset()
 	composer.closeHistory()
+}
+
+// SetPlaceholder changes only the code-authored purpose hint for the one editor.
+func (composer *Composer) SetPlaceholder(value string) {
+	composer.input.Placeholder = value
+}
+
+// ResetPlaceholder restores the normal question and Slash-command hint.
+func (composer *Composer) ResetPlaceholder() {
+	composer.input.Placeholder = defaultPlaceholder
 }
 
 // RecordSubmission adds one submitted message to local prompt history.

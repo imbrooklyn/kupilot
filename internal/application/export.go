@@ -1,0 +1,865 @@
+package application
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
+)
+
+const (
+	// ExportSummarySchemaVersion identifies the only admitted local export projection.
+	ExportSummarySchemaVersion = "kupilot.export-summary.v1"
+	// MaxExportSummaryBytes is the complete post-redaction Markdown ceiling.
+	MaxExportSummaryBytes = 2 * 1024 * 1024
+	// MaxExportMessages bounds committed conversation records in one export.
+	MaxExportMessages = 100
+	// MaxExportDiagnoses bounds structured historic Diagnoses in one export.
+	MaxExportDiagnoses = 10
+	// MaxExportEvidence bounds referenced Evidence summaries in one export.
+	MaxExportEvidence = 100
+
+	maxExportTargetBytes         = 4096
+	maxExportMessageBytes        = 4096
+	maxExportDiagnosisTextBytes  = 2048
+	maxExportEvidenceFactBytes   = 2048
+	maxExportEvidencePathBytes   = 1024
+	maxExportDiagnosisItems      = 5
+	maxExportPrerequisites       = 5
+	maxExportCitationsPerItem    = 10
+	maxExportMarkdownOverhead    = 128 * 1024
+	exportSummaryTimestampLayout = "2006-01-02T15:04:05.000Z"
+)
+
+var (
+	// ErrInvalidExportSummary reports an invalid or non-allowlisted export projection.
+	ErrInvalidExportSummary = errors.New("the Session export summary is invalid")
+	// ErrExportSummaryLimit reports a complete export that cannot fit its fixed ceiling.
+	ErrExportSummaryLimit = errors.New("the Session export summary exceeds its fixed limit")
+	// ErrSessionExportUnavailable does not distinguish a missing, archived, deleted, or ineligible Session.
+	ErrSessionExportUnavailable = errors.New("the Session is unavailable for export")
+)
+
+// ExportSummaryIntent binds one explicit current-Session target and one
+// privacy-review confirmation to the fixed export schema.
+type ExportSummaryIntent struct {
+	SessionID       domain.SessionID
+	TargetPath      string
+	ExpectedCurrent bool
+	Confirmed       bool
+	SchemaVersion   string
+}
+
+// Validate rejects implicit targets, stale historic intent, and schema drift.
+func (intent ExportSummaryIntent) Validate() error {
+	if !intent.SessionID.Valid() || !intent.ExpectedCurrent || !intent.Confirmed ||
+		intent.SchemaVersion != ExportSummarySchemaVersion || len(intent.TargetPath) < 1 ||
+		len(intent.TargetPath) > maxExportTargetBytes || !utf8.ValidString(intent.TargetPath) ||
+		strings.TrimSpace(intent.TargetPath) != intent.TargetPath {
+		return ErrInvalidUICommand
+	}
+	for _, character := range intent.TargetPath {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf) {
+			return ErrInvalidUICommand
+		}
+	}
+	return nil
+}
+
+// SessionExportResult identifies a completed local publication without
+// returning its sensitive filesystem target.
+type SessionExportResult struct {
+	SessionID     domain.SessionID
+	SchemaVersion string
+}
+
+// Validate checks the fixed content-free success projection.
+func (result SessionExportResult) Validate() error {
+	if !result.SessionID.Valid() || result.SchemaVersion != ExportSummarySchemaVersion {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// ExportTextProcessor applies the fixed sensitive-value policy before and after rendering.
+type ExportTextProcessor interface {
+	Process(string, int) (security.TextResult, error)
+	ProcessLines(string, int) (security.TextResult, error)
+}
+
+// ExportFile is the narrow Application-to-filesystem publication intent.
+type ExportFile struct {
+	TargetPath string
+	Content    []byte
+}
+
+// Validate checks only delivery-neutral bounds. Filesystem path policy remains in the adapter.
+func (file ExportFile) Validate() error {
+	if len(file.TargetPath) < 1 || len(file.TargetPath) > maxExportTargetBytes || !utf8.ValidString(file.TargetPath) ||
+		strings.ContainsRune(file.TargetPath, 0) || len(file.Content) < 1 || len(file.Content) > MaxExportSummaryBytes ||
+		!utf8.Valid(file.Content) {
+		return ErrInvalidExportSummary
+	}
+	return nil
+}
+
+// ExportFileWriter atomically publishes one already-projected bounded summary.
+type ExportFileWriter interface {
+	WriteSummary(context.Context, ExportFile) error
+}
+
+// ExportSessionRecord is the complete Session metadata allowlist read from SQLite.
+type ExportSessionRecord struct {
+	ID          domain.SessionID
+	Title       string
+	PrivacyMode domain.PrivacyMode
+	LastScope   *domain.ScopeCandidate
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ExportMessageRecord is one committed user or final assistant source record.
+type ExportMessageRecord struct {
+	Role      domain.MessageRole
+	Content   string
+	CreatedAt time.Time
+}
+
+// ExportDiagnosisRecord contains only the four structured Diagnosis collections.
+type ExportDiagnosisRecord struct {
+	ConfirmedFacts     []domain.ConfirmedFact
+	Hypotheses         []domain.Hypothesis
+	MissingInformation []domain.MissingInformation
+	RecommendedActions []domain.RecommendedAction
+	CreatedAt          time.Time
+}
+
+// ExportEvidenceRecord is one independently eligible accepted Evidence derivative.
+type ExportEvidenceRecord struct {
+	ID             domain.EvidenceID
+	Category       domain.EvidenceCategory
+	Resource       domain.ResourceRef
+	Fact           string
+	SourcePath     string
+	ObservedAt     time.Time
+	RedactionCount int
+	Truncated      bool
+}
+
+// SessionExportSnapshot is one consistent SQLite allowlist projection.
+type SessionExportSnapshot struct {
+	Session   ExportSessionRecord
+	Messages  []ExportMessageRecord
+	Diagnoses []ExportDiagnosisRecord
+	Evidence  []ExportEvidenceRecord
+	Truncated bool
+}
+
+// SessionExportReader loads one bounded consistent standard-persistence projection.
+type SessionExportReader interface {
+	ReadExportSnapshot(context.Context, domain.SessionID) (SessionExportSnapshot, error)
+}
+
+// ExportSummary is the versioned project-owned schema rendered as Markdown.
+type ExportSummary struct {
+	SchemaVersion string
+	ExportedAt    time.Time
+	Truncated     bool
+	Session       ExportSummarySession
+	Messages      []ExportSummaryMessage
+	Diagnoses     []ExportSummaryDiagnosis
+	Evidence      []ExportSummaryEvidence
+}
+
+// ExportSummarySession contains only safe display metadata.
+type ExportSummarySession struct {
+	ID          domain.SessionID
+	Title       string
+	PrivacyMode domain.PrivacyMode
+	Context     string
+	Namespace   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ExportSummaryMessage is one redacted committed conversation item.
+type ExportSummaryMessage struct {
+	Role      domain.MessageRole
+	Content   string
+	CreatedAt time.Time
+}
+
+// ExportSummaryDiagnosis is one redacted four-part Diagnosis.
+type ExportSummaryDiagnosis struct {
+	ConfirmedFacts     []domain.ConfirmedFact
+	Hypotheses         []domain.Hypothesis
+	MissingInformation []domain.MissingInformation
+	RecommendedActions []domain.RecommendedAction
+	CreatedAt          time.Time
+}
+
+// ExportSummaryEvidence is one available or expired referenced Evidence projection.
+type ExportSummaryEvidence struct {
+	ID         domain.EvidenceID
+	State      domain.EvidenceDetailState
+	Category   domain.EvidenceCategory
+	APIVersion string
+	Kind       string
+	Namespace  string
+	Name       string
+	Fact       string
+	SourcePath string
+	ObservedAt time.Time
+	Redacted   bool
+	Truncated  bool
+}
+
+// ProjectExportSummary applies the field allowlist, per-field redaction, and source caps.
+func ProjectExportSummary(
+	snapshot SessionExportSnapshot,
+	exportedAt time.Time,
+	processor ExportTextProcessor,
+) (ExportSummary, error) {
+	if processor == nil || !validCoordinatorTime(exportedAt) || !validExportSession(snapshot.Session) {
+		return ExportSummary{}, ErrInvalidExportSummary
+	}
+	if len(snapshot.Evidence) > MaxExportEvidence {
+		return ExportSummary{}, ErrExportSummaryLimit
+	}
+	title, err := processExportSingleLine(processor, snapshot.Session.Title, 512)
+	if err != nil {
+		return ExportSummary{}, ErrInvalidExportSummary
+	}
+	summary := ExportSummary{
+		SchemaVersion: ExportSummarySchemaVersion,
+		ExportedAt:    exportedAt.UTC().Truncate(time.Millisecond),
+		Truncated:     snapshot.Truncated || title.Truncated,
+		Session: ExportSummarySession{
+			ID: snapshot.Session.ID, Title: title.Value, PrivacyMode: snapshot.Session.PrivacyMode,
+			CreatedAt: snapshot.Session.CreatedAt.UTC().Truncate(time.Millisecond),
+			UpdatedAt: snapshot.Session.UpdatedAt.UTC().Truncate(time.Millisecond),
+		},
+	}
+	if snapshot.Session.LastScope != nil {
+		contextName, processErr := processExportSingleLine(processor, snapshot.Session.LastScope.Context, 253)
+		if processErr != nil {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		namespace, processErr := processExportSingleLine(processor, snapshot.Session.LastScope.Namespace, 63)
+		if processErr != nil || contextName.Value == "" || namespace.Value == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		summary.Session.Context = contextName.Value
+		summary.Session.Namespace = namespace.Value
+		summary.Truncated = summary.Truncated || contextName.Truncated || namespace.Truncated
+	}
+
+	messageLimit := min(len(snapshot.Messages), MaxExportMessages)
+	if len(snapshot.Messages) > messageLimit {
+		summary.Truncated = true
+	}
+	summary.Messages = make([]ExportSummaryMessage, 0, messageLimit)
+	for _, record := range snapshot.Messages[:messageLimit] {
+		if (record.Role != domain.MessageRoleUser && record.Role != domain.MessageRoleAssistant) ||
+			!validCoordinatorTime(record.CreatedAt) || !utf8.ValidString(record.Content) || strings.TrimSpace(record.Content) == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		content, processErr := processExportText(processor, record.Content, maxExportMessageBytes)
+		if processErr != nil || content.Value == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		summary.Truncated = summary.Truncated || content.Truncated
+		summary.Messages = append(summary.Messages, ExportSummaryMessage{
+			Role: record.Role, Content: content.Value, CreatedAt: record.CreatedAt.UTC().Truncate(time.Millisecond),
+		})
+	}
+
+	diagnosisLimit := min(len(snapshot.Diagnoses), MaxExportDiagnoses)
+	if len(snapshot.Diagnoses) > diagnosisLimit {
+		summary.Truncated = true
+	}
+	summary.Diagnoses = make([]ExportSummaryDiagnosis, 0, diagnosisLimit)
+	for _, record := range snapshot.Diagnoses[:diagnosisLimit] {
+		projected, changed, projectErr := projectExportDiagnosis(record, processor)
+		if projectErr != nil {
+			return ExportSummary{}, projectErr
+		}
+		summary.Truncated = summary.Truncated || changed
+		summary.Diagnoses = append(summary.Diagnoses, projected)
+	}
+
+	referenced := exportReferencedEvidence(summary.Diagnoses)
+	evidenceByID := make(map[domain.EvidenceID]ExportEvidenceRecord, len(snapshot.Evidence))
+	for _, record := range snapshot.Evidence {
+		if !validExportEvidence(record) {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		if _, duplicate := evidenceByID[record.ID]; duplicate {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		evidenceByID[record.ID] = record
+	}
+	if len(referenced) > MaxExportEvidence {
+		referenced = referenced[:MaxExportEvidence]
+		summary.Truncated = true
+	}
+	summary.Evidence = make([]ExportSummaryEvidence, 0, len(referenced))
+	for _, id := range referenced {
+		record, available := evidenceByID[id]
+		if !available {
+			summary.Evidence = append(summary.Evidence, ExportSummaryEvidence{ID: id, State: domain.EvidenceDetailExpired})
+			continue
+		}
+		fact, processErr := processExportText(processor, record.Fact, maxExportEvidenceFactBytes)
+		if processErr != nil || fact.Value == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		path := ""
+		pathResult := exportProcessedText{}
+		if record.SourcePath != "" {
+			pathResult, processErr = processExportSingleLine(processor, record.SourcePath, maxExportEvidencePathBytes)
+			if processErr != nil {
+				return ExportSummary{}, ErrInvalidExportSummary
+			}
+			path = pathResult.Value
+		}
+		namespace, processErr := processExportSingleLine(processor, record.Resource.Namespace, 63)
+		if processErr != nil || namespace.Value == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		name, processErr := processExportSingleLine(processor, record.Resource.Name, 253)
+		if processErr != nil || name.Value == "" {
+			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		evidenceTruncated := record.Truncated || fact.Truncated || pathResult.Truncated || namespace.Truncated || name.Truncated
+		state := domain.EvidenceDetailAvailable
+		if evidenceTruncated {
+			state = domain.EvidenceDetailPartial
+		}
+		summary.Truncated = summary.Truncated || evidenceTruncated
+		summary.Evidence = append(summary.Evidence, ExportSummaryEvidence{
+			ID: id, State: state, Category: record.Category,
+			APIVersion: record.Resource.APIVersion, Kind: record.Resource.Kind,
+			Namespace: namespace.Value, Name: name.Value,
+			Fact: fact.Value, SourcePath: path, ObservedAt: record.ObservedAt.UTC().Truncate(time.Millisecond),
+			Redacted:  record.RedactionCount > 0 || fact.Redacted || pathResult.Redacted || namespace.Redacted || name.Redacted,
+			Truncated: evidenceTruncated,
+		})
+	}
+	return summary, nil
+}
+
+// RenderExportSummary emits deterministic Markdown and applies the complete-output guard.
+func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) ([]byte, error) {
+	if processor == nil || summary.SchemaVersion != ExportSummarySchemaVersion || !validCoordinatorTime(summary.ExportedAt) ||
+		!summary.Session.ID.Valid() || summary.Session.PrivacyMode != domain.PrivacyModeStandard ||
+		len(summary.Messages) > MaxExportMessages || len(summary.Diagnoses) > MaxExportDiagnoses || len(summary.Evidence) > MaxExportEvidence {
+		return nil, ErrInvalidExportSummary
+	}
+	var builder strings.Builder
+	builder.Grow(min(MaxExportSummaryBytes, maxExportMarkdownOverhead+len(summary.Messages)*maxExportMessageBytes))
+	builder.WriteString("# KuPilot Session Summary\n\n")
+	fmt.Fprintf(&builder, "Schema: `%s`\n\n", ExportSummarySchemaVersion)
+	fmt.Fprintf(&builder, "Exported at: `%s`\n\n", exportTimestamp(summary.ExportedAt))
+	fmt.Fprintf(&builder, "Truncated: `%t`\n\n", summary.Truncated)
+	builder.WriteString("## Session\n\n")
+	fmt.Fprintf(&builder, "- ID: `%s`\n", summary.Session.ID)
+	fmt.Fprintf(&builder, "- Title: %s\n", escapeExportMarkdown(summary.Session.Title))
+	fmt.Fprintf(&builder, "- Persistence mode: `%s`\n", summary.Session.PrivacyMode)
+	fmt.Fprintf(&builder, "- Created at: `%s`\n", exportTimestamp(summary.Session.CreatedAt))
+	fmt.Fprintf(&builder, "- Updated at: `%s`\n", exportTimestamp(summary.Session.UpdatedAt))
+	if summary.Session.Context != "" && summary.Session.Namespace != "" {
+		fmt.Fprintf(&builder, "- Historic Context: %s\n", escapeExportMarkdown(summary.Session.Context))
+		fmt.Fprintf(&builder, "- Historic Namespace: %s\n", escapeExportMarkdown(summary.Session.Namespace))
+	}
+
+	builder.WriteString("\n## Conversation\n")
+	if len(summary.Messages) == 0 {
+		builder.WriteString("\n_None._\n")
+	}
+	for index, message := range summary.Messages {
+		fmt.Fprintf(&builder, "\n### Message %d\n\n", index+1)
+		fmt.Fprintf(&builder, "- Role: `%s`\n", message.Role)
+		fmt.Fprintf(&builder, "- Created at: `%s`\n\n", exportTimestamp(message.CreatedAt))
+		writeExportQuote(&builder, message.Content)
+	}
+
+	builder.WriteString("\n## Diagnoses\n")
+	if len(summary.Diagnoses) == 0 {
+		builder.WriteString("\n_None._\n")
+	}
+	for index, diagnosis := range summary.Diagnoses {
+		fmt.Fprintf(&builder, "\n### Diagnosis %d\n\n", index+1)
+		fmt.Fprintf(&builder, "Created at: `%s`\n", exportTimestamp(diagnosis.CreatedAt))
+		writeConfirmedFacts(&builder, diagnosis.ConfirmedFacts)
+		writeHypotheses(&builder, diagnosis.Hypotheses)
+		writeMissingInformation(&builder, diagnosis.MissingInformation)
+		writeRecommendedActions(&builder, diagnosis.RecommendedActions)
+	}
+
+	builder.WriteString("\n## Evidence references\n")
+	if len(summary.Evidence) == 0 {
+		builder.WriteString("\n_None._\n")
+	}
+	for _, evidence := range summary.Evidence {
+		fmt.Fprintf(&builder, "\n### `%s`\n\n", evidence.ID)
+		fmt.Fprintf(&builder, "- State: %s\n", evidence.State)
+		if evidence.State == domain.EvidenceDetailExpired {
+			builder.WriteString("- Detail: removed by retention policy and not reconstructed\n")
+			continue
+		}
+		fmt.Fprintf(&builder, "- Category: `%s`\n", evidence.Category)
+		fmt.Fprintf(&builder, "- Resource: `%s %s/%s` (`%s`)\n", evidence.Kind, evidence.Namespace, evidence.Name, evidence.APIVersion)
+		fmt.Fprintf(&builder, "- Observed at: `%s`\n", exportTimestamp(evidence.ObservedAt))
+		fmt.Fprintf(&builder, "- Redacted: `%t`\n- Truncated: `%t`\n", evidence.Redacted, evidence.Truncated)
+		if evidence.SourcePath != "" {
+			fmt.Fprintf(&builder, "- Source path: %s\n", escapeExportMarkdown(evidence.SourcePath))
+		}
+		builder.WriteString("\n")
+		writeExportQuote(&builder, evidence.Fact)
+	}
+	builder.WriteString("\n---\n\nThis file is a bounded, redacted local summary. It excludes raw Tools, raw logs, complete prompts, model traffic, credentials, Secrets, and approval authority. It is not encrypted and deleting it does not guarantee forensic erasure.\n")
+
+	guarded, err := processor.ProcessLines(builder.String(), MaxExportSummaryBytes)
+	if err != nil {
+		return nil, ErrInvalidExportSummary
+	}
+	if guarded.Truncated || len(guarded.Value) > MaxExportSummaryBytes {
+		return nil, ErrExportSummaryLimit
+	}
+	return []byte(guarded.Value), nil
+}
+
+func validExportSession(record ExportSessionRecord) bool {
+	return record.ID.Valid() && record.PrivacyMode == domain.PrivacyModeStandard &&
+		validCoordinatorTime(record.CreatedAt) && validCoordinatorTime(record.UpdatedAt) &&
+		!record.UpdatedAt.Before(record.CreatedAt) && utf8.ValidString(record.Title) && len(record.Title) <= 512 &&
+		(record.LastScope == nil || record.LastScope.Validate() == nil)
+}
+
+func validExportEvidence(record ExportEvidenceRecord) bool {
+	return record.ID.Valid() && record.Category.Valid() && domain.ValidateLiveResourceRef(record.Resource) == nil &&
+		validCoordinatorTime(record.ObservedAt) && record.RedactionCount >= 0 &&
+		utf8.ValidString(record.Fact) && strings.TrimSpace(record.Fact) != "" && utf8.ValidString(record.SourcePath)
+}
+
+type exportProcessedText struct {
+	Value     string
+	Truncated bool
+	Redacted  bool
+}
+
+func processExportText(processor ExportTextProcessor, value string, limit int) (exportProcessedText, error) {
+	processed, err := processor.ProcessLines(value, limit)
+	if err != nil {
+		return exportProcessedText{}, err
+	}
+	return exportProcessedText{
+		Value: processed.Value, Truncated: processed.Truncated, Redacted: processed.RedactionCount > 0,
+	}, nil
+}
+
+func processExportSingleLine(processor ExportTextProcessor, value string, limit int) (exportProcessedText, error) {
+	processed, err := processor.Process(value, limit)
+	if err != nil {
+		return exportProcessedText{}, err
+	}
+	return exportProcessedText{
+		Value: processed.Value, Truncated: processed.Truncated, Redacted: processed.RedactionCount > 0,
+	}, nil
+}
+
+func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextProcessor) (ExportSummaryDiagnosis, bool, error) {
+	if !validCoordinatorTime(record.CreatedAt) {
+		return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+	}
+	result := ExportSummaryDiagnosis{CreatedAt: record.CreatedAt.UTC().Truncate(time.Millisecond)}
+	truncated := false
+
+	factLimit := min(len(record.ConfirmedFacts), maxExportDiagnosisItems)
+	truncated = truncated || len(record.ConfirmedFacts) > factLimit
+	for _, fact := range record.ConfirmedFacts[:factLimit] {
+		ids, idsTruncated, err := boundedEvidenceIDs(fact.EvidenceIDs, true)
+		if err != nil {
+			return ExportSummaryDiagnosis{}, false, err
+		}
+		statement, err := processExportSingleLine(processor, fact.Statement, maxExportDiagnosisTextBytes)
+		if err != nil || statement.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		result.ConfirmedFacts = append(result.ConfirmedFacts, domain.ConfirmedFact{Statement: statement.Value, EvidenceIDs: ids})
+		truncated = truncated || idsTruncated || statement.Truncated
+	}
+
+	hypothesisLimit := min(len(record.Hypotheses), maxExportDiagnosisItems)
+	truncated = truncated || len(record.Hypotheses) > hypothesisLimit
+	for _, hypothesis := range record.Hypotheses[:hypothesisLimit] {
+		if hypothesis.Confidence != domain.DiagnosisConfidenceLow && hypothesis.Confidence != domain.DiagnosisConfidenceMedium &&
+			hypothesis.Confidence != domain.DiagnosisConfidenceHigh {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		ids, idsTruncated, err := boundedEvidenceIDs(hypothesis.SupportingEvidenceIDs, false)
+		if err != nil {
+			return ExportSummaryDiagnosis{}, false, err
+		}
+		statement, err := processExportSingleLine(processor, hypothesis.Statement, maxExportDiagnosisTextBytes)
+		if err != nil || statement.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		falsifier, err := processExportSingleLine(processor, hypothesis.Falsifier, maxExportDiagnosisTextBytes)
+		if err != nil || falsifier.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		result.Hypotheses = append(result.Hypotheses, domain.Hypothesis{
+			Statement: statement.Value, SupportingEvidenceIDs: ids, Confidence: hypothesis.Confidence, Falsifier: falsifier.Value,
+		})
+		truncated = truncated || idsTruncated || statement.Truncated || falsifier.Truncated
+	}
+
+	missingLimit := min(len(record.MissingInformation), maxExportDiagnosisItems)
+	truncated = truncated || len(record.MissingInformation) > missingLimit
+	for _, missing := range record.MissingInformation[:missingLimit] {
+		if !validExportMissingKind(missing.Kind) {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		detail, err := processExportSingleLine(processor, missing.Detail, maxExportDiagnosisTextBytes)
+		if err != nil || detail.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		impact, err := processExportSingleLine(processor, missing.Impact, maxExportDiagnosisTextBytes)
+		if err != nil || impact.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		result.MissingInformation = append(result.MissingInformation, domain.MissingInformation{
+			Kind: missing.Kind, Detail: detail.Value, Impact: impact.Value,
+		})
+		truncated = truncated || detail.Truncated || impact.Truncated
+	}
+
+	actionLimit := min(len(record.RecommendedActions), maxExportDiagnosisItems)
+	truncated = truncated || len(record.RecommendedActions) > actionLimit
+	for _, action := range record.RecommendedActions[:actionLimit] {
+		if action.Executed {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		actionText, err := processExportSingleLine(processor, action.Action, maxExportDiagnosisTextBytes)
+		if err != nil || actionText.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		risk, err := processExportSingleLine(processor, action.Risk, maxExportDiagnosisTextBytes)
+		if err != nil || risk.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		prerequisiteLimit := min(len(action.Prerequisites), maxExportPrerequisites)
+		prerequisites := make([]string, 0, prerequisiteLimit)
+		prerequisitesChanged := len(action.Prerequisites) > prerequisiteLimit
+		for _, prerequisite := range action.Prerequisites[:prerequisiteLimit] {
+			value, processErr := processExportSingleLine(processor, prerequisite, 1024)
+			if processErr != nil || value.Value == "" {
+				return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+			}
+			prerequisites = append(prerequisites, value.Value)
+			prerequisitesChanged = prerequisitesChanged || value.Truncated
+		}
+		result.RecommendedActions = append(result.RecommendedActions, domain.RecommendedAction{
+			Action: actionText.Value, Risk: risk.Value, Prerequisites: prerequisites, Executed: false,
+		})
+		truncated = truncated || actionText.Truncated || risk.Truncated || prerequisitesChanged
+	}
+	return result, truncated, nil
+}
+
+func boundedEvidenceIDs(ids []domain.EvidenceID, required bool) ([]domain.EvidenceID, bool, error) {
+	if required && len(ids) == 0 {
+		return nil, false, ErrInvalidExportSummary
+	}
+	limit := min(len(ids), maxExportCitationsPerItem)
+	result := make([]domain.EvidenceID, limit)
+	seen := make(map[domain.EvidenceID]struct{}, limit)
+	for index, id := range ids[:limit] {
+		if !id.Valid() {
+			return nil, false, ErrInvalidExportSummary
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, false, ErrInvalidExportSummary
+		}
+		seen[id] = struct{}{}
+		result[index] = id
+	}
+	return result, len(ids) > limit, nil
+}
+
+func validExportMissingKind(kind domain.MissingInformationKind) bool {
+	switch kind {
+	case domain.MissingInformationAbsent, domain.MissingInformationForbidden, domain.MissingInformationUnsupported,
+		domain.MissingInformationStale, domain.MissingInformationConflicting, domain.MissingInformationTruncated,
+		domain.MissingInformationSensitiveOutputBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func exportReferencedEvidence(diagnoses []ExportSummaryDiagnosis) []domain.EvidenceID {
+	set := make(map[domain.EvidenceID]struct{})
+	for _, diagnosis := range diagnoses {
+		for _, fact := range diagnosis.ConfirmedFacts {
+			for _, id := range fact.EvidenceIDs {
+				set[id] = struct{}{}
+			}
+		}
+		for _, hypothesis := range diagnosis.Hypotheses {
+			for _, id := range hypothesis.SupportingEvidenceIDs {
+				set[id] = struct{}{}
+			}
+		}
+	}
+	result := make([]domain.EvidenceID, 0, len(set))
+	for id := range set {
+		result = append(result, id)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left] < result[right] })
+	return result
+}
+
+// ExportEvidenceReferences applies the versioned Diagnosis and citation caps
+// before an adapter reads any Evidence source rows.
+func ExportEvidenceReferences(diagnoses []ExportDiagnosisRecord) ([]domain.EvidenceID, bool, error) {
+	diagnosisLimit := min(len(diagnoses), MaxExportDiagnoses)
+	truncated := len(diagnoses) > diagnosisLimit
+	set := make(map[domain.EvidenceID]struct{})
+	for _, diagnosis := range diagnoses[:diagnosisLimit] {
+		factLimit := min(len(diagnosis.ConfirmedFacts), maxExportDiagnosisItems)
+		truncated = truncated || len(diagnosis.ConfirmedFacts) > factLimit
+		for _, fact := range diagnosis.ConfirmedFacts[:factLimit] {
+			ids, idsTruncated, err := boundedEvidenceIDs(fact.EvidenceIDs, true)
+			if err != nil {
+				return nil, false, err
+			}
+			truncated = truncated || idsTruncated
+			for _, id := range ids {
+				set[id] = struct{}{}
+			}
+		}
+		hypothesisLimit := min(len(diagnosis.Hypotheses), maxExportDiagnosisItems)
+		truncated = truncated || len(diagnosis.Hypotheses) > hypothesisLimit
+		for _, hypothesis := range diagnosis.Hypotheses[:hypothesisLimit] {
+			ids, idsTruncated, err := boundedEvidenceIDs(hypothesis.SupportingEvidenceIDs, false)
+			if err != nil {
+				return nil, false, err
+			}
+			truncated = truncated || idsTruncated
+			for _, id := range ids {
+				set[id] = struct{}{}
+			}
+		}
+	}
+	result := make([]domain.EvidenceID, 0, len(set))
+	for id := range set {
+		result = append(result, id)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left] < result[right] })
+	if len(result) > MaxExportEvidence {
+		result = result[:MaxExportEvidence]
+		truncated = true
+	}
+	return result, truncated, nil
+}
+
+func exportTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format(exportSummaryTimestampLayout)
+}
+
+func escapeExportMarkdown(value string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "{", "\\{", "}", "\\}",
+		"[", "\\[", "]", "\\]", "(", "\\(", ")", "\\)", "#", "\\#", "+", "\\+",
+		"-", "\\-", "!", "\\!", "|", "\\|", ">", "\\>", "<", "\\<",
+	)
+	return replacer.Replace(value)
+}
+
+func writeExportQuote(builder *strings.Builder, value string) {
+	for _, line := range strings.Split(escapeExportMarkdown(value), "\n") {
+		fmt.Fprintf(builder, "> %s\n", line)
+	}
+}
+
+func writeConfirmedFacts(builder *strings.Builder, values []domain.ConfirmedFact) {
+	builder.WriteString("\n#### Confirmed facts\n")
+	if len(values) == 0 {
+		builder.WriteString("\n_None._\n")
+		return
+	}
+	for index, fact := range values {
+		fmt.Fprintf(builder, "\n%d. %s\n", index+1, escapeExportMarkdown(fact.Statement))
+		writeEvidenceIDs(builder, "Evidence", fact.EvidenceIDs)
+	}
+}
+
+func writeHypotheses(builder *strings.Builder, values []domain.Hypothesis) {
+	builder.WriteString("\n#### Hypotheses\n")
+	if len(values) == 0 {
+		builder.WriteString("\n_None._\n")
+		return
+	}
+	for index, hypothesis := range values {
+		fmt.Fprintf(builder, "\n%d. %s\n", index+1, escapeExportMarkdown(hypothesis.Statement))
+		fmt.Fprintf(builder, "   - Confidence: `%s`\n", hypothesis.Confidence)
+		fmt.Fprintf(builder, "   - Falsifier: %s\n", escapeExportMarkdown(hypothesis.Falsifier))
+		writeEvidenceIDs(builder, "Supporting Evidence", hypothesis.SupportingEvidenceIDs)
+	}
+}
+
+func writeMissingInformation(builder *strings.Builder, values []domain.MissingInformation) {
+	builder.WriteString("\n#### Missing information\n")
+	if len(values) == 0 {
+		builder.WriteString("\n_None._\n")
+		return
+	}
+	for index, missing := range values {
+		fmt.Fprintf(builder, "\n%d. `%s`: %s\n", index+1, missing.Kind, escapeExportMarkdown(missing.Detail))
+		fmt.Fprintf(builder, "   - Impact: %s\n", escapeExportMarkdown(missing.Impact))
+	}
+}
+
+func writeRecommendedActions(builder *strings.Builder, values []domain.RecommendedAction) {
+	builder.WriteString("\n#### Recommended actions\n")
+	if len(values) == 0 {
+		builder.WriteString("\n_None._\n")
+		return
+	}
+	for index, action := range values {
+		fmt.Fprintf(builder, "\n%d. %s\n", index+1, escapeExportMarkdown(action.Action))
+		fmt.Fprintf(builder, "   - Risk: %s\n", escapeExportMarkdown(action.Risk))
+		builder.WriteString("   - Executed: `false`\n")
+		for _, prerequisite := range action.Prerequisites {
+			fmt.Fprintf(builder, "   - Prerequisite: %s\n", escapeExportMarkdown(prerequisite))
+		}
+	}
+}
+
+func writeEvidenceIDs(builder *strings.Builder, label string, values []domain.EvidenceID) {
+	if len(values) == 0 {
+		return
+	}
+	encoded := make([]string, len(values))
+	for index, id := range values {
+		encoded[index] = "`" + string(id) + "`"
+	}
+	fmt.Fprintf(builder, "   - %s: %s\n", label, strings.Join(encoded, ", "))
+}
+
+func (coordinator *Coordinator) executeExportSessionCommand(
+	ctx context.Context,
+	command UICommand,
+) (UICommandOutcome, error) {
+	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+	intent := *command.Export
+	coordinator.mu.Lock()
+	challenge := coordinator.privacyChallenge
+	if challenge == nil || challenge.requestID != command.RequestID || challenge.revision != command.PrivacyRevision {
+		coordinator.mu.Unlock()
+		return UICommandOutcome{}, ErrPrivacyReviewStale
+	}
+	coordinator.privacyChallenge = nil
+	coordinator.mu.Unlock()
+
+	if err := coordinator.beginUIOperation(true); err != nil {
+		return UICommandOutcome{}, err
+	}
+	defer coordinator.finishOperation()
+
+	coordinator.mu.Lock()
+	current := coordinator.currentSession
+	currentMatches := current != nil && current.ID == intent.SessionID &&
+		current.PrivacyMode == domain.PrivacyModeStandard
+	coordinator.mu.Unlock()
+	if !currentMatches || coordinator.exports == nil || coordinator.exportFiles == nil || coordinator.exportText == nil {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+
+	snapshotContext, cancelSnapshot := context.WithTimeout(ctx, coordinator.persistenceLimit)
+	snapshot, err := coordinator.exports.ReadExportSnapshot(snapshotContext, intent.SessionID)
+	cancelSnapshot()
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return UICommandOutcome{}, contextErr
+		}
+		if !errors.Is(err, ErrSessionExportUnavailable) && !errors.Is(err, ErrSessionNotResumable) {
+			coordinator.markGlobalPersistenceDegraded()
+		}
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	if snapshot.Session.ID != intent.SessionID || snapshot.Session.PrivacyMode != domain.PrivacyModeStandard {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+
+	exportedAt := coordinator.now()
+	summary, err := ProjectExportSummary(snapshot, exportedAt, coordinator.exportText)
+	if err != nil {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	content, err := RenderExportSummary(summary, coordinator.exportText)
+	if err != nil {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	audit, err := coordinator.newSessionExportAudit(intent.SessionID, exportedAt)
+	if err != nil {
+		coordinator.markGlobalPersistenceDegraded()
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	if err := coordinator.persist(ctx, func(operationContext context.Context) error {
+		return coordinator.audits.Append(operationContext, audit)
+	}); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return UICommandOutcome{}, contextErr
+		}
+		coordinator.markGlobalPersistenceDegraded()
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	if err := coordinator.exportFiles.WriteSummary(ctx, ExportFile{TargetPath: intent.TargetPath, Content: content}); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return UICommandOutcome{}, contextErr
+		}
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	result.Export = &SessionExportResult{SessionID: intent.SessionID, SchemaVersion: ExportSummarySchemaVersion}
+	return result, nil
+}
+
+func (coordinator *Coordinator) newSessionExportAudit(
+	sessionID domain.SessionID,
+	occurredAt time.Time,
+) (domain.AuditEvent, error) {
+	id, err := coordinator.auditIdentifiers.NewAuditEventID()
+	if err != nil || !id.Valid() || !validCoordinatorTime(occurredAt) {
+		return domain.AuditEvent{}, ErrPersistenceUnavailable
+	}
+	operation, policyVersion := "export_summary", ExportSummarySchemaVersion
+	event := domain.AuditEvent{
+		ID: id, SessionID: &sessionID, Type: domain.AuditEventSessionExportRequested,
+		Actor: domain.AuditActorUser, Outcome: domain.AuditOutcomeSuccess,
+		Details:    domain.AuditDetails{Operation: &operation, PolicyVersion: &policyVersion},
+		OccurredAt: occurredAt,
+	}
+	if event.Validate() != nil {
+		return domain.AuditEvent{}, ErrPersistenceUnavailable
+	}
+	return event, nil
+}

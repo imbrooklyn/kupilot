@@ -48,6 +48,10 @@ func TestAuditEventValidationUsesClosedTypesAndTypedDetails(t *testing.T) {
 	if !AuditEventRunStarted.AllowedInMinimalPersistence() {
 		t.Fatal("run lifecycle AuditEvent was denied for minimal persistence")
 	}
+	if AuditEventSessionExportRequested.RetentionClass() != AuditRetentionRead ||
+		AuditEventSessionExportRequested.AllowedInMinimalPersistence() {
+		t.Fatal("Session export audit was not classified as standard-persistence read audit")
+	}
 
 	tests := []struct {
 		name   string

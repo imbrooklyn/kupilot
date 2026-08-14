@@ -395,7 +395,7 @@ func (coordinator *ApprovalCoordinator) CancelRun(ctx context.Context, runID dom
 	defer coordinator.mu.Unlock()
 	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
 		return tracked.request.RunID == runID
-	}, false)
+	}, domain.ApprovalReasonRunCancelled)
 }
 
 // InvalidateScope implements the scope invalidation hook for a v0.2
@@ -410,7 +410,7 @@ func (coordinator *ApprovalCoordinator) InvalidateScope(generation int64) error 
 	defer cancel()
 	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
 		return tracked.request.Intent.Scope.Generation < generation
-	}, true)
+	}, domain.ApprovalReasonScopeChanged)
 }
 
 // Recover atomically invalidates every pending or approved-not-executed row.
@@ -484,7 +484,7 @@ func (coordinator *ApprovalCoordinator) Get(
 func (coordinator *ApprovalCoordinator) closeMatching(
 	ctx context.Context,
 	matches func(trackedApproval) bool,
-	invalidate bool,
+	reason domain.ApprovalStateReason,
 ) error {
 	var resultErr error
 	for id, tracked := range coordinator.active {
@@ -495,10 +495,10 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 			updated domain.ApprovalRequest
 			err     error
 		)
-		if invalidate {
-			updated, err = coordinator.service.Invalidate(ctx, id, domain.ApprovalReasonScopeChanged)
+		if reason == domain.ApprovalReasonScopeChanged {
+			updated, err = coordinator.service.Invalidate(ctx, id, reason)
 		} else {
-			updated, err = coordinator.service.Cancel(ctx, id, domain.ApprovalReasonRunCancelled)
+			updated, err = coordinator.service.Cancel(ctx, id, reason)
 		}
 		if err != nil && updated.ID == "" {
 			resultErr = ErrApprovalUnavailable

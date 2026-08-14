@@ -103,6 +103,89 @@ func TestResumePickerCancellationDiffersByOrigin(t *testing.T) {
 	assertSingleEditor(t, inTUI)
 }
 
+func TestResumePickerDeletesOnlyAfterExplicitConfirmation(t *testing.T) {
+	model, query := openPickerFromDraft(t, "/resume payment", application.UICompletionSession)
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		}},
+	}})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	if cmd != nil || model.sessionDelete == nil || model.sessionDelete.ExpectedCurrent ||
+		!strings.Contains(model.render(), "Delete selected Session?") {
+		t.Fatal("resume Picker delete did not open a bound confirmation")
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil || model.sessionDelete != nil || !model.sessionPicker.Open() {
+		t.Fatal("resume Picker delete cancellation changed history or closed the Picker")
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+	command := applicationCommandFromCmd(t, cmd)
+	if command.Kind != application.UICommandDeleteSession || command.Lifecycle == nil ||
+		command.Lifecycle.SessionID != testSessionID || command.Lifecycle.ExpectedCurrent ||
+		!command.Lifecycle.Confirmed {
+		t.Fatalf("resume Picker delete command = %#v", command)
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandDeleteSession, RequestID: command.RequestID,
+		Deletion: &application.SessionDeletionResult{SessionID: testSessionID},
+	}})
+	if !model.sessionPicker.Open() || model.sessionPicker.SourceCount() != 0 ||
+		!strings.Contains(model.render(), "Session deleted") {
+		t.Fatal("committed historical deletion did not remove only the bound Picker row")
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil || !model.sessionPicker.Open() {
+		t.Fatal("closing historical deletion result did not return to the resume Picker")
+	}
+}
+
+func TestResumePickerKeepsLowercaseDeleteLetterInTheComposerFilter(t *testing.T) {
+	model, query := openPickerFromDraft(t, "/resume payment", application.UICompletionSession)
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		}},
+	}})
+
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	updated := completionQueryFromCmd(t, cmd)
+	if model.sessionDelete != nil || model.composer.Value() != "/resume paymentd" || updated.Filter != "paymentd" {
+		t.Fatalf("lowercase filter state = delete %#v draft %q query %#v", model.sessionDelete, model.composer.Value(), updated)
+	}
+}
+
+func TestTopLevelResumePickerDeletionNeverFallsBackToANewSession(t *testing.T) {
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		StartIntent: application.UIStartIntent{Kind: application.UIStartResumePicker},
+		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+	})
+	query := completionQueryFromCmd(t, model.Init())
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		}},
+	}})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+	command := applicationCommandFromCmd(t, cmd)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandDeleteSession, RequestID: command.RequestID,
+		Deletion: &application.SessionDeletionResult{SessionID: testSessionID},
+	}})
+	if model.startup.Ready || model.resumeOrigin != resumeOriginTopLevel || !model.sessionPicker.Open() || model.session.ID != "" {
+		t.Fatal("top-level deletion created or implied a fallback Session")
+	}
+}
+
 func TestResumeScopeConflictHasZeroScopeActionUntilExplicitChoice(t *testing.T) {
 	t.Parallel()
 

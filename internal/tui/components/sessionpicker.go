@@ -51,3 +51,26 @@ func (picker SessionPicker) View() string                             { return p
 func (picker SessionPicker) SourceCount() int                         { return picker.list.sourceCount() }
 func (picker SessionPicker) VisibleCount() int                        { return picker.list.visibleCount() }
 func (picker SessionPicker) Selected() (SessionCandidate, bool)       { return picker.list.selectedItem() }
+
+// Remove deletes one committed Session result from the current bounded view.
+func (picker *SessionPicker) Remove(id string) bool {
+	if id == "" {
+		return false
+	}
+	for index := range picker.list.items {
+		if picker.list.items[index].ID != id {
+			continue
+		}
+		copy(picker.list.items[index:], picker.list.items[index+1:])
+		picker.list.items = picker.list.items[:len(picker.list.items)-1]
+		if len(picker.list.items) == 0 {
+			picker.list.selected = 0
+			picker.list.offset = 0
+		} else if picker.list.selected >= len(picker.list.items) {
+			picker.list.selected = len(picker.list.items) - 1
+		}
+		picker.list.ensureVisible()
+		return true
+	}
+	return false
+}

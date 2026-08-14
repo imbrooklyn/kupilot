@@ -4,12 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
+
+var _ application.SessionLifecyclePersistence = (*SessionRepository)(nil)
+
+const tightenOperationalDetailRetentionSQL = `
+	INSERT INTO settings (key, value_json, schema_version, updated_at_ms)
+	VALUES (?, ?, ?, ?)
+	ON CONFLICT (key) DO UPDATE SET
+		value_json = excluded.value_json,
+		schema_version = excluded.schema_version,
+		updated_at_ms = excluded.updated_at_ms
+	WHERE settings.value_json = ?
+`
 
 // CreateWithAudit atomically inserts one Session and its creation audit.
 func (repository *SessionRepository) CreateWithAudit(
@@ -70,8 +84,130 @@ func (repository *SessionRepository) CreateWithAudit(
 	return nil
 }
 
-// BeginWithAudit atomically inserts the safe request Message, running
-// AgentRun, activity time, and required start audit.
+// LoadOperationalDetailRetention reads the one typed retention preference.
+func (repository *SessionRepository) LoadOperationalDetailRetention(ctx context.Context) (int, bool, error) {
+	if err := repositoryContext(ctx, repository.db, "read_operational_detail_retention"); err != nil {
+		return 0, false, err
+	}
+	var row settingRow
+	err := repository.db.handle.GetContext(ctx, &row, getSettingSQL, domain.SettingOperationalDetailRetentionDays)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, repositoryFailure(
+			repository.db,
+			"setting_read_failed",
+			"read_operational_detail_retention",
+			"KuPilot could not read the retention setting.",
+			err,
+		)
+	}
+	setting, err := row.domainSetting()
+	if err != nil {
+		return 0, false, repositoryFailure(
+			repository.db,
+			"setting_row_invalid",
+			"read_operational_detail_retention",
+			"KuPilot could not read the retention setting safely.",
+			err,
+		)
+	}
+	if setting.Key != domain.SettingOperationalDetailRetentionDays {
+		return 0, false, repositoryFailure(
+			repository.db,
+			"setting_row_invalid",
+			"read_operational_detail_retention",
+			"KuPilot could not read the retention setting safely.",
+			domain.ErrInvalidSetting,
+		)
+	}
+	return int(setting.IntegerValue), true, nil
+}
+
+// TightenOperationalDetailRetention atomically compares and lowers the typed setting.
+func (repository *SessionRepository) TightenOperationalDetailRetention(
+	ctx context.Context,
+	update application.RetentionSettingUpdate,
+) error {
+	if err := repositoryContext(ctx, repository.db, "tighten_operational_detail_retention"); err != nil {
+		return err
+	}
+	if err := update.Validate(); err != nil {
+		return err
+	}
+	setting := domain.Setting{
+		Key: domain.SettingOperationalDetailRetentionDays, IntegerValue: int64(update.Days),
+		SchemaVersion: 1, UpdatedAt: update.UpdatedAt,
+	}
+	if setting.Validate() != nil {
+		return application.ErrRetentionWouldWiden
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		current := application.DefaultOperationalDetailRetentionDays
+		var row settingRow
+		readErr := tx.GetContext(ctx, &row, getSettingSQL, domain.SettingOperationalDetailRetentionDays)
+		if readErr == nil {
+			stored, mapErr := row.domainSetting()
+			if mapErr != nil {
+				return mapErr
+			}
+			if stored.Key != domain.SettingOperationalDetailRetentionDays {
+				return domain.ErrInvalidSetting
+			}
+			current = int(stored.IntegerValue)
+		} else if !errors.Is(readErr, sql.ErrNoRows) {
+			return readErr
+		}
+		if current != update.ExpectedDays {
+			return application.ErrRetentionSettingConflict
+		}
+		if update.Days > current {
+			return application.ErrRetentionWouldWiden
+		}
+		result, execErr := tx.ExecContext(
+			ctx,
+			tightenOperationalDetailRetentionSQL,
+			setting.Key,
+			strconv.FormatInt(setting.IntegerValue, 10),
+			setting.SchemaVersion,
+			setting.UpdatedAt.UTC().UnixMilli(),
+			strconv.Itoa(update.ExpectedDays),
+		)
+		if execErr != nil {
+			return execErr
+		}
+		affected, affectedErr := result.RowsAffected()
+		if affectedErr != nil {
+			return affectedErr
+		}
+		if affected != 1 {
+			return application.ErrRetentionSettingConflict
+		}
+		return nil
+	})
+	if errors.Is(err, application.ErrRetentionSettingConflict) || errors.Is(err, application.ErrRetentionWouldWiden) {
+		return err
+	}
+	if err != nil {
+		return repositoryFailure(
+			repository.db,
+			"retention_setting_failed",
+			"tighten_operational_detail_retention",
+			"KuPilot could not tighten the retention setting.",
+			err,
+		)
+	}
+	return nil
+}
+
+// DeleteSessionGraph commits the existing fixed Session cascade transaction.
+func (repository *SessionRepository) DeleteSessionGraph(ctx context.Context, id domain.SessionID) error {
+	return repository.Delete(ctx, id)
+}
+
+// BeginWithAudit atomically inserts one running AgentRun, activity time, and
+// required start audit. Only standard mode retains the safe request Message.
 func (repository *AgentRunRepository) BeginWithAudit(
 	ctx context.Context,
 	message domain.Message,
@@ -85,7 +221,8 @@ func (repository *AgentRunRepository) BeginWithAudit(
 		return sessioncontract.ErrInvalidRepositoryRequest
 	}
 	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		if err := ensureStandardActiveSession(ctx, tx, run.SessionID); err != nil {
+		mode, err := activeSessionPrivacyMode(ctx, tx, run.SessionID)
+		if err != nil {
 			return err
 		}
 		var runningCount int
@@ -95,10 +232,13 @@ func (repository *AgentRunRepository) BeginWithAudit(
 		if runningCount != 0 {
 			return sessioncontract.ErrAgentRunConflict
 		}
-		if err := insertMessage(ctx, tx, message); err != nil {
-			return err
+		retainMessage := mode == domain.PrivacyModeStandard
+		if retainMessage {
+			if err := insertMessage(ctx, tx, message); err != nil {
+				return err
+			}
 		}
-		if err := insertAgentRun(ctx, tx, run); err != nil {
+		if err := insertAgentRun(ctx, tx, run, retainMessage); err != nil {
 			return err
 		}
 		if err := touchSession(ctx, tx, run.SessionID, laterTime(message.CreatedAt, *run.StartedAt)); err != nil {
@@ -289,7 +429,9 @@ func insertCoordinatedDiagnosis(
 	}
 	if summary.Found != summary.Referenced || !diagnosisWindowMatches(diagnosis, summary) ||
 		diagnosis.EvidenceDetailsState != "" && diagnosis.EvidenceDetailsState != summary.State {
-		return ErrDiagnosisEvidenceInvalid
+		if !zeroRetentionExpiredDiagnosis(ctx, tx, diagnosis, summary) {
+			return ErrDiagnosisEvidenceInvalid
+		}
 	}
 	_, err = tx.ExecContext(
 		ctx,
@@ -307,6 +449,21 @@ func insertCoordinatedDiagnosis(
 		diagnosis.CreatedAt.UTC().UnixMilli(),
 	)
 	return err
+}
+
+func zeroRetentionExpiredDiagnosis(
+	ctx context.Context,
+	tx *sqlx.Tx,
+	diagnosis domain.Diagnosis,
+	summary diagnosisEvidenceSummary,
+) bool {
+	if diagnosis.EvidenceDetailsState != domain.EvidenceDetailExpired ||
+		summary.State != domain.EvidenceDetailExpired || summary.Referenced == 0 ||
+		summary.Found != 0 || summary.EvidenceCount != 0 {
+		return false
+	}
+	days, err := operationalDetailRetentionDays(ctx, tx, application.DefaultOperationalDetailRetentionDays)
+	return err == nil && days == 0
 }
 
 func finishCoordinatedRun(ctx context.Context, tx *sqlx.Tx, run domain.AgentRun) error {
