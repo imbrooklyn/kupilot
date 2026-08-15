@@ -1,9 +1,8 @@
 # Changelog
 
-This file records notable user-visible changes to KuPilot. There is no published
-release; current behavior is recorded under `Unreleased`.
+This file records notable user-visible changes to KuPilot.
 
-## 0.3.0 - Unreleased
+## 0.3.0 - 2026-08-16
 
 ### Added
 
