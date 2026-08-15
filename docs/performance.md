@@ -2,98 +2,218 @@
 
 ## Scope
 
-KuPilot measures five maintenance-sensitive surfaces: no-I/O CLI startup,
-process memory, local SQLite lifecycle operations, bounded stream rendering,
-and release binary size. These measurements protect the existing product from
-regression; they do not create a cross-machine service-level agreement or
-justify broader runtime budgets.
+KuPilot measures six maintenance-sensitive surfaces: no-I/O CLI startup,
+process memory, local SQLite migration and Session operations, the synthetic
+Diagnosis fixture matrix, bounded stream merge and rendering, and release
+binary size. These measurements protect admitted behavior from regression.
+They are not cross-machine service-level agreements, capacity claims, or a
+reason to add product complexity.
 
-The hard Agent, model, Kubernetes, Tool, byte, item, and traversal ceilings in
-ADR-0016 remain security limits. Performance results cannot relax them.
+The hard Agent, model, Kubernetes, Tool, byte, item, retention, traversal, and
+timeout ceilings remain security limits. Performance work cannot relax them or
+bypass scope checks, normalization, redaction, Evidence validation, audit,
+approval, cancellation, or persistence safety.
 
-## Measurement environment
+## Environment classes and comparison method
 
-Every comparison records the exact source commit, dirty state, Go version,
-`GOOS`, `GOARCH`, `CGO_ENABLED`, operating-system version, CPU class, physical
-memory, power mode, terminal dimensions when relevant, and command line. Use
-Go 1.25.13, `CGO_ENABLED=0` for product binaries, fixed synthetic inputs, a
-local temporary SQLite database, no real kubeconfig, no model credential, and
-no network service.
+Every comparison records the exact source revision and dirty state, Go version,
+`GOOS`, `GOARCH`, `CGO_ENABLED`, operating-system version, CPU class and core
+count, physical memory, power mode, terminal dimensions when relevant, and the
+complete command line. Product binaries use Go 1.25.13, `CGO_ENABLED=0`,
+read-only modules, `-trimpath`, and stripped symbols. All workloads use fixed
+synthetic input, temporary SQLite files, and no real kubeconfig, model
+credential, network service, cluster, or user state.
 
-Compare candidate and accepted baseline on the same host and operating-system
-session. Run the baseline first, candidate second, then reverse the order to
-expose thermal or cache bias. Discard no sample except for a documented harness
-failure. Report median and p95 for time, median and maximum for resident memory,
-and exact bytes for artifacts. Host-specific raw samples belong in local
-release evidence, not public documentation.
+Measurements have three environment classes:
 
-macOS process measurements use `/usr/bin/time -lp`; Linux uses
-`/usr/bin/time -v`. Those tools report different field names, so values are
-compared only within the same operating system and tool. A missing measurement
-tool or benchmark target is a failed baseline, never a zero result.
+- A controlled physical host on a supported target is the only class that can
+  accept a time or memory trend. Compare baseline and candidate in the same
+  operating-system session and power mode.
+- A hosted or virtual CI runner may execute semantic smoke and absolute safety
+  gates. Its timing and resident-memory values can identify a result that needs
+  controlled reproduction, but cannot reject a release by themselves.
+- A cross-target build host may accept only target-specific artifact checks
+  such as pure-Go dependency closure, repeatable byte size, and the absolute
+  binary ceiling. It cannot represent target runtime performance.
 
-## Workloads and stable budgets
+Run the accepted baseline first and the candidate second, then reverse the
+order. Discard no sample except a documented harness failure. Record the first
+and second pass separately before pooling them. For time, report the median and
+nearest-rank p95; for `B/op` and `allocs/op`, report medians; for resident and
+in-use heap memory, report the median and maximum; for artifacts, report exact
+bytes. Use `benchstat` when it is already available, or an equivalent sorted
+sample calculation, and record the tool and version. Statistical significance
+helps interpret noise but does not replace the fixed budgets.
+
+When no comparable accepted output exists for the same versioned workload,
+the result establishes a reviewable baseline rather than proving an
+improvement or regression. Host-specific samples, profiles, and comparison
+reports are local maintenance evidence and do not belong in this document.
+
+macOS peak-process measurements use `/usr/bin/time -lp`; Linux uses
+`/usr/bin/time -v`. Field meanings differ, so compare only the same operating
+system and tool. A missing tool or benchmark target is a failed measurement,
+never a zero result.
+
+## Versioned workloads and stable budgets
 
 <!-- markdownlint-disable MD013 -->
 
-| Surface | Fixed workload | Samples | Acceptance budget |
-| --- | --- | ---: | --- |
-| No-I/O startup | A release-mode native binary executes `kupilot version`; separately exercise `help` as a zero-business-I/O contract check | 30 measured invocations after 3 untimed warm-ups | Median wall time no more than 10% above the accepted same-host baseline and p95 no more than 20% above it. Both commands create zero database, log, model, Kubernetes, Tool, approval, or executor action. |
-| Process memory | Measure native `version`, bounded TUI stream-render benchmark, and SQLite lifecycle benchmark with the platform process tool | 10 process samples per workload plus Go benchmark allocation data | Maximum RSS no more than 10% or 8 MiB above the accepted same-host baseline, whichever allowance is larger. Go benchmark `B/op` and `allocs/op` stay within their workload limits below. |
-| SQLite | A benchmark opens a real temporary database, applies the accepted migrations, starts and completes bounded synthetic Session/run/Evidence/Diagnosis records, queries eligible resume metadata, enforces retention, and closes cleanly | `-count=10` with `-benchmem`; one operation per fresh temporary database unless the benchmark name states reuse | Median `ns/op` no more than 15% above baseline; `B/op` no more than 10% above baseline; `allocs/op` no more than 10% above baseline. Every iteration validates owner-only paths, foreign keys, fixed migrations, and prohibited-data absence. |
-| Stream render | A benchmark applies fixed bounded stream deltas and Tool-step events to an 80x24 no-color TUI model, renders after each event, and includes the maximum admitted retained transcript input | `-count=10` with `-benchmem` | Median `ns/op`, `B/op`, and `allocs/op` each no more than 10% above baseline. Output remains bounded, contains no forbidden terminal control, and accepts no stale or post-terminal event. |
-| Binary size | Build the four supported macOS/Linux `amd64`/`arm64` binaries with the release toolchain, `CGO_ENABLED=0`, `-trimpath`, and read-only modules | One exact byte count per target; repeat the release build twice | No target grows more than 5% from its accepted target baseline and no uncompressed binary exceeds 96 MiB. Archive membership, CGO-free SQLite, metadata, SBOM, checksum, and sensitive-string checks still pass. |
+| Metric | Versioned harness and fixed workload | Samples and statistic | Accepted threshold |
+| --- | --- | --- | --- |
+| No-I/O startup | `BenchmarkCLIProcessStartupV1` executes an already-built native binary with `version` and `help` in an empty isolated environment. It verifies bounded output and zero filesystem creation. Existing CLI contract tests independently prove zero business-composition calls. | Three warm-ups followed by 30 one-process samples for each command; median and nearest-rank p95. | Candidate median wall time is at most 10% above the comparable accepted baseline and p95 is at most 20% above it. Both commands still cause zero database, log, model, Kubernetes, Tool, approval, or executor action. |
+| Peak and stable memory | Measure native `version`, one `BenchmarkSQLiteDiagnosticLifecycleV1` operation, and one `BenchmarkStreamRenderV1/RetainedHistory100x1KiB` operation as separate precompiled processes. Record platform maximum RSS, Go `B/op` and `allocs/op`, and, for benchmark test processes, `inuse_space` after the workload completes. | Ten fresh process samples per workload; median and maximum RSS, median and maximum available in-use heap, plus the workload allocation statistics below. | Maximum RSS and maximum available in-use heap each grow by no more than 10% or 8 MiB over the comparable accepted baseline, whichever allowance is larger. Allocation trends must also satisfy their workload rows. |
+| SQLite | `BenchmarkSQLiteMigrationFreshV1` opens, migrates, verifies, and closes one fresh real temporary database. `BenchmarkSQLiteResumeQueryV1` measures a 50-item picker, a 50-item literal search, and an exact 100-message history. `BenchmarkSQLiteDiagnosticLifecycleV1` stores one bounded Session/run/Tool/Evidence/Diagnosis lifecycle, reads resume and Diagnosis state, runs bounded retention, verifies migrations, foreign keys, permissions, and prohibited-data absence, and closes cleanly. | Ten independent outputs with `-benchmem`; one iteration per fresh migration or lifecycle output and 100 operations per reused resume-query output. Report medians. | Median `ns/op` is at most 15% above baseline. Median `B/op` and `allocs/op` are each at most 10% above baseline. Correctness, owner-only permissions, foreign keys, fixed migration history, and prohibited-data checks must pass in every sample. |
+| Diagnosis | `BenchmarkDiagnosisFixtureMatrixV1` runs all eight admitted diagnostic categories in both sufficient- and limited-Evidence variants through scripted local model and Tool adapters and applies the fixed rubric. One operation is the complete 16-fixture matrix. | Ten one-operation outputs with `-benchmem`; median `ns/op`, `B/op`, and `allocs/op`. | Each median is at most 10% above the comparable accepted baseline. Every fixture and rubric assertion must still pass; no network, Kubernetes, or external model call is permitted. |
+| Stream merge and render | `BenchmarkStreamDeltaMergeV1` merges one 64 KiB stream from 64 fixed 1 KiB deltas at the Application event bridge. `BenchmarkStreamRenderV1/BoundedStream64KiB` sends a 64 KiB stream, two Tool-step states, a stale event, a terminal result, and a post-terminal event through Bubble Tea `Update`, rendering after every event. `RetainedHistory100x1KiB` reconstructs and renders the maximum retained message count using fixed 1 KiB messages. | Ten outputs with `-benchmem`; 100 merge operations, 10 bounded-stream operations, and one retained-history operation per output. Report medians. | Median `ns/op`, `B/op`, and `allocs/op` are each at most 10% above baseline. Rendered state remains bounded and terminal-safe, and stale or post-terminal input cannot change accepted run state. |
+| Binary size | `binary-size-check` builds each supported macOS/Linux `amd64`/`arm64` target twice with the fixed pure-Go performance flags and compares exact bytes. | Two builds per target in one gate; retain one exact byte count for each accepted revision. | No target grows more than 5% from its supplied accepted target baseline, repeated build sizes match, and no uncompressed binary exceeds 96 MiB. CGO-free SQLite and dependency checks remain mandatory. |
 
 <!-- markdownlint-enable MD013 -->
 
-For percentage checks, an observed change smaller than the timer resolution or
-one allocation is treated as no change. A candidate that exceeds a budget must
-identify the responsible admitted behavior and reduce or isolate it. Raising a
-threshold solely to make a regression pass is not acceptance.
+For percentage checks, a change smaller than timer resolution or one
+allocation is treated as no change. A threshold is fixed before candidate
+measurement. It must not be raised merely because a candidate fails. A
+candidate over budget requires controlled reproduction and attribution to an
+admitted behavior before any production change is considered.
 
 ## Reproducible commands
 
-Build and artifact measurements use the repository gates:
+The low-noise semantic smoke runs every versioned harness once. It checks
+correctness and isolation, not timing:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make build cross-build
+GOTOOLCHAIN=go1.25.13 make test-performance
 ```
 
-The native binary is measured with the platform process tool by repeatedly
-executing:
+Build the native performance binary with the same fixed flags used by the size
+gate:
 
 ```sh
-./bin/kupilot version
+GOTOOLCHAIN=go1.25.13 make build
 ```
 
-SQLite and stream-render measurements use Go benchmark output with memory
-accounting:
+Collect startup warm-ups and measured samples separately:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -run '^$' -bench '^BenchmarkSQLite' \
-  -benchmem -count=10 ./internal/persistence/sqlite
-GOTOOLCHAIN=go1.25.13 go test -run '^$' -bench '^BenchmarkStreamRender' \
-  -benchmem -count=10 ./internal/tui
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkCLIProcessStartupV1/(Version|Help)$' \
+  -benchtime=1x -count=3 ./cmd/kupilot
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkCLIProcessStartupV1/(Version|Help)$' \
+  -benchtime=1x -count=30 ./cmd/kupilot
 ```
 
-Benchmark names beneath those prefixes identify one fixed workload and must not
-silently change inputs. If an input changes, retain the old workload long enough
-to compare it, introduce a versioned benchmark name, and record why the new
-workload better represents an admitted product path.
+Collect SQLite and Diagnosis samples:
 
-## Validity and safety rules
+```sh
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^(BenchmarkSQLiteMigrationFreshV1|BenchmarkSQLiteDiagnosticLifecycleV1)$' \
+  -benchmem -benchtime=1x -count=10 ./internal/persistence/sqlite
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkSQLiteResumeQueryV1' \
+  -benchmem -benchtime=100x -count=10 ./internal/persistence/sqlite
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkDiagnosisFixtureMatrixV1$' \
+  -benchmem -benchtime=1x -count=10 ./internal/agent
+```
 
-- Startup and help measurements are valid only when business-I/O absence is
-  independently asserted; a fast failing network or database call is not a
-  startup success.
-- SQLite measurements use real temporary files and fixed synthetic canaries.
-  They never reuse a user's state directory and never persist raw model, Tool,
-  Kubernetes, log, prompt, credential, or vendor-error content.
-- Stream inputs are deterministic and bounded. Rendering benchmarks call only
-  TUI state transitions and `View`; they perform no business I/O.
-- CPU profiles, heap profiles, traces, and raw benchmark files are local
-  maintenance artifacts. They are reviewed for paths and external text before
-  sharing and are not committed by default.
-- A single wall-clock sample, virtualized runner comparison, or cross-OS number
-  cannot establish a regression or a public SLA. CI may detect large changes,
-  but a release decision repeats the comparison on a controlled supported host.
+Collect stream merge and render samples:
+
+```sh
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkStreamDeltaMergeV1$' \
+  -benchmem -benchtime=100x -count=10 ./internal/application
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkStreamRenderV1/BoundedStream64KiB$' \
+  -benchmem -benchtime=10x -count=10 ./internal/tui
+GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+  -bench '^BenchmarkStreamRenderV1/RetainedHistory100x1KiB$' \
+  -benchmem -benchtime=1x -count=10 ./internal/tui
+```
+
+The binary gate enforces the absolute ceiling and repeat-build agreement. A
+reviewed directory containing `kupilot-<goos>-<goarch>` baseline binaries also
+enables the fixed 5% trend gate:
+
+```sh
+GOTOOLCHAIN=go1.25.13 make binary-size-check
+GOTOOLCHAIN=go1.25.13 make binary-size-check \
+  BINARY_SIZE_BASELINE_DIR='<accepted-binaries>'
+```
+
+Benchmark names ending in `V1` define immutable workload inputs. If an input
+must change, retain the old harness for comparison, add a new versioned name,
+and review a new baseline before applying its trend threshold.
+
+## Memory and profile boundaries
+
+Compile the selected test package before process-level measurement so compiler
+work is not charged to the workload. Execute each test binary in a new process
+for each RSS sample. The Go test harness and runtime remain part of both sides
+of the comparison:
+
+```sh
+mkdir -p bin/perf
+GOTOOLCHAIN=go1.25.13 go test -c -o bin/perf/sqlite.test \
+  ./internal/persistence/sqlite
+/usr/bin/time -lp bin/perf/sqlite.test -test.run '^$' \
+  -test.bench '^BenchmarkSQLiteDiagnosticLifecycleV1$' \
+  -test.benchtime=1x -test.count=1
+```
+
+Use the equivalent precompiled command for the TUI retained-history workload.
+For native startup memory, measure `bin/kupilot version` directly. Repeat each
+command ten times without reusing the process.
+
+Maximum RSS is a process peak and includes the Go runtime, loaded code, test
+harness where applicable, SQLite driver, and transient allocations. It is not
+a retained-heap measurement. `B/op` is total allocation traffic divided by the
+fixed operation count and is not peak memory. A heap profile's `inuse_space`
+after benchmark completion is the stable-memory proxy for precompiled test
+workloads; the short-lived native `version` process has no equivalent retained
+heap sample. `alloc_space` describes cumulative allocation pressure. Neither
+establishes an interactive long-run steady state because the offline harness
+has no background watch or live session.
+
+CPU and heap profiles may be collected from a precompiled benchmark binary:
+
+```sh
+bin/perf/sqlite.test -test.run '^$' \
+  -test.bench '^BenchmarkSQLiteDiagnosticLifecycleV1$' \
+  -test.benchtime=10x -test.cpuprofile bin/perf/sqlite.cpu.pprof \
+  -test.memprofile bin/perf/sqlite.heap.pprof
+GOTOOLCHAIN=go1.25.13 go tool pprof -top -nodecount=20 \
+  bin/perf/sqlite.heap.pprof
+```
+
+Profiles are diagnostic evidence, not gates. Profile collection changes
+runtime cost, so profiled samples are never mixed with unprofiled timing or RSS
+samples.
+
+## Validity, safety, and known limitations
+
+- Startup results are valid only when the isolated-directory assertion and
+  independent zero-composition-call tests pass. A fast failed I/O attempt is
+  not successful startup.
+- SQLite uses real temporary files. Fixture content is synthetic, bounded, and
+  safe; database and sidecars are checked without printing stored bodies or
+  local paths.
+- Diagnosis uses scripted local adapters. Stream inputs call only synchronous
+  Application and TUI state transitions. No benchmark owns a goroutine or
+  performs model, Kubernetes, credential-helper, or public-network I/O.
+- The retained-history workload combines the maximum message count with a
+  fixed 1 KiB per message; the separate stream workload exercises the 64 KiB
+  single-message boundary. It does not claim that every retained message will
+  simultaneously contain the maximum byte count.
+- Binary equality in this gate means repeatable byte size, not byte-for-byte
+  reproducibility or release provenance. Release metadata, archives, checksums,
+  SBOMs, and sensitive-string scans remain the responsibility of release gates.
+- CPU frequency scaling, thermal state, filesystem cache, antivirus activity,
+  virtualized scheduling, and timer resolution remain sources of noise. The
+  reversed run order and multiple samples expose but cannot eliminate them.
+- Raw benchmark output, RSS samples, profiles, and machine-specific summaries
+  are reviewed locally for paths and external text before sharing and are not
+  committed by default.
+- These workloads do not measure cloud cost, real model or cluster latency,
+  maximum cluster size, live monitoring, or concurrent users. They make no
+  latency, memory, or capacity promise across machines.

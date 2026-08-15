@@ -403,7 +403,7 @@ func diagnosisFixturePath(name string) string {
 	return filepath.Join(parts...)
 }
 
-func readStrictJSONFixture[T any](t *testing.T, path string) T {
+func readStrictJSONFixture[T any](t testing.TB, path string) T {
 	t.Helper()
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -422,7 +422,7 @@ func readStrictJSONFixture[T any](t *testing.T, path string) T {
 	return result
 }
 
-func assertPolicyExpectation(t *testing.T, policy scenarioPolicy, expectation diagnosisScenarioExpectation) {
+func assertPolicyExpectation(t testing.TB, policy scenarioPolicy, expectation diagnosisScenarioExpectation) {
 	t.Helper()
 	if policy.Scenario == "" || len(policy.MinimumEvidence) == 0 || len(policy.PermissionOrMissingPaths) == 0 ||
 		!reflect.DeepEqual(policy.ToolOrder, expectation.toolOrder) {
@@ -445,7 +445,7 @@ func rubricIDs(items []rubricItem) []string {
 	return result
 }
 
-func assertUniqueRubricItems(t *testing.T, label string, items []rubricItem) {
+func assertUniqueRubricItems(t testing.TB, label string, items []rubricItem) {
 	t.Helper()
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
@@ -459,7 +459,7 @@ func assertUniqueRubricItems(t *testing.T, label string, items []rubricItem) {
 	}
 }
 
-func runConversationFixture(t *testing.T, fixture conversationFixture) scenarioRun {
+func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioRun {
 	t.Helper()
 	if fixture.Name == "" || fixture.Question == "" || len(fixture.Steps) == 0 || len(fixture.Diagnosis) == 0 ||
 		fixture.Target.Namespace == "" || fixture.Target.Name == "" {
@@ -595,7 +595,7 @@ func (guard *fixtureScopeGuard) Current(ctx context.Context, scope domain.Cluste
 }
 
 type scriptedConversationModel struct {
-	t         *testing.T
+	t         testing.TB
 	mu        sync.Mutex
 	steps     []fixtureStep
 	diagnosis json.RawMessage
@@ -686,7 +686,7 @@ func (model *scriptedConversationModel) Requests() []domain.ModelRequest {
 }
 
 type scriptedKubeTool struct {
-	t      *testing.T
+	t      testing.TB
 	mu     sync.Mutex
 	base   time.Time
 	clock  *fixtureClock

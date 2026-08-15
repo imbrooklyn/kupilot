@@ -7,6 +7,7 @@ CROSS_BIN_DIR ?= $(BIN_DIR)/cross
 COMMAND_PACKAGE ?= ./cmd/kupilot
 TOOLS_BIN_DIR ?= $(BIN_DIR)/tools
 GATE_GO_VERSION ?= go1.25.13
+BINARY_SIZE_BASELINE_DIR ?=
 
 GOIMPORTS_VERSION ?= v0.48.0
 GOLANGCI_LINT_VERSION ?= v2.11.4
@@ -29,7 +30,7 @@ E2E_TEST_PATTERN := ^(TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis|Tes
 FUZZ_SEED_PATTERN := ^(FuzzRedactorSafety|FuzzBindToolCallStrictSchema|FuzzBoundedSSEBodyIsChunkIndependent|FuzzParseSlashDraftHasNoDynamicAuthority)$$
 IMPORT_GUARD_PATTERN := ^(TestApplicationImportBoundaryIsStatic|TestEinoImportsRemainInTheirSoleTranslationBoundaries|TestExportedKubeBoundaryContainsNoClientGoTypes|TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape|TestTUIImportBoundaryAndSingleTextareaAreStatic|TestRepositorySourcesKeepExplicitSQLBoundary|TestSQLXImportRemainsInsideSQLiteAdapter|TestCompositionConstructsOneModelLifecycleAndNoWritePath|TestSelectedDriverAndSQLXContract|TestV01ProductionHasNoApprovalServiceOrWriteExecutor)$$
 
-.PHONY: bootstrap-tools release-tools go-version-check release-version-check release-config-check release-cgo-check release-dry-run release-verify fmt imports fmt-check imports-check lint workflow-lint test test-race test-security security test-migration test-e2e test-fuzz-seeds import-guard dependency-guard vuln vet build cross-build platform-smoke check check-slow check-all
+.PHONY: bootstrap-tools release-tools go-version-check release-version-check release-config-check release-cgo-check release-dry-run release-verify fmt imports fmt-check imports-check lint workflow-lint test test-race test-security security test-migration test-e2e test-fuzz-seeds test-performance import-guard dependency-guard vuln vet build cross-build binary-size-check platform-smoke check check-slow check-all
 
 $(GOIMPORTS_BIN):
 	mkdir -p "$(dir $@)"
@@ -271,6 +272,13 @@ test-e2e:
 test-fuzz-seeds:
 	$(GO_CMD) test -count=1 $(PACKAGES) -run '$(FUZZ_SEED_PATTERN)'
 
+test-performance: build
+	$(GO_CMD) test -run '^$$' -bench '^BenchmarkCLIProcessStartupV1$$' -benchtime=1x -count=1 ./cmd/kupilot
+	$(GO_CMD) test -run '^$$' -bench '^BenchmarkStreamDeltaMergeV1$$' -benchmem -benchtime=1x -count=1 ./internal/application
+	$(GO_CMD) test -run '^$$' -bench '^BenchmarkDiagnosisFixtureMatrixV1$$' -benchmem -benchtime=1x -count=1 ./internal/agent
+	$(GO_CMD) test -run '^$$' -bench '^BenchmarkSQLite' -benchmem -benchtime=1x -count=1 ./internal/persistence/sqlite
+	$(GO_CMD) test -run '^$$' -bench '^BenchmarkStreamRenderV1' -benchmem -benchtime=1x -count=1 ./internal/tui
+
 import-guard:
 	$(GO_CMD) test -count=1 $(PACKAGES) -run '$(IMPORT_GUARD_PATTERN)'
 
@@ -285,19 +293,56 @@ vet:
 
 build:
 	mkdir -p "$(dir $(BINARY))"
-	CGO_ENABLED=0 $(GO_CMD) build -o "$(BINARY)" $(COMMAND_PACKAGE)
+	CGO_ENABLED=0 $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$(BINARY)" $(COMMAND_PACKAGE)
 
 cross-build:
 	mkdir -p "$(CROSS_BIN_DIR)"
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO_CMD) build -o "$(CROSS_BIN_DIR)/kupilot-darwin-amd64" $(COMMAND_PACKAGE)
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO_CMD) build -o "$(CROSS_BIN_DIR)/kupilot-darwin-arm64" $(COMMAND_PACKAGE)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO_CMD) build -o "$(CROSS_BIN_DIR)/kupilot-linux-amd64" $(COMMAND_PACKAGE)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO_CMD) build -o "$(CROSS_BIN_DIR)/kupilot-linux-arm64" $(COMMAND_PACKAGE)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$(CROSS_BIN_DIR)/kupilot-darwin-amd64" $(COMMAND_PACKAGE)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$(CROSS_BIN_DIR)/kupilot-darwin-arm64" $(COMMAND_PACKAGE)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$(CROSS_BIN_DIR)/kupilot-linux-amd64" $(COMMAND_PACKAGE)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$(CROSS_BIN_DIR)/kupilot-linux-arm64" $(COMMAND_PACKAGE)
+
+binary-size-check: cross-build release-cgo-check
+	@set -eu; \
+	repeat_root="$$(mktemp -d "$${TMPDIR:-/tmp}/kupilot-size-check.XXXXXX")"; \
+	trap 'rm -rf "$$repeat_root"' EXIT HUP INT TERM; \
+	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
+		goos="$${target%/*}"; \
+		goarch="$${target#*/}"; \
+		name="kupilot-$${goos}-$${goarch}"; \
+		first="$(CROSS_BIN_DIR)/$$name"; \
+		second="$$repeat_root/$$name"; \
+		CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" $(GO_CMD) build -buildvcs=false -mod=readonly -trimpath -ldflags="-s -w" -o "$$second" $(COMMAND_PACKAGE); \
+		first_size="$$(wc -c < "$$first" | tr -d ' ')"; \
+		second_size="$$(wc -c < "$$second" | tr -d ' ')"; \
+		if [ "$$first_size" != "$$second_size" ]; then \
+			printf '%s\n' "Repeated binary size differs for $$target: $$first_size versus $$second_size bytes."; \
+			exit 1; \
+		fi; \
+		if [ "$$first_size" -gt 100663296 ]; then \
+			printf '%s\n' "Binary size exceeds the 96 MiB ceiling for $$target: $$first_size bytes."; \
+			exit 1; \
+		fi; \
+		if [ -n "$(BINARY_SIZE_BASELINE_DIR)" ]; then \
+			baseline="$(BINARY_SIZE_BASELINE_DIR)/$$name"; \
+			if [ ! -f "$$baseline" ]; then \
+				printf '%s\n' "Accepted binary baseline is missing for $$target."; \
+				exit 1; \
+			fi; \
+			baseline_size="$$(wc -c < "$$baseline" | tr -d ' ')"; \
+			allowed_size="$$(( (baseline_size * 105 + 99) / 100 ))"; \
+			if [ "$$first_size" -gt "$$allowed_size" ]; then \
+				printf '%s\n' "Binary size exceeds the accepted 5 percent trend budget for $$target: $$first_size versus $$baseline_size bytes."; \
+				exit 1; \
+			fi; \
+		fi; \
+		printf '%s\n' "Verified binary size for $$target: $$first_size bytes; repeated build matched."; \
+	done
 
 platform-smoke: go-version-check test build
 
 check: go-version-check fmt-check imports-check vet lint workflow-lint test build
 
-check-slow: go-version-check test-race security test-migration test-e2e test-fuzz-seeds vuln cross-build
+check-slow: go-version-check test-race security test-migration test-e2e test-fuzz-seeds test-performance vuln binary-size-check
 
 check-all: check check-slow
