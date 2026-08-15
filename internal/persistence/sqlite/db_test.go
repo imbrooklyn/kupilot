@@ -55,6 +55,118 @@ func TestOpenConfiguresPrivateFilesAndConnectionPragmas(t *testing.T) {
 	}
 }
 
+func TestDeleteAllLocalStateRemovesOnlyDatabaseFilesAndKeepsDirectory(t *testing.T) {
+	stateDir := filepath.Join(testRealTempDir(t), "delete-all-state")
+	database := openTestDB(t, context.Background(), stateDir, "delete-all")
+	databasePath := filepath.Join(stateDir, databaseFilename)
+	unrelatedPath := filepath.Join(stateDir, "keep.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("unrelated"), 0o600); err != nil {
+		t.Fatalf("WriteFile(unrelated) error = %v", err)
+	}
+
+	result, err := database.DeleteAllLocalState(context.Background())
+	if err != nil || !result.StorageClosed || !result.Complete {
+		t.Fatalf("DeleteAllLocalState() = %#v, %v", result, err)
+	}
+	for _, path := range knownStoragePaths(databasePath) {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("storage path still exists after delete-all: %v", statErr)
+		}
+	}
+	if info, statErr := os.Lstat(stateDir); statErr != nil || !info.IsDir() {
+		t.Fatalf("state directory was removed or changed: %#v/%v", info, statErr)
+	}
+	if content, readErr := os.ReadFile(unrelatedPath); readErr != nil || string(content) != "unrelated" {
+		t.Fatalf("unrelated file changed = %q/%v", content, readErr)
+	}
+	if closeErr := database.Close(); closeErr != nil {
+		t.Fatalf("Close() after delete-all error = %v", closeErr)
+	}
+}
+
+func TestDeleteAllLocalStatePreflightDenialsLeaveDatabaseOpenAndUntouched(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("symlink contract applies to supported platforms")
+	}
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, string)
+		ctx     func() context.Context
+	}{
+		{
+			name: "cancelled",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+		},
+		{
+			name: "sidecar symlink",
+			prepare: func(t *testing.T, databasePath string) {
+				t.Helper()
+				target := filepath.Join(filepath.Dir(databasePath), "symlink-target")
+				if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+					t.Fatalf("WriteFile(target) error = %v", err)
+				}
+				if err := os.Symlink(target, databasePath+"-journal"); err != nil {
+					t.Fatalf("Symlink(sidecar) error = %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := filepath.Join(testRealTempDir(t), "delete-all-preflight")
+			database := openTestDB(t, context.Background(), stateDir, "delete-all-preflight")
+			databasePath := filepath.Join(stateDir, databaseFilename)
+			if test.prepare != nil {
+				test.prepare(t, databasePath)
+			}
+			ctx := context.Background()
+			if test.ctx != nil {
+				ctx = test.ctx()
+			}
+			result, err := database.DeleteAllLocalState(ctx)
+			if err == nil || result.StorageClosed || result.Complete {
+				t.Fatalf("DeleteAllLocalState(preflight) = %#v, %v", result, err)
+			}
+			if strings.Contains(err.Error(), stateDir) {
+				t.Fatal("delete-all safe error disclosed the local state path")
+			}
+			if _, statErr := os.Lstat(databasePath); statErr != nil {
+				t.Fatalf("database changed after preflight denial: %v", statErr)
+			}
+			if pingErr := database.handle.PingContext(context.Background()); pingErr != nil {
+				t.Fatalf("database closed after preflight denial: %v", pingErr)
+			}
+		})
+	}
+}
+
+func TestDeleteAllLocalStateReportsPartialRemovalAfterClose(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("Unix directory permissions provide the deterministic removal denial")
+	}
+	stateDir := filepath.Join(testRealTempDir(t), "delete-all-partial")
+	database := openTestDB(t, context.Background(), stateDir, "delete-all-partial")
+	databasePath := filepath.Join(stateDir, databaseFilename)
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatalf("Chmod(read-only state directory) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+
+	result, err := database.DeleteAllLocalState(context.Background())
+	if err == nil || !result.StorageClosed || result.Complete {
+		t.Fatalf("DeleteAllLocalState(partial) = %#v, %v", result, err)
+	}
+	if _, statErr := os.Lstat(databasePath); statErr != nil {
+		t.Fatalf("partial deletion did not leave the denied database path visible: %v", statErr)
+	}
+	if pingErr := database.handle.PingContext(context.Background()); pingErr == nil {
+		t.Fatal("database remained usable after partial delete-all result")
+	}
+}
+
 func TestOpenRejectsUnsafePathsWithoutDisclosingThem(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("symlink and Unix permission contract applies to supported platforms")

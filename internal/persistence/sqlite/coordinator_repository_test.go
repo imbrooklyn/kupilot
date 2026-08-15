@@ -133,6 +133,82 @@ func TestCoordinatorRepositoriesRunMinimalSessionWithoutContentPersistence(t *te
 	}
 }
 
+func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *testing.T) {
+	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-clear-history")
+	base := time.UnixMilli(12_000).UTC()
+	seedStandardRun(
+		t,
+		database,
+		"00000000-0000-7000-8000-000000012001",
+		"00000000-0000-7000-8000-000000012002",
+		"00000000-0000-7000-8000-000000012003",
+		base,
+	)
+	second := testSession("00000000-0000-7000-8000-000000012004", "Second", domain.PrivacyModeStandard, base.Add(time.Millisecond))
+	if err := NewSessionRepository(database).Create(context.Background(), second); err != nil {
+		t.Fatalf("Create(second Session) error = %v", err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO audit_events (id, event_type, actor, outcome, details_json, occurred_at_ms) VALUES ('00000000-0000-7000-8000-000000012005', 'persistence_degraded', 'system', 'failure', '{}', 12005)`,
+		`INSERT INTO settings (key, value_json, schema_version, updated_at_ms) VALUES ('operational_detail_retention_days', '14', 1, 12006)`,
+		`INSERT INTO privacy_consents (singleton_id, policy_version, origin_hash, categories_json, decision, decided_at_ms, schema_version) VALUES (1, 'privacy-v1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '[]', 'accepted', 12007, 1)`,
+	} {
+		if _, err := database.handle.ExecContext(context.Background(), statement); err != nil {
+			t.Fatalf("seed preference statement error = %v", err)
+		}
+	}
+
+	repository := NewSessionRepository(database)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := repository.ClearHistory(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ClearHistory(cancelled) error = %v", err)
+	}
+	var before int
+	if err := database.handle.GetContext(context.Background(), &before, `SELECT count(id) FROM sessions`); err != nil || before != 2 {
+		t.Fatalf("Session count after cancelled clear = %d/%v", before, err)
+	}
+
+	if err := repository.ClearHistory(context.Background()); err != nil {
+		t.Fatalf("ClearHistory() error = %v", err)
+	}
+	for table, want := range map[string]int{
+		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
+		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
+		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
+		"settings": 1, "privacy_consents": 1, "schema_migrations": 4,
+	} {
+		var got int
+		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {
+			t.Errorf("%s rows after clear-history = %d/%v, want %d", table, got, err, want)
+		}
+	}
+}
+
+func TestCoordinatorRepositoryClearHistoryRollsBackOnFailure(t *testing.T) {
+	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-clear-history-rollback")
+	session := testSession("00000000-0000-7000-8000-000000012101", "Rollback", domain.PrivacyModeStandard, time.UnixMilli(12_100).UTC())
+	if err := NewSessionRepository(database).Create(context.Background(), session); err != nil {
+		t.Fatalf("Create(Session) error = %v", err)
+	}
+	if _, err := database.handle.ExecContext(context.Background(), `
+		CREATE TRIGGER deny_history_clear
+		BEFORE DELETE ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'synthetic history clear denial');
+		END
+	`); err != nil {
+		t.Fatalf("create denial trigger error = %v", err)
+	}
+	if err := NewSessionRepository(database).ClearHistory(context.Background()); err == nil {
+		t.Fatal("ClearHistory() error = nil")
+	}
+	var count int
+	if err := database.handle.GetContext(context.Background(), &count, `SELECT count(id) FROM sessions`); err != nil || count != 1 {
+		t.Fatalf("Session count after rollback = %d/%v", count, err)
+	}
+}
+
 func TestCoordinatorRepositoriesKeepZeroDayDetailOutOfSQLite(t *testing.T) {
 	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-zero-retention")
 	run := seedStandardRun(

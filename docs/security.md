@@ -513,6 +513,17 @@ before the run is quiescent and before the SQLite adapter's single Session-graph
 transaction. A consuming approval, cancellation, or persistence failure denies
 deletion without an executor call or partial-success claim.
 
+The same dialog requires a separate `Y` confirmation for `H` clear-history and
+`X` delete-all-local-state. Both operations cancel and await current run work
+and durably close every pending or approved-not-executed approval before
+deletion; any consuming approval denies the request with zero executor calls.
+Clear-history uses a bounded transaction and states that settings and valid
+consent remain. Delete-all validates the exact state directory, database, and
+known sidecars before closing the database; it follows no symlink and removes
+no directory or unrelated file. Preflight denial leaves storage open. A failure
+after close is reported as incomplete, and KuPilot exits after acknowledgement
+without creating replacement state.
+
 For a current standard-persistence Session, the same `/privacy` flow may use the
 sole composer to collect an explicit Markdown target and then preview and
 confirm the fixed redacted summary categories. Minimal Sessions do not offer
@@ -520,10 +531,10 @@ export. The target is never logged or placed in audit, existing files are not
 overwritten, and the resulting local copy is not encrypted or automatically
 removed with its source Session.
 
-There is no separate Session-management page, clear-history command, delete-all
-UI, or second composer. Operators who need all-state removal must follow the
-exact stopped-process file cleanup boundary in
-[Privacy and Local Data](user-guide/privacy-and-local-data.md). Logical deletion,
+There is no separate Session-management page or second composer. Operational
+logs and exported summaries remain outside database-state deletion; their exact
+manual cleanup boundary is documented in [Privacy and Local
+Data](user-guide/privacy-and-local-data.md). Logical deletion,
 ordinary `DELETE`, file removal, checkpointing, and `VACUUM` must not be described
 as forensic erasure. SQLite free pages, WAL, filesystem journals, backups,
 snapshots, swap, and storage media remain outside that guarantee.

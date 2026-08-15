@@ -119,34 +119,36 @@ type Model struct {
 	scopeConflict   components.ScopeConflictDialog
 	footer          components.Footer
 
-	activePicker       application.UICompletionKind
-	pendingCompletion  application.UICompletionQuery
-	pendingResume      application.UIResumeRequest
-	pendingResumed     *application.UIResumedSession
-	resumeOrigin       resumeOrigin
-	nextRequestID      uint64
-	initialQuery       application.UICompletionQuery
-	initialResume      application.UIResumeRequest
-	pendingScopeID     uint64
-	pendingResourceID  uint64
-	pendingResource    ResourceView
-	pendingSubmitID    uint64
-	pendingPrivacyID   uint64
-	pendingDeleteID    uint64
-	pendingExportID    uint64
-	pendingApprovalID  uint64
-	privacyReview      *application.PrivacyReview
-	lifecycleReview    *application.SessionLifecycleReview
-	sessionDelete      *sessionDeleteState
-	sessionExport      *sessionExportState
-	pendingApproval    *application.UIApprovalRequest
-	evidenceReferences []application.UIEvidenceReference
-	pendingEvidence    application.UIEvidenceDetailQuery
-	evidenceGeneration int64
-	approvalState      domain.ApprovalState
-	privacyPending     bool
-	quitAfterCancel    bool
-	terminalFocused    bool
+	activePicker           application.UICompletionKind
+	pendingCompletion      application.UICompletionQuery
+	pendingResume          application.UIResumeRequest
+	pendingResumed         *application.UIResumedSession
+	resumeOrigin           resumeOrigin
+	nextRequestID          uint64
+	initialQuery           application.UICompletionQuery
+	initialResume          application.UIResumeRequest
+	pendingScopeID         uint64
+	pendingResourceID      uint64
+	pendingResource        ResourceView
+	pendingSubmitID        uint64
+	pendingPrivacyID       uint64
+	pendingDeleteID        uint64
+	pendingExportID        uint64
+	pendingApprovalID      uint64
+	privacyReview          *application.PrivacyReview
+	lifecycleReview        *application.SessionLifecycleReview
+	sessionDelete          *sessionDeleteState
+	localDeletion          *localDeletionState
+	sessionExport          *sessionExportState
+	pendingApproval        *application.UIApprovalRequest
+	evidenceReferences     []application.UIEvidenceReference
+	pendingEvidence        application.UIEvidenceDetailQuery
+	evidenceGeneration     int64
+	approvalState          domain.ApprovalState
+	privacyPending         bool
+	quitAfterCancel        bool
+	quitAfterLocalDeletion bool
+	terminalFocused        bool
 
 	styles styleSet
 	keymap KeyMap

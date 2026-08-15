@@ -170,8 +170,11 @@ The `/privacy` surface can start a new standard- or minimal-persistence Session,
 tighten operational-detail retention, delete the current Session, and export a
 versioned redacted summary of the current standard Session. A historical
 standard Session can be deleted from the existing resume picker or explicitly
-resumed before export. KuPilot has no clear-history or delete-all UI; the exact
-offline cleanup boundary and forensic-erasure limitation are documented in
+resumed before export. The same `/privacy` dialog can clear every Session graph
+while preserving settings and valid consent, or close storage and delete the
+validated database plus known SQLite sidecars. Operational logs and exported
+summaries remain separate. The exact deletion boundary and forensic-erasure
+limitation are documented in
 [Privacy and Local Data](docs/user-guide/privacy-and-local-data.md).
 
 KuPilot has no product telemetry, usage analytics, remote crash reporting,

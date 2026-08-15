@@ -240,6 +240,119 @@ func TestSessionDeleteOutcomeChangesCurrentSessionOnlyAfterMatchingCommit(t *tes
 	})
 }
 
+func TestPrivacyClearHistoryAndDeleteAllRequireExplicitConfirmation(t *testing.T) {
+	manager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+		Store: new(tuiPrivacyStore), Origin: "https://model.example",
+		Now: func() time.Time { return time.UnixMilli(32_000).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	review, err := manager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	lifecycle := application.SessionLifecycleReview{
+		CurrentSession: &application.UISessionState{
+			ID: testSessionID, Title: "Current Session", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		OperationalDetailRetentionDays: application.DefaultOperationalDetailRetentionDays,
+		ReadAuditRetentionDays:         application.ReadAuditRetentionDays,
+		WriteAuditRetentionDays:        application.WriteAuditRetentionDays,
+		StandardContentUntilDeletion:   true,
+	}
+	newPrivacyModel := func() Model {
+		model := newTestModel()
+		model.height = 80
+		model.reflow()
+		model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+		model.pendingPrivacyID = 80
+		model.showPrivacyReview(review, &lifecycle)
+		return model
+	}
+
+	t.Run("clear history", func(t *testing.T) {
+		model, cmd := updateModel(t, newPrivacyModel(), tea.KeyPressMsg{Code: 'h'})
+		if cmd != nil || model.localDeletion == nil || model.localDeletion.Kind != clearLocalHistory ||
+			!strings.Contains(model.render(), "Clear all Session history?") {
+			t.Fatal("clear-history confirmation did not disclose preserved preferences")
+		}
+		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+		if cmd != nil || model.localDeletion != nil || !strings.Contains(model.render(), "Privacy and local data") {
+			t.Fatal("clear-history cancellation dispatched or did not restore privacy review")
+		}
+		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'h'})
+		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+		command := applicationCommandFromCmd(t, cmd)
+		if command.Kind != application.UICommandClearHistory || command.Lifecycle == nil || !command.Lifecycle.Confirmed {
+			t.Fatalf("clear-history command = %#v", command)
+		}
+		model, cmd = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandClearHistory, RequestID: command.RequestID,
+			HistoryDeletion: &application.HistoryDeletionResult{SessionsCleared: true, PreferencesPreserved: true},
+		}})
+		if cmd != nil || model.session.ID != "" || model.localDeletion != nil ||
+			!strings.Contains(model.render(), "Session history cleared") {
+			t.Fatalf("clear-history result state = %#v", model.session)
+		}
+	})
+
+	t.Run("delete all preflight denial", func(t *testing.T) {
+		model, _ := updateModel(t, newPrivacyModel(), tea.KeyPressMsg{Code: 'x'})
+		if model.localDeletion == nil || !strings.Contains(model.render(), "Delete all local database state?") {
+			t.Fatal("delete-all confirmation did not disclose its exact file scope")
+		}
+		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+		command := applicationCommandFromCmd(t, cmd)
+		if command.Kind != application.UICommandDeleteAllLocalState || command.Lifecycle == nil || !command.Lifecycle.Confirmed {
+			t.Fatalf("delete-all command = %#v", command)
+		}
+		model, cmd = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteAllLocalState, RequestID: command.RequestID,
+			Failure: application.UIQueryUnavailable, LocalStateDeletion: &application.LocalStateDeletionResult{},
+		}})
+		if cmd != nil || model.session.ID != testSessionID || !strings.Contains(model.render(), "Local data not deleted") {
+			t.Fatalf("preflight denial state = %#v", model.session)
+		}
+	})
+
+	t.Run("delete all complete quits", func(t *testing.T) {
+		model, _ := updateModel(t, newPrivacyModel(), tea.KeyPressMsg{Code: 'x'})
+		model, commandCmd := updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+		command := applicationCommandFromCmd(t, commandCmd)
+		model, quit := updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteAllLocalState, RequestID: command.RequestID,
+			LocalStateDeletion: &application.LocalStateDeletionResult{StorageClosed: true, Complete: true},
+		}})
+		if quit != nil || model.session.ID != "" || model.localDeletion != nil ||
+			!strings.Contains(model.render(), "Local database state deleted") {
+			t.Fatalf("complete delete-all did not clear state and report success: %#v", model.session)
+		}
+		model, quit = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !commandQuits(quit) || model.quitAfterLocalDeletion {
+			t.Fatal("complete delete-all did not quit after acknowledgement")
+		}
+	})
+
+	t.Run("delete all partial failure is visible before exit", func(t *testing.T) {
+		model, _ := updateModel(t, newPrivacyModel(), tea.KeyPressMsg{Code: 'x'})
+		model, commandCmd := updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+		command := applicationCommandFromCmd(t, commandCmd)
+		model, quit := updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+			Command: application.UICommandDeleteAllLocalState, RequestID: command.RequestID,
+			Failure:            application.UIQueryUnavailable,
+			LocalStateDeletion: &application.LocalStateDeletionResult{StorageClosed: true},
+		}})
+		if quit != nil || model.session.ID != "" || !strings.Contains(model.render(), "Local database deletion incomplete") {
+			t.Fatalf("partial delete-all did not clear state and report failure: %#v", model.session)
+		}
+		model, quit = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+		if !commandQuits(quit) || model.quitAfterLocalDeletion {
+			t.Fatal("partial delete-all did not quit after acknowledgement")
+		}
+	})
+}
+
 type tuiPrivacyStore struct{}
 
 func (*tuiPrivacyStore) LoadPrivacy(context.Context) (application.PrivacyRecord, bool, error) {

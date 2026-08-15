@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 )
@@ -125,8 +127,12 @@ type OpenOptions struct {
 
 // DB owns the private sqlx handle for the SQLite adapter.
 type DB struct {
+	mu            sync.Mutex
 	handle        *sqlx.DB
 	correlationID string
+	stateDir      string
+	databasePath  string
+	closed        bool
 }
 
 // Open validates the fixed storage path, opens the selected SQLite driver,
@@ -179,6 +185,8 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 	db := &DB{
 		handle:        handle,
 		correlationID: options.CorrelationID,
+		stateDir:      options.StateDir,
+		databasePath:  databasePath,
 	}
 	defer func() {
 		if returnErr != nil {
@@ -222,6 +230,16 @@ func (db *DB) Close() error {
 	if db == nil || db.handle == nil {
 		return nil
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.closeLocked()
+}
+
+func (db *DB) closeLocked() error {
+	if db.closed {
+		return nil
+	}
+	db.closed = true
 	if err := db.handle.Close(); err != nil {
 		return newError(
 			ClassPersistenceUnavailable,
@@ -231,6 +249,86 @@ func (db *DB) Close() error {
 			db.correlationID,
 			err,
 		)
+	}
+	return nil
+}
+
+// DeleteAllLocalState closes storage and removes only the validated database
+// and known SQLite sidecars. It never removes a directory or follows a link.
+func (db *DB) DeleteAllLocalState(ctx context.Context) (application.LocalStateDeletionResult, error) {
+	if db == nil || db.handle == nil {
+		return application.LocalStateDeletionResult{}, newError(
+			ClassConfigurationInvalid,
+			"storage_delete_invalid",
+			"delete_all_local_state",
+			"KuPilot local storage cannot be deleted safely.",
+			"storage",
+			nil,
+		)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return application.LocalStateDeletionResult{StorageClosed: true}, newError(
+			ClassPersistenceUnavailable,
+			"storage_already_closed",
+			"delete_all_local_state",
+			"KuPilot local storage is already closed.",
+			db.correlationID,
+			nil,
+		)
+	}
+	if err := contextFailure(ctx, "delete_all_local_state", db.correlationID); err != nil {
+		return application.LocalStateDeletionResult{}, err
+	}
+	if err := db.validateDeletionPaths(); err != nil {
+		return application.LocalStateDeletionResult{}, pathError(db.correlationID, err)
+	}
+	if err := db.closeLocked(); err != nil {
+		return application.LocalStateDeletionResult{StorageClosed: true}, err
+	}
+
+	var removalErrors []error
+	for _, path := range knownStoragePaths(db.databasePath) {
+		if err := validateKnownStorageFile(path); err != nil {
+			removalErrors = append(removalErrors, err)
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removalErrors = append(removalErrors, err)
+		}
+	}
+	if len(removalErrors) != 0 {
+		return application.LocalStateDeletionResult{StorageClosed: true}, newError(
+			ClassPersistenceUnavailable,
+			"storage_delete_incomplete",
+			"delete_all_local_state",
+			"KuPilot closed local storage but could not remove every database file.",
+			db.correlationID,
+			errors.Join(removalErrors...),
+		)
+	}
+	return application.LocalStateDeletionResult{StorageClosed: true, Complete: true}, nil
+}
+
+func (db *DB) validateDeletionPaths() error {
+	if !validStateDirectory(db.stateDir) || db.databasePath != filepath.Join(db.stateDir, databaseFilename) {
+		return os.ErrInvalid
+	}
+	if err := rejectSymlinkedPath(db.stateDir); err != nil {
+		return err
+	}
+	info, err := os.Lstat(db.stateDir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		if err != nil {
+			return err
+		}
+		return os.ErrInvalid
+	}
+	for _, path := range knownStoragePaths(db.databasePath) {
+		if err := validateKnownStorageFile(path); err != nil {
+			return err
+		}
 	}
 	return nil
 }

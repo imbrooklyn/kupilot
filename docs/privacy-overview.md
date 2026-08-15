@@ -127,9 +127,14 @@ active, and terminal-but-not-yet-quiesced runs are cancelled and awaited, and
 pending or approved-but-not-executed approvals are made
 non-executable before one transactional graph deletion. A consuming approval or
 database failure denies deletion without a partial-success claim. There is no
-separate Session-management surface, clear-history command, or delete-all UI.
-[Privacy and Local Data](user-guide/privacy-and-local-data.md) documents the
-exact database and log paths and the safe manual all-state cleanup boundary.
+separate Session-management surface. `H` in `/privacy` clears every Session
+graph and associated audit in bounded transactions while preserving settings
+and valid model-transfer consent. `X` closes storage and deletes only the
+validated database and known journal, WAL, and shared-memory sidecars; it also
+removes settings and consent. A preflight denial leaves storage open, while a
+failure after close is reported before KuPilot exits. Operational logs and
+exported summaries are outside both operations. [Privacy and Local
+Data](user-guide/privacy-and-local-data.md) documents the exact boundaries.
 Logical deletion and file removal are not forensic erasure from backups,
 snapshots, SQLite free pages, WAL history, swap, or storage media.
 

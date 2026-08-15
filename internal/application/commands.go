@@ -121,7 +121,8 @@ func (command UICommand) Validate() error {
 		return ErrInvalidUICommand
 	}
 	lifecycleCommand := command.Kind == UICommandTightenRetention || command.Kind == UICommandSetPersistenceMode ||
-		command.Kind == UICommandDeleteSession
+		command.Kind == UICommandDeleteSession || command.Kind == UICommandClearHistory ||
+		command.Kind == UICommandDeleteAllLocalState
 	if lifecycleCommand != (command.Lifecycle != nil) || command.Lifecycle != nil && command.Lifecycle.validateFor(command.Kind) != nil {
 		return ErrInvalidUICommand
 	}
@@ -190,7 +191,7 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) || command.LogsEnabled != nil {
 			return ErrInvalidUICommand
 		}
-	case UICommandDeleteSession:
+	case UICommandDeleteSession, UICommandClearHistory, UICommandDeleteAllLocalState:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand

@@ -170,6 +170,19 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 		model.showDialog("Session not deleted", "The Session was not deleted. No partial deletion was reported.")
 		model.reflow()
 		return false
+	case application.UICommandClearHistory, application.UICommandDeleteAllLocalState:
+		if model.pendingDeleteID == 0 || message.RequestID != model.pendingDeleteID || model.localDeletion == nil {
+			return false
+		}
+		model.pendingDeleteID = 0
+		model.pendingPrivacyID = 0
+		model.privacyReview = nil
+		model.lifecycleReview = nil
+		model.localDeletion = nil
+		model.privacyPending = false
+		model.showDialog("Local data not deleted", "No committed deletion result was reported.")
+		model.reflow()
+		return false
 	case application.UICommandExportSession:
 		if model.pendingExportID == 0 || message.RequestID != model.pendingExportID || model.sessionExport == nil {
 			return false
@@ -305,6 +318,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	if model.dialog.Open() {
+		if model.quitAfterLocalDeletion {
+			if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+				model.quitAfterLocalDeletion = false
+				model.closeDialog()
+				return model, quitCommand()
+			}
+			return model, nil
+		}
 		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetError {
 			return model.updateSessionExportTargetErrorKey(message)
 		}
@@ -313,6 +334,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if model.sessionDelete != nil {
 			return model.updateSessionDeleteKey(message)
+		}
+		if model.localDeletion != nil {
+			return model.updateLocalDeletionKey(message)
 		}
 		if model.privacyReview != nil {
 			return model.updatePrivacyDialogKey(message)
@@ -1115,6 +1139,37 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.showDialog("Session deleted", "The selected Session was deleted logically in one committed transaction. This is not forensic erasure.")
 		}
 		model.transcript.AppendNotice("The Session was deleted logically in one committed transaction. This is not forensic erasure.")
+	case application.UICommandClearHistory:
+		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.localDeletion == nil ||
+			model.localDeletion.Kind != clearLocalHistory {
+			return
+		}
+		model.clearLocalDeletionFlow()
+		if result.Failure != "" {
+			model.showDialog("History not cleared", "No committed all-Session deletion was reported. Settings and consent were not changed by this request.")
+			return
+		}
+		model.resetAfterHistoryDeletion()
+		model.transcript.AppendNotice("All Session history was deleted logically. Settings and valid model data-sharing consent were preserved. This is not forensic erasure.")
+		model.showDialog("Session history cleared", "All Session graphs and associated audit were deleted. Settings and valid model data-sharing consent remain. This is not forensic erasure.")
+	case application.UICommandDeleteAllLocalState:
+		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.localDeletion == nil ||
+			model.localDeletion.Kind != deleteAllLocalState || result.LocalStateDeletion == nil {
+			return
+		}
+		local := *result.LocalStateDeletion
+		model.clearLocalDeletionFlow()
+		if local.StorageClosed {
+			model.resetAfterHistoryDeletion()
+			model.quitAfterLocalDeletion = true
+			if result.Failure != "" {
+				model.showDialog("Local database deletion incomplete", "KuPilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the configured state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
+				return
+			}
+			model.showDialog("Local database state deleted", "KuPilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc or Enter to exit.")
+			return
+		}
+		model.showDialog("Local data not deleted", "Storage path validation or preflight failed before the database was closed. KuPilot remains open and no complete deletion was reported.")
 	case application.UICommandExportSession:
 		if model.pendingExportID == 0 || result.RequestID != model.pendingExportID || model.sessionExport == nil {
 			return
@@ -1276,6 +1331,27 @@ func (model *Model) finishPrivacyAction(requestID uint64) bool {
 	return true
 }
 
+func (model *Model) clearLocalDeletionFlow() {
+	model.pendingDeleteID = 0
+	model.pendingPrivacyID = 0
+	model.privacyReview = nil
+	model.lifecycleReview = nil
+	model.localDeletion = nil
+	model.privacyPending = false
+	model.dialog.Close()
+}
+
+func (model *Model) resetAfterHistoryDeletion() {
+	model.closePickers()
+	model.composer.Reset()
+	model.session = SessionView{}
+	model.privacyMode = domain.PrivacyModeStandard
+	model.resource = ResourceView{}
+	model.pendingResumed = nil
+	model.resumeOrigin = resumeOriginNone
+	model.resetTranscript()
+}
+
 func privacyReviewText(review application.PrivacyReview, lifecycle *application.SessionLifecycleReview) string {
 	var builder strings.Builder
 	if lifecycle != nil {
@@ -1318,6 +1394,7 @@ func privacyReviewText(review application.PrivacyReview, lifecycle *application.
 		if lifecycle.CurrentSession != nil {
 			builder.WriteString(" | D delete current Session")
 		}
+		builder.WriteString(" | H clear history | X delete all database state")
 		builder.WriteString(" | Esc cancel")
 	} else {
 		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
@@ -1380,6 +1457,18 @@ func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, t
 			return model, nil
 		}
 		model.beginCurrentSessionDelete()
+		return model, nil
+	case message.Code == 'h' || message.Code == 'H':
+		if model.lifecycleReview == nil {
+			return model, nil
+		}
+		model.beginLocalDeletion(clearLocalHistory)
+		return model, nil
+	case message.Code == 'x' || message.Code == 'X':
+		if model.lifecycleReview == nil {
+			return model, nil
+		}
+		model.beginLocalDeletion(deleteAllLocalState)
 		return model, nil
 	case message.Code == 'e' || message.Code == 'E':
 		if model.lifecycleReview == nil || model.lifecycleReview.CurrentSession == nil ||

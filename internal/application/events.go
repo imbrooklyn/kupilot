@@ -55,20 +55,22 @@ type UIStatusResult struct {
 // UICommandOutcome contains only the typed result shapes used by delivery.
 // Exactly which fields are populated is determined by Command.
 type UICommandOutcome struct {
-	Command   UICommandKind
-	RequestID uint64
-	Session   *UISessionState
-	Resumed   *UIResumedSession
-	Scope     *UIScopeResult
-	Resource  *UIResourceSelectionResult
-	Status    *UIStatusResult
-	Privacy   *PrivacyReview
-	Lifecycle *SessionLifecycleReview
-	Deletion  *SessionDeletionResult
-	Export    *SessionExportResult
-	Approval  *UIApprovalResult
-	RunID     domain.AgentRunID
-	Failure   UIQueryFailureCode
+	Command            UICommandKind
+	RequestID          uint64
+	Session            *UISessionState
+	Resumed            *UIResumedSession
+	Scope              *UIScopeResult
+	Resource           *UIResourceSelectionResult
+	Status             *UIStatusResult
+	Privacy            *PrivacyReview
+	Lifecycle          *SessionLifecycleReview
+	Deletion           *SessionDeletionResult
+	HistoryDeletion    *HistoryDeletionResult
+	LocalStateDeletion *LocalStateDeletionResult
+	Export             *SessionExportResult
+	Approval           *UIApprovalResult
+	RunID              domain.AgentRunID
+	Failure            UIQueryFailureCode
 }
 
 // Validate checks command/result correlation and exclusive payload shapes.
@@ -98,6 +100,12 @@ func (result UICommandOutcome) Validate() error {
 		}
 	}
 	if result.Deletion != nil && (result.Deletion.Validate() != nil || result.Command != UICommandDeleteSession) {
+		return ErrInvalidUIEvent
+	}
+	if result.HistoryDeletion != nil && (result.HistoryDeletion.Validate() != nil || result.Command != UICommandClearHistory) {
+		return ErrInvalidUIEvent
+	}
+	if result.LocalStateDeletion != nil && (result.LocalStateDeletion.Validate() != nil || result.Command != UICommandDeleteAllLocalState) {
 		return ErrInvalidUIEvent
 	}
 	if result.Export != nil && (result.Export.Validate() != nil || result.Command != UICommandExportSession) {
@@ -220,6 +228,36 @@ func (result UICommandOutcome) Validate() error {
 			return nil
 		}
 		if result.Deletion == nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandClearHistory:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil ||
+			result.Deletion != nil || result.LocalStateDeletion != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if !result.Failure.validOperational() || result.HistoryDeletion != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.HistoryDeletion == nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandDeleteAllLocalState:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil ||
+			result.Deletion != nil || result.HistoryDeletion != nil || result.RunID != "" || result.LocalStateDeletion == nil {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if !result.Failure.validOperational() || result.LocalStateDeletion.Complete {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if !result.LocalStateDeletion.Complete {
 			return ErrInvalidUIEvent
 		}
 	case UICommandExportSession:

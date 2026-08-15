@@ -34,8 +34,9 @@ release; current behavior is recorded under `Unreleased`.
 - Bounded Evidence details that preserve run and scope provenance while
   excluding raw Tool results, raw objects, and raw container output.
 - Standard and minimal Session modes, one-way operational-detail retention,
-  transactional per-Session deletion, bounded safe Session discovery, and a
-  versioned redacted Markdown summary export in the existing TUI surfaces.
+  transactional per-Session and clear-history deletion, exact-path local
+  database deletion, bounded safe Session discovery, and a versioned redacted
+  Markdown summary export in the existing TUI surfaces.
 - Deterministic diagnosis provenance and assertion rubrics across all eight
   supported diagnostic categories.
 - A released-schema migration matrix covering `v0.1` through `v0.3`, plus
@@ -67,9 +68,6 @@ release; current behavior is recorded under `Unreleased`.
 
 - There is no published binary or package-manager installation recorded here;
   the verified installation path is a source build.
-- KuPilot has no clear-history or delete-all UI. Users can delete one Session at
-  a time or remove the exact local database, known sidecars, and logs while all
-  KuPilot processes are stopped.
 - Diagnosis is limited to the documented eight categories and may end with
   missing information rather than a root cause.
 - Windows is experimental and is not part of the supported `v0.3` runtime or CI

@@ -397,6 +397,157 @@ func TestCoordinatorDeleteSessionHandlesConfirmationCancellationAndDatabaseFailu
 	}
 }
 
+func TestCoordinatorClearHistoryRequiresConfirmationAndPreservesStateOnFailure(t *testing.T) {
+	clock := newCoordinatorClock()
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
+		return agent.RunOutcome{}
+	}))
+	first := createCoordinatorSession(t, coordinator)
+	second := createCoordinatorSession(t, coordinator)
+
+	unconfirmed := UICommand{
+		Kind: UICommandClearHistory, RequestID: 71,
+		Lifecycle: &SessionLifecycleIntent{},
+	}
+	if _, err := coordinator.ExecuteUICommand(context.Background(), unconfirmed); !errors.Is(err, ErrInvalidUICommand) || persistence.clearHistoryCount != 0 {
+		t.Fatalf("unconfirmed clear-history error/calls = %v/%d", err, persistence.clearHistoryCount)
+	}
+	persistence.clearHistoryFailure = true
+	confirmed := unconfirmed
+	confirmed.Lifecycle.Confirmed = true
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := coordinator.ExecuteUICommand(cancelled, confirmed); !errors.Is(err, context.Canceled) || persistence.clearHistoryCount != 0 {
+		t.Fatalf("cancelled clear-history error/calls = %v/%d", err, persistence.clearHistoryCount)
+	}
+	failed, err := coordinator.ExecuteUICommand(context.Background(), confirmed)
+	if err != nil || failed.Failure != UIQueryUnavailable || persistence.clearHistoryCount != 1 ||
+		coordinator.CurrentUISession() == nil || coordinator.CurrentUISession().ID != second.ID {
+		t.Fatalf("failed clear-history outcome/error/calls/current = %#v/%v/%d/%#v", failed, err, persistence.clearHistoryCount, coordinator.CurrentUISession())
+	}
+
+	persistence.clearHistoryFailure = false
+	confirmed.RequestID++
+	cleared, err := coordinator.ExecuteUICommand(context.Background(), confirmed)
+	persistence.mu.Lock()
+	remaining := len(persistence.sessions)
+	persistence.mu.Unlock()
+	if err != nil || cleared.HistoryDeletion == nil || !cleared.HistoryDeletion.SessionsCleared ||
+		!cleared.HistoryDeletion.PreferencesPreserved || persistence.clearHistoryCount != 2 || remaining != 0 ||
+		coordinator.CurrentUISession() != nil || first.ID == second.ID {
+		t.Fatalf("clear-history outcome/error/calls/remaining/current = %#v/%v/%d/%d/%#v", cleared, err, persistence.clearHistoryCount, remaining, coordinator.CurrentUISession())
+	}
+}
+
+func TestCoordinatorHistoryDeletionCancelsActiveRunBeforeStorageMutation(t *testing.T) {
+	for _, kind := range []UICommandKind{UICommandClearHistory, UICommandDeleteAllLocalState} {
+		t.Run(string(kind), func(t *testing.T) {
+			clock := newCoordinatorClock()
+			started := make(chan struct{})
+			terminated := make(chan struct{})
+			runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+				publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+				if err != nil {
+					t.Fatalf("NewEventPublisher() error = %v", err)
+				}
+				if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
+					t.Fatalf("Publish(started) error = %v", err)
+				}
+				close(started)
+				<-ctx.Done()
+				_, _ = publisher.Publish(context.WithoutCancel(ctx), agent.RunEvent{
+					Kind: agent.RunEventRunCancelled, TerminationReason: agent.RunTerminationUserCancelled,
+				})
+				close(terminated)
+				class := domain.SafeErrorClassCancelled
+				return agent.RunOutcome{Status: domain.AgentRunStatusCancelled, ErrorClass: &class, SafeMessage: "The AgentRun was cancelled."}
+			})
+			coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+			persistence.clearHistoryReady = terminated
+			localState := &recordingLocalStateDeletion{
+				result: LocalStateDeletionResult{StorageClosed: true, Complete: true}, ready: terminated,
+			}
+			coordinator.localState = localState
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Inspect the selected Pod."})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			<-started
+			outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+				Kind: kind, RequestID: 74, Lifecycle: &SessionLifecycleIntent{Confirmed: true},
+			})
+			if err != nil || outcome.Failure != "" {
+				t.Fatalf("history deletion outcome/error = %#v/%v", outcome, err)
+			}
+			if kind == UICommandClearHistory && persistence.clearHistoryCount != 1 ||
+				kind == UICommandDeleteAllLocalState && localState.calls != 1 {
+				t.Fatalf("history mutation calls clear/delete-all = %d/%d", persistence.clearHistoryCount, localState.calls)
+			}
+			run, err := coordinator.WaitRun(context.Background(), runID)
+			if err != nil || run.Status != domain.AgentRunStatusCancelled {
+				t.Fatalf("WaitRun() = %#v, %v", run, err)
+			}
+		})
+	}
+}
+
+func TestCoordinatorDeleteAllLocalStateReportsPreflightAndClosedPartialFailures(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		result     LocalStateDeletionResult
+		failure    bool
+		wantClosed bool
+		wantClear  bool
+	}{
+		{name: "preflight denied", result: LocalStateDeletionResult{}, failure: true},
+		{name: "closed partial", result: LocalStateDeletionResult{StorageClosed: true}, failure: true, wantClosed: true, wantClear: true},
+		{name: "complete", result: LocalStateDeletionResult{StorageClosed: true, Complete: true}, wantClosed: true, wantClear: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newCoordinatorClock()
+			coordinator, _, _, _ := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
+				return agent.RunOutcome{}
+			}))
+			createCoordinatorSession(t, coordinator)
+			deletion := &recordingLocalStateDeletion{result: test.result}
+			if test.failure {
+				deletion.err = errors.New("generated local-state deletion failure")
+			}
+			coordinator.localState = deletion
+			outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+				Kind: UICommandDeleteAllLocalState, RequestID: 73,
+				Lifecycle: &SessionLifecycleIntent{Confirmed: true},
+			})
+			currentCleared := coordinator.CurrentUISession() == nil
+			if err != nil || outcome.LocalStateDeletion == nil || outcome.LocalStateDeletion.StorageClosed != test.wantClosed ||
+				(outcome.Failure != "") != test.failure || deletion.calls != 1 ||
+				currentCleared != test.wantClear {
+				t.Fatalf("delete-all outcome/error/calls/current = %#v/%v/%d/%#v", outcome, err, deletion.calls, coordinator.CurrentUISession())
+			}
+		})
+	}
+}
+
+type recordingLocalStateDeletion struct {
+	result LocalStateDeletionResult
+	err    error
+	calls  int
+	ready  <-chan struct{}
+}
+
+func (deletion *recordingLocalStateDeletion) DeleteAllLocalState(context.Context) (LocalStateDeletionResult, error) {
+	deletion.calls++
+	if deletion.ready != nil {
+		select {
+		case <-deletion.ready:
+		default:
+			return LocalStateDeletionResult{}, errors.New("generated delete-all before prerequisite termination")
+		}
+	}
+	return deletion.result, deletion.err
+}
+
 func TestCoordinatorDeleteHistoricalSessionKeepsCurrentSession(t *testing.T) {
 	clock := newCoordinatorClock()
 	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
@@ -644,6 +795,44 @@ func TestApprovalCoordinatorPreparesSessionDeletionWithoutExecuting(t *testing.T
 			}
 		})
 	}
+}
+
+func TestApprovalCoordinatorPreparesHistoryDeletionWithoutExecuting(t *testing.T) {
+	for _, state := range []domain.ApprovalState{domain.ApprovalStatePending, domain.ApprovalStateApproved} {
+		t.Run(string(state), func(t *testing.T) {
+			fixture := newApprovalCoordinatorFixture(t)
+			request := fixture.submit(t, 39)
+			if state == domain.ApprovalStateApproved {
+				approved, err := fixture.coordinator.Decide(
+					context.Background(),
+					approvalDecisionCommand(UICommandApproveRestart, request, 39, 109),
+				)
+				if err != nil || approved.State != domain.ApprovalStateApproved {
+					t.Fatalf("Decide(approve) = %#v, %v", approved, err)
+				}
+			}
+			if err := fixture.coordinator.PrepareHistoryDeletion(context.Background()); err != nil {
+				t.Fatalf("PrepareHistoryDeletion() error = %v", err)
+			}
+			if fixture.persistence.lastCloseExpected != state || fixture.executor.calls != 0 {
+				t.Fatalf("history deletion expected/executor = %s/%d", fixture.persistence.lastCloseExpected, fixture.executor.calls)
+			}
+		})
+	}
+
+	t.Run("consuming is denied", func(t *testing.T) {
+		fixture := newApprovalCoordinatorFixture(t)
+		request := fixture.submit(t, 40)
+		fixture.coordinator.mu.Lock()
+		tracked := fixture.coordinator.active[request.ID]
+		tracked.consuming = true
+		fixture.coordinator.active[request.ID] = tracked
+		fixture.coordinator.mu.Unlock()
+		err := fixture.coordinator.PrepareHistoryDeletion(context.Background())
+		if !errors.Is(err, ErrHistoryDeletionUnsafe) || fixture.persistence.closes != 0 || fixture.executor.calls != 0 {
+			t.Fatalf("consuming history deletion error/close/executor = %v/%d/%d", err, fixture.persistence.closes, fixture.executor.calls)
+		}
+	})
 }
 
 func TestApprovalCoordinatorSessionDeletionDenialsHaveZeroWrites(t *testing.T) {

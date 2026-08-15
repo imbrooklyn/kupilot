@@ -208,7 +208,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Now: now,
 		UI: &application.CoordinatorUIConfig{
 			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
-			EvidenceDetail: evidenceApplication,
+			EvidenceDetail: evidenceApplication, LocalState: database,
 		},
 	})
 	if err != nil {

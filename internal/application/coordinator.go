@@ -67,6 +67,7 @@ type CoordinatorUIConfig struct {
 	Scopes         *ScopeManager
 	Approvals      *ApprovalCoordinator
 	EvidenceDetail EvidenceDetailReader
+	LocalState     LocalStateDeleter
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -105,6 +106,7 @@ type Coordinator struct {
 	uiScopes         *ScopeManager
 	approvals        *ApprovalCoordinator
 	evidenceDetails  EvidenceDetailReader
+	localState       LocalStateDeleter
 	exports          SessionExportReader
 	exportFiles      ExportFileWriter
 	exportText       ExportTextProcessor
@@ -243,6 +245,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	var uiScopes *ScopeManager
 	var approvals *ApprovalCoordinator
 	var evidenceDetails EvidenceDetailReader
+	var localState LocalStateDeleter
 	if config.UI != nil {
 		resumeSessions = config.UI.Sessions
 		sessionSearch = config.UI.Search
@@ -251,6 +254,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiScopes = config.UI.Scopes
 		approvals = config.UI.Approvals
 		evidenceDetails = config.UI.EvidenceDetail
+		localState = config.UI.LocalState
 		if approvals != nil && uiScopes.BindApprovalInvalidationHook(approvals) != nil {
 			return nil, ErrCoordinatorDependency
 		}
@@ -267,6 +271,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiScopes:        uiScopes,
 		approvals:       approvals,
 		evidenceDetails: evidenceDetails,
+		localState:      localState,
 		exports:         config.Exports,
 		exportFiles:     config.ExportFiles,
 		exportText:      config.ExportText,
@@ -681,6 +686,8 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return coordinator.executePersistenceModeCommand(ctx, command)
 	case UICommandDeleteSession:
 		return coordinator.executeDeleteSessionCommand(ctx, command)
+	case UICommandClearHistory, UICommandDeleteAllLocalState:
+		return coordinator.executeHistoryDeletionCommand(ctx, command)
 	case UICommandExportSession:
 		return coordinator.executeExportSessionCommand(ctx, command)
 	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:

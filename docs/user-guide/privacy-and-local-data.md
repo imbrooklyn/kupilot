@@ -215,28 +215,38 @@ committed result. A database failure rolls back the graph deletion and reports
 the Session as not deleted; an approval already invalidated remains
 non-executable.
 
-KuPilot does not provide a Session-management page, clear-history command, or
-delete-all UI. To remove all local KuPilot history with the current binary:
+Press `H` in `/privacy`, then `Y`, to clear all Session history. Application
+cancels and awaits starting or active AgentRun work and durably makes every
+pending or approved-but-not-executed approval non-executable. A consuming
+approval or prerequisite failure denies the request. SQLite removes every
+Session graph and associated audit in bounded transactions. Settings and still-
+valid model-transfer consent remain, which the confirmation and result state
+explicitly disclose. A transaction failure reports that history was not
+cleared.
 
-1. Quit every KuPilot process so no database or log handle remains open.
-2. Resolve the exact state and log directories from the effective typed
-   configuration and the tables above. Do not infer them from the current
-   working directory.
-3. If retention is required, make an owner-protected backup under your own
-   policy. A backup retains the same sensitive local metadata.
-4. Remove only `kupilot.db` and the known `kupilot.db-journal`,
-   `kupilot.db-wal`, and `kupilot.db-shm` files from that exact state directory.
-   Removing the database also removes stored Session history, settings, and
-   consent.
-5. If local operational logs must also be removed, remove only `kupilot.log`,
-   `kupilot.log.1`, and `kupilot.log.2` from the exact log directory.
+Press `X` in `/privacy`, then `Y`, to delete all local database state. After the
+same run and approval gates, KuPilot validates the configured state directory,
+the exact `kupilot.db` path, and the known `-journal`, `-wal`, and `-shm`
+sidecars. It rejects symlinks and non-regular targets before closing storage.
+It then closes the database and removes only those exact files, including
+stored Session history, settings, and consent. It never recursively removes a
+directory or creates replacement state in the same operation.
 
-Do not recursively remove a home, XDG base, Application Support, state, or log
-root. On the next start, KuPilot creates new validated local state and requires
-model-transfer consent again.
+A preflight denial leaves the database open and KuPilot running. If any exact
+file cannot be removed after storage closes, the UI reports an incomplete
+deletion before exit. A successful result also requires acknowledgement before
+exit. On the next start, KuPilot creates new validated database state and
+requires model-transfer consent again.
 
-Per-Session deletion is logical deletion. Neither logical row deletion nor file
-removal guarantees forensic erasure from SQLite free pages, WAL history,
+Clear-history and delete-all do not remove exported summaries or the local
+operational log. To remove operational logs after KuPilot exits, resolve the
+exact configured log directory and remove only `kupilot.log`, `kupilot.log.1`,
+and `kupilot.log.2`. Do not recursively remove a home, XDG base, Application
+Support, state, or log root. User-managed backups retain the same sensitive
+local metadata and remain outside KuPilot deletion.
+
+Per-Session and clear-history deletion are logical operations. Neither logical
+row deletion nor file removal guarantees forensic erasure from SQLite free pages, WAL history,
 filesystem journals, snapshots, backups, swap, or storage media. KuPilot does
 not run automatic `VACUUM` as a secure-delete claim. Use operating-system disk
 encryption and manage backups and snapshots when stronger protection is

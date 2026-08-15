@@ -19,9 +19,11 @@ const (
 )
 
 const (
-	UICommandTightenRetention   UICommandKind = "tighten_retention"
-	UICommandSetPersistenceMode UICommandKind = "set_persistence_mode"
-	UICommandDeleteSession      UICommandKind = "delete_session"
+	UICommandTightenRetention    UICommandKind = "tighten_retention"
+	UICommandSetPersistenceMode  UICommandKind = "set_persistence_mode"
+	UICommandDeleteSession       UICommandKind = "delete_session"
+	UICommandClearHistory        UICommandKind = "clear_history"
+	UICommandDeleteAllLocalState UICommandKind = "delete_all_local_state"
 )
 
 var (
@@ -31,6 +33,8 @@ var (
 	ErrRetentionSettingConflict = errors.New("the retention setting changed before the requested update")
 	// ErrSessionDeletionUnsafe reports an approval state that may be executing.
 	ErrSessionDeletionUnsafe = errors.New("the Session cannot be deleted while an approved operation may be executing")
+	// ErrHistoryDeletionUnsafe reports an approval state that may be executing.
+	ErrHistoryDeletionUnsafe = errors.New("local history cannot be deleted while an approved operation may be executing")
 )
 
 // RetentionSettingUpdate is the atomic compare-and-tighten persistence intent.
@@ -59,6 +63,13 @@ type SessionLifecyclePersistence interface {
 	LoadOperationalDetailRetention(context.Context) (days int, found bool, err error)
 	TightenOperationalDetailRetention(context.Context, RetentionSettingUpdate) error
 	DeleteSessionGraph(context.Context, domain.SessionID) error
+	ClearHistory(context.Context) error
+}
+
+// LocalStateDeleter owns the bounded removal of the validated database and its
+// known sidecars. It exposes no path, SQL handle, or recursive filesystem API.
+type LocalStateDeleter interface {
+	DeleteAllLocalState(context.Context) (LocalStateDeletionResult, error)
 }
 
 // SessionLifecycleIntent is the exclusive payload for one fixed lifecycle command.
@@ -85,6 +96,11 @@ func (intent SessionLifecycleIntent) validateFor(kind UICommandKind) error {
 		}
 	case UICommandDeleteSession:
 		if intent.RetentionDays != nil || intent.PrivacyMode != "" || !intent.SessionID.Valid() || !intent.Confirmed {
+			return ErrInvalidUICommand
+		}
+	case UICommandClearHistory, UICommandDeleteAllLocalState:
+		if intent.RetentionDays != nil || intent.PrivacyMode != "" || intent.SessionID != "" ||
+			intent.ExpectedCurrent || !intent.Confirmed {
 			return ErrInvalidUICommand
 		}
 	default:
@@ -130,6 +146,37 @@ func (result SessionDeletionResult) Validate() error {
 	return nil
 }
 
+// HistoryDeletionResult confirms one committed all-Session deletion while
+// explicitly recording that non-history preferences remain.
+type HistoryDeletionResult struct {
+	SessionsCleared      bool
+	PreferencesPreserved bool
+}
+
+// Validate checks the fixed successful clear-history result.
+func (result HistoryDeletionResult) Validate() error {
+	if !result.SessionsCleared || !result.PreferencesPreserved {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// LocalStateDeletionResult reports whether storage became unavailable and
+// whether every validated database file was removed. A closed partial failure
+// is distinct from a preflight denial that leaves storage open.
+type LocalStateDeletionResult struct {
+	StorageClosed bool
+	Complete      bool
+}
+
+// Validate checks the fixed delete-all result states.
+func (result LocalStateDeletionResult) Validate() error {
+	if result.Complete && !result.StorageClosed {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
 // PrepareSessionDeletion durably cancels every unexecuted approval for one
 // Session and rejects deletion while an approval consumption path is active.
 func (coordinator *ApprovalCoordinator) PrepareSessionDeletion(ctx context.Context, sessionID domain.SessionID) error {
@@ -146,6 +193,22 @@ func (coordinator *ApprovalCoordinator) PrepareSessionDeletion(ctx context.Conte
 	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
 		return tracked.request.SessionID == sessionID
 	}, domain.ApprovalReasonUserCancelled)
+}
+
+// PrepareHistoryDeletion durably cancels every unexecuted approval and rejects
+// deletion while any approval consumption path is active.
+func (coordinator *ApprovalCoordinator) PrepareHistoryDeletion(ctx context.Context) error {
+	if coordinator == nil || ctx == nil {
+		return ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	for _, tracked := range coordinator.active {
+		if tracked.consuming {
+			return ErrHistoryDeletionUnsafe
+		}
+	}
+	return coordinator.closeMatching(ctx, func(trackedApproval) bool { return true }, domain.ApprovalReasonUserCancelled)
 }
 
 func (coordinator *Coordinator) sessionLifecycleReview(ctx context.Context) (SessionLifecycleReview, error) {
@@ -377,4 +440,110 @@ func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context,
 	deletion := SessionDeletionResult{SessionID: intent.SessionID, WasCurrent: current}
 	result.Deletion = &deletion
 	return result, nil
+}
+
+func (coordinator *Coordinator) executeHistoryDeletionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+	if err := coordinator.beginUIOperation(false); err != nil {
+		return UICommandOutcome{}, err
+	}
+	defer coordinator.finishOperation()
+
+	coordinator.mu.Lock()
+	startingCancel := coordinator.startingCancel
+	startingDone := coordinator.startingDone
+	coordinator.mu.Unlock()
+	if startingCancel != nil {
+		startingCancel()
+		select {
+		case <-ctx.Done():
+			return UICommandOutcome{}, ctx.Err()
+		case <-startingDone:
+		}
+	}
+	if coordinator.approvals != nil {
+		if err := coordinator.approvals.PrepareHistoryDeletion(ctx); err != nil {
+			result.Failure = UIQueryUnavailable
+			if command.Kind == UICommandDeleteAllLocalState {
+				state := LocalStateDeletionResult{}
+				result.LocalStateDeletion = &state
+			}
+			return result, nil
+		}
+	}
+	coordinator.mu.Lock()
+	state := coordinator.active
+	coordinator.mu.Unlock()
+	if state != nil {
+		state.cancel()
+		if _, err := coordinator.WaitRun(ctx, state.run.ID); err != nil {
+			if ctx.Err() != nil {
+				return UICommandOutcome{}, ctx.Err()
+			}
+			result.Failure = UIQueryUnavailable
+			if command.Kind == UICommandDeleteAllLocalState {
+				local := LocalStateDeletionResult{}
+				result.LocalStateDeletion = &local
+			}
+			return result, nil
+		}
+	}
+
+	if command.Kind == UICommandClearHistory {
+		if err := coordinator.persist(ctx, func(operationContext context.Context) error {
+			return coordinator.sessions.ClearHistory(operationContext)
+		}); err != nil {
+			if ctx.Err() != nil {
+				return UICommandOutcome{}, ctx.Err()
+			}
+			result.Failure = UIQueryUnavailable
+			return result, nil
+		}
+		coordinator.clearDeletedHistoryState()
+		cleared := HistoryDeletionResult{SessionsCleared: true, PreferencesPreserved: true}
+		result.HistoryDeletion = &cleared
+		return result, nil
+	}
+
+	if coordinator.localState == nil {
+		local := LocalStateDeletionResult{}
+		result.LocalStateDeletion = &local
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	operationContext, cancel := context.WithTimeout(ctx, coordinator.persistenceLimit)
+	local, err := coordinator.localState.DeleteAllLocalState(operationContext)
+	cancel()
+	if local.Validate() != nil || err == nil && !local.Complete {
+		local = LocalStateDeletionResult{}
+		err = ErrPersistenceUnavailable
+	}
+	result.LocalStateDeletion = &local
+	if err != nil {
+		result.Failure = UIQueryUnavailable
+	}
+	if local.StorageClosed {
+		coordinator.clearDeletedHistoryState()
+		coordinator.mu.Lock()
+		coordinator.persistenceDegraded = true
+		coordinator.mu.Unlock()
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) clearDeletedHistoryState() {
+	coordinator.mu.Lock()
+	coordinator.currentSession = nil
+	coordinator.currentResumed = false
+	coordinator.pendingResume = nil
+	coordinator.startupResume = nil
+	coordinator.privacyChallenge = nil
+	coordinator.lastDiagnosis = nil
+	coordinator.lastEvidence = nil
+	coordinator.mu.Unlock()
+	if coordinator.uiScopes != nil {
+		if scope, active := coordinator.uiScopes.CurrentScope(); active {
+			clearScopeResource(coordinator.uiScopes, scope)
+		}
+	}
 }

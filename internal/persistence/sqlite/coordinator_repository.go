@@ -206,6 +206,33 @@ func (repository *SessionRepository) DeleteSessionGraph(ctx context.Context, id 
 	return repository.Delete(ctx, id)
 }
 
+// ClearHistory removes every Session graph and every remaining unlinked audit
+// in one transaction while preserving settings, consent, and schema metadata.
+func (repository *SessionRepository) ClearHistory(ctx context.Context) error {
+	if err := repositoryContext(ctx, repository.db, "clear_history"); err != nil {
+		return err
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM audit_events`); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return repositoryFailure(
+			repository.db,
+			"history_clear_failed",
+			"clear_history",
+			"KuPilot could not clear local Session history.",
+			err,
+		)
+	}
+	return nil
+}
+
 // BeginWithAudit atomically inserts one running AgentRun, activity time, and
 // required start audit. Only standard mode retains the safe request Message.
 func (repository *AgentRunRepository) BeginWithAudit(

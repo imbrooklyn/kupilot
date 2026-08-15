@@ -25,6 +25,17 @@ type sessionDeleteState struct {
 	Origin          sessionDeleteOrigin
 }
 
+type localDeletionKind uint8
+
+const (
+	clearLocalHistory localDeletionKind = iota + 1
+	deleteAllLocalState
+)
+
+type localDeletionState struct {
+	Kind localDeletionKind
+}
+
 type sessionExportStage uint8
 
 const (
@@ -288,6 +299,57 @@ func (model Model) updateSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, t
 	}
 	model.pendingDeleteID = requestID
 	model.dialog.Show("Deleting Session", "Waiting for Application to cancel unsafe state and commit the deletion transaction.")
+	return model, applicationCommand(command)
+}
+
+func (model *Model) beginLocalDeletion(kind localDeletionKind) {
+	if kind != clearLocalHistory && kind != deleteAllLocalState {
+		return
+	}
+	model.localDeletion = &localDeletionState{Kind: kind}
+	if kind == clearLocalHistory {
+		model.showDialog("Clear all Session history?", "This removes every Session graph and all associated read/write audit in bounded transactions. Settings and valid model data-sharing consent remain. An active AgentRun and every pending or approved-not-executed approval must be cancelled first.\n\nLogical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
+		return
+	}
+	model.showDialog("Delete all local database state?", "This closes KuPilot local storage and removes only the validated database plus known SQLite journal, WAL, and shared-memory sidecars. Session history, settings, and model data-sharing consent are removed. Exported summaries, operational log files, backups, snapshots, swap, and storage media are outside this operation.\n\nKuPilot exits after storage closes, including after a partial file-removal failure. This does not guarantee forensic erasure.\n\nY confirms deletion and exit. Esc or Enter cancels.")
+}
+
+func (model Model) updateLocalDeletionKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if model.localDeletion == nil || model.pendingDeleteID != 0 {
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+		model.localDeletion = nil
+		if model.privacyReview != nil && model.lifecycleReview != nil {
+			model.showDialog("Privacy and local data", privacyReviewText(*model.privacyReview, model.lifecycleReview))
+		} else {
+			model.closeDialog()
+		}
+		return model, nil
+	}
+	if message.Code != 'y' && message.Code != 'Y' {
+		return model, nil
+	}
+	requestID := model.nextUIRequestID()
+	kind := application.UICommandClearHistory
+	title := "Clearing Session history"
+	body := "Waiting for Application to cancel unsafe state and commit the bounded deletion transaction."
+	if model.localDeletion.Kind == deleteAllLocalState {
+		kind = application.UICommandDeleteAllLocalState
+		title = "Deleting local database state"
+		body = "Waiting for Application to cancel unsafe state, close storage, and remove the validated database files."
+	}
+	command := application.UICommand{
+		Kind: kind, RequestID: requestID,
+		Lifecycle: &application.SessionLifecycleIntent{Confirmed: true},
+	}
+	if command.Validate() != nil {
+		model.localDeletion = nil
+		model.showDialog("Local data not deleted", "The deletion request could not be constructed safely.")
+		return model, nil
+	}
+	model.pendingDeleteID = requestID
+	model.dialog.Show(title, body)
 	return model, applicationCommand(command)
 }
 

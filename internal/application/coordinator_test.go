@@ -466,6 +466,9 @@ type memoryCoordinatorPersistence struct {
 	deleteWriteCount     int
 	deleteFailure        bool
 	deleteReady          <-chan struct{}
+	clearHistoryCount    int
+	clearHistoryFailure  bool
+	clearHistoryReady    <-chan struct{}
 }
 
 func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
@@ -538,6 +541,25 @@ func (persistence *memoryCoordinatorPersistence) DeleteSessionGraph(_ context.Co
 		return errors.New("generated missing Session")
 	}
 	delete(persistence.sessions, id)
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) ClearHistory(_ context.Context) error {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	persistence.clearHistoryCount++
+	if persistence.clearHistoryReady != nil {
+		select {
+		case <-persistence.clearHistoryReady:
+		default:
+			return errors.New("generated clear-history before prerequisite termination")
+		}
+	}
+	if persistence.clearHistoryFailure {
+		return errors.New("generated clear-history failure")
+	}
+	persistence.sessions = make(map[domain.SessionID]domain.Session)
+	persistence.audits = nil
 	return nil
 }
 
