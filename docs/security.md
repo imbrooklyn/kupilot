@@ -1,8 +1,8 @@
 # KuPilot Security Threat Model
 
-- Status: Accepted security baseline for `v0.1` and the admitted `v0.2` write
-  boundary
-- Date: 2026-08-14
+- Status: Accepted security baseline for `v0.1`, the admitted `v0.2` write
+  boundary, and the `v0.3` Session lifecycle, export, and assurance boundary
+- Date: 2026-08-15
 
 This document defines KuPilot's security objectives, trust boundaries, runtime
 controls, and deterministic security tests. It is normative for implementation
@@ -391,7 +391,7 @@ security test oracle.
 
 | ID | Threat | Required runtime controls | Deterministic proof |
 | --- | --- | --- | --- |
-| T01 | Kubeconfig, token, certificate, key, or exec credential output reaches the model, terminal, logs, errors, or SQLite, or unsafe kubeconfig permissions go unnoticed | C01, C02, C08, C10; credentials are adapter-local and excluded by sink schemas; unsafe Unix source permissions produce a content-free warning without automatic changes | Inject a distinct synthetic canary at every credential source; exercise success and every adapter error; assert exact absence from captured model requests, events, rendered frames, logs, repository queries, and safe errors; table-test owner/group/world modes and assert warning text has no content or path and mode bits never change |
+| T01 | Kubeconfig, token, certificate, key, or exec credential output reaches the model, terminal, logs, errors, or SQLite, or unsafe kubeconfig permissions go unnoticed | C01, C02, C08, C10; credentials are adapter-local and excluded by sink schemas; unsafe Unix source permissions produce a content-free warning without automatic changes | The credential-source matrix injects distinct kubeconfig, token, certificate, key, exec-output, and exec-error canaries and asserts exact permitted transport, child, and server actions plus project-boundary exclusion; the downstream sink matrix covers model, terminal, log, error, and SQLite projections; permission tests assert content-free, path-free warnings and unchanged owner/group/world mode bits |
 | T02 | The model API key is persisted, rendered, inherited by a child, disclosed by an error, or sent to a different endpoint | C01, C02, C03, C10; ephemeral source, immediate environment removal, same-origin transport | Use environment and safe-input fakes plus a redirect and exec child; assert the authentication value appears only in the outbound header to the configured origin, never in child or redirect traffic or any captured sink; scan formatted error paths with a synthetic canary |
 | T03 | Secret data or another high-risk value is read from Kubernetes or smuggled through an Event, resource field, question, container output, Tool selection, or Diagnosis draft | C04 and C07 model-text processing plus C06 source denial and the ordered egress pipeline | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, and the full sink integration test prove typed redaction or blocking before model, Tool/Kubernetes, TUI, Evidence, audit/log, and persistence sinks; denial paths assert zero forbidden calls |
 | T04 | Prompt or Tool-result injection asks the Agent to ignore policy, reveal data, change endpoint, cross scope, write, or approve itself | C04, C05, C07, C11, C12; authority exists only in runtime state and fixed dispatch | Feed injection fixtures through user, Event, container-output, resource-name, historic-message, and model channels; assert unchanged catalog, endpoint, scope, budgets, approval state, and zero forbidden adapter calls |
@@ -404,7 +404,7 @@ security test oracle.
 | T11 | Retained data outlives its contract, minimal-persistence becomes resumable, deletion is partial, an approval survives deletion, or cleanup failure is hidden | C08, C12, and the Data Retention Contract | Use a fake clock at cutoff boundaries; assert one-way retention updates, complete transactional cascades, no content rows in minimal mode, no resume candidate, target-bound confirmation, active-run cancellation, pending/approved invalidation, zero executor calls on denial, honest deletion failure, and a startup/run gate when mandatory pruning fails |
 | T12 | Kubernetes, model, or user-controlled text executes terminal control sequences, spoofs approval, or hides scope | C07 local-only styling and typed approval state | Golden-test escape, control, invalid UTF-8, bidirectional, wide, combining, and oversized input from every external source; assert rendered bytes contain no forbidden sequence and approval fields cannot originate in text |
 | T13 | Unbounded model streams, Kubernetes results, logs, recursion, retries, or event queues exhaust memory, time, or model budget | C09 atomic hard ceilings and owned cancellation | Test each exact boundary and one-over value with fake clocks and counters; fuzz stream chunks; assert bounded allocations/queues, no call after exhaustion, one terminal result, and an explicit gap |
-| T14 | Raw vendor errors or logs disclose credentials, endpoint bodies, SQL, local paths, or cluster data | C01 and C10 safe classification and allowlisted logging | Wrap synthetic canaries at every adapter error boundary, including joined and formatted errors; enumerate TUI, model, audit, and ordinary-log outputs and assert only stable safe fields remain |
+| T14 | Raw vendor errors or logs disclose credentials, endpoint bodies, SQL, local paths, or cluster data | C01 and C10 safe classification and allowlisted logging | `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestSecurityAssuranceSafeErrorCancellationIdentity`, and `TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors` cover direct, nested, wrapped, joined, and formatted adapter failures; stable classes and cancellation identity remain while every enumerated model, Tool, TUI, log, audit, SQLite, child-process, CLI, and error sink excludes the canary |
 | T15 | A hidden Kubernetes write path exists in `v0.1` through a Tool, TUI shortcut, generic client, dependency, or model claim | C11 absent composition and read-only contracts | Static import and method checks plus a request-recording fake assert only admitted read verbs; exercise every command and Tool; validate that claimed execution prose is not accepted as fact |
 | T16 | A future approval is replayed, broadened, approved after expiry or scope change, or executed against a changed Deployment | C12 versioned digest, 60-second TTL, nonce, one-time state, re-read, fingerprint, and concurrency precondition | With a fake clock and store, mutate each bound field individually, replay decisions, cross restart, cross generation, and race target changes; assert external write count zero for every mismatch |
 | T17 | A database failure bypasses approval audit or causes an automatic duplicate write | C08 and C12 durable pre-operation gate, consumed state, no automatic retry | Fail each transaction boundary and interrupt before and after the fake external request; assert no request before durable consumed/audit state, at most one request, visible unknown outcome where needed, and no startup replay |
@@ -473,8 +473,8 @@ This threat model must be reviewed before any of the following:
 
 ## 11. Operator controls and current limitations
 
-Operators must preserve the following independent controls for the reachable
-`v0.1` composition:
+Operators must preserve the following independent controls for the current
+read-only composition:
 
 - Bind the rules in [Least-Privilege RBAC](rbac/README.md) to the selected
   kubeconfig identity. Do not grant `cluster-admin`, wildcard permissions, a
@@ -494,7 +494,8 @@ Operators must preserve the following independent controls for the reachable
   launch an exec credential program. Allowed exec programs run with the local
   user's authority and are not sandboxed by KuPilot.
 - Treat a Diagnosis as a bounded snapshot, not a guaranteed root cause or proof
-  of current cluster state. Every `v0.1` recommendation is unexecuted.
+  of current cluster state. Every recommendation in the current composed binary
+  is unexecuted.
 
 For a `v0.2` composition, add only the exact namespaced Deployment `get` and
 `patch` rule in [Least-Privilege RBAC](rbac/README.md) for approved targets.

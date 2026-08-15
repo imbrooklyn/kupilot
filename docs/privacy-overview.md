@@ -6,7 +6,7 @@ user. It also uses one user-configured model endpoint to support the Agent.
 bounded content is sent to that endpoint only after informed consent and local
 safety processing.
 
-This document states the `v0.1` privacy boundary. It is not a claim that
+This document states the current `v0.3` privacy boundary. It is not a claim that
 redaction can recognize every sensitive value or that a model provider deletes
 data on KuPilot's schedule.
 
@@ -169,7 +169,7 @@ snapshot policy are the relevant local controls.
 ## No product telemetry
 
 KuPilot has no product telemetry, usage analytics, remote crash reporting,
-KuPilot-operated account, update checker, or KuPilot control plane in `v0.1`.
+KuPilot-operated account, update checker, or KuPilot control plane.
 Normal Diagnosis network paths are the selected Kubernetes API and configured
 model endpoint. A kubeconfig exec credential program, when explicitly declared
 and allowed, runs with the local user's authority and may have independent
@@ -179,8 +179,8 @@ network or filesystem behavior.
 
 Evidence is a time-bounded observation, not a guarantee that the cluster remains
 unchanged. A Diagnosis may be incomplete or wrong, and KuPilot may be unable to
-identify a root cause. `v0.1` recommendations are text for the user to evaluate;
-KuPilot does not execute them and has no approval dialog.
+identify a root cause. Recommendations in the current composed binary are text
+for the user to evaluate; it does not execute them and has no approval dialog.
 
 See [Configuration](configuration.md), [Least-Privilege RBAC](rbac/README.md),
 [Security Threat Model](security.md), and [Scope](scope.md) for the complete

@@ -3,7 +3,7 @@
 This file records notable user-visible changes to KuPilot. There is no published
 release; current behavior is recorded under `Unreleased`.
 
-## Unreleased
+## 0.3.0 - Unreleased
 
 ### Added
 
@@ -31,10 +31,19 @@ release; current behavior is recorded under `Unreleased`.
 - Bounded post-PATCH Deployment observation with distinct accepted, progress,
   success, failure, timeout, unavailable, and unknown outcomes in the Approval
   Dialog and structured audit history.
+- Bounded Evidence details that preserve run and scope provenance while
+  excluding raw Tool results, raw objects, and raw container output.
+- Standard and minimal Session modes, one-way operational-detail retention,
+  transactional per-Session deletion, bounded safe Session discovery, and a
+  versioned redacted Markdown summary export in the existing TUI surfaces.
+- Deterministic diagnosis provenance and assertion rubrics across all eight
+  supported diagnostic categories.
+- A released-schema migration matrix covering `v0.1` through `v0.3`, plus
+  reproducible offline performance and release-artifact gates.
 
 ### Security
 
-- The reachable `v0.1` composition contains no Kubernetes mutation port,
+- The current read-only composition contains no Kubernetes mutation port,
   mutation adapter, write Tool, approval coordinator, shell, kubectl runner, or
   generic Kubernetes request surface.
 - Kubernetes credentials, model credentials, Secret data, raw objects, raw
@@ -50,15 +59,18 @@ release; current behavior is recorded under `Unreleased`.
   seconds and 45 observations at a minimum two-second interval. Post-attempt
   audit uses at most three idempotent attempts and fails visibly without
   repeating the Kubernetes write.
+- Synthetic credential-source and safe-error matrices cover nested, wrapped,
+  joined, and formatted failures across model, Tool, TUI, log, audit, SQLite,
+  child-process, CLI, and error sinks with exact external-action counts.
 
 ### Known limitations
 
 - There is no published binary or package-manager installation recorded here;
   the verified installation path is a source build.
-- The public CLI/TUI always starts standard-persistence Sessions and does not
-  expose per-Session deletion, clear-history, delete-all, or selection of the
-  repository's enforced minimal-persistence mode.
+- KuPilot has no clear-history or delete-all UI. Users can delete one Session at
+  a time or remove the exact local database, known sidecars, and logs while all
+  KuPilot processes are stopped.
 - Diagnosis is limited to the documented eight categories and may end with
   missing information rather than a root cause.
-- Windows is experimental and is not part of the supported `v0.1` runtime or CI
+- Windows is experimental and is not part of the supported `v0.3` runtime or CI
   release gate.

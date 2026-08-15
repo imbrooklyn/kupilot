@@ -14,7 +14,7 @@ and `arm64`. You need:
 - Permission under your organization's policy to send the displayed diagnostic
   data categories to that model destination.
 
-Windows is experimental and is not part of the supported `v0.1` runtime gate.
+Windows is experimental and is not part of the supported `v0.3` runtime gate.
 KuPilot is not intended to run as a cluster controller, shared server, or
 container-only service.
 
@@ -128,7 +128,8 @@ means all Namespaces.
    model or Tool I/O, binds it to the immutable ClusterScope, and shows each
    bounded Tool step.
 5. Review the final confirmed facts, hypotheses, missing information, and
-   recommendations. Every recommendation is marked `Not executed`.
+   recommendations. Every recommendation is marked `Not executed`. Press
+   `Ctrl+E` to inspect bounded safe details for cited Evidence.
 
 Changing Context, Namespace, or the container-output privacy category cancels
 an active AgentRun and invalidates stale work before another transfer.
@@ -147,7 +148,7 @@ The compile-time command registry is fixed:
 | `/new` | Create a new Session without querying history. |
 | `/resume [filter]` | Open eligible local Session selection inside the TUI. |
 | `/rename [title]` | Rename the current standard-persistence Session. |
-| `/privacy` | Review model data sharing and container-output eligibility. |
+| `/privacy` | Review model data sharing, persistence, retention, deletion, and export controls. |
 | `/cancel` | Cancel the active AgentRun. |
 | `/quit`, `/exit` | Exit KuPilot. |
 
@@ -157,7 +158,8 @@ to submit an ordinary question that begins with `/`.
 Key bindings include `Enter` to submit, `Ctrl+J` for a newline, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
-`Ctrl+X` to cancel a run, and `Ctrl+C` to quit.
+`Ctrl+E` to inspect cited Evidence, `Ctrl+X` to cancel a run, and `Ctrl+C` to
+quit.
 
 ## Stop safely
 

@@ -2,19 +2,23 @@
 
 ## Supported boundary
 
-Security reports are accepted for the current `v0.1` source boundary. KuPilot
-is a local, single-process, single-user, namespaced, strictly read-only
-Kubernetes diagnostic Agent. No published release is recorded in the
+Security reports are accepted for the current `v0.3` source boundary. KuPilot
+is a local, single-process, single-user, namespaced Kubernetes diagnostic
+Agent. The current `cmd/kupilot` composition is strictly read-only; the
+separately admitted `v0.2` Deployment restart workflow remains isolated and is
+not constructed by that composition. No published release is recorded in the
 [Changelog](CHANGELOG.md). This policy covers the current source boundary, not
 an unverified distribution artifact.
 
-The normative controls and residual assurance gaps are documented in the
+The normative controls and residual risks are documented in the
 [Security Threat Model](docs/security.md) and
-[v0.1 Security Review](docs/security-review-v0.1.md). The review has no open
-Critical, High, or Medium finding. It records two Low assurance gaps: exhaustive
-Kubernetes credential-source sink coverage and exhaustive joined/formatted safe
-error coverage. These are not known bypasses and must not be represented as
-complete assurance.
+[v0.1 Read-Only Composition Security Review](docs/security-review-v0.1.md). The
+review has no open Critical, High, Medium, or Low finding or assurance gap.
+Combined deterministic synthetic-canary matrices cover every documented
+Kubernetes credential source at the adapter boundary and the nested, wrapped,
+joined, and formatted safe-error paths through the prohibited sinks. This is
+not a claim about real production data, live RBAC, or third-party penetration
+testing.
 
 ## Report a vulnerability privately
 

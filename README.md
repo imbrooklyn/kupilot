@@ -6,17 +6,17 @@ read-only Kubernetes observations, then produces a cautious Diagnosis whose
 confirmed facts cite Evidence from that run.
 
 > [!IMPORTANT]
-> KuPilot `v0.1` is strictly read-only. It has no Kubernetes write path, shell,
-> kubectl execution, Pod Exec, approval dialog, or autonomous remediation.
-> Recommendations are guidance for the user and are always marked as not
-> executed.
+> The current KuPilot `v0.3` candidate composition is strictly read-only. It has
+> no reachable Kubernetes write path, shell, kubectl execution, Pod Exec,
+> approval dialog, or autonomous remediation. Recommendations are guidance for
+> the user and are always marked as not executed.
 
 KuPilot is Agent-first rather than resource-browser-first. Its TUI exists to
 establish one verified Context and Namespace, accept diagnostic intent, and let
 the user supervise each ToolInvocation. It is not k9s, a Kubernetes Dashboard,
 an IDE, a monitoring system, or a general DevOps Agent.
 
-## What `v0.1` can diagnose
+## What `v0.3` can diagnose
 
 The supported diagnostic categories are:
 
@@ -106,8 +106,9 @@ submitting a change.
    or reject the consent request.
 
 5. Ask one diagnostic question. KuPilot shows bounded Tool steps and returns a
-   structured Diagnosis. Evaluate any recommendation independently; `v0.1`
-   cannot execute it.
+   structured Diagnosis. Press `Ctrl+E` to inspect the bounded safe provenance
+   behind cited Evidence. Evaluate any recommendation independently; the
+   current composed binary cannot execute it.
 
 The [Getting Started Guide](docs/user-guide/getting-started.md) covers the TUI,
 scope selection, privacy review, cancellation, and common first-run failures.
@@ -165,10 +166,12 @@ a small, allowlisted, rotating local operational log by default. Neither store
 is encrypted by KuPilot. Local logging can be disabled independently from the
 privacy control for container-output Tools.
 
-The current public CLI/TUI always starts standard-persistence Sessions. It does
-not expose per-Session deletion, clear-history, delete-all, or a
-minimal-persistence selector. The exact current paths, safe manual cleanup
-boundary, retention behavior, and this limitation are documented in
+The `/privacy` surface can start a new standard- or minimal-persistence Session,
+tighten operational-detail retention, delete the current Session, and export a
+versioned redacted summary of the current standard Session. A historical
+standard Session can be deleted from the existing resume picker or explicitly
+resumed before export. KuPilot has no clear-history or delete-all UI; the exact
+offline cleanup boundary and forensic-erasure limitation are documented in
 [Privacy and Local Data](docs/user-guide/privacy-and-local-data.md).
 
 KuPilot has no product telemetry, usage analytics, remote crash reporting,

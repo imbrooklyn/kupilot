@@ -1,29 +1,32 @@
 # KuPilot v0.1 Security Review
 
-- Review disposition: meets the `v0.1` security-review risk threshold with two
-  open Low assurance gaps
-- Baseline reviewed: 2026-08-10
+- Review disposition: meets the read-only composition security-review risk
+  threshold with no open finding or assurance gap
+- Baseline reviewed: 2026-08-15
 - Authority: the [Security Threat Model](security.md),
   [Architecture](architecture.md), [Privacy Overview](privacy-overview.md), and
   [Data Retention Contract](data-retention.md)
 
 This review maps every threat in the accepted threat model to implementation
-controls and deterministic evidence. It covers the reachable `v0.1`
-composition. The admitted but unreachable `v0.2` write threats are included so
-that write absence is explicit rather than inferred.
+controls and deterministic evidence. It covers the current reachable read-only
+composition, which preserves the `v0.1` write-absence invariant. The admitted
+but unreachable `v0.2` write threats are included so that write absence is
+explicit rather than inferred.
 
 ## Conclusion
 
 The review found no credential disclosure, cross-origin authorization leak,
 cross-scope acceptance, terminal-control execution, or reachable Kubernetes
-write path in `v0.1`. Both Medium findings are closed: model-originated free
+write path in the current composition. Both Medium findings are closed:
+model-originated free
 text is processed before actions and sinks, and Agent plus SQLite use the same
 all-accepted-Evidence observation-window invariant.
 
-Two Low assurance gaps remain open for the exhaustive credential-source sink
-matrix and joined/formatted safe-error coverage. They do not establish a known
-bypass and do not block this risk disposition, but they remain explicit
-residual risk and are not counted as passing threats.
+Both Low assurance gaps are closed. The credential-source matrix distinguishes
+the permitted Kubernetes transport use from every prohibited sink, and the
+safe-error matrix covers nested, wrapped, joined, and formatted failures across
+configuration, Kubernetes, model, Tool, SQLite, Application, and shutdown
+aggregation boundaries with exact action counts.
 
 <!-- markdownlint-disable MD013 -->
 
@@ -32,7 +35,7 @@ residual risk and are not counted as passing threats.
 | Critical | 0 | 0 |
 | High | 0 | 0 |
 | Medium | 0 | 2 |
-| Low | 2 | 0 |
+| Low | 0 | 2 |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -44,7 +47,8 @@ Status meanings:
   weakens the required control.
 - **Gap**: no bypass was observed, but the required proof is incomplete.
 - **Not reachable**: the threat belongs to the admitted `v0.2` write boundary,
-  and static composition evidence shows that boundary is absent from `v0.1`.
+  and static composition evidence shows that boundary is absent from the
+  current read-only composition.
 
 ## Stable composition evidence
 
@@ -69,7 +73,7 @@ Status meanings:
   runtime evidence is in
   [`internal/tools/boundary_test.go`](../internal/tools/boundary_test.go) and
   [`cmd/kupilot/composition_test.go`](../cmd/kupilot/composition_test.go).
-- SQLite uses the two checksummed forward migrations in
+- SQLite uses the four checksummed forward migrations in
   [`internal/persistence/sqlite/migrations`](../internal/persistence/sqlite/migrations),
   explicit column mappings, fixed SQL, bound values, and the allowlisted schema
   checks in
@@ -83,7 +87,7 @@ Status meanings:
 
 | Threat | Control and code evidence | Deterministic test evidence | Status |
 | --- | --- | --- | --- |
-| T01: Kubernetes credentials reach a prohibited sink, or unsafe kubeconfig permissions are missed | C01, C02, C08, and C10; credential loading and client construction remain in [`internal/kube`](../internal/kube), while SQLite fields are allowlisted | `TestConfigLoaderReportsUnsafePermissionsWithoutChangingOrExposingPath`, `TestExecCredentialOutputFailureIsBoundedAndSafe`, `TestExecCredentialLaunchFailuresAreSafe`, and the safe-source path in `TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis` | **Gap — SR-003.** Existing tests cover important sources and sinks, but not every credential source across every success/error sink required by T01. |
+| T01: Kubernetes credentials reach a prohibited sink, or unsafe kubeconfig permissions are missed | C01, C02, C08, and C10; credential loading and client construction remain in [`internal/kube`](../internal/kube), while SQLite fields are allowlisted | `TestSecurityAssuranceKubernetesCredentialSourceMatrix`, `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestConfigLoaderReportsUnsafePermissionsWithoutChangingOrExposingPath`, and exec-credential strict-denial, environment, output, and cancellation tests | **Pass — SR-003 closed.** Distinct kubeconfig, bearer-token, client-certificate, private-key, exec-stdout, and exec-stderr canaries reach only their permitted adapter use and are absent from every prohibited sink; permissions remain unchanged. |
 | T02: the model API key is persisted, rendered, inherited, disclosed, or redirected | C01-C03 and C10; one-shot opaque secret source, child-environment filtering, and same-origin transport policy in [`internal/config`](../internal/config) and [`internal/llm/openaicompat`](../internal/llm/openaicompat) | `TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink`, `TestEnvironmentSecretSourceReadsOnceAndUnsets`, `TestFilterChildEnvironmentRemovesEveryModelAPIKeyEntry`, `TestCredentialCanaryIsBlockedFromRequestAndResponseValues`, `TestCrossOriginRedirectIsDeniedBeforeAuthorizationCanMove`, and `TestExecCredentialsAllowDirectLaunchAndRemoveModelKey` | **Pass.** The synthetic key is confined to the configured-origin authorization header, and denial paths observe zero forbidden forwarding. |
 | T03: Secret or other high-risk text is read or smuggled through eligible content | C04/C07 model-text processing plus C06 source denial and the ordered egress pipeline in [`internal/agent`](../internal/agent), [`internal/tools`](../internal/tools), and [`internal/security/redactor.go`](../internal/security/redactor.go) | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, Kubernetes source-denial tests, `FuzzRedactorSafety`, and the full sink canary integration test | **Pass — SR-001 closed.** Lower-risk eligible text is replaced before downstream use; high-confidence model text is blocked before Tool/Kubernetes action, and denial tests observe zero forbidden calls or sinks. |
 | T04: prompt or Tool-result injection changes runtime authority | C04, C05, C07, and C11; authority comes from immutable run state and fixed dispatch in [`internal/agent`](../internal/agent) | `TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection`, `TestAdapterRejectsHostileToolSelectionsBeforeHandler`, `TestMaliciousToolOutputCannotAuthorizeAnotherTool`, scope-generation tests, and zero-action Slash denials | **Pass.** Hostile text does not alter catalog, endpoint, scope, budgets, approval state, or write authority. |
@@ -96,7 +100,7 @@ Status meanings:
 | T11: retention exceeds policy, minimal mode resumes, deletion is partial, or cleanup failure is hidden | C08 plus explicit retention repositories and startup/run gates | cutoff, minimal-shell, cascade, rollback, cancellation, startup maintenance, resume eligibility, and durable-run-start zero-model/Tool-call tests in [`internal/persistence/sqlite`](../internal/persistence/sqlite), [`internal/application`](../internal/application), and [`cmd/kupilot`](../cmd/kupilot) | **Pass.** Cutoffs and cascades are transactional; mandatory failures are visible and fail before prohibited work. |
 | T12: external text executes terminal controls, spoofs typed state, or hides scope | C07 local styling, sanitization, bounded render state, typed scope/approval meaning, and fixed Slash registry in [`internal/tui`](../internal/tui) | `TestSanitizeExternalTextRemovesTerminalAndBidiControls`, `TestApplicationTextAndScopeAreSanitizedBeforeRenderState`, golden/render tests, paste and stale-event tests, `TestSlashRegistryIsFixedAndReadOnly`, and `FuzzParseSlashDraftHasNoDynamicAuthority` | **Pass.** Escape, control, bidi, invalid UTF-8, and dynamic Slash inputs do not become terminal or runtime authority. |
 | T13: streams, results, logs, recursion, retries, or queues exceed budgets | C09 atomic ceilings, child deadlines, owned cancellation, local projection bounds, and bounded event/render state | `TestRunBudgetEnforcesExactHardLimits`, one-over and concurrent reservation tests, exact Tool result/log/graph limits, event queue and TUI cumulative stream tests, oversize model fixtures, and `FuzzBoundedSSEBodyIsChunkIndependent` | **Pass.** Boundary and one-over cases stop with bounded output, no post-exhaustion call, and one terminal result. |
-| T14: raw vendor errors or logs disclose credentials, bodies, SQL, paths, or cluster data | C01 and C10 safe classifications at adapter boundaries | Kubernetes wrapped-error tests, model HTTP/transport error canaries, SQLite safe repository errors, config value-hiding tests, and the text-free lifecycle observer in the sink integration test | **Gap — SR-004.** Per-adapter coverage exists, but the required exhaustive joined/formatted-error matrix and complete sink enumeration are absent. |
+| T14: raw vendor errors or logs disclose credentials, bodies, SQL, paths, or cluster data | C01 and C10 safe classifications at adapter boundaries | `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestSecurityAssuranceSafeErrorCancellationIdentity`, `TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors`, Kubernetes wrapped-error tests, model HTTP/transport error canaries, SQLite safe repository errors, and config value-hiding tests | **Pass — SR-004 closed.** Stable classes and cancellation identity survive direct, nested, wrapped, joined, and formatted paths while model, Tool, TUI, log, audit, SQLite, child-process, CLI, and error sinks exclude the canaries. |
 | T15: a hidden Kubernetes write path exists in `v0.1` | C11 absent mutation composition, fixed read-only contracts, and runtime rejection of claimed execution | `TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape`, `TestCompositionConstructsOneModelLifecycleAndNoWritePath`, exact Kubernetes request recorders, fixed Slash tests, exact catalog tests, and `TestDiagnosisValidatorRejectsUnregisteredEvidenceAndExecutionClaims` | **Pass.** Static imports and reachable methods expose only admitted reads; all observed requests are read-only and execution prose cannot become a confirmed fact. |
 | T16: a future approval is replayed, broadened, stale, or targets a changed Deployment | C11 excludes the C12 coordinator and executor from `v0.1` | `TestCompositionConstructsOneModelLifecycleAndNoWritePath` and Application/Tool/TUI boundary tests | **Not reachable.** No `v0.2` approval state or executor is constructed in the reviewed composition. This is not evidence for a future `v0.2` implementation. |
 | T17: database failure bypasses pre-write audit or causes a duplicate write | C11 excludes all write orchestration from `v0.1`; read-only persistence failures follow the explicit degraded-state policy | composition no-write tests and Coordinator durable-start/degraded-storage tests with model and Kubernetes call counts | **Not reachable.** There is no write or pre-write audit path in `v0.1`; reachable read-only persistence failures remain visible and fail closed. |
@@ -106,7 +110,7 @@ Status meanings:
 
 <!-- markdownlint-enable MD013 -->
 
-Threat status totals are 15 Pass, 0 Finding, 2 Gap, and 3 Not reachable.
+Threat status totals are 17 Pass, 0 Finding, 0 Gap, and 3 Not reachable.
 
 ## Findings
 
@@ -165,66 +169,56 @@ references, truncated Evidence, Tool-result truncation without Evidence,
 rejected cross-run references, a durable unreferenced Diagnosis, and a
 successful later run without false persistence degradation.
 
-### SR-003: Kubernetes credential-source sink proof is incomplete
+### SR-003: Kubernetes credential-source sink proof
 
 - **Severity:** Low
-- **Status:** Open assurance gap
+- **Status:** Closed
 - **Affected threats:** T01 and C01/C02/C08/C10
-- **Owner:** Kubernetes adapter and security-test maintainers
-- **Revisit trigger:** any credential-source or sink change, or a claim that T01
-  has exhaustive release-signoff evidence
+- **Revisit trigger:** any credential-source or prohibited-sink change
 
-Existing tests separately cover unsafe kubeconfig permission warnings, model
-key child-environment removal, exec credential output failures, safe Kubernetes
-errors, SQLite/WAL canary absence, model requests, Application events, rendered
-TUI, and text-free lifecycle observations. They do not inject a distinct
-synthetic canary at every Kubernetes credential source—kubeconfig bytes, bearer
-token, client certificate, private key, exec standard output, and exec standard
-error—and enumerate every prohibited sink on both success and failure paths.
+`TestSecurityAssuranceKubernetesCredentialSourceMatrix` injects distinct
+synthetic values through kubeconfig bytes and path, bearer token, generated
+client certificate and private key, and exec standard output and standard
+error. It distinguishes the permitted authenticated transport use and direct
+credential decoding from project-owned outputs and formatted safe errors, with
+exact server, client, and child-process counts. The independent downstream sink
+matrix covers model requests, Application events, rendered TUI, ordinary logs,
+AuditEvents, SQLite rows and database sidecars, child environments, and CLI
+output. Permission tests prove that warnings expose neither content nor path
+and do not change mode bits.
 
-Acceptance requires that complete matrix, including formatted safe errors,
-ordinary logs, AuditEvents, every eligible SQLite table, database/WAL/SHM
-files, and exact external-action counts. The permitted Kubernetes transport use
-must be distinguished from every prohibited sink. Permission tests must also
-prove warning content contains neither source content nor path and that mode
-bits are unchanged.
-
-### SR-004: Joined and formatted safe-error proof is incomplete
+### SR-004: Joined and formatted safe-error proof
 
 - **Severity:** Low
-- **Status:** Open assurance gap
+- **Status:** Closed
 - **Affected threat:** T14 and C01/C10
-- **Owner:** adapter-boundary and security-test maintainers
 - **Revisit trigger:** any safe-error boundary, sink, or shutdown-aggregation
-  change, or a claim that T14 has exhaustive release-signoff evidence
+  change
 
-Current adapter tests show that representative wrapped Kubernetes, model,
-configuration, Tool, and SQLite failures become stable safe classes without
-their synthetic values. They do not exhaustively exercise nested `%w`, normal
-formatting, and joined failures at every adapter boundary while enumerating the
-TUI, model, audit, ordinary-log, and persistent sinks.
-
-Acceptance requires a deterministic table covering configuration, Kubernetes,
-model, Tool, SQLite, Application, and shutdown aggregation. Each case must
-retain stable `errors.Is`/class behavior, omit distinct synthetic values under
-direct formatting, wrapping, and joining, enumerate all reachable sinks, and
-assert exact forbidden external-action counts.
+`TestSecurityAssuranceSafeErrorSourceSinkMatrix` covers configuration,
+Kubernetes, model, Tool, SQLite, and Application boundaries through direct,
+nested, wrapped, joined, and formatted errors. It enumerates model requests,
+Tool results, Application events, rendered TUI, ordinary logs, AuditEvents,
+SQLite rows and database sidecars, child environments, and CLI output while
+asserting exact action counts. `TestSecurityAssuranceSafeErrorCancellationIdentity`
+preserves cancellation identity without exposing raw causes, and
+`TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors` proves stable
+`errors.Is` and class behavior across ordered, idempotent shutdown aggregation.
 
 ## Release decision and limitations
 
-No Critical, High, or Medium finding remains open, so this security review no
-longer blocks CI progression for the reviewed `v0.1` composition. SR-003 and
-SR-004 remain Low assurance gaps with explicit ownership and revisit triggers.
-They do not establish a known bypass, but they cannot be counted as passing
-threats or used to claim an exhaustive credential-source or safe-error proof.
+No Critical, High, Medium, or Low finding or assurance gap remains open for the
+reviewed read-only composition. SR-003 and SR-004 are closed by deterministic
+synthetic-canary matrices and return to review when a covered source, sink, or
+error aggregation boundary changes.
 
 This review uses synthetic canaries, local fakes, request-recording HTTP
 fixtures, temporary SQLite databases, static import/composition checks, and
 deterministic fuzz seeds. It does not use a real cluster, real model endpoint,
 real credential, public network, third-party penetration test, or dependency
 vulnerability scanner. It does not claim SQLite encryption, tamper resistance,
-forensic deletion, live RBAC correctness, or security properties for an
-unimplemented `v0.2` write path.
+forensic deletion, live RBAC correctness, or live-cluster security properties
+for the isolated `v0.2` write workflow.
 
 No raw canary value is included in this document. Tests construct their values
 locally so that public documentation and fixtures cannot become a source of a
