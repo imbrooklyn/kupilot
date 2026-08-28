@@ -10,11 +10,13 @@ schema. A schema may omit an eligible field, but it may not add a category that
 this contract excludes.
 
 KuPilot uses a local SQLite database. It does not claim that the database is
-encrypted, tamper-resistant, a credential store, or capable of forensic erasure.
-Its controls are source exclusion, local projection, owner-only filesystem
-access on supported platforms, bounded detail retention, user deletion, and
-visible failure. Operating-system disk encryption and backup lifecycle remain
-the user's controls for storage outside KuPilot.
+encrypted, tamper-resistant, a credential store, or capable of forensic
+erasure. A separate fixed Home configuration may contain a model API key only
+after the user chooses disclosed plaintext storage; that exception never makes
+the key eligible for SQLite. Local controls are source exclusion, projection,
+create-only owner modes on supported platforms, bounded detail retention, user
+deletion, and visible failure. Existing user-managed modes, operating-system
+disk encryption, and backup lifecycle remain the user's controls.
 
 ## 1. Normative principles
 
@@ -48,6 +50,7 @@ the user's controls for storage outside KuPilot.
 | Ordinary `v0.1` read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
 | Terminal `v0.2` approval and decision records, and approval, pre-write intent, write-attempt, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because KuPilot is not a compliance ledger. Pending and approved requests are first made terminal by their owning lifecycle, never by retention cleanup. |
 | Explicit `kupilot.export-summary.v1` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
+| Optional plaintext model profile in `KUPILOT_HOME/config.yaml` | Until the user overwrites or removes the local configuration | This user-selected credential copy is outside SQLite and Session retention. Process-only setup and environment loading do not create it. |
 | Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
 
@@ -214,15 +217,19 @@ is retained: 90 days for read-only lifecycle or 180 days when linked to a future
 write record, unless the user deletes them earlier. When the last required record
 expires, cleanup removes the shell in the same bounded purge flow.
 
-## 5. Data that is never persisted
+## 5. Data excluded from SQLite and ordinary sinks
 
-The following has a retention period of zero and is never eligible for SQLite,
-typed configuration, an ordinary application log, a crash bundle, or another
-KuPilot-created durable store:
+Except for the explicitly selected plaintext model key in the fixed Home
+configuration, the following has a retention period of zero and is never
+eligible for SQLite, ordinary typed configuration values, an application log,
+a crash bundle, or another KuPilot-created durable store:
 
 - Kubeconfig contents; bearer tokens; ServiceAccount token material; client
-  certificates; private keys; exec credential output; model API keys; cookies;
-  and authentication headers.
+  certificates; private keys; exec credential output; cookies; and
+  authentication headers.
+- Model API keys from every source outside the explicit Home configuration
+  save. Even when locally saved, the key is never eligible for SQLite, Session
+  content, audit, logs, exports, model content, or generic configuration values.
 - Kubernetes Secret objects or data, ConfigMap data, container environment
   values, referenced credential values, and every source KuPilot is forbidden to
   read.
@@ -361,15 +368,18 @@ tombstone. Delivery and repository errors use stable content-free classes.
 ### 8.2 Clear history and delete all local state
 
 Clear-history removes every Session graph and associated audit record through
-bounded transactions. Non-secret typed configuration and a still-valid consent
-record may remain only when the UI says so explicitly.
+bounded transactions. The fixed Home configuration, including a locally saved
+plaintext model key, is outside that SQLite operation. A still-valid consent
+record remains only when the UI says so explicitly.
 
 A separate delete-all-local-state operation closes database handles and removes
 the resolved KuPilot database and known journal, WAL, and shared-memory sidecars.
-It includes settings and consent. The operation targets only validated KuPilot
+It includes settings and consent. The operation targets only validated database
 paths and never follows symlinks or recursively deletes an arbitrary directory.
-Any incomplete removal is reported; KuPilot does not create replacement state in
-the same operation.
+It does not remove Home configuration, cache, logs, exports, or backups. Any
+incomplete removal is reported; KuPilot does not create replacement state in
+the same operation. `kupilot cache clear` is a separate fixed operation that
+removes only cache entries.
 
 ### 8.3 Deletion limitations
 

@@ -163,7 +163,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 		)
 	}
 
-	databasePath, err := prepareStoragePath(ctx, options.StateDir, options.CorrelationID)
+	databasePath, existingFiles, err := prepareStoragePath(ctx, options.StateDir, options.CorrelationID)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 	if err := verifyIntegrity(ctx, handle, options.CorrelationID); err != nil {
 		return nil, err
 	}
-	if err := secureKnownStorageFiles(options.StateDir, databasePath, options.CorrelationID); err != nil {
+	if err := secureKnownStorageFiles(options.StateDir, databasePath, existingFiles, options.CorrelationID); err != nil {
 		return nil, err
 	}
 	return db, nil
@@ -436,53 +436,75 @@ func verifyIntegrity(ctx context.Context, db *sqlx.DB, correlationID string) err
 	return nil
 }
 
-func prepareStoragePath(ctx context.Context, stateDir, correlationID string) (string, error) {
+func prepareStoragePath(ctx context.Context, stateDir, correlationID string) (string, map[string]os.FileInfo, error) {
 	if err := contextFailure(ctx, "prepare_storage_path", correlationID); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := rejectSymlinkedPath(stateDir); err != nil {
-		return "", pathError(correlationID, err)
+		return "", nil, pathError(correlationID, err)
+	}
+	_, beforeErr := os.Lstat(stateDir)
+	createdStateDir := errors.Is(beforeErr, os.ErrNotExist)
+	if beforeErr != nil && !createdStateDir {
+		return "", nil, pathError(correlationID, beforeErr)
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return "", permissionError(correlationID, err)
+		return "", nil, permissionError(correlationID, err)
 	}
 	if err := rejectSymlinkedPath(stateDir); err != nil {
-		return "", pathError(correlationID, err)
+		return "", nil, pathError(correlationID, err)
 	}
 	info, err := os.Lstat(stateDir)
 	if err != nil || !info.IsDir() {
-		return "", pathError(correlationID, err)
+		return "", nil, pathError(correlationID, err)
 	}
-	if err := os.Chmod(stateDir, 0o700); err != nil {
-		return "", permissionError(correlationID, err)
+	if createdStateDir {
+		if err := os.Chmod(stateDir, 0o700); err != nil {
+			return "", nil, permissionError(correlationID, err)
+		}
 	}
 
 	databasePath := filepath.Join(stateDir, databaseFilename)
+	existingFiles := make(map[string]os.FileInfo, len(knownSidecarSuffixes)+1)
 	for _, path := range knownStoragePaths(databasePath) {
 		if err := validateKnownStorageFile(path); err != nil {
-			return "", pathError(correlationID, err)
+			return "", nil, pathError(correlationID, err)
+		}
+		if existing, statErr := os.Lstat(path); statErr == nil {
+			existingFiles[path] = existing
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return "", nil, pathError(correlationID, statErr)
 		}
 	}
 	file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err == nil {
+	createdDatabase := err == nil
+	if createdDatabase {
 		if closeErr := file.Close(); closeErr != nil {
-			return "", permissionError(correlationID, closeErr)
+			return "", nil, permissionError(correlationID, closeErr)
 		}
 	} else if !errors.Is(err, os.ErrExist) {
-		return "", permissionError(correlationID, err)
+		return "", nil, permissionError(correlationID, err)
 	}
-	if err := os.Chmod(databasePath, 0o600); err != nil {
-		return "", permissionError(correlationID, err)
+	if createdDatabase {
+		if err := os.Chmod(databasePath, 0o600); err != nil {
+			return "", nil, permissionError(correlationID, err)
+		}
 	}
 	if err := contextFailure(ctx, "prepare_storage_path", correlationID); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return databasePath, nil
+	return databasePath, existingFiles, nil
 }
 
-func secureKnownStorageFiles(stateDir, databasePath, correlationID string) error {
-	if err := os.Chmod(stateDir, 0o700); err != nil {
-		return permissionError(correlationID, err)
+func secureKnownStorageFiles(
+	stateDir,
+	databasePath string,
+	existingFiles map[string]os.FileInfo,
+	correlationID string,
+) error {
+	info, err := os.Lstat(stateDir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return pathError(correlationID, err)
 	}
 	for _, path := range knownStoragePaths(databasePath) {
 		info, err := os.Lstat(path)
@@ -492,8 +514,10 @@ func secureKnownStorageFiles(stateDir, databasePath, correlationID string) error
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return pathError(correlationID, err)
 		}
-		if err := os.Chmod(path, 0o600); err != nil {
-			return permissionError(correlationID, err)
+		if existing, ok := existingFiles[path]; !ok || !os.SameFile(existing, info) {
+			if err := os.Chmod(path, 0o600); err != nil {
+				return permissionError(correlationID, err)
+			}
 		}
 	}
 	return nil

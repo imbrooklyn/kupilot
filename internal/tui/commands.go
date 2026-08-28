@@ -18,6 +18,10 @@ type ApplicationConsumer interface {
 	ExecuteUICommand(context.Context, application.UICommand) (application.UICommandOutcome, error)
 }
 
+type modelSetupConsumer interface {
+	ConfigureModel(context.Context, application.ModelSetupRequest) (application.ModelSetupResult, error)
+}
+
 // DispatchApplication translates one deferred TUI request into one neutral
 // result message. The caller supplies the operation Context and owns any
 // asynchronous execution.
@@ -50,6 +54,17 @@ func DispatchApplication(ctx context.Context, consumer ApplicationConsumer, mess
 			return applicationFailure(message, "The requested operation could not be completed safely.")
 		}
 		return CommandResultMsg{Result: result}
+	case ApplicationModelSetupMsg:
+		setup, ok := consumer.(modelSetupConsumer)
+		if !ok {
+			return applicationFailure(message, "The model configuration path is unavailable.")
+		}
+		result, err := setup.ConfigureModel(ctx, request.Request)
+		if err != nil || result.Validate() != nil {
+			request.Request.Secret.Destroy()
+			return applicationFailure(message, "The model configuration could not be applied safely.")
+		}
+		return ModelSetupResultMsg{Result: result}
 	default:
 		return applicationFailure(message, "The requested operation is unavailable.")
 	}
@@ -78,6 +93,10 @@ func applicationFailure(message tea.Msg, safeMessage string) ApplicationFailureM
 		result.ApprovalDigest = request.Command.ApprovalDigest
 		result.ApprovalSequence = request.Command.ApprovalSequence
 		result.Command = request.Command.Kind
+	case ApplicationModelSetupMsg:
+		request.Request.Secret.Destroy()
+		result.RequestID = request.Request.RequestID
+		result.ModelSetup = true
 	}
 	return result
 }
@@ -103,6 +122,12 @@ func applicationResume(request application.UIResumeRequest) tea.Cmd {
 func applicationEvidenceDetail(query application.UIEvidenceDetailQuery) tea.Cmd {
 	return func() tea.Msg {
 		return ApplicationEvidenceDetailMsg{Query: query}
+	}
+}
+
+func applicationModelSetup(request application.ModelSetupRequest) tea.Cmd {
+	return func() tea.Msg {
+		return ApplicationModelSetupMsg{Request: request}
 	}
 }
 

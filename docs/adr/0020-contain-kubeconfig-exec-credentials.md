@@ -134,4 +134,4 @@ with the compatibility contract.
 - [Security Threat Model](../security.md)
 - [Kubernetes Compatibility](../kubernetes-compatibility.md)
 - [ADR-0007: Use client-go Behind Narrow Kubernetes Ports](0007-use-client-go-behind-narrow-kubernetes-ports.md)
-- [ADR-0021: Use Ephemeral Model API Key Sources](0021-use-ephemeral-model-api-key-sources.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)

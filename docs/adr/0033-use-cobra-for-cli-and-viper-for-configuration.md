@@ -21,11 +21,14 @@ command tree. Cobra does not supersede the fixed command, flag, Session,
 privacy, or composition boundaries.
 
 Each parse operation constructs a fresh command tree. The tree contains only
-`resume`, `version`, and `help`; bare execution produces the typed new-Session
-intent. Cobra's generated completion command and suggestions are disabled.
+`resume`, `cache clear`, `version`, and `help`; bare execution produces the
+typed new-Session intent. Cobra's generated completion command and suggestions
+are disabled.
 Framework errors are translated to bounded project-owned errors and stable exit
 codes. Cobra does not initialize configuration, storage, Kubernetes, a model,
-or the TUI, and Cobra types do not cross the CLI delivery boundary.
+or the TUI, and Cobra types do not cross the CLI delivery boundary. `cache
+clear` resolves only the canonical KuPilot Home and removes only entries below
+its fixed `cache` child before any ordinary startup dependency is constructed.
 
 KuPilot uses `github.com/spf13/viper v1.21.0` for typed configuration. Each
 configuration load constructs and injects an independent Viper instance rather
@@ -34,10 +37,12 @@ project-owned schema before values cross a boundary.
 
 Viper use is limited to the accepted CLI, environment, file, and default
 precedence for non-sensitive configuration. KuPilot will not use remote
-configuration providers, live watch or hot reload, configuration writes, or a
-generic `map[string]any` configuration boundary. Model API keys and other
-credential values remain outside Viper and configuration files. Help and version
-must return before Viper or any business dependency is initialized.
+configuration providers, live watch or hot reload, or a generic `map[string]any`
+configuration boundary. A dedicated loader extracts `model.api_key` before
+Viper receives sanitized key-free bytes. A dedicated atomic writer may update
+the fixed Home configuration file from an Application-owned model-setup use
+case; Viper itself does not write configuration. Help, version, and `cache
+clear` must return before Viper or any business dependency is initialized.
 
 Only dependencies used by production code belong in `go.mod`.
 
@@ -69,8 +74,8 @@ Costs and constraints:
   generated files would add unnecessary surface.
 - Viper package-level helpers were rejected because they create hidden mutable
   global state.
-- Remote configuration, hot reload, and configuration persistence were rejected
-  because they add I/O, lifecycle, and trust surfaces not required by `v0.1`.
+- Remote configuration and hot reload were rejected because they add lifecycle
+  and trust surfaces not required by `v0.1`.
 
 ## Security and privacy impact
 
@@ -80,10 +85,10 @@ questions, arbitrary commands, cwd/workspace semantics, dynamic commands, or
 additional Session management. Vendor errors and parsed values must not expose
 credentials, configuration contents, environment values, or local paths.
 
-Short-circuit tests must prove that help and version do not call the composition
-start path. Configuration tests must prove that API key handling bypasses Viper
-and that invalid or unknown configuration performs no model, Kubernetes, or
-database I/O.
+Short-circuit tests must prove that help, version, and `cache clear` do not call
+the composition start path. Configuration tests must prove that API key handling
+bypasses Viper, local publication is bounded and atomic, and invalid or unknown
+configuration performs no model, Kubernetes, or database I/O.
 
 ## Validation
 
@@ -95,8 +100,9 @@ compatible with KuPilot's Go 1.25.0 and Apache-2.0 baselines.
 Tests must cover the fixed command catalog, completion absence, typed intents,
 safe errors, short circuits, exit codes, and sensitive-value rejection. Viper
 integration tests must cover strict YAML decoding, unknown-field rejection,
-precedence, supported platform paths, cancellation where applicable, the final
-dependency graph and licenses, and absence of sensitive values.
+precedence, fixed Home paths, cancellation where applicable, the final
+dependency graph and licenses, and absence of sensitive values outside the
+dedicated extractor and writer.
 
 ## Revisit triggers
 
@@ -111,5 +117,5 @@ dependency graph and licenses, and absence of sensitive values.
 - [Architecture](../architecture.md)
 - [Security Threat Model](../security.md)
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
-- [ADR-0021: Use Ephemeral Model API Key Sources](0021-use-ephemeral-model-api-key-sources.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0031: Require Explicit CLI Session Resume](0031-require-explicit-cli-session-resume.md)

@@ -1,111 +1,152 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
-// Paths contains resolved local paths. Only state, cache, and log directories
-// are configurable from YAML; configuration discovery stays platform-owned.
+const HomeEnvironmentVariable = "KUPILOT_HOME"
+
+// Paths contains the fixed descendants of one process-frozen KuPilot Home.
+// None of these paths is part of the serializable configuration schema.
 type Paths struct {
-	ConfigDir  string `mapstructure:"-" yaml:"-" json:"-"`
-	ConfigFile string `mapstructure:"-" yaml:"-" json:"-"`
-	StateDir   string `mapstructure:"state_dir" yaml:"state_dir" json:"state_dir"`
-	CacheDir   string `mapstructure:"cache_dir" yaml:"cache_dir" json:"cache_dir"`
-	LogDir     string `mapstructure:"log_dir" yaml:"log_dir" json:"log_dir"`
+	HomeDir              string `mapstructure:"-" yaml:"-" json:"-"`
+	ConfigFile           string `mapstructure:"-" yaml:"-" json:"-"`
+	StateDir             string `mapstructure:"-" yaml:"-" json:"-"`
+	CacheDir             string `mapstructure:"-" yaml:"-" json:"-"`
+	LogDir               string `mapstructure:"-" yaml:"-" json:"-"`
+	HomePermissionsWider bool   `mapstructure:"-" yaml:"-" json:"-"`
 }
 
-// PathInput is the complete deterministic input to platform path resolution.
+// PathInput is the complete deterministic input to lexical Home resolution.
 type PathInput struct {
-	GOOS          string
-	HomeDir       string
-	XDGConfigHome string
-	XDGStateHome  string
-	XDGCacheHome  string
+	HomeDir     string
+	KuPilotHome string
 }
 
-// SystemPaths resolves paths from the supported operating system and current
-// user environment without consulting working-directory state.
+// SystemPaths resolves and freezes the current process Home without creating it.
 func SystemPaths() (Paths, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return Paths{}, newSafeError(
-			ClassConfigurationInvalid,
-			"home_directory_invalid",
-			"resolve_platform_paths",
-			"KuPilot could not resolve the current user's home directory.",
-		)
+	selected := os.Getenv(HomeEnvironmentVariable)
+	home := ""
+	if selected == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return Paths{}, newSafeError(
+				ClassConfigurationInvalid,
+				"home_directory_invalid",
+				"resolve_home",
+				"KuPilot could not resolve the current user's home directory.",
+			)
+		}
 	}
-	return ResolvePaths(PathInput{
-		GOOS:          runtime.GOOS,
-		HomeDir:       home,
-		XDGConfigHome: os.Getenv("XDG_CONFIG_HOME"),
-		XDGStateHome:  os.Getenv("XDG_STATE_HOME"),
-		XDGCacheHome:  os.Getenv("XDG_CACHE_HOME"),
-	})
+	paths, err := ResolvePaths(PathInput{HomeDir: home, KuPilotHome: selected})
+	if err != nil {
+		return Paths{}, err
+	}
+	return canonicalizeExistingHome(paths)
 }
 
-// ResolvePaths applies Linux XDG and macOS per-user path rules.
+// ResolvePaths derives the one fixed layout without consulting working-directory
+// state or any platform-specific XDG or Library locations.
 func ResolvePaths(input PathInput) (Paths, error) {
-	if input.GOOS != "linux" && input.GOOS != "darwin" {
-		return Paths{}, newSafeError(
-			ClassUnsupported,
-			"platform_unsupported",
-			"resolve_platform_paths",
-			"KuPilot supports local path resolution on macOS and Linux.",
-		)
+	root := input.KuPilotHome
+	if root == "" {
+		if !validAbsoluteDirectory(input.HomeDir) {
+			return Paths{}, newSafeError(
+				ClassConfigurationInvalid,
+				"home_directory_invalid",
+				"resolve_home",
+				"KuPilot requires an absolute current-user home directory.",
+			)
+		}
+		root = filepath.Join(input.HomeDir, ".kupilot")
 	}
-	if !validAbsoluteDirectory(input.HomeDir) {
+	if !validHomePath(root) {
 		return Paths{}, newSafeError(
 			ClassConfigurationInvalid,
-			"home_directory_invalid",
-			"resolve_platform_paths",
-			"KuPilot requires an absolute current-user home directory.",
+			"kupilot_home_invalid",
+			"resolve_home",
+			"KUPILOT_HOME must be an absolute, normalized, non-root path.",
 		)
 	}
-	if input.GOOS == "linux" {
-		for _, value := range []string{input.XDGConfigHome, input.XDGStateHome, input.XDGCacheHome} {
-			if value != "" && !validAbsoluteDirectory(value) {
-				return Paths{}, newSafeError(
-					ClassConfigurationInvalid,
-					"xdg_path_invalid",
-					"resolve_platform_paths",
-					"Each configured XDG base directory must be an absolute, normalized path.",
-				)
-			}
-		}
-		configHome := input.XDGConfigHome
-		if configHome == "" {
-			configHome = filepath.Join(input.HomeDir, ".config")
-		}
-		stateHome := input.XDGStateHome
-		if stateHome == "" {
-			stateHome = filepath.Join(input.HomeDir, ".local", "state")
-		}
-		cacheHome := input.XDGCacheHome
-		if cacheHome == "" {
-			cacheHome = filepath.Join(input.HomeDir, ".cache")
-		}
-		configDir := filepath.Join(configHome, "kupilot")
-		stateDir := filepath.Join(stateHome, "kupilot")
-		return Paths{
-			ConfigDir:  configDir,
-			ConfigFile: filepath.Join(configDir, "config.yaml"),
-			StateDir:   stateDir,
-			CacheDir:   filepath.Join(cacheHome, "kupilot"),
-			LogDir:     filepath.Join(stateDir, "logs"),
-		}, nil
-	}
+	return pathsForHome(root), nil
+}
 
-	applicationSupport := filepath.Join(input.HomeDir, "Library", "Application Support", "KuPilot")
+func canonicalizeExistingHome(paths Paths) (Paths, error) {
+	root, info, exists, err := canonicalHomeRoot(paths.HomeDir)
+	if err != nil {
+		return Paths{}, err
+	}
+	resolved := pathsForHome(root)
+	if !exists {
+		return resolved, nil
+	}
+	if info == nil || !info.IsDir() {
+		return Paths{}, newSafeError(ClassConfigurationInvalid, "kupilot_home_unsafe", "resolve_home", "KUPILOT_HOME must resolve to a directory.")
+	}
+	resolved.HomePermissionsWider = info.Mode().Perm()&0o077 != 0
+	return resolved, nil
+}
+
+// canonicalHomeRoot resolves every existing ancestor once, including the
+// parent of a Home that KuPilot has not created yet. Missing suffixes remain
+// lexical descendants of that canonical directory.
+func canonicalHomeRoot(root string) (string, os.FileInfo, bool, error) {
+	current := root
+	missing := make([]string, 0, 2)
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			canonical, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil || !validAbsoluteDirectory(canonical) {
+				return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unsafe", "resolve_home", "KUPILOT_HOME could not be resolved to a safe directory.")
+			}
+			info, inspectErr := os.Lstat(canonical)
+			if inspectErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unsafe", "resolve_home", "KUPILOT_HOME must resolve beneath an available directory.")
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				canonical = filepath.Join(canonical, missing[index])
+			}
+			if !validHomePath(canonical) {
+				return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unsafe", "resolve_home", "KUPILOT_HOME could not be resolved to a safe directory.")
+			}
+			if len(missing) != 0 {
+				return canonical, nil, false, nil
+			}
+			return canonical, info, true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "KuPilot could not inspect KUPILOT_HOME.")
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "KuPilot could not inspect KUPILOT_HOME.")
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
+func pathsForHome(root string) Paths {
 	return Paths{
-		ConfigDir:  applicationSupport,
-		ConfigFile: filepath.Join(applicationSupport, "config.yaml"),
-		StateDir:   applicationSupport,
-		CacheDir:   filepath.Join(input.HomeDir, "Library", "Caches", "KuPilot"),
-		LogDir:     filepath.Join(input.HomeDir, "Library", "Logs", "KuPilot"),
-	}, nil
+		HomeDir:    root,
+		ConfigFile: filepath.Join(root, "config.yaml"),
+		StateDir:   filepath.Join(root, "state"),
+		CacheDir:   filepath.Join(root, "cache"),
+		LogDir:     filepath.Join(root, "logs"),
+	}
+}
+
+func validHomePath(value string) bool {
+	return validAbsoluteDirectory(value) && !filesystemRoot(value)
+}
+
+func filesystemRoot(value string) bool {
+	volume := filepath.VolumeName(value)
+	return filepath.Clean(value) == filepath.Clean(volume+string(filepath.Separator))
 }
 
 func validAbsoluteDirectory(value string) bool {

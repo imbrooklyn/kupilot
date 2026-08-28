@@ -24,6 +24,7 @@ const rootHelp = `KuPilot is a local Kubernetes diagnostic Agent.
 Usage:
   kupilot
   kupilot resume [SESSION_ID | --last]
+  kupilot cache clear
   kupilot version
   kupilot help [COMMAND]
 
@@ -31,11 +32,12 @@ Running kupilot without a subcommand starts a new Session.
 
 Commands:
   resume   Resume by picker, exact Session ID, or --last.
+  cache    Manage the local KuPilot cache.
   version  Print non-sensitive build information.
   help     Show help for a command.
 
 Options:
-  --config PATH     Use an explicit non-sensitive YAML configuration file.
+  --config PATH     Use an explicit YAML configuration file.
   --context NAME    Select the initial Kubernetes Context.
   --namespace NAME  Select the initial Kubernetes Namespace.
   --no-color        Disable color output.
@@ -48,6 +50,13 @@ const resumeHelp = `Usage:
 
 Resume an eligible Session by picker, exact Session ID, or --last.
 Resume never starts a model request, Tool call, or Kubernetes read automatically.
+`
+
+const cacheHelp = `Usage:
+  kupilot cache clear
+
+Clear entries below the fixed KUPILOT_HOME cache directory.
+A missing cache is a successful no-op.
 `
 
 const versionHelp = `Usage:
@@ -79,6 +88,8 @@ func Help(topic HelpTopic) string {
 	switch topic {
 	case HelpResume:
 		return resumeHelp
+	case HelpCache:
+		return cacheHelp
 	case HelpVersion:
 		return versionHelp
 	case HelpHelp:

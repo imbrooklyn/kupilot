@@ -155,34 +155,41 @@ not encrypted or tamper-resistant. Protect it with operating-system access
 controls, disk encryption, and an appropriate backup policy. Deleting it is not
 a forensic-erasure guarantee.
 
-## Database and log paths
+## Home, configuration, database, cache, and logs
 
-The database is `kupilot.db` in the resolved state directory:
+KuPilot resolves one process-frozen Home from `KUPILOT_HOME`, or uses
+`$HOME/.kupilot` by default:
 
-| Platform | Database |
+| Local category | Fixed path below Home |
 | --- | --- |
-| Linux | `${XDG_STATE_HOME:-$HOME/.local/state}/kupilot/kupilot.db` |
-| macOS | `~/Library/Application Support/KuPilot/kupilot.db` |
+| Configuration | `config.yaml` |
+| Database | `state/kupilot.db` |
+| Cache | `cache/` |
+| Current operational log | `logs/kupilot.log` |
 
-Known sidecars use the same base name with `-journal`, `-wal`, or `-shm`.
-Configured `paths.state_dir` or `KUPILOT_STATE_DIR` replaces the state
-directory. The directory must be an absolute, normalized, non-root,
-non-symlink path. On supported Unix platforms it uses mode `0700`, while the
-database and sidecars use `0600`.
+Known SQLite sidecars use the database base name with `-journal`, `-wal`, or
+`-shm`; bounded logs use `.1` and `.2` rotations. No version has been released
+with another local layout, so KuPilot performs no legacy discovery or migration.
 
-KuPilot also writes a small JSON operational log by default:
+On supported Unix platforms, newly created KuPilot directories use `0700` and
+new files use `0600`. Existing user-managed modes are respected and are not an
+availability gate, even when wider. KuPilot may warn about a wider Home or
+configuration file, but it does not chmod or chown it. Managed targets must
+still have the expected file type and must not use a symbolic link below the
+canonical Home.
 
-| Platform | Current log |
-| --- | --- |
-| Linux | `${XDG_STATE_HOME:-$HOME/.local/state}/kupilot/logs/kupilot.log` |
-| macOS | `~/Library/Logs/KuPilot/kupilot.log` |
+Interactive model setup may save a model API key as disclosed plaintext in
+`config.yaml`. That file is not an encrypted credential store and can be
+exposed by its permissions, another same-user process, backups, or snapshots.
+The extractor keeps the value out of ordinary typed configuration, TUI history,
+SQLite, logs, audit, model content, and child environments. Choosing `session`
+instead keeps it only in the current KuPilot process.
 
-`paths.log_dir` or `KUPILOT_LOG_DIR` replaces that directory. The log is limited
-to code-defined startup and AgentRun lifecycle events and allowlisted scalar
-fields. It stores no Messages, Tool arguments, resource names, cluster payloads,
-request or response bodies, headers, credentials, raw errors, or database rows.
-Each file is at most 1 MiB; at most three files are kept; rotation or pruning
-occurs at seven days.
+The operational log is limited to code-defined startup and AgentRun lifecycle
+events and allowlisted scalar fields. It stores no Messages, Tool arguments,
+resource names, cluster payloads, request or response bodies, headers,
+credentials, raw errors, or database rows. Each file is at most 1 MiB; at most
+three files are kept; rotation or pruning occurs at seven days.
 
 Disable this local application log before startup with:
 
@@ -225,7 +232,7 @@ explicitly disclose. A transaction failure reports that history was not
 cleared.
 
 Press `X` in `/privacy`, then `Y`, to delete all local database state. After the
-same run and approval gates, KuPilot validates the configured state directory,
+same run and approval gates, KuPilot validates the fixed Home state directory,
 the exact `kupilot.db` path, and the known `-journal`, `-wal`, and `-shm`
 sidecars. It rejects symlinks and non-regular targets before closing storage.
 It then closes the database and removes only those exact files, including
@@ -238,12 +245,15 @@ deletion before exit. A successful result also requires acknowledgement before
 exit. On the next start, KuPilot creates new validated database state and
 requires model-transfer consent again.
 
-Clear-history and delete-all do not remove exported summaries or the local
-operational log. To remove operational logs after KuPilot exits, resolve the
-exact configured log directory and remove only `kupilot.log`, `kupilot.log.1`,
-and `kupilot.log.2`. Do not recursively remove a home, XDG base, Application
-Support, state, or log root. User-managed backups retain the same sensitive
-local metadata and remain outside KuPilot deletion.
+Clear-history and delete-all database state do not remove `config.yaml`, cache,
+exported summaries, or the local operational log. `kupilot cache clear` removes
+only entries below the fixed cache child and does not load or change the
+configuration, database, or log. To remove a locally saved key, edit or remove
+the exact Home configuration after KuPilot exits. To remove operational logs,
+remove only `kupilot.log`, `kupilot.log.1`, and `kupilot.log.2` below the fixed
+Home log directory. Do not recursively remove an unrelated parent or an
+explicit export directory. User-managed backups retain the same sensitive local
+data and remain outside KuPilot deletion.
 
 Per-Session and clear-history deletion are logical operations. Neither logical
 row deletion nor file removal guarantees forensic erasure from SQLite free pages, WAL history,

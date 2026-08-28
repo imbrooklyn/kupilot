@@ -41,6 +41,9 @@ type CoordinatorConfig struct {
 	Audits             AuditPersistence
 	Scope              ActiveScope
 	Runner             agent.AgentRunner
+	ModelRuntime       ModelRuntime
+	ModelFactory       ModelRuntimeFactory
+	ModelProfiles      ModelProfileWriter
 	Identifiers        ApplicationIdentifierSource
 	AuditIdentifiers   AuditIdentifierSource
 	Questions          QuestionProcessor
@@ -90,6 +93,9 @@ type Coordinator struct {
 	audits           AuditPersistence
 	scope            ActiveScope
 	runner           agent.AgentRunner
+	modelRuntime     ModelRuntime
+	modelFactory     ModelRuntimeFactory
+	modelProfiles    ModelProfileWriter
 	identifiers      ApplicationIdentifierSource
 	auditIdentifiers AuditIdentifierSource
 	questions        QuestionProcessor
@@ -133,6 +139,7 @@ type Coordinator struct {
 
 type activeRun struct {
 	input                    agent.RunInput
+	runner                   agent.AgentRunner
 	run                      domain.AgentRun
 	cancel                   context.CancelFunc
 	done                     chan struct{}
@@ -212,8 +219,18 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if persistenceLimit == 0 {
 		persistenceLimit = DefaultPersistenceTimeout
 	}
+	runner := config.Runner
+	if config.ModelRuntime != nil {
+		if runner != nil {
+			return nil, ErrCoordinatorDependency
+		}
+		runner = config.ModelRuntime
+	}
+	if (config.ModelFactory == nil) != (config.ModelProfiles == nil) {
+		return nil, ErrCoordinatorDependency
+	}
 	if config.Sessions == nil || config.Runs == nil || config.Tools == nil ||
-		config.Audits == nil || config.Scope == nil || config.Runner == nil || config.Identifiers == nil ||
+		config.Audits == nil || config.Scope == nil || runner == nil && config.ModelFactory == nil || config.Identifiers == nil ||
 		config.AuditIdentifiers == nil || config.Questions == nil || config.UIEvents == nil || config.Observer == nil ||
 		config.Privacy == nil || config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
@@ -262,7 +279,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	return &Coordinator{
 		sessions: config.Sessions, runs: config.Runs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
-		runner: config.Runner, identifiers: config.Identifiers,
+		runner: runner, modelRuntime: config.ModelRuntime,
+		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles,
+		identifiers:      config.Identifiers,
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
 		privacy:  config.Privacy,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
@@ -326,6 +345,116 @@ func (coordinator *Coordinator) StartUI(
 		return UIStartResult{}, ErrCoordinatorDependency
 	}
 	return result, nil
+}
+
+// ConfigureModel owns the single-runtime replacement sequence used by the TUI.
+// The transient credential is destroyed on every outcome.
+func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request ModelSetupRequest) (ModelSetupResult, error) {
+	if request.Secret != nil {
+		defer request.Secret.Destroy()
+	}
+	if coordinator == nil || ctx == nil || request.Validate() != nil {
+		return ModelSetupResult{}, ErrModelSetupInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return ModelSetupResult{}, err
+	}
+	if err := coordinator.beginUIOperation(false); err != nil {
+		return ModelSetupResult{}, err
+	}
+	defer coordinator.finishOperation()
+	if err := coordinator.stopRunForModelSetup(ctx); err != nil {
+		return ModelSetupResult{}, err
+	}
+
+	coordinator.mu.Lock()
+	factory := coordinator.modelFactory
+	profiles := coordinator.modelProfiles
+	closed := coordinator.closed
+	coordinator.mu.Unlock()
+	if closed || factory == nil || profiles == nil {
+		return ModelSetupResult{}, ErrModelSetupFailed
+	}
+	replacement, err := factory.BuildModelRuntime(ctx, request)
+	if err != nil || replacement == nil || !validModelSetupText(replacement.ModelName(), MaxModelSetupNameBytes) ||
+		!validPrivacyOrigin(replacement.Origin()) {
+		if replacement != nil {
+			replacement.Close()
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return ModelSetupResult{}, contextErr
+		}
+		return ModelSetupResult{}, ErrModelSetupFailed
+	}
+	if request.Persist {
+		if err := profiles.SaveModelProfile(ctx, request); err != nil {
+			replacement.Close()
+			if contextErr := ctx.Err(); contextErr != nil {
+				return ModelSetupResult{}, contextErr
+			}
+			return ModelSetupResult{}, ErrModelSetupFailed
+		}
+	}
+	if err := coordinator.privacy.ReconfigureOrigin(replacement.Origin()); err != nil {
+		replacement.Close()
+		return ModelSetupResult{}, ErrModelSetupFailed
+	}
+
+	coordinator.mu.Lock()
+	if coordinator.closed {
+		coordinator.mu.Unlock()
+		replacement.Close()
+		return ModelSetupResult{}, ErrCoordinatorClosed
+	}
+	previous := coordinator.modelRuntime
+	coordinator.modelRuntime = replacement
+	coordinator.runner = replacement
+	coordinator.privacyChallenge = nil
+	coordinator.mu.Unlock()
+	if previous != nil {
+		previous.Close()
+	}
+	result := ModelSetupResult{
+		RequestID: request.RequestID, Model: replacement.ModelName(),
+		Origin: replacement.Origin(), Persisted: request.Persist,
+	}
+	if result.Validate() != nil {
+		return ModelSetupResult{}, ErrModelSetupFailed
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) stopRunForModelSetup(ctx context.Context) error {
+	for {
+		coordinator.mu.Lock()
+		startingCancel := coordinator.startingCancel
+		startingDone := coordinator.startingDone
+		state := coordinator.active
+		coordinator.mu.Unlock()
+		if startingCancel == nil && state == nil {
+			return nil
+		}
+		if startingCancel != nil {
+			startingCancel()
+		}
+		if state != nil {
+			state.cancel()
+		}
+		var done <-chan struct{}
+		if startingDone != nil {
+			done = startingDone
+		} else if state != nil {
+			done = state.done
+		}
+		if done == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+		}
+	}
 }
 
 func (coordinator *Coordinator) resolveStartupScopeCandidate(
@@ -775,6 +904,9 @@ func (coordinator *Coordinator) executeQuestionCommand(ctx context.Context, comm
 		resource = selected
 	}
 	runID, err := coordinator.StartRun(ctx, StartRunCommand{SessionID: sessionID, Question: command.Text, Resource: resource})
+	if errors.Is(err, ErrModelUnconfigured) {
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryModelRequired}, nil
+	}
 	if errors.Is(err, ErrConsentRequired) {
 		review, reviewErr := coordinator.openPrivacyChallenge(ctx, command.RequestID)
 		if reviewErr != nil {
@@ -1547,6 +1679,12 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		cancelRun()
 		return "", ErrCoordinatorBusy
 	}
+	if coordinator.runner == nil {
+		coordinator.mu.Unlock()
+		cancelRun()
+		return "", ErrModelUnconfigured
+	}
+	runner := coordinator.runner
 	if coordinator.currentSession != nil {
 		if coordinator.currentSession.ID != command.SessionID {
 			coordinator.mu.Unlock()
@@ -1622,7 +1760,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		return "", ErrCoordinatorDependency
 	}
 	state := &activeRun{
-		input: input, cancel: cancelRun, done: make(chan struct{}), bridge: bridge,
+		input: input, runner: runner, cancel: cancelRun, done: make(chan struct{}), bridge: bridge,
 		tools: make(map[domain.ToolInvocationID]*pendingTool), persistOperationalDetail: persistOperationalDetail,
 		minimalPersistence: minimalPersistence,
 	}
@@ -1892,6 +2030,16 @@ func (coordinator *Coordinator) Shutdown(ctx context.Context) error {
 		}
 		if state == nil {
 			if operationsDone == nil {
+				coordinator.mu.Lock()
+				runtime := coordinator.modelRuntime
+				coordinator.modelRuntime = nil
+				if runtime != nil {
+					coordinator.runner = nil
+				}
+				coordinator.mu.Unlock()
+				if runtime != nil {
+					runtime.Close()
+				}
 				return nil
 			}
 			select {
@@ -2182,7 +2330,7 @@ func (coordinator *Coordinator) markGlobalPersistenceDegraded() {
 }
 
 func (coordinator *Coordinator) executeRun(ctx context.Context, state *activeRun) {
-	outcome := coordinator.runner.Run(ctx, state.input, coordinator)
+	outcome := state.runner.Run(ctx, state.input, coordinator)
 	coordinator.mu.Lock()
 	terminal := state.terminal
 	terminalStatus := state.terminalStatus

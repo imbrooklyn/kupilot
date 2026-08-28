@@ -23,7 +23,7 @@ var _ fmt.Stringer = SecretValue{}
 var _ fmt.GoStringer = SecretValue{}
 var _ encoding.TextMarshaler = SecretValue{}
 
-// EnvironmentSecretSource reads the one admitted v0.1 model credential source.
+// EnvironmentSecretSource reads the one admitted environment override.
 type EnvironmentSecretSource struct {
 	LookupEnv func(string) (string, bool)
 	Unsetenv  func(string) error
@@ -35,13 +35,26 @@ type EnvironmentSecretSource struct {
 // Read copies one API key into an opaque wrapper and immediately removes the
 // source environment entry before validation returns.
 func (source *EnvironmentSecretSource) Read() (SecretValue, error) {
-	if source == nil {
+	secret, found, err := source.ReadOptional()
+	if err != nil {
+		return SecretValue{}, err
+	}
+	if !found {
 		return SecretValue{}, missingAPIKeyError()
+	}
+	return secret, nil
+}
+
+// ReadOptional consumes the environment source once and distinguishes absence
+// from an invalid present value.
+func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error) {
+	if source == nil {
+		return SecretValue{}, false, nil
 	}
 	source.mu.Lock()
 	defer source.mu.Unlock()
 	if source.consumed {
-		return SecretValue{}, newSafeError(ClassConfigurationInvalid, "model_api_key_already_read", "read_model_api_key", "The model API key source is one-shot and has already been consumed.")
+		return SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "model_api_key_already_read", "read_model_api_key", "The model API key source is one-shot and has already been consumed.")
 	}
 	source.consumed = true
 	lookup := source.LookupEnv
@@ -54,18 +67,19 @@ func (source *EnvironmentSecretSource) Read() (SecretValue, error) {
 	}
 	value, found := lookup(ModelAPIKeyEnvironmentVariable)
 	if !found {
-		return SecretValue{}, missingAPIKeyError()
+		return SecretValue{}, false, nil
 	}
 	if err := unset(ModelAPIKeyEnvironmentVariable); err != nil {
-		return SecretValue{}, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "KuPilot could not remove the model API key from its process environment; startup was stopped.")
+		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "KuPilot could not remove the model API key from its process environment; startup was stopped.")
 	}
 	if value == "" {
-		return SecretValue{}, missingAPIKeyError()
+		return SecretValue{}, false, nil
 	}
-	if !validSecret(value) {
-		return SecretValue{}, newSafeError(ClassConfigurationInvalid, "model_api_key_invalid", "read_model_api_key", "The model API key is invalid or exceeds the 4096-byte limit.")
+	secret, err := NewSecretValue(value)
+	if err != nil {
+		return SecretValue{}, false, err
 	}
-	return SecretValue{value: []byte(value)}, nil
+	return secret, true, nil
 }
 
 func missingAPIKeyError() *SafeError {
@@ -82,6 +96,15 @@ func validSecret(value string) bool {
 		}
 	}
 	return true
+}
+
+// NewSecretValue copies a validated credential into the non-renderable runtime
+// wrapper. Callers must discard their source buffer as soon as practical.
+func NewSecretValue(value string) (SecretValue, error) {
+	if !validSecret(value) {
+		return SecretValue{}, newSafeError(ClassConfigurationInvalid, "model_api_key_invalid", "read_model_api_key", "The model API key is invalid or exceeds the 4096-byte limit.")
+	}
+	return SecretValue{value: []byte(value)}, nil
 }
 
 // SecretValue is a runtime-only model transport credential. Formatting is

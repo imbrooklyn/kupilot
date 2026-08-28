@@ -71,6 +71,7 @@ func TestRunShortCircuitsHelpAndVersion(t *testing.T) {
 		{name: "root help with configuration option", args: []string{"--config", "/missing/config.yaml", "--help"}, wantContent: "Running kupilot without a subcommand starts a new Session."},
 		{name: "resume help", args: []string{"resume", "--help"}, wantContent: "kupilot resume [SESSION_ID | --last]"},
 		{name: "resume help with scope options", args: []string{"resume", "--context", "development", "--namespace=team-a", "--help"}, wantContent: "kupilot resume [SESSION_ID | --last]"},
+		{name: "cache help", args: []string{"cache", "clear", "--help"}, wantContent: "kupilot cache clear"},
 		{name: "version help", args: []string{"help", "version"}, wantContent: "Print non-sensitive build information."},
 		{name: "help help", args: []string{"help", "help"}, wantContent: "Show help for a command."},
 		{name: "version", args: []string{"version"}, wantContent: "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.25.0 platform=linux/arm64\n"},
@@ -109,7 +110,7 @@ func TestRootHelpListsOnlyFixedCommands(t *testing.T) {
 	t.Parallel()
 
 	help := Help(HelpRoot)
-	for _, want := range []string{"  resume ", "  version", "  help   "} {
+	for _, want := range []string{"  resume ", "  cache  ", "  version", "  help   "} {
 		if !strings.Contains(help, want) {
 			t.Errorf("root help does not contain command entry %q", want)
 		}

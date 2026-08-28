@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,7 +37,7 @@ func TestValidateModelEndpointPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			config := Defaults(testPaths(t.TempDir()))
+			config := Defaults()
 			config.Model.Endpoint = tt.endpoint
 			config.Model.Model = "diagnostic-model"
 			err := Validate(&config)
@@ -101,7 +100,6 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "namespace uppercase", mutate: func(c *Config) { c.Namespace = "Default" }, code: "config_namespace_invalid"},
 		{name: "namespace all", mutate: func(c *Config) { c.Namespace = "*" }, code: "config_namespace_invalid"},
 		{name: "provider kind", mutate: func(c *Config) { c.Model.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
-		{name: "API key source", mutate: func(c *Config) { c.Model.APIKeySource = "file" }, code: "config_api_key_source_invalid"},
 		{name: "temperature below zero", mutate: func(c *Config) { c.Model.Temperature = -0.01 }, code: "config_temperature_invalid"},
 		{name: "temperature above maximum", mutate: func(c *Config) { c.Model.Temperature = 0.21 }, code: "config_temperature_invalid"},
 		{name: "output tokens zero", mutate: func(c *Config) { c.Model.MaxOutputTokens = 0 }, code: "config_output_limit_invalid"},
@@ -112,17 +110,13 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "tool calling disabled", mutate: func(c *Config) { c.Model.ToolCallingRequired = false }, code: "config_model_capability_invalid"},
 		{name: "unknown exec policy", mutate: func(c *Config) { c.Kubernetes.ExecCredentials = "prompt" }, code: "config_exec_credentials_invalid"},
 		{name: "debug logging", mutate: func(c *Config) { c.Logging.Level = "debug" }, code: "config_log_level_invalid"},
-		{name: "relative state path", mutate: func(c *Config) { c.Paths.StateDir = "relative/state" }, code: "config_path_invalid"},
-		{name: "root log path", mutate: func(c *Config) {
-			c.Paths.LogDir = filepath.VolumeName(filepath.Clean(string(filepath.Separator))) + string(filepath.Separator)
-		}, code: "config_path_invalid"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			config := Defaults(testPaths(t.TempDir()))
+			config := Defaults()
 			tt.mutate(&config)
 			err := Validate(&config)
 			assertSafeError(t, err, ClassConfigurationInvalid, tt.code)
@@ -133,7 +127,7 @@ func TestValidateConfigurationFields(t *testing.T) {
 func TestModelConfigurationRequiresEndpointAndModel(t *testing.T) {
 	t.Parallel()
 
-	config := Defaults(testPaths(t.TempDir()))
+	config := Defaults()
 	_, err := config.ValidatedModel()
 	assertSafeError(t, err, ClassConfigurationInvalid, "config_model_required")
 
@@ -145,6 +139,43 @@ func TestModelConfigurationRequiresEndpointAndModel(t *testing.T) {
 	}
 	if model.Origin != "https://model.example.test" {
 		t.Fatalf("Origin = %q, want canonical origin", model.Origin)
+	}
+}
+
+func TestValidateAcceptsPartialModelConfigurationForInteractiveCompletion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		endpoint   string
+		model      string
+		wantOrigin string
+	}{
+		{
+			name:       "endpoint only",
+			endpoint:   "https://MODEL.EXAMPLE.test:443/v1/",
+			wantOrigin: "https://model.example.test",
+		},
+		{
+			name:  "model only",
+			model: "diagnostic-model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			config := Defaults()
+			config.Model.Endpoint = tt.endpoint
+			config.Model.Model = tt.model
+			if err := Validate(&config); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if config.Model.Origin != tt.wantOrigin {
+				t.Fatalf("Origin = %q, want %q", config.Model.Origin, tt.wantOrigin)
+			}
+		})
 	}
 }
 

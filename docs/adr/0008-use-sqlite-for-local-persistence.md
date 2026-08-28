@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0035
 
 ## Context
 
@@ -16,10 +17,11 @@ confidentiality and retention boundary that must be explicit.
 
 ## Decision
 
-KuPilot will use one local SQLite database in its resolved per-user state
-directory. `internal/persistence/sqlite` owns the database handle, SQL,
-migrations, row mappings, transaction mechanics, and driver-specific behavior.
-Application owns transaction intent through focused consumer ports.
+KuPilot will use one local SQLite database at the fixed `state/kupilot.db`
+descendant of the resolved KuPilot Home. `internal/persistence/sqlite` owns the
+database handle, SQL, migrations, row mappings, transaction mechanics, and
+driver-specific behavior. Application owns transaction intent through focused
+consumer ports.
 
 The SQLite adapter will:
 
@@ -28,8 +30,9 @@ The SQLite adapter will:
   identifiers, pragmas, migrations, or arbitrary ordering.
 - Keep transactions short and never hold one across model, Kubernetes, terminal,
   or user interaction.
-- Apply owner-only directory and file permissions on supported platforms and
-  verify known journal and sidecar permissions.
+- Apply owner-only permissions to newly created directories, database files,
+  and known sidecars on supported platforms. Preserve existing user-managed
+  modes while continuing to validate file type and symlink safety.
 - Reject unsafe symlinked paths and use no model-, Session-, or CLI-selected
   database path.
 - Run schema, migration, interrupted-run recovery, and mandatory retention gates
@@ -98,8 +101,8 @@ The concrete driver, sqlx mapping, and schema must prove:
 
 1. Foreign-key enforcement, transaction rollback, busy handling, cancellation,
    and supported journal behavior.
-2. Owner-only permissions for the directory, database, and sidecars on macOS and
-   Linux.
+2. Owner-only creation modes plus unchanged wider existing user-managed modes
+   for the directory, database, and sidecars on macOS and Linux.
 3. Migration and integrity failure without silent recreation.
 4. Startup interruption recovery and no automatic run or write replay.
 5. Deterministic retention and deletion at all cutoff and failure boundaries.
@@ -123,5 +126,6 @@ requirements.
 - [Data Retention Contract](../data-retention.md)
 - [Security Threat Model](../security.md)
 - [ADR-0002: Use a Local Single Process with No KuPilot Server](0002-local-single-process-no-server.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](0030-use-sqlx-inside-the-sqlite-adapter.md)

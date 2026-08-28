@@ -16,18 +16,20 @@ import (
 const MaxConfigFileBytes = 64 * 1024
 
 // LoadOptions contains deterministic inputs to one independent configuration
-// load. LookupEnv is injectable for tests and never receives the API-key name.
+// load. LookupEnv and Unsetenv make environment and one-shot key handling
+// deterministic in tests.
 type LoadOptions struct {
 	Paths     Paths
 	Overrides Overrides
 	LookupEnv func(string) (string, bool)
+	Unsetenv  func(string) error
 }
 
 // Load applies defaults, a strict YAML file, admitted environment variables,
 // and typed CLI overrides in increasing precedence order.
-func Load(ctx context.Context, options LoadOptions) (Config, error) {
+func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	if ctx == nil || ctx.Err() != nil {
-		return Config{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
+		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
 	}
 	lookup := options.LookupEnv
 	if lookup == nil {
@@ -45,42 +47,128 @@ func Load(ctx context.Context, options LoadOptions) (Config, error) {
 		explicitFile = true
 	}
 	if !validAbsoluteDirectory(filepath.Dir(configFile)) || !filepath.IsAbs(configFile) || filepath.Clean(configFile) != configFile {
-		return Config{}, newSafeError(ClassConfigurationInvalid, "config_file_path_invalid", "load_configuration", "The configuration file path must be absolute and normalized.")
+		return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_file_path_invalid", "load_configuration", "The configuration file path must be absolute and normalized.")
 	}
 
 	instance := viper.New()
 	instance.SetConfigType("yaml")
-	setDefaults(instance, options.Paths)
-	content, found, err := readConfigFile(ctx, configFile, explicitFile)
+	setDefaults(instance)
+	content, found, permissionsWider, err := readConfigFile(ctx, configFile, explicitFile)
 	if err != nil {
-		return Config{}, err
+		return Loaded{}, err
 	}
+	var fileCredential SecretValue
 	if found {
-		if err := validateStrictYAML(content); err != nil {
-			return Config{}, err
+		var sanitized []byte
+		sanitized, fileCredential, _, err = extractSensitiveConfig(content)
+		zeroBytes(content)
+		content = nil
+		if err != nil {
+			return Loaded{}, err
 		}
-		if err := instance.ReadConfig(bytes.NewReader(content)); err != nil {
-			return Config{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must be valid YAML and match the documented schema exactly.")
+		if err := validateStrictYAML(sanitized); err != nil {
+			fileCredential.Destroy()
+			return Loaded{}, err
+		}
+		if err := instance.ReadConfig(bytes.NewReader(sanitized)); err != nil {
+			fileCredential.Destroy()
+			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must be valid YAML and match the documented schema exactly.")
 		}
 	}
 
 	if err := applyEnvironment(instance, lookup); err != nil {
-		return Config{}, err
+		fileCredential.Destroy()
+		return Loaded{}, err
 	}
 	applyOverrides(instance, options.Overrides)
-	config := Defaults(options.Paths)
+	config := Defaults()
 	if err := instance.UnmarshalExact(&config); err != nil {
-		return Config{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must match the documented types and schema exactly.")
+		fileCredential.Destroy()
+		return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must match the documented types and schema exactly.")
 	}
-	config.Paths.ConfigDir = options.Paths.ConfigDir
-	config.Paths.ConfigFile = configFile
 	if err := Validate(&config); err != nil {
-		return Config{}, err
+		fileCredential.Destroy()
+		return Loaded{}, err
+	}
+	environmentSource := &EnvironmentSecretSource{LookupEnv: lookup, Unsetenv: options.Unsetenv}
+	environmentCredential, environmentFound, err := environmentSource.ReadOptional()
+	if err != nil {
+		fileCredential.Destroy()
+		return Loaded{}, err
+	}
+	credential := fileCredential
+	credentialSource := CredentialSourceNone
+	if credential.IsSet() {
+		credentialSource = CredentialSourceFile
+	}
+	if environmentFound {
+		fileCredential.Destroy()
+		credential = environmentCredential
+		credentialSource = CredentialSourceEnvironment
 	}
 	if err := ctx.Err(); err != nil {
-		return Config{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
+		credential.Destroy()
+		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
 	}
-	return config, nil
+	warnings := make([]string, 0, 2)
+	if options.Paths.HomePermissionsWider {
+		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; KuPilot will respect the existing user-managed permissions.")
+	}
+	if permissionsWider {
+		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain a plaintext model API key.")
+	}
+	return Loaded{
+		Config: config, Paths: options.Paths, Credential: credential,
+		CredentialSource: credentialSource, Warnings: warnings,
+	}, nil
+}
+
+// extractSensitiveConfig removes the sole admitted credential field before
+// strict decoding or Viper sees the document.
+func extractSensitiveConfig(content []byte) ([]byte, SecretValue, bool, error) {
+	var document yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	decodeErr := decoder.Decode(&document)
+	var extra any
+	extraErr := decoder.Decode(&extra)
+	if decodeErr != nil || !errors.Is(extraErr, io.EOF) || containsProhibitedYAMLNode(&document) ||
+		!validConfigYAMLDocument(&document, true) {
+		return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must use the documented YAML types and must not use null, alias, or merge values.")
+	}
+	root := document.Content[0]
+	var credential SecretValue
+	found := false
+	for index := 0; index < len(root.Content); index += 2 {
+		if root.Content[index].Value != "model" {
+			continue
+		}
+		model := root.Content[index+1]
+		filtered := make([]*yaml.Node, 0, len(model.Content))
+		for field := 0; field < len(model.Content); field += 2 {
+			key, value := model.Content[field], model.Content[field+1]
+			if key.Value != "api_key" {
+				filtered = append(filtered, key, value)
+				continue
+			}
+			if found {
+				return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must not contain duplicate fields.")
+			}
+			var err error
+			credential, err = NewSecretValue(value.Value)
+			if err != nil {
+				return nil, SecretValue{}, false, err
+			}
+			value.Value = ""
+			found = true
+		}
+		model.Content = filtered
+	}
+	sanitized, err := yaml.Marshal(&document)
+	if err != nil || len(sanitized) > MaxConfigFileBytes {
+		credential.Destroy()
+		return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration could not be decoded safely.")
+	}
+	return sanitized, credential, found, nil
 }
 
 func validateStrictYAML(content []byte) error {
@@ -96,13 +184,13 @@ func validateStrictYAML(content []byte) error {
 	}
 
 	var document yaml.Node
-	if err := yaml.Unmarshal(content, &document); err != nil || containsProhibitedYAMLNode(&document) || !validConfigYAMLDocument(&document) {
+	if err := yaml.Unmarshal(content, &document); err != nil || containsProhibitedYAMLNode(&document) || !validConfigYAMLDocument(&document, false) {
 		return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must use the documented YAML types and must not use null, alias, or merge values.")
 	}
 	return nil
 }
 
-func validConfigYAMLDocument(document *yaml.Node) bool {
+func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 	if document == nil || document.Kind == 0 {
 		return false
 	}
@@ -114,11 +202,16 @@ func validConfigYAMLDocument(document *yaml.Node) bool {
 		return false
 	}
 	versionSeen := false
+	seen := make(map[string]struct{}, len(root.Content)/2)
 	for index := 0; index < len(root.Content); index += 2 {
 		key, value := root.Content[index], root.Content[index+1]
 		if !yamlString(key) {
 			return false
 		}
+		if _, duplicate := seen[key.Value]; duplicate {
+			return false
+		}
+		seen[key.Value] = struct{}{}
 		switch key.Value {
 		case "version":
 			if !yamlScalar(value, "!!int") {
@@ -133,12 +226,8 @@ func validConfigYAMLDocument(document *yaml.Node) bool {
 			if !yamlScalar(value, "!!bool") {
 				return false
 			}
-		case "paths":
-			if !validPathsYAML(value) {
-				return false
-			}
 		case "model":
-			if !validModelYAML(value) {
+			if !validModelYAML(value, allowCredential) {
 				return false
 			}
 		case "kubernetes":
@@ -156,22 +245,13 @@ func validConfigYAMLDocument(document *yaml.Node) bool {
 	return versionSeen
 }
 
-func validPathsYAML(node *yaml.Node) bool {
+func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
-		case "state_dir", "cache_dir", "log_dir":
+		case "provider_kind", "endpoint", "model":
 			return yamlString(value)
-		default:
-			return false
-		}
-	})
-}
-
-func validModelYAML(node *yaml.Node) bool {
-	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
-		switch key {
-		case "provider_kind", "endpoint", "model", "api_key_source":
-			return yamlString(value)
+		case "api_key":
+			return allowCredential && yamlString(value)
 		case "temperature":
 			return yamlScalar(value, "!!int", "!!float")
 		case "max_output_tokens", "request_timeout_seconds":
@@ -207,11 +287,16 @@ func validYAMLMapping(node *yaml.Node, validate func(string, *yaml.Node) bool) b
 	if node == nil || node.Kind != yaml.MappingNode || len(node.Content)%2 != 0 {
 		return false
 	}
+	seen := make(map[string]struct{}, len(node.Content)/2)
 	for index := 0; index < len(node.Content); index += 2 {
 		key, value := node.Content[index], node.Content[index+1]
 		if !yamlString(key) || !validate(key.Value, value) {
 			return false
 		}
+		if _, duplicate := seen[key.Value]; duplicate {
+			return false
+		}
+		seen[key.Value] = struct{}{}
 	}
 	return true
 }
@@ -247,19 +332,15 @@ func containsProhibitedYAMLNode(node *yaml.Node) bool {
 	return false
 }
 
-func setDefaults(instance *viper.Viper, paths Paths) {
-	defaults := Defaults(paths)
+func setDefaults(instance *viper.Viper) {
+	defaults := Defaults()
 	instance.SetDefault("version", defaults.Version)
 	instance.SetDefault("context", defaults.Context)
 	instance.SetDefault("namespace", defaults.Namespace)
 	instance.SetDefault("no_color", defaults.NoColor)
-	instance.SetDefault("paths.state_dir", defaults.Paths.StateDir)
-	instance.SetDefault("paths.cache_dir", defaults.Paths.CacheDir)
-	instance.SetDefault("paths.log_dir", defaults.Paths.LogDir)
 	instance.SetDefault("model.provider_kind", defaults.Model.ProviderKind)
 	instance.SetDefault("model.endpoint", defaults.Model.Endpoint)
 	instance.SetDefault("model.model", defaults.Model.Model)
-	instance.SetDefault("model.api_key_source", defaults.Model.APIKeySource)
 	instance.SetDefault("model.temperature", defaults.Model.Temperature)
 	instance.SetDefault("model.max_output_tokens", defaults.Model.MaxOutputTokens)
 	instance.SetDefault("model.request_timeout_seconds", defaults.Model.RequestTimeoutSeconds)
@@ -288,9 +369,6 @@ func applyEnvironment(instance *viper.Viper, lookup func(string) (string, bool))
 		{environment: "KUPILOT_CONTEXT", key: "context", kind: environmentString},
 		{environment: "KUPILOT_NAMESPACE", key: "namespace", kind: environmentString},
 		{environment: "KUPILOT_NO_COLOR", key: "no_color", kind: environmentBool},
-		{environment: "KUPILOT_STATE_DIR", key: "paths.state_dir", kind: environmentString},
-		{environment: "KUPILOT_CACHE_DIR", key: "paths.cache_dir", kind: environmentString},
-		{environment: "KUPILOT_LOG_DIR", key: "paths.log_dir", kind: environmentString},
 		{environment: "KUPILOT_MODEL_ENDPOINT", key: "model.endpoint", kind: environmentString},
 		{environment: "KUPILOT_MODEL", key: "model.model", kind: environmentString},
 		{environment: "KUPILOT_MODEL_TEMPERATURE", key: "model.temperature", kind: environmentFloat},
@@ -342,44 +420,41 @@ func applyOverrides(instance *viper.Viper, overrides Overrides) {
 	}
 }
 
-func readConfigFile(ctx context.Context, path string, required bool) ([]byte, bool, error) {
+func readConfigFile(ctx context.Context, path string, required bool) ([]byte, bool, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, newSafeError(ClassCancelled, "config_load_cancelled", "read_configuration", "Configuration loading was cancelled.")
+		return nil, false, false, newSafeError(ClassCancelled, "config_load_cancelled", "read_configuration", "Configuration loading was cancelled.")
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) && !required {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	if err != nil {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the configuration file; verify that the selected owner-only file exists.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the selected configuration file.")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file must be a regular file and must not be a symbolic link.")
-	}
-	if info.Mode().Perm() != 0o600 {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_permissions", "read_configuration", "The configuration file must be accessible only by its owner; use mode 0600.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file must be a regular file and must not be a symbolic link.")
 	}
 	if info.Size() > MaxConfigFileBytes {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_too_large", "read_configuration", "The configuration file exceeds the 64 KiB limit.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_too_large", "read_configuration", "The configuration file exceeds the 64 KiB limit.")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the configuration file; verify that the selected owner-only file exists.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the selected configuration file.")
 	}
 	defer file.Close()
 	openedInfo, err := file.Stat()
-	if err != nil || !openedInfo.Mode().IsRegular() || openedInfo.Mode().Perm() != 0o600 || !os.SameFile(info, openedInfo) {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file changed or became unsafe while KuPilot was opening it.")
+	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file changed or became unsafe while KuPilot was opening it.")
 	}
 	content, err := io.ReadAll(io.LimitReader(file, MaxConfigFileBytes+1))
 	if err != nil {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the configuration file.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the configuration file.")
 	}
 	if len(content) > MaxConfigFileBytes {
-		return nil, false, newSafeError(ClassConfigurationInvalid, "config_file_too_large", "read_configuration", "The configuration file exceeds the 64 KiB limit.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_too_large", "read_configuration", "The configuration file exceeds the 64 KiB limit.")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, newSafeError(ClassCancelled, "config_load_cancelled", "read_configuration", "Configuration loading was cancelled.")
+		return nil, false, false, newSafeError(ClassCancelled, "config_load_cancelled", "read_configuration", "Configuration loading was cancelled.")
 	}
-	return content, true, nil
+	return content, true, openedInfo.Mode().Perm()&0o077 != 0, nil
 }

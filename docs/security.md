@@ -151,18 +151,22 @@ information in the Diagnosis.
 
 ### C01: Credential confinement
 
-Kubeconfig bytes, certificate and key bytes, tokens, exec credential output, the
-model API key, cookies, and authentication headers remain inside the adapter
-that needs them. Configuration and domain values contain only a credential
-source category. Errors expose a stable class and safe operation name, never a
-credential-bearing vendor error or request dump.
+Kubeconfig bytes, certificate and key bytes, tokens, exec credential output,
+the model API key, cookies, and authentication headers remain inside the narrow
+extractor, opaque wrapper, writer, or transport that needs them. Ordinary typed
+configuration and Domain values contain only a fixed runtime source marker.
+Errors expose a stable class and safe operation name, never a credential-bearing
+vendor error or request dump.
 
-The `v0.1` model API key comes from the ephemeral environment or optional safe
-process-input source defined by ADR-0021. The composition root copies an
-environment value into an opaque credential and immediately unsets the source
-variable. The key is not accepted through a value-bearing CLI argument,
-configuration file, prompt, database row, or Tool argument. KuPilot does not
-generate a debug dump containing process environment or transport headers.
+The model API key may come from masked TUI input, optional plaintext
+`model.api_key`, or the one-shot `KUPILOT_MODEL_API_KEY` override defined by
+ADR-0035. The environment entry is copied into an opaque credential and
+immediately unset; the file field is removed before Viper or ordinary typed
+decoding. The key is not accepted through a value-bearing CLI argument, prompt,
+database row, Tool argument, Application event, rendered TUI, history, log, or
+audit. The sole admitted durable key location is the fixed Home configuration
+after the user's disclosed `save` choice. KuPilot does not generate a debug dump
+containing configuration bytes, process environment, or transport headers.
 
 KuPilot warns when a selected kubeconfig source is group- or world-readable on
 platforms with Unix permission bits. It never changes permissions on a user's
@@ -261,14 +265,15 @@ plain visible replacement.
 
 ### C08: SQLite confinement
 
-The database lives in the resolved KuPilot state directory: the documented
-platform default or an explicit absolute KuPilot state-path override from typed
-local configuration. A model, Session, Tool, or Kubernetes value cannot select
-the path. On supported platforms the directory is owner-only, database and
-sidecar files are owner-readable and owner-writable, and symlinked path
-components are rejected. SQL is fixed in the SQLite adapter; values are bound
-parameters, and external text cannot select a table, column, pragma, migration,
-or ordering expression.
+The database has the fixed `state/kupilot.db` path below the process-frozen
+KuPilot Home. Only `KUPILOT_HOME` can select that root; a model, YAML field,
+Session, Tool, Kubernetes value, working directory, or repository cannot select
+the database path. On supported platforms newly created state, database, and
+sidecar paths use owner-only modes. Wider existing user-managed modes are
+preserved, while symlinked managed descendants and non-regular database or
+sidecar files are rejected. SQL is fixed in the SQLite adapter; values are
+bound parameters, and external text cannot select a table, column, pragma,
+migration, or ordering expression.
 
 Schema mappings contain only fields allowed by the retention contract. Opening,
 migration, recovery, and retention enforcement are explicit startup gates.
@@ -381,6 +386,31 @@ publication. Every failure removes the temporary file and never publishes
 partial bytes. The output remains unencrypted user-controlled data and is
 outside later Session deletion and forensic-erasure guarantees.
 
+### C14: Unified Home, interactive model setup, and cache maintenance
+
+`KUPILOT_HOME`, or `$HOME/.kupilot` when absent, is resolved and frozen before
+ordinary startup. Automatic writes are limited to fixed configuration, state,
+cache, and log descendants. Explicit configuration overrides remain read-only;
+the separately confirmed summary export is the only admitted write outside
+Home. New Unix paths receive `0700` directory or `0600` file modes, while
+existing user-managed modes are neither rejected solely for being wider nor
+silently changed. Managed symlinks below canonical Home, wrong file types, and
+replacement races fail the affected operation safely.
+
+The TUI masks credential input and excludes it from history and transcript.
+Application serializes model replacement, cancels and joins active run work,
+builds before swapping, retains the old runtime on construction or publication
+failure, and invalidates consent on an origin change. The secret wrapper is
+destroyed on every result. A local save uses a same-Home temporary file,
+synchronization, target revalidation, and atomic rename; it creates a new file
+as `0600` and preserves an existing user-managed mode.
+
+`kupilot cache clear` resolves only Home, short-circuits ordinary composition,
+and removes entries through non-following directory handles on supported Unix
+platforms. A missing cache is not created. Home, configuration, state, logs,
+explicit exports, and link targets remain outside the deletion set; cancellation
+or partial failure is reported without a forensic-erasure claim.
+
 ## 7. Threat-to-control-to-test mapping
 
 All tests in this table are deterministic and use local fakes, fixtures, fake
@@ -392,7 +422,7 @@ security test oracle.
 | ID | Threat | Required runtime controls | Deterministic proof |
 | --- | --- | --- | --- |
 | T01 | Kubeconfig, token, certificate, key, or exec credential output reaches the model, terminal, logs, errors, or SQLite, or unsafe kubeconfig permissions go unnoticed | C01, C02, C08, C10; credentials are adapter-local and excluded by sink schemas; unsafe Unix source permissions produce a content-free warning without automatic changes | The credential-source matrix injects distinct kubeconfig, token, certificate, key, exec-output, and exec-error canaries and asserts exact permitted transport, child, and server actions plus project-boundary exclusion; the downstream sink matrix covers model, terminal, log, error, and SQLite projections; permission tests assert content-free, path-free warnings and unchanged owner/group/world mode bits |
-| T02 | The model API key is persisted, rendered, inherited by a child, disclosed by an error, or sent to a different endpoint | C01, C02, C03, C10; ephemeral source, immediate environment removal, same-origin transport | Use environment and safe-input fakes plus a redirect and exec child; assert the authentication value appears only in the outbound header to the configured origin, never in child or redirect traffic or any captured sink; scan formatted error paths with a synthetic canary |
+| T02 | The model API key is persisted without the explicit local-save choice, rendered, retained after a failed setup, inherited by a child, disclosed by an error, or sent to a different endpoint | C01, C02, C03, C10, and C14; sensitive extraction, immediate environment removal, masked input, opaque one-shot wrappers, fixed-Home publication, and same-origin transport | Use distinct file, environment, and TUI canaries plus a redirect and exec child; assert the value appears only in the explicitly selected Home file and same-origin Authorization header, never in ordinary Config, Viper state, UI render/history, errors, logs, audit, SQLite, child or redirect traffic; assert failed and process-only setup publish no credential file |
 | T03 | Secret data or another high-risk value is read from Kubernetes or smuggled through an Event, resource field, question, container output, Tool selection, or Diagnosis draft | C04 and C07 model-text processing plus C06 source denial and the ordered egress pipeline | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, and the full sink integration test prove typed redaction or blocking before model, Tool/Kubernetes, TUI, Evidence, audit/log, and persistence sinks; denial paths assert zero forbidden calls |
 | T04 | Prompt or Tool-result injection asks the Agent to ignore policy, reveal data, change endpoint, cross scope, write, or approve itself | C04, C05, C07, C11, C12; authority exists only in runtime state and fixed dispatch | Feed injection fixtures through user, Event, container-output, resource-name, historic-message, and model channels; assert unchanged catalog, endpoint, scope, budgets, approval state, and zero forbidden adapter calls |
 | T05 | A structured Tool selection supplies unknown fields, scope, arbitrary Kind, raw selector, deadline, or larger limit | C04 strict decoding, internal scope binding, and C09 ceilings | Table-test missing, duplicate, unknown, wrong-type, overlong, and boundary fields; fuzz decoding; assert denial occurs before reservation or external I/O and canonical arguments contain only schema fields |
@@ -412,6 +442,8 @@ security test oracle.
 | T19 | A model recommendation or TUI event bypasses Application and invokes the future executor | C11/C12 composition isolation and typed commands | Contract and import tests prove TUI and Agent see no executor; send forged UI/model events and assert rejection before approval state or external I/O changes |
 | T20 | Restart executes a broader patch, another write, multiple requests, or reports request acceptance as verified success | C12 one semantic operation, fixed parameters, one request, and separate verification | Compare the fake Kubernetes request to the fixed operation contract; lock the 90-second/two-second/45-observation policy; force reject, expiry, change, forbidden, conflict, accepted, progress, success, failure, timeout, cancellation, stale scope, restart recovery, and result-audit failure; assert exact write counts and distinct bounded UI/audit states |
 | T21 | Summary export leaks a prohibited source or target path, overwrites a file, follows a symlink, publishes partial bytes, races deletion, or replays after restart | C08, C10, and C13 versioned projection, two-pass guard, content-free audit, serialized operation, and atomic no-replace publication | Use a temporary database and directory, fake clock, barriers, and distinct raw, credential, path, and approval canaries; assert prohibited byte occurrence is zero, owner-only mode, symlink and unsafe-permission rejection, no overwrite, temporary cleanup, zero filesystem writes on pre-audit denial, stable concurrent deletion, and no restart replay |
+| T22 | Automatic startup or interactive save writes outside the selected Home, overwrites an explicit configuration source, changes an existing user-managed mode, follows a managed symlink, or leaves a partial credential file | C14 frozen fixed descendants, read-only external configuration, create-only mode policy, revalidation, and atomic publication | Test default and overridden Home, canonical root links, every fixed descendant, external config selection, new and wider existing modes, cancellation, wrong types, managed links, target replacement, write failure, temporary cleanup, and distinct path/credential canaries |
+| T23 | Cache clearing initializes ordinary services, deletes Home or non-cache data, follows a link, escapes through a replacement race, creates a missing cache, or reports partial work as complete | C14 short-circuit routing and descriptor-relative non-following deletion | Populate nested cache entries plus distinct configuration, database, log, export, and external-link canaries; test absent cache, cancellation after partial work, root and entry links, non-directory failure, type replacement, and exact initialization counters; assert only cache entries are removed |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -480,12 +512,15 @@ read-only composition:
   kubeconfig identity. Do not grant `cluster-admin`, wildcard permissions, a
   namespaced read ClusterRole through a ClusterRoleBinding, Secret access,
   Watch, or a write verb for KuPilot.
-- Keep configuration, state, database sidecars, and local logs in the resolved
-  owner-only non-symlink paths. KuPilot does not encrypt these files or protect
+- Select one absolute normalized `KUPILOT_HOME` when the default
+  `$HOME/.kupilot` is unsuitable. Review any wider existing Home or
+  configuration permissions. KuPilot does not encrypt these files or protect
   them from another process with the same local-user authority.
-- Supply the model API key only through `KUPILOT_MODEL_API_KEY` in the KuPilot
-  process environment. Do not place it in YAML, argv, history, user questions,
-  issue reports, or diagnostic fixtures.
+- Supply the model API key through masked setup, the one-shot environment
+  override, or the optional local plaintext configuration field. Use `save`
+  only after accepting the not-encrypted disclosure. Never place the key in
+  argv, Session history, user questions, issue reports, repository examples, or
+  diagnostic fixtures.
 - Review the exact canonical model origin and enabled categories before
   accepting consent. Container output is disabled by default; enabling it
   invalidates prior consent and does not weaken local projection, sensitive-
@@ -558,7 +593,7 @@ under the [Security Policy](../SECURITY.md).
 - [ADR-0014: Isolate Runs with ClusterScope Generation](adr/0014-cluster-scope-generation-isolation.md)
 - [ADR-0016: Freeze Runtime Budgets](adr/0016-freeze-runtime-budgets.md)
 - [ADR-0020: Contain Kubeconfig Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
-- [ADR-0021: Use Ephemeral Model API Key Sources](adr/0021-use-ephemeral-model-api-key-sources.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](adr/0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0027: Use Stable Safe Error Classes](adr/0027-use-stable-safe-error-classes.md)
 - [ADR-0029: Limit `v0.2` to Deployment Restart](adr/0029-limit-v0.2-to-deployment-restart.md)

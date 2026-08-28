@@ -32,29 +32,35 @@ in one interaction without giving the model general cluster access.
 6. **Snapshot diagnosis, not monitoring.** Evidence describes an observation at
    a recorded time. KuPilot does not claim that the cluster remains unchanged.
 7. **Local credential isolation.** Kubernetes and model credentials are not
-   model content. Cluster data is projected and redacted locally before any
-   permitted cloud transfer.
+   model content. A model key may be kept process-only or explicitly saved as
+   disclosed plaintext under the user-managed KuPilot Home, but it never enters
+   Session history, logs, audit, SQLite, or ordinary model-facing values.
+   Cluster data is projected and redacted locally before any permitted cloud
+   transfer.
 
 ## Intended `v0.1` user journey
 
 1. The user starts a new Session. A bare `kupilot` invocation always creates a
    new Session; only an explicit `resume` action queries local Session history.
-2. The user selects and verifies a kubeconfig Context and Namespace. KuPilot
+2. If the model profile or key is missing, the user completes masked setup in
+   the single-screen TUI and chooses disclosed local plaintext storage or
+   process-only use. No configuration file is required merely to open KuPilot.
+3. The user selects and verifies a kubeconfig Context and Namespace. KuPilot
    forms the active ClusterScope without copying or persisting kubeconfig
    contents.
-3. The user can optionally attach one ResourceRef from the fixed target kinds:
+4. The user can optionally attach one ResourceRef from the fixed target kinds:
    Pod, Deployment, ReplicaSet, Job, or Service.
-4. The user submits a diagnostic question in natural language. That submission
+5. The user submits a diagnostic question in natural language. That submission
    creates one AgentRun with an immutable ClusterScope.
-5. The Agent selects from the six read-only Tools. The TUI shows each
+6. The Agent selects from the six read-only Tools. The TUI shows each
    ToolInvocation and its safe status or summary, and the user can cancel the
    AgentRun.
-6. Tool results are projected, bounded, and redacted before they become Evidence
+7. Tool results are projected, bounded, and redacted before they become Evidence
    or eligible model context.
-7. KuPilot returns a Diagnosis with confirmed facts, hypotheses, missing
+8. KuPilot returns a Diagnosis with confirmed facts, hypotheses, missing
    information, recommended actions, the observed ClusterScope, and observation
    times.
-8. The user evaluates and performs any desired action independently. `v0.1`
+9. The user evaluates and performs any desired action independently. `v0.1`
    never presents a recommendation as an action KuPilot executed.
 
 ## Diagnosis contract

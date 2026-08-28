@@ -65,7 +65,7 @@ a new Session or changes endpoint configuration.
 Endpoint validation and a capability probe may occur before consent only when
 they contain no user question, conversation, Kubernetes, Tool, Evidence, or
 other cluster content. Authentication remains origin-bound under ADR-0010 and
-ADR-0021. A redirect never transfers consent or authentication to another
+ADR-0035. A redirect never transfers consent or authentication to another
 origin.
 
 Valid consent may be persisted under both standard and minimal-persistence
@@ -165,5 +165,5 @@ transport integration must preserve these properties.
 - [Data Retention Contract](../data-retention.md)
 - [Privacy Overview](../privacy-overview.md)
 - [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
-- [ADR-0021: Use Ephemeral Model API Key Sources](0021-use-ephemeral-model-api-key-sources.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)

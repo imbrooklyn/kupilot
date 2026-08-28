@@ -200,11 +200,12 @@ const (
 	UIQueryTimeout         UIQueryFailureCode = "timeout"
 	UIQueryNotResumable    UIQueryFailureCode = "session_not_resumable"
 	UIQueryConsentRequired UIQueryFailureCode = "consent_required"
+	UIQueryModelRequired   UIQueryFailureCode = "model_required"
 )
 
 func (code UIQueryFailureCode) valid() bool {
 	return code == UIQueryUnavailable || code == UIQueryForbidden || code == UIQueryTimeout ||
-		code == UIQueryNotResumable || code == UIQueryConsentRequired
+		code == UIQueryNotResumable || code == UIQueryConsentRequired || code == UIQueryModelRequired
 }
 
 func (code UIQueryFailureCode) validOperational() bool {

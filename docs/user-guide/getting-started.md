@@ -30,13 +30,14 @@ make build
 The build is CGO-free and writes `./bin/kupilot`. No published archive or
 package-manager installation is supported.
 
-## Create an owner-only configuration
+## Optional configuration and model setup
 
-KuPilot accepts one strict, non-sensitive YAML document. Unknown fields,
-duplicate keys, aliases, merge keys, nulls, wrong types, additional YAML
-documents, and files larger than 64 KiB are rejected.
+No configuration file is required to open KuPilot. A bare start uses one fixed
+Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
+the endpoint, model identifier, or API key is absent.
 
-A minimal configuration is:
+If you prefer a file, KuPilot accepts one strict version 1 YAML document. For
+example:
 
 ```yaml
 version: 1
@@ -49,39 +50,28 @@ model:
 ```
 
 The endpoint and names are deliberately non-working placeholders. Replace them
-with approved values. Do not add an API key, token, certificate, kubeconfig
-content, header, or TLS-bypass value; none belongs to the schema.
-
-The default file is:
-
-| Platform | Path |
-| --- | --- |
-| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/kupilot/config.yaml` |
-| macOS | `~/Library/Application Support/KuPilot/config.yaml` |
-
-The file must be a regular non-symlink file with mode `0600`. Alternatively,
-select an owner-only file by absolute normalized path:
+with approved values. The default file is `KUPILOT_HOME/config.yaml`. An
+optional plaintext `model.api_key` is admitted, but do not put a real key in a
+repository, example, chat message, or public report. A separately selected file
+must use an absolute normalized path:
 
 ```sh
 ./bin/kupilot --config /absolute/path/to/config.yaml
 ```
 
-See [Configuration](../configuration.md) for the full schema, defaults,
-precedence, environment variables, platform paths, and endpoint rules.
+Unknown fields, duplicate keys, aliases, merges, nulls, wrong types, additional
+documents, and files larger than 64 KiB are rejected. Existing user-managed
+file permissions are respected; new KuPilot-created Home directories use
+`0700` and new files use `0600` on supported Unix platforms.
 
-## Supply the model credential
+The key can instead come from `KUPILOT_MODEL_API_KEY`, which overrides a file
+value, is read once, and is removed from the KuPilot process environment. It is
+also accepted through the masked TUI setup. Choose `save` only after reviewing
+the plaintext, not-encrypted disclosure; choose `session` to keep the key in
+this process only. No credential-valued CLI option exists.
 
-`KUPILOT_MODEL_API_KEY` is the only admitted model credential source. Supply it
-to the KuPilot process through an appropriate local secret mechanism. KuPilot
-reads the value once into a non-renderable runtime wrapper and removes the entry
-from its own process environment. It does not write the value to YAML, SQLite,
-the local application log, the TUI, model content, or a child-process
-environment.
-
-Do not put the value in a command argument, repository file, chat message, or
-shell-history assignment. Removing the child process's environment entry cannot
-remove a value exported in its parent shell; clear that parent-shell value when
-it is no longer needed.
+See [Configuration](../configuration.md) for the full schema, Home layout,
+precedence, environment variables, endpoint rules, and credential boundary.
 
 ## Grant read-only Kubernetes access
 
@@ -116,18 +106,20 @@ means all Namespaces.
 
 ## Complete the first-run flow
 
-1. Confirm the footer shows the intended verified Context, Namespace, and
+1. If the footer shows `model/unconfigured`, complete the four-step endpoint,
+   model, storage, and masked-key flow. `/model` can reconfigure it later.
+2. Confirm the footer shows the intended verified Context, Namespace, and
    `read-only` state. If no scope is active, use `/context` and `/namespace`.
-2. Optionally use `/resource` to attach one Pod, Deployment, ReplicaSet, Job, or
+3. Optionally use `/resource` to attach one Pod, Deployment, ReplicaSet, Job, or
    Service. Picker selection is only an input aid; it is not Evidence and does
    not prove that the object still exists.
-3. Open `/privacy`. Review the canonical model destination, every enabled data
+4. Open `/privacy`. Review the canonical model destination, every enabled data
    category, and every never-eligible category. Container output is disabled by
    default. Accepting consent authorizes only the exact displayed tuple.
-4. Enter one diagnostic question. KuPilot durably begins the run before any
+5. Enter one diagnostic question. KuPilot durably begins the run before any
    model or Tool I/O, binds it to the immutable ClusterScope, and shows each
    bounded Tool step.
-5. Review the final confirmed facts, hypotheses, missing information, and
+6. Review the final confirmed facts, hypotheses, missing information, and
    recommendations. Every recommendation is marked `Not executed`. Press
    `Ctrl+E` to inspect bounded safe details for cited Evidence.
 
@@ -141,6 +133,7 @@ The compile-time command registry is fixed:
 | Command | Behavior |
 | --- | --- |
 | `/help` | Show commands and key bindings. |
+| `/model` | Configure or replace the single model runtime. |
 | `/context [filter]` | Select a kubeconfig Context. |
 | `/namespace [filter]`, `/ns` | Select a Namespace in the current Context. |
 | `/resource [filter]`, `/res` | Select or clear a direct target resource. |

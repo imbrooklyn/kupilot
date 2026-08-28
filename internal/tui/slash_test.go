@@ -11,7 +11,7 @@ func TestSlashRegistryIsFixedAndReadOnly(t *testing.T) {
 
 	commands := SlashCommands()
 	wantNames := []string{
-		"help", "context", "namespace", "resource", "status", "new",
+		"help", "model", "context", "namespace", "resource", "status", "new",
 		"resume", "rename", "privacy", "cancel", "quit",
 	}
 	if len(commands) != len(wantNames) {

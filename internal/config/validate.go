@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/url"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
@@ -26,16 +25,8 @@ func Validate(config *Config) error {
 	if config.Namespace != "" && !validNamespace(config.Namespace) {
 		return newSafeError(ClassConfigurationInvalid, "config_namespace_invalid", "validate_configuration", "Kubernetes Namespace must be a single DNS label; all-Namespace scope is not supported.")
 	}
-	for _, value := range []string{config.Paths.StateDir, config.Paths.CacheDir, config.Paths.LogDir} {
-		if !validConfiguredPath(value) {
-			return newSafeError(ClassConfigurationInvalid, "config_path_invalid", "validate_configuration", "State, cache, and log directories must be absolute, normalized, non-root paths.")
-		}
-	}
 	if config.Model.ProviderKind != ProviderOpenAICompatible {
 		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "model.provider_kind must be openai_compatible.")
-	}
-	if config.Model.APIKeySource != APIKeySourceEnvironment {
-		return newSafeError(ClassConfigurationInvalid, "config_api_key_source_invalid", "validate_configuration", "model.api_key_source must be environment.")
 	}
 	if math.IsNaN(config.Model.Temperature) || math.IsInf(config.Model.Temperature, 0) || config.Model.Temperature < 0 || config.Model.Temperature > 0.2 {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "model.temperature must be between 0 and 0.2.")
@@ -49,9 +40,6 @@ func Validate(config *Config) error {
 	if !config.Model.Streaming || !config.Model.ToolCallingRequired {
 		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "Model streaming and structured Tool calling must remain enabled.")
 	}
-	if (config.Model.Endpoint == "" && config.Model.Model != "") || (config.Model.Endpoint != "" && config.Model.Model == "") {
-		return newSafeError(ClassConfigurationInvalid, "config_model_required", "validate_configuration", "Model endpoint and model identifier must be configured together.")
-	}
 	if config.Model.Endpoint != "" {
 		endpoint, origin, ok := canonicalEndpoint(config.Model.Endpoint)
 		if !ok {
@@ -59,11 +47,11 @@ func Validate(config *Config) error {
 		}
 		config.Model.Endpoint = endpoint
 		config.Model.Origin = origin
-		if !validModelIdentifier(config.Model.Model) {
-			return newSafeError(ClassConfigurationInvalid, "config_model_identifier_invalid", "validate_configuration", "Model identifier must be bounded ASCII text without spaces or control characters.")
-		}
 	} else {
 		config.Model.Origin = ""
+	}
+	if config.Model.Model != "" && !validModelIdentifier(config.Model.Model) {
+		return newSafeError(ClassConfigurationInvalid, "config_model_identifier_invalid", "validate_configuration", "Model identifier must be bounded ASCII text without spaces or control characters.")
 	}
 	if config.Kubernetes.ExecCredentials != ExecCredentialsAllow && config.Kubernetes.ExecCredentials != ExecCredentialsDeny {
 		return newSafeError(ClassConfigurationInvalid, "config_exec_credentials_invalid", "validate_configuration", "kubernetes.exec_credentials must be allow or deny.")
@@ -246,13 +234,6 @@ func validModelIdentifier(value string) bool {
 		}
 	}
 	return true
-}
-
-func validConfiguredPath(value string) bool {
-	if !validAbsoluteDirectory(value) || value == filepath.Clean(string(filepath.Separator)) {
-		return false
-	}
-	return !strings.ContainsRune(value, 0)
 }
 
 func isBidirectionalControl(value rune) bool {

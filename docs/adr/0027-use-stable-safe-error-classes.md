@@ -36,7 +36,7 @@ The stable `v0.1` classes are:
 | Class | Meaning and default retry policy |
 | --- | --- |
 | `invalid_input` | User or local command failed deterministic validation; not retryable without changing input |
-| `configuration_invalid` | Required non-secret configuration is absent or invalid; not retryable without changing configuration |
+| `configuration_invalid` | A supplied typed setting, path, or credential is invalid; not retryable without changing the input |
 | `consent_required` | Current endpoint/category policy lacks valid informed consent; retryable only after an explicit decision |
 | `authentication_failed` | Kubernetes or model authentication failed; not automatically retried |
 | `permission_denied` | The authenticated identity lacks an admitted operation; not automatically retried and never widens access |

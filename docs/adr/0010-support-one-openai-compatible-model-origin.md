@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0035
 
 ## Context
 
@@ -26,7 +27,10 @@ The one compatibility profile uses Chat Completions-style streaming and
 structured Tool calls. Response-format and usage fields are optional
 capabilities, not requirements. The configuration contains a validated endpoint
 origin, configured model identifier, non-secret capability and request settings,
-and the API-key source category. The API key itself is not configuration data.
+and the fixed runtime credential-source marker. ADR-0035 admits masked setup,
+an environment override, and one optional plaintext local file field while
+keeping the key outside the ordinary typed configuration and model runtime
+contract.
 Endpoint and transport rules are:
 
 - `https` with normal certificate and hostname verification is the default and
@@ -80,7 +84,7 @@ Costs and constraints:
 The endpoint is a user-selected external trust boundary. KuPilot binds informed
 consent to its canonical origin and eligible categories, rejects cross-origin
 redirects, and never lets model, Kubernetes, Session, or Tool content change it.
-The API key is transport-only and governed by ADR-0021.
+The API key is transport-only after extraction and is governed by ADR-0035.
 
 Eligible cluster data is still sensitive after projection and redaction. A
 supported endpoint does not imply that it is appropriate under the user's
@@ -121,5 +125,5 @@ compatibility documentation.
 - [Privacy Overview](../privacy-overview.md)
 - [Security Threat Model](../security.md)
 - [ADR-0006: Use Eino Behind an Agent Adapter](0006-use-eino-behind-an-agent-adapter.md)
-- [ADR-0021: Use Ephemeral Model API Key Sources](0021-use-ephemeral-model-api-key-sources.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)

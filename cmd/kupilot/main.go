@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
@@ -41,13 +43,20 @@ func run(
 	info buildinfo.Info,
 ) int {
 	return cli.Run(ctx, args, stdout, stderr, info, func(ctx context.Context, intent cli.StartIntent) error {
-		return start(ctx, intent, info, stdout)
+		return start(ctx, intent, info, stdout, stderr)
 	})
 }
 
-func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, stdout io.Writer) (returnErr error) {
+func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, stdout, stderr io.Writer) (returnErr error) {
 	paths, err := config.SystemPaths()
 	if err != nil {
+		return err
+	}
+	if intent.Kind == cli.IntentCacheClear {
+		if err := config.ClearCache(ctx, paths); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintln(stdout, "KuPilot cache cleared.")
 		return err
 	}
 	loaded, err := config.Load(ctx, config.LoadOptions{
@@ -62,11 +71,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
-	if loaded.Model.Endpoint == "" && loaded.Model.Model == "" {
-		return cli.UnavailableError{}
+	defer loaded.Credential.Destroy()
+	for _, warning := range loaded.Warnings {
+		_, _ = fmt.Fprintln(stderr, "Warning:", warning)
 	}
-	validatedModel, err := loaded.ValidatedModel()
-	if err != nil {
+	if err := config.EnsureHome(ctx, loaded.Paths); err != nil {
 		return err
 	}
 
@@ -86,16 +95,17 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			Level:     configuredLogLevel(loaded.Logging.Level),
 		})
 		if openErr != nil {
-			return openErr
+			_, _ = fmt.Fprintln(stderr, "Warning: local operational logging is unavailable and has been disabled for this process.")
+		} else {
+			composition.logSink = logSink
+			logger = logSink.Logger
 		}
-		composition.logSink = logSink
-		logger = logSink.Logger
 	}
 	logger.InfoContext(ctx, platformlogging.EventStartup,
 		"component", "composition",
 		"operation", "configuration_load",
 		"outcome", "success",
-		"provider_kind", validatedModel.ProviderKind,
+		"provider_kind", loaded.Model.ProviderKind,
 	)
 
 	applicationVersion := info.Version
@@ -118,7 +128,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	auditRepository := sqlite.NewAuditRepository(database)
 	retentionRepository := sqlite.NewRetentionRepository(database)
 	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
-		Store: sqlite.NewPrivacyRepository(database), Origin: validatedModel.Origin, Now: utcNow,
+		Store: sqlite.NewPrivacyRepository(database), Origin: loaded.Model.Origin, Now: utcNow,
 	})
 	if err != nil {
 		return err
@@ -177,32 +187,42 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 
-	secretSource := new(config.EnvironmentSecretSource)
-	credential, err := secretSource.Read()
-	if err != nil {
-		return err
+	modelFactory := &compositionModelFactory{
+		base: loaded.Config, tools: toolHandlers, scope: scopeManager,
+		identifiers: identifiers, now: now, logger: logger,
 	}
-	composition.credential = &credential
-	modelAdapter, modelErr := openaicompat.New(modelConfiguration(validatedModel), composition.credential, logger)
-	if modelErr != nil {
-		return modelErr
+	profileWriter := &compositionModelProfileWriter{paths: loaded.Paths, base: loaded.Config}
+	var initialRuntime application.ModelRuntime
+	if loaded.Model.Endpoint != "" && loaded.Model.Model != "" && loaded.Credential.IsSet() {
+		setupSecret, secretErr := applicationSecret(&loaded.Credential)
+		loaded.Credential.Destroy()
+		if secretErr == nil {
+			request := application.ModelSetupRequest{
+				RequestID: 1, Endpoint: loaded.Model.Endpoint, Model: loaded.Model.Model, Secret: setupSecret,
+			}
+			initialRuntime, err = modelFactory.BuildModelRuntime(ctx, request)
+			setupSecret.Destroy()
+		}
+		if secretErr != nil || err != nil {
+			initialRuntime = nil
+			_, _ = fmt.Fprintln(stderr, "Warning: the configured model runtime could not be constructed; use /model to configure it in the TUI.")
+		}
+	} else {
+		loaded.Credential.Destroy()
 	}
-	composition.model = modelAdapter
-	composition.credential = nil
-	agentAdapter, err := einoadapter.New(einoadapter.Config{
-		Model: modelAdapter, Tools: toolHandlers, ScopeGuard: scopeManager,
-		Identifiers: identifiers, Now: now,
-	})
-	if err != nil {
-		return err
-	}
-	composition.agent = agentAdapter
+	runtimeTransferred := false
+	defer func() {
+		if initialRuntime != nil && !runtimeTransferred {
+			initialRuntime.Close()
+		}
+	}()
 	deliveryStop := make(chan struct{})
 	uiEventSink := &deliveryUIEventSink{events: make(chan application.UIEvent, 64), stopped: deliveryStop}
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
-		Runner: agentAdapter, Identifiers: identifiers, AuditIdentifiers: identifiers,
+		ModelRuntime: initialRuntime, ModelFactory: modelFactory, ModelProfiles: profileWriter,
+		Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: redactor, Exports: sessionRepository, ExportFiles: filesystem.NewExportWriter(), ExportText: redactor,
 		Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now,
@@ -215,6 +235,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 	composition.coordinator = coordinator
+	runtimeTransferred = true
 
 	startIntent, err := applicationStartIntent(intent)
 	if err != nil {
@@ -231,7 +252,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}
 	initialScope := tui.ScopeView{}
 	if shouldActivateInitialScope(startIntent) {
-		initialScope, err = activateInitialScope(ctx, coordinator, loaded)
+		initialScope, err = activateInitialScope(ctx, coordinator, loaded.Config)
 		if err != nil {
 			return err
 		}
@@ -240,11 +261,14 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
 	}
 	model := tui.NewModel(tui.Config{
-		NoColor:     loaded.NoColor,
-		StartIntent: startIntent,
-		Scope:       initialScope,
-		ModelName:   validatedModel.Model,
-		PrivacyMode: domain.PrivacyModeStandard,
+		NoColor:            loaded.NoColor,
+		StartIntent:        startIntent,
+		Scope:              initialScope,
+		ModelEndpoint:      loaded.Model.Endpoint,
+		ModelName:          loaded.Model.Model,
+		ModelConfigured:    initialRuntime != nil,
+		ModelConfiguredSet: true,
+		PrivacyMode:        domain.PrivacyModeStandard,
 	})
 	if startResult.Session != nil {
 		updated, _ := model.Update(tui.CommandResultMsg{Result: application.UICommandOutcome{
@@ -264,7 +288,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		model,
 		tea.WithContext(ctx),
 		tea.WithOutput(stdout),
-		tea.WithFilter(applicationRequestFilter(requests)),
+		tea.WithFilter(applicationRequestFilter(requestContext, requests)),
 	)
 	var workers sync.WaitGroup
 	workers.Add(2)
@@ -272,8 +296,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	go pumpApplicationEvents(eventContext, program, uiEventSink.events, deliveryStop, &workers)
 
 	_, runErr := program.Run()
-	close(requests)
 	cancelRequests()
+	close(requests)
 	shutdownContext, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), domain.MaxAgentRunDuration+15*time.Second)
 	shutdownErr := coordinator.Shutdown(shutdownContext)
 	cancelShutdown()
@@ -515,11 +539,16 @@ func (sink *deliveryUIEventSink) PublishUIEvent(ctx context.Context, event appli
 	}
 }
 
-func applicationRequestFilter(requests chan<- tea.Msg) func(tea.Model, tea.Msg) tea.Msg {
+func applicationRequestFilter(ctx context.Context, requests chan<- tea.Msg) func(tea.Model, tea.Msg) tea.Msg {
 	return func(_ tea.Model, message tea.Msg) tea.Msg {
 		switch message.(type) {
-		case tui.ApplicationCommandMsg, tui.ApplicationQueryMsg, tui.ApplicationResumeMsg, tui.ApplicationEvidenceDetailMsg:
+		case tui.ApplicationCommandMsg, tui.ApplicationModelSetupMsg, tui.ApplicationQueryMsg, tui.ApplicationResumeMsg, tui.ApplicationEvidenceDetailMsg:
+			if ctx == nil || ctx.Err() != nil {
+				return rejectedApplicationRequest(message)
+			}
 			select {
+			case <-ctx.Done():
+				return rejectedApplicationRequest(message)
 			case requests <- message:
 				return nil
 			default:
@@ -551,6 +580,10 @@ func rejectedApplicationRequest(message tea.Msg) tui.ApplicationFailureMsg {
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
 		result.RunID = request.Command.RunID
 		result.Command = request.Command.Kind
+	case tui.ApplicationModelSetupMsg:
+		destroyApplicationRequest(request)
+		result.RequestID = request.Request.RequestID
+		result.ModelSetup = true
 	}
 	return result
 }
@@ -562,7 +595,10 @@ func pumpApplicationRequests(
 	requests <-chan tea.Msg,
 	workers *sync.WaitGroup,
 ) {
-	defer workers.Done()
+	defer func() {
+		destroyPendingApplicationRequests(requests)
+		workers.Done()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -573,6 +609,26 @@ func pumpApplicationRequests(
 			}
 			program.Send(tui.DispatchApplication(ctx, consumer, message))
 		}
+	}
+}
+
+func destroyPendingApplicationRequests(requests <-chan tea.Msg) {
+	for {
+		select {
+		case message, open := <-requests:
+			if !open {
+				return
+			}
+			destroyApplicationRequest(message)
+		default:
+			return
+		}
+	}
+}
+
+func destroyApplicationRequest(message tea.Msg) {
+	if request, ok := message.(tui.ApplicationModelSetupMsg); ok {
+		request.Request.Secret.Destroy()
 	}
 }
 
@@ -603,12 +659,151 @@ type coordinatorLifecycle interface {
 	Shutdown(context.Context) error
 }
 
-type waitCloser interface {
-	Close()
-}
-
 type scopeLifecycle interface {
 	Close() error
+}
+
+type compositionModelFactory struct {
+	base        config.Config
+	tools       agent.ToolHandlers
+	scope       agent.RunScopeGuard
+	identifiers agent.RunIdentifierSource
+	now         func() time.Time
+	logger      *slog.Logger
+}
+
+func (factory *compositionModelFactory) BuildModelRuntime(
+	ctx context.Context,
+	request application.ModelSetupRequest,
+) (application.ModelRuntime, error) {
+	if factory == nil || ctx == nil || ctx.Err() != nil || request.Validate() != nil {
+		return nil, application.ErrModelSetupInvalid
+	}
+	settings := factory.base
+	settings.Model.Endpoint = request.Endpoint
+	settings.Model.Origin = ""
+	settings.Model.Model = request.Model
+	if err := config.Validate(&settings); err != nil {
+		return nil, err
+	}
+	credential, err := configurationSecret(request.Secret)
+	if err != nil {
+		return nil, err
+	}
+	modelAdapter, modelErr := openaicompat.New(modelConfiguration(settings.Model), &credential, factory.logger)
+	if modelErr != nil {
+		credential.Destroy()
+		return nil, modelErr
+	}
+	agentAdapter, err := einoadapter.New(einoadapter.Config{
+		Model: modelAdapter, Tools: factory.tools, ScopeGuard: factory.scope,
+		Identifiers: factory.identifiers, Now: factory.now,
+	})
+	if err != nil {
+		modelAdapter.Close()
+		return nil, err
+	}
+	return &compositionModelRuntime{
+		agent: agentAdapter, model: modelAdapter,
+		name: settings.Model.Model, origin: settings.Model.Origin,
+	}, nil
+}
+
+type compositionModelProfileWriter struct {
+	paths config.Paths
+	base  config.Config
+}
+
+func (writer *compositionModelProfileWriter) SaveModelProfile(
+	ctx context.Context,
+	request application.ModelSetupRequest,
+) error {
+	if writer == nil || request.Validate() != nil {
+		return application.ErrModelSetupInvalid
+	}
+	credential, err := configurationSecret(request.Secret)
+	if err != nil {
+		return err
+	}
+	defer credential.Destroy()
+	return config.SaveModelProfile(ctx, writer.paths, writer.base, config.ModelProfile{
+		Endpoint: request.Endpoint, Model: request.Model,
+	}, &credential)
+}
+
+type compositionModelRuntime struct {
+	once   sync.Once
+	agent  *einoadapter.Adapter
+	model  *openaicompat.Adapter
+	name   string
+	origin string
+}
+
+func (runtime *compositionModelRuntime) Run(
+	ctx context.Context,
+	input agent.RunInput,
+	sink agent.EventSink,
+) agent.RunOutcome {
+	if runtime == nil || runtime.agent == nil {
+		return agent.RunOutcome{}
+	}
+	return runtime.agent.Run(ctx, input, sink)
+}
+
+func (runtime *compositionModelRuntime) Close() {
+	if runtime == nil {
+		return
+	}
+	runtime.once.Do(func() {
+		if runtime.agent != nil {
+			runtime.agent.Close()
+		}
+		if runtime.model != nil {
+			runtime.model.Close()
+		}
+	})
+}
+
+func (runtime *compositionModelRuntime) ModelName() string {
+	if runtime == nil {
+		return ""
+	}
+	return runtime.name
+}
+
+func (runtime *compositionModelRuntime) Origin() string {
+	if runtime == nil {
+		return ""
+	}
+	return runtime.origin
+}
+
+func applicationSecret(secret *config.SecretValue) (*application.ModelSetupSecret, error) {
+	var (
+		result *application.ModelSetupSecret
+		err    error
+	)
+	if secret == nil {
+		return nil, application.ErrModelSetupInvalid
+	}
+	if useErr := secret.Use(func(value string) { result, err = application.NewModelSetupSecret(value) }); useErr != nil {
+		return nil, useErr
+	}
+	return result, err
+}
+
+func configurationSecret(secret *application.ModelSetupSecret) (config.SecretValue, error) {
+	var (
+		result config.SecretValue
+		err    error
+	)
+	if secret == nil {
+		return config.SecretValue{}, application.ErrModelSetupInvalid
+	}
+	if useErr := secret.Use(func(value string) { result, err = config.NewSecretValue(value) }); useErr != nil {
+		return config.SecretValue{}, useErr
+	}
+	return result, err
 }
 
 // runtimeComposition owns shutdown in dependency order. It is lifecycle state,
@@ -617,9 +812,6 @@ type runtimeComposition struct {
 	mu sync.Mutex
 
 	coordinator coordinatorLifecycle
-	agent       waitCloser
-	model       waitCloser
-	credential  *config.SecretValue
 	scope       scopeLifecycle
 	database    io.Closer
 	logSink     io.Closer
@@ -639,14 +831,6 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 		if err := composition.coordinator.Shutdown(ctx); err != nil {
 			return err
 		}
-	}
-	if composition.agent != nil {
-		composition.agent.Close()
-	}
-	if composition.model != nil {
-		composition.model.Close()
-	} else if composition.credential != nil {
-		composition.credential.Destroy()
 	}
 	var closeErrors []error
 	if composition.scope != nil {
@@ -709,7 +893,7 @@ func modelConfiguration(value config.ModelConfig) domain.ModelConfiguration {
 	return domain.ModelConfiguration{
 		ProviderKind: domain.ModelProviderOpenAICompatible,
 		Endpoint:     value.Endpoint, Origin: value.Origin, Model: value.Model,
-		APIKeySource: domain.ModelAPIKeySourceEnvironment,
+		APIKeySource: domain.ModelAPIKeySourceRuntime,
 		Temperature:  value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
 		RequestTimeout:    time.Duration(value.RequestTimeoutSeconds) * time.Second,
 		StreamingRequired: value.Streaming, ToolCallingRequired: value.ToolCallingRequired,

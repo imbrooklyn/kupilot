@@ -88,6 +88,27 @@ func TestPrivacyDecisionsRejectStaleCancelledAndFailedWrites(t *testing.T) {
 	}
 }
 
+func TestPrivacyManagerDefersStoreIOUntilModelOriginIsConfigured(t *testing.T) {
+	store := new(privacyTestStore)
+	manager := newPrivacyTestManager(t, store, "", PrivacyPolicyVersion, privacyTestClock())
+	if _, err := manager.Review(context.Background()); !errors.Is(err, ErrModelUnconfigured) {
+		t.Fatalf("unconfigured Review() error = %v", err)
+	}
+	if allowed, err := manager.AuthorizeModel(context.Background()); allowed || !errors.Is(err, ErrModelUnconfigured) {
+		t.Fatalf("unconfigured AuthorizeModel() = %v, %v", allowed, err)
+	}
+	if store.loadCalls != 0 || store.saveCalls != 0 {
+		t.Fatalf("unconfigured privacy store calls = load %d save %d", store.loadCalls, store.saveCalls)
+	}
+	if err := manager.ReconfigureOrigin("https://model.example"); err != nil {
+		t.Fatalf("ReconfigureOrigin() error = %v", err)
+	}
+	review, err := manager.Review(context.Background())
+	if err != nil || review.Decision != PrivacyDecisionPending || store.loadCalls != 1 || store.saveCalls != 0 {
+		t.Fatalf("configured Review() = %#v, %v; load %d save %d", review, err, store.loadCalls, store.saveCalls)
+	}
+}
+
 type privacyTestStore struct {
 	mu        sync.Mutex
 	record    PrivacyRecord

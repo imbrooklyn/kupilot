@@ -118,7 +118,7 @@ func TestLoadSelectsConfigurationFileByPrecedence(t *testing.T) {
 		overrides   Overrides
 		want        string
 	}{
-		{name: "platform default", want: "default-file"},
+		{name: "fixed Home default", want: "default-file"},
 		{
 			name:        "environment file",
 			environment: map[string]string{"KUPILOT_CONFIG_FILE": environmentFile},
@@ -215,7 +215,8 @@ func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 		{name: "alias value", content: "version: 1\ncontext: &context development\nnamespace: *context\n"},
 		{name: "multiple documents", content: "version: 1\n---\nversion: 1\n"},
 		{name: "unknown nested field", content: "version: 1\nlogging:\n  backend: remote\n"},
-		{name: "model API key", content: "version: 1\nmodel:\n  api_key: prohibited\n"},
+		{name: "retired paths", content: "version: 1\npaths:\n  state_dir: /tmp/state\n"},
+		{name: "retired API key source", content: "version: 1\nmodel:\n  api_key_source: environment\n"},
 		{name: "authorization header", content: "version: 1\nmodel:\n  authorization: prohibited\n"},
 		{name: "insecure TLS override", content: "version: 1\nmodel:\n  insecure_skip_verify: true\n"},
 		{name: "redirect override", content: "version: 1\nmodel:\n  allow_cross_origin_redirects: true\n"},
@@ -240,7 +241,7 @@ func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnsafeConfigurationFiles(t *testing.T) {
+func TestLoadAcceptsUserManagedConfigurationPermissionsAndRejectsUnsafeFiles(t *testing.T) {
 	t.Parallel()
 
 	t.Run("non-owner permissions", func(t *testing.T) {
@@ -252,8 +253,13 @@ func TestLoadRejectsUnsafeConfigurationFiles(t *testing.T) {
 
 		paths := testPaths(root)
 		paths.ConfigFile = path
-		_, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
-		assertSafeError(t, err, ClassConfigurationInvalid, "config_file_permissions")
+		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if len(loaded.Warnings) != 1 {
+			t.Fatalf("warnings = %#v, want one permissions warning", loaded.Warnings)
+		}
 	})
 
 	t.Run("symbolic link", func(t *testing.T) {
@@ -320,24 +326,26 @@ func TestConfigSerializationNeverContainsEnvironmentAPIKey(t *testing.T) {
 			}
 			return environment(key)
 		},
+		Unsetenv: func(string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if apiKeyLookedUp {
-		t.Fatal("configuration loading queried the model API key source")
+	if !apiKeyLookedUp || !got.Credential.IsSet() || got.CredentialSource != CredentialSourceEnvironment {
+		t.Fatal("configuration loading did not consume the environment credential override")
 	}
+	defer got.Credential.Destroy()
 
-	jsonEncoded, err := json.Marshal(got)
+	jsonEncoded, err := json.Marshal(got.Config)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	yamlEncoded, err := yaml.Marshal(got)
+	yamlEncoded, err := yaml.Marshal(got.Config)
 	if err != nil {
 		t.Fatalf("yaml.Marshal() error = %v", err)
 	}
 	for name, value := range map[string]string{
-		"formatted Config": fmt.Sprintf("%v %#v", got, got),
+		"formatted Config": fmt.Sprintf("%v %#v", got.Config, got.Config),
 		"JSON Config":      string(jsonEncoded),
 		"YAML Config":      string(yamlEncoded),
 	} {
@@ -365,13 +373,7 @@ func TestExampleConfigurationMatchesStrictSchema(t *testing.T) {
 }
 
 func testPaths(root string) Paths {
-	return Paths{
-		ConfigDir:  filepath.Join(root, "config"),
-		ConfigFile: filepath.Join(root, "config", "config.yaml"),
-		StateDir:   filepath.Join(root, "state"),
-		CacheDir:   filepath.Join(root, "cache"),
-		LogDir:     filepath.Join(root, "logs"),
-	}
+	return pathsForHome(root)
 }
 
 func lookupMap(values map[string]string) func(string) (string, bool) {

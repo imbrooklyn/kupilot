@@ -35,34 +35,38 @@ Check all of the following:
 
 - An explicit `--config` or `KUPILOT_CONFIG_FILE` value is an absolute,
   normalized path.
-- The file is regular, not a symlink, no larger than 64 KiB, and has mode
-  `0600`.
+- The file is regular, not a symlink, and no larger than 64 KiB. Wider existing
+  permissions produce a warning rather than a rejection.
 - The document contains `version: 1` and no unknown, duplicate, null, alias,
   merge, or second-document content.
 - Values use the exact types and bounds in [Configuration](configuration.md).
-- `model.endpoint` and `model.model` are both set or both absent. Startup needs
-  both.
+- Each supplied `model.endpoint` and `model.model` value is valid. A missing
+  endpoint, model identifier, or API key starts the TUI in model-setup mode.
 
-`config.example.yaml` is tracked as a readable public example and therefore
-must be copied to an owner-only file before it can be selected as configuration.
-Do not add a credential to either copy. Its `paths.*` entries are illustrative;
-omit them to use platform defaults, or replace them with canonical owner-only
-directories that contain no symbolic-link component.
+`config.example.yaml` deliberately contains no real credential. Copy it to the
+fixed Home configuration or select an absolute external file. Do not add a real
+key to the tracked example, repository, fixture, or support report. The schema
+has no path fields; all managed local paths derive from `KUPILOT_HOME`.
 
-`help` and `version` intentionally work without loading configuration, storage,
-Kubernetes, or the model. Use them to distinguish CLI parsing from startup
-failure.
+`help`, `version`, and `cache clear` intentionally work without loading ordinary
+configuration, storage, Kubernetes, or the model. Use them to distinguish CLI
+parsing or cache maintenance from startup failure.
 
 ## The model API key is missing or rejected
 
-`KUPILOT_MODEL_API_KEY` is the only admitted source. The value must be present,
-non-empty, valid UTF-8 without spaces or controls, and at most 4096 bytes. It
-cannot be supplied in YAML or as a CLI value.
+Use the masked TUI setup, optional plaintext `model.api_key`, or
+`KUPILOT_MODEL_API_KEY`. The environment value overrides a file value. The
+effective value must be non-empty, valid UTF-8 without spaces or controls, and
+at most 4096 bytes. It cannot be supplied as a CLI value.
 
 KuPilot reads and removes the entry from its own process environment once. That
 does not remove an exported value from the parent shell. If a secret launcher
 retries within the same process after the one-shot read, start a fresh KuPilot
 process rather than attempting to reuse a consumed source.
+
+If interactive construction fails, the TUI discards the submitted key and asks
+for it again. `save` writes disclosed plaintext to
+`KUPILOT_HOME/config.yaml`; `session` keeps it in the current process only.
 
 ## The model endpoint is rejected or incompatible
 
@@ -200,8 +204,9 @@ state removal.
 
 Rejecting or cancelling the dialog sends no pending question. If accepting the
 unchanged tuple does not persist, inspect the safe storage failure and owner-only
-path requirements; KuPilot fails closed rather than treating an unsaved decision
-as consent.
+creation or managed-path requirements; wider existing modes alone are not a
+denial. KuPilot fails closed rather than treating an unsaved decision as
+consent.
 
 ## Resume is unavailable
 
@@ -230,11 +235,14 @@ active. Historic Evidence remains display-only. See
 
 ## SQLite or local logging is unavailable
 
-The state and log directories must be absolute, normalized, non-root, real
-directories with mode `0700`. The database, known SQLite sidecars, and log files
-must be regular non-symlink files with mode `0600`. KuPilot rejects unsafe paths
-and permissions rather than following links or silently changing user-owned
-files.
+Confirm `KUPILOT_HOME` is an absolute, normalized, non-root directory and that
+its fixed `state` and `logs` children have the expected file types. KuPilot
+rejects symlinked managed descendants and non-regular database, sidecar, or log
+targets. It assigns `0700`/`0600` only to newly created paths on supported Unix
+platforms; wider existing user-managed modes are accepted and left unchanged.
+
+A local log failure is reported and logging is disabled for that process. A
+required SQLite failure still stops startup or blocks a new durable run.
 
 An unknown, incompatible, checksum-mismatched, or corrupt database is not
 deleted, overwritten, renamed, or recreated automatically. Preserve it if
@@ -277,7 +285,7 @@ The CLI uses these stable process categories:
 
 | Code | Meaning |
 | ---: | --- |
-| `0` | Help, version, or the interactive flow completed successfully. |
+| `0` | Help, version, cache clearing, or the interactive flow completed successfully. |
 | `1` | Safe startup or runtime failure. |
 | `2` | Invalid command, option, or argument. |
 | `69` | The selected new or resume start path is unavailable. |

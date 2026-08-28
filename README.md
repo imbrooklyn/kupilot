@@ -64,48 +64,28 @@ submitting a change.
 
 ## Quick start
 
-1. Create an owner-only YAML configuration. The full schema and platform
-   locations are documented in [Configuration](docs/configuration.md). A
-   minimal example is:
-
-   ```yaml
-   version: 1
-   context: example-context
-   namespace: example-namespace
-
-   model:
-     endpoint: https://model.example.invalid/v1
-     model: example-model
-   ```
-
-   The `.invalid` endpoint and all `example-*` names are placeholders. Replace
-   them with values approved for your environment. Do not put a model API key,
-   kubeconfig content, token, or certificate in this file. An explicit
-   configuration file must use an absolute path and mode `0600`.
-
-2. Make `KUPILOT_MODEL_API_KEY` available to the KuPilot process through an
-   appropriate local secret mechanism. Do not pass the value as a CLI argument
-   or store it in the repository. KuPilot reads and removes its process-local
-   environment entry once; if it was exported by a parent shell, remove the
-   parent-shell value after KuPilot exits.
-
-3. Grant the selected Kubernetes identity only the read permissions in
+1. Grant the selected Kubernetes identity only the read permissions in
    [Least-Privilege RBAC](docs/rbac/README.md). Do not use `cluster-admin` for
    KuPilot.
 
-4. Start a new Session:
+2. Start a new Session with no required configuration file:
 
    ```sh
-   ./bin/kupilot --config /absolute/path/to/config.yaml
+   ./bin/kupilot
    ```
 
-   A bare `kupilot` always creates a new Session and never queries history. If
-   Context and Namespace are not supplied by configuration or CLI overrides,
-   select and verify them in the TUI. Before the first model-content transfer,
-   review the exact destination and enabled cloud data categories, then accept
-   or reject the consent request.
+   A bare start always creates a new Session and never queries history. KuPilot
+   keeps its automatically managed files below `${KUPILOT_HOME:-$HOME/.kupilot}`.
+   If the model endpoint, identifier, or API key is missing, the TUI asks for
+   them with masked key input. Choose whether to save the key as disclosed
+   plaintext in the local Home configuration or keep it only for this process.
+   Environment variables remain available as overrides.
 
-5. Ask one diagnostic question. KuPilot shows bounded Tool steps and returns a
+3. Select and verify a Context and Namespace when the TUI asks. Before the
+   first model-content transfer, review the exact destination and enabled cloud
+   data categories, then accept or reject consent.
+
+4. Ask one diagnostic question. KuPilot shows bounded Tool steps and returns a
    structured Diagnosis. Press `Ctrl+E` to inspect the bounded safe provenance
    behind cited Evidence. Evaluate any recommendation independently; the
    current composed binary cannot execute it.
@@ -122,15 +102,19 @@ kupilot
 kupilot resume
 kupilot resume SESSION_ID
 kupilot resume --last
+kupilot cache clear
 kupilot version
 kupilot --version
 kupilot help
 kupilot help resume
+kupilot help cache
 ```
 
 - `kupilot resume` opens a bounded picker of eligible local Sessions.
 - `kupilot resume SESSION_ID` requires an exact UUIDv7 Session identifier.
 - `kupilot resume --last` selects the most recently active eligible Session.
+- `kupilot cache clear` removes only entries below the fixed Home cache and
+  short-circuits before ordinary startup.
 - Resume restores safe history and unverified scope/resource candidates only.
   It does not resume an AgentRun, model stream, ToolInvocation, Kubernetes
   client, or live scope.
@@ -140,8 +124,8 @@ kupilot help resume
   working directory, repository path, Context, or Namespace.
 - There is no `--all`, `--cd`, cwd-based Session lookup, automatic last-Session
   resume, or credential-valued option.
-- `help` and `version` short-circuit before business storage, Kubernetes, model,
-  or TUI initialization.
+- `help`, `version`, and `cache clear` short-circuit before business storage,
+  Kubernetes, model, or TUI initialization.
 
 See [Sessions and Scope](docs/user-guide/sessions-and-scope.md) for resume
 eligibility and saved-scope conflict behavior.
@@ -161,10 +145,12 @@ key, raw prompts, and raw protocol bodies are not eligible model content.
 Redaction reduces risk but cannot guarantee that every sensitive value in an
 otherwise eligible field is recognized.
 
-KuPilot stores sanitized Session history in a local SQLite database and writes
-a small, allowlisted, rotating local operational log by default. Neither store
-is encrypted by KuPilot. Local logging can be disabled independently from the
-privacy control for container-output Tools.
+KuPilot stores sanitized Session history, cache, configuration, and a small
+allowlisted rotating operational log under one fixed Home. SQLite and logs are
+not encrypted. A model key saved through the TUI is also plaintext and is kept
+out of SQLite, logs, model content, transcript history, and ordinary typed
+configuration. Local logging can be disabled independently from the privacy
+control for container-output Tools.
 
 The `/privacy` surface can start a new standard- or minimal-persistence Session,
 tighten operational-detail retention, delete the current Session, and export a

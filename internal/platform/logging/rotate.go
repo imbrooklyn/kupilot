@@ -45,10 +45,12 @@ func openRotatingWriter(ctx context.Context, options Options) (*rotatingWriter, 
 
 func ensurePrivateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
+	created := false
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return newSafeError(ClassInternal, "log_directory_unavailable", "KuPilot could not create its local log directory.")
 		}
+		created = true
 		info, err = os.Lstat(directory)
 	}
 	if err != nil {
@@ -57,8 +59,10 @@ func ensurePrivateDirectory(directory string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "The local log directory must not be a symbolic link.")
 	}
-	if info.Mode().Perm() != 0o700 {
-		return newSafeError(ClassConfigurationInvalid, "log_permissions_unsafe", "The local log directory must be accessible only by its owner; use mode 0700.")
+	if created {
+		if err := os.Chmod(directory, 0o700); err != nil {
+			return newSafeError(ClassInternal, "log_directory_unavailable", "KuPilot could not protect its new local log directory.")
+		}
 	}
 	return nil
 }
@@ -79,9 +83,6 @@ func (writer *rotatingWriter) prune(ctx context.Context) error {
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "Local log files must be regular files and must not be symbolic links.")
-		}
-		if info.Mode().Perm() != 0o600 {
-			return newSafeError(ClassConfigurationInvalid, "log_permissions_unsafe", "Local log files must be accessible only by their owner; use mode 0600.")
 		}
 		if index >= writer.maxFiles || info.Size() > writer.maxFileBytes || now.Sub(info.ModTime()) >= writer.maxAge {
 			if err := os.Remove(name); err != nil {
@@ -160,9 +161,6 @@ func (writer *rotatingWriter) openCurrent() error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "The current local log must be a regular file and must not be a symbolic link.")
 		}
-		if info.Mode().Perm() != 0o600 {
-			return newSafeError(ClassConfigurationInvalid, "log_permissions_unsafe", "The current local log must be accessible only by its owner; use mode 0600.")
-		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return newSafeError(ClassInternal, "log_file_unavailable", "KuPilot could not inspect its current local log.")
 	}
@@ -172,9 +170,9 @@ func (writer *rotatingWriter) openCurrent() error {
 	}
 	openedInfo, err := file.Stat()
 	pathInfo, pathErr := os.Lstat(name)
-	if err != nil || pathErr != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !openedInfo.Mode().IsRegular() || openedInfo.Mode().Perm() != 0o600 || !os.SameFile(pathInfo, openedInfo) {
+	if err != nil || pathErr != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
 		_ = file.Close()
-		return newSafeError(ClassConfigurationInvalid, "log_permissions_unsafe", "The current local log must be a regular owner-only file.")
+		return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "The current local log must remain one regular non-symlink file.")
 	}
 	writer.file = file
 	writer.size = openedInfo.Size()

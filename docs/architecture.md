@@ -52,7 +52,7 @@ The following rules are mandatory:
 ```mermaid
 flowchart LR
     User["Terminal user"]
-    Config["Local configuration and<br/>runtime credential sources"]
+    Config["KuPilot Home configuration and<br/>runtime credential sources"]
     Kubeconfig["Local kubeconfig"]
 
     subgraph Host["User workstation"]
@@ -145,7 +145,7 @@ adapter-only dependency.
 | Boundary | Owns | Must not own |
 | --- | --- | --- |
 | Domain | Value objects, state transitions, stable error classes, and invariants | I/O, serialization protocols, framework types, UI state, SQL, clients |
-| Application | Session, run, scope, cancellation, persistence intent, event acceptance, and `v0.2` approval orchestration | SDK calls, SQL statements, terminal rendering, Kubernetes object projection |
+| Application | Session, run, scope, cancellation, model-runtime replacement, persistence intent, event acceptance, and `v0.2` approval orchestration | SDK calls, SQL statements, terminal rendering, Kubernetes object projection |
 | Agent core | Single-Agent loop policy, bounded model/Tool contracts, Evidence citation validation, and neutral Agent events | Live scope mutation, Kubernetes clients, SQLite, TUI state |
 | Tool handlers | Strict Tool schemas, canonical arguments, Tool budgets, safe ToolResult and Evidence construction | TUI behavior, repository calls, generic Kubernetes access, scope selection |
 | Infrastructure | Kubeconfig/client lifecycle, bounded Kubernetes reads, model transport, SQLite mappings, configuration, and safety implementations | End-to-end use-case decisions or policy bypasses |
@@ -737,17 +737,20 @@ UI nonce. Neither model contains an arbitrary operation payload.
 
 ### 6.9 ModelConfiguration
 
-ModelConfiguration is a validated, serializable configuration value rather
-than a vendor SDK object. It contains the fixed provider kind
-`openai_compatible`, endpoint origin, configured model identifier, API-key
-source category, bounded temperature and output settings, request timeout,
-required streaming and Tool-calling capabilities, and transport policy.
+ModelConfiguration is a validated, serializable, non-sensitive runtime value
+rather than a vendor SDK object. It contains the fixed provider kind
+`openai_compatible`, endpoint origin, configured model identifier, a fixed
+`runtime` marker showing that an opaque credential was selected before this
+boundary, bounded temperature and output settings, request timeout, required
+streaming and Tool-calling capabilities, and transport policy.
 
 The API key itself is a runtime transport credential and is not a
-ModelConfiguration field. The value also contains no HTTP client, Eino model,
-request headers, redirect callback, or raw endpoint response. Model adapters
-must validate endpoint capabilities before use and keep SDK mappings behind the
-adapter boundary.
+ModelConfiguration field. A configuration adapter may extract it from the
+optional local plaintext field before ordinary typed decoding, while masked TUI
+input and the environment override enter through opaque wrappers. The value
+also contains no HTTP client, Eino model, request headers, redirect callback, or
+raw endpoint response. Model adapters must validate endpoint capabilities
+before use and keep SDK mappings behind the adapter boundary.
 
 ## 7. Consumer-owned ports
 
@@ -761,6 +764,8 @@ their names do not authorize broader method sets.
 | --- | --- | --- | --- |
 | CLI or TUI to use case | `application` | Application coordinator | Typed command/query in, neutral DTO or event out; no delivery types |
 | Application to Agent | `application` (`AgentRunner`) | `agent/einoadapter` | Immutable RunInput, neutral RunEventSink, Diagnosis, classified error |
+| Application to model-runtime construction | `application` (`ModelRuntimeFactory`) | Composition-owned factory over the Eino and model adapters | Validated profile plus opaque one-shot credential in; one owned runtime or safe failure out |
+| Application to local model-profile publication | `application` (`ModelProfileWriter`) | Configuration adapter wired by composition | Explicit save choice and opaque credential in; atomic fixed-Home publication or safe failure out |
 | Agent runtime to scope freshness | `application` (`RunScopeGuard`) | Application scope state owner | Exact run scope in; current or `stale_scope` out; no client or credential crosses |
 | Application to scope activation | `application` (`ScopeActivator`) | `kube` | Context/Namespace candidate in; verified safe scope metadata or classified error out |
 | Application to Picker reads | `application` (`PickerReader`) | `kube` | Fixed Kind/query/scope/limit in; safe bounded candidate DTOs out |
@@ -806,6 +811,7 @@ when no isolation or test seam is needed.
 | Boundary | Mode and owner | Ordering, cancellation, and backpressure |
 | --- | --- | --- |
 | CLI/TUI command to Application | Synchronous validation and acceptance; Application owns the use case | Commands carry an expected generation or request ID where stale work is possible. Long I/O does not run in Bubble Tea `Update` or `View`. |
+| TUI model setup to Application | One serialized Application operation | The opaque credential is destroyed on every outcome. Reconfiguration cancels and joins run work, constructs before swap, preserves the old runtime on construction or publication failure, and invalidates changed-origin consent. |
 | Application to AgentRunner | One Application-owned asynchronous task per active run | One parent context owns model streams and Tool calls. Application cancels and waits during shutdown. |
 | AgentRunner to model | Streaming external I/O, one request at a time | Child deadline is shorter than run deadline. Stream ownership and closure remain inside the adapter. |
 | AgentRunner to Tool | Synchronous result per Tool selection, serial in `v0.1` | Pre-call and post-result generation checks surround execution. No Tool starts after cancellation or terminal state. |

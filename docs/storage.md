@@ -33,16 +33,18 @@ must not contain `runtime/cgo`.
 
 ## Path and file policy
 
-The database is named `kupilot.db` under the validated per-user state directory.
-The path comes from typed local configuration; database names and paths never
-come from a Session, Tool, Kubernetes object, or model value.
+The database has the fixed path `state/kupilot.db` below the process-frozen
+KuPilot Home. `KUPILOT_HOME` selects that root; otherwise KuPilot uses
+`$HOME/.kupilot`. Database names and descendants never come from YAML, a
+Session, Tool, Kubernetes object, working directory, or model value.
 
-On supported Unix platforms, KuPilot enforces mode `0700` on the state directory
-and mode `0600` on the database and known journal, WAL, and shared-memory
-sidecars. Existing symlinked path components, database files, and sidecars are
-rejected before the driver opens the database. An unknown, incompatible, or
-corrupt database is reported as unavailable and is not deleted, renamed,
-overwritten, or recreated automatically.
+On supported Unix platforms, KuPilot assigns `0700` to a newly created state
+directory and `0600` to a newly created database or known journal, WAL, and
+shared-memory sidecar. Existing user-managed modes are preserved and do not
+block storage solely for being wider. Symlinked managed descendants,
+non-regular database files and sidecars, and path replacement remain rejected.
+An unknown, incompatible, or corrupt database is reported as unavailable and
+is not deleted, renamed, overwritten, or recreated automatically.
 
 These controls do not provide SQLite encryption or forensic deletion. Operating
 system disk encryption, snapshots, backups, swap, and storage-media lifecycle

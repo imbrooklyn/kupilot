@@ -240,12 +240,12 @@ Both version forms must report the expected version, commit, commit time, Go
 version, and platform. Help must return without creating a database, contacting
 Kubernetes, contacting a model endpoint, or entering the TUI.
 
-For the safe startup-error check, point the platform-specific XDG configuration,
-state, and cache variables at an empty temporary tree; set `KUBECONFIG` to an
-empty test file; leave `KUPILOT_MODEL_API_KEY` empty; and invoke KuPilot with an
-absolute path to a nonexistent configuration file. The command must return a
-safe `config_file_unavailable` error, must not echo an environment value, and
-must not create a database, WAL/SHM sidecar, or log.
+For the safe startup-error check, point `KUPILOT_HOME` at a nonexistent child of
+an empty temporary tree; set `KUBECONFIG` to an empty test file; leave
+`KUPILOT_MODEL_API_KEY` absent; and invoke KuPilot with an absolute path to a
+nonexistent configuration file. The command must return a safe
+`config_file_unavailable` error, must not echo an environment value, and must
+not create Home, a database, WAL/SHM sidecar, or log.
 
 ### Separately authorized integration smoke
 

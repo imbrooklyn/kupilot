@@ -35,6 +35,12 @@ type ApplicationCommandMsg struct {
 	Command application.UICommand
 }
 
+// ApplicationModelSetupMsg carries the one opaque credential-bearing setup
+// request. The value is never a UI event or ordinary command payload.
+type ApplicationModelSetupMsg struct {
+	Request application.ModelSetupRequest
+}
+
 // ApplicationQueryMsg is a deferred typed completion query for an adapter.
 type ApplicationQueryMsg struct {
 	Query application.UICompletionQuery
@@ -80,6 +86,11 @@ type CommandResultMsg struct {
 	Result application.UICommandOutcome
 }
 
+// ModelSetupResultMsg carries only the non-sensitive configured projection.
+type ModelSetupResultMsg struct {
+	Result application.ModelSetupResult
+}
+
 // ApplicationFailureMsg carries code-authored delivery-safe text and the
 // applicable request identity needed to reject stale asynchronous failures.
 type ApplicationFailureMsg struct {
@@ -94,6 +105,7 @@ type ApplicationFailureMsg struct {
 	Query            application.UICompletionKind
 	Resume           application.UIResumeMode
 	Evidence         application.UIEvidenceReference
+	ModelSetup       bool
 }
 
 func sanitizeExternalText(value string, limit int) string {

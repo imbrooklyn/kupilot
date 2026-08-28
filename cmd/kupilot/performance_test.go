@@ -44,9 +44,7 @@ func BenchmarkCLIProcessStartupV1(b *testing.B) {
 				"HOME=" + root,
 				"PATH=/usr/bin:/bin",
 				"TMPDIR=" + root,
-				"XDG_CACHE_HOME=" + filepath.Join(root, "cache"),
-				"XDG_CONFIG_HOME=" + filepath.Join(root, "config"),
-				"XDG_STATE_HOME=" + filepath.Join(root, "state"),
+				"KUPILOT_HOME=" + filepath.Join(root, "kupilot-home"),
 				"KUBECONFIG=" + filepath.Join(root, "absent-kubeconfig"),
 			}
 			b.ResetTimer()

@@ -84,12 +84,25 @@ configured origin, but it is not model content. Kubernetes credentials are used
 only by the local Kubernetes client. Neither credential category is written to
 Session history, the local application log, or SQLite.
 
+The key may be entered through the masked TUI, supplied by the process
+environment, or read from an optional plaintext `model.api_key` in the selected
+configuration. Choosing `save` in model setup atomically stores it in the fixed
+KuPilot Home configuration after an explicit not-encrypted disclosure; choosing
+`session` does not. The local configuration is a separate user-managed asset,
+not Session persistence or an encrypted credential store.
+
 KuPilot has no Tool that reads Kubernetes Secrets. If an eligible Event, log,
 resource field, user question, or model result appears to contain a high-risk
 value, KuPilot redacts or blocks it. It does not send the original merely to
 preserve diagnostic completeness.
 
 ## Local persistence and deletion
+
+This section describes SQLite retention. KuPilot keeps automatically managed
+configuration, SQLite state, cache, and operational logs below the single
+`${KUPILOT_HOME:-$HOME/.kupilot}` root. Database deletion does not delete the
+configuration, cache, logs, exports, or backups; `kupilot cache clear` removes
+only cache entries.
 
 `/privacy` displays the current standard or minimal persistence mode, the
 effective operational-detail period, the fixed read/lifecycle and approval/write
@@ -167,9 +180,11 @@ file sink. This is separate from the `/privacy` container-output category: one
 controls local operational records, while the other controls whether bounded
 Pod log Tools may read and transfer processed facts.
 
-SQLite and local logs are not encrypted by KuPilot. Owner-only permissions,
-operating-system account isolation, disk protection, and the user's backup and
-snapshot policy are the relevant local controls.
+SQLite, local logs, and a saved plaintext API key are not encrypted by KuPilot.
+New managed paths use owner-only modes on supported Unix platforms. Existing
+user-managed modes are respected rather than rejected or changed, so operating-
+system account isolation, selected permissions, disk protection, and the
+user's backup and snapshot policy remain the relevant local controls.
 
 ## No product telemetry
 

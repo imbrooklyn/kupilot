@@ -231,7 +231,7 @@ func TestFileLoggerCreatesOwnerOnlyDirectoryAndFile(t *testing.T) {
 	}
 }
 
-func TestFileLoggerRejectsUnsafePathsAndPermissions(t *testing.T) {
+func TestFileLoggerHandlesUserManagedModesAndRejectsUnsafePaths(t *testing.T) {
 	t.Parallel()
 
 	t.Run("relative directory", func(t *testing.T) {
@@ -253,14 +253,48 @@ func TestFileLoggerRejectsUnsafePathsAndPermissions(t *testing.T) {
 		assertLoggingError(t, err, "configuration_invalid", "log_path_unsafe")
 	})
 
-	t.Run("broad directory permissions", func(t *testing.T) {
+	t.Run("broad user-managed directory permissions", func(t *testing.T) {
 		root := privateTempDir(t)
 		directory := filepath.Join(root, "logs")
 		if err := os.Mkdir(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Open(context.Background(), Options{Directory: directory})
-		assertLoggingError(t, err, "configuration_invalid", "log_permissions_unsafe")
+		sink, err := Open(context.Background(), Options{Directory: directory})
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if err := sink.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		info, err := os.Lstat(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("user-managed directory mode = %v", info.Mode().Perm())
+		}
+	})
+
+	t.Run("broad user-managed file permissions", func(t *testing.T) {
+		root := privateTempDir(t)
+		path := filepath.Join(root, LogFileName)
+		if err := os.WriteFile(path, []byte("existing\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sink, err := Open(context.Background(), Options{Directory: root})
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if err := sink.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("user-managed file mode = %v", info.Mode().Perm())
+		}
 	})
 
 	t.Run("log file symbolic link", func(t *testing.T) {

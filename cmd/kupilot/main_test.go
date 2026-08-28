@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,17 +36,6 @@ func TestCompositionRoot(t *testing.T) {
 		wantOutput string
 		wantError  string
 	}{
-		{
-			name:      "new Session unavailable",
-			wantCode:  cli.ExitUnavailable,
-			wantError: "Starting a new Session is unavailable.\n",
-		},
-		{
-			name:      "resume unavailable",
-			args:      []string{"resume"},
-			wantCode:  cli.ExitUnavailable,
-			wantError: "Session resume is unavailable.\n",
-		},
 		{
 			name:       "help short circuit",
 			args:       []string{"help"},
@@ -86,6 +77,44 @@ func TestCompositionRoot(t *testing.T) {
 	}
 }
 
+func TestCompositionRootCacheClearShortCircuitsOrdinaryStartup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KUPILOT_HOME", home)
+	configPath := filepath.Join(home, "config.yaml")
+	cachePath := filepath.Join(home, "cache")
+	statePath := filepath.Join(home, "state")
+	if err := os.WriteFile(configPath, []byte("invalid: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cachePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "entry"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statePath, "preserve"), []byte("state"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(context.Background(), []string{"cache", "clear"}, &stdout, &stderr, buildinfo.Info{})
+	if code != cli.ExitOK || stdout.String() != "KuPilot cache cleared.\n" || stderr.String() != "" {
+		t.Fatalf("cache clear = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
+	}
+	if entries, err := os.ReadDir(cachePath); err != nil || len(entries) != 0 {
+		t.Fatalf("cache entries = %v, %v", entries, err)
+	}
+	if content, err := os.ReadFile(configPath); err != nil || string(content) != "invalid: [" {
+		t.Fatal("cache clear initialized or changed configuration")
+	}
+	if content, err := os.ReadFile(filepath.Join(statePath, "preserve")); err != nil || string(content) != "state" {
+		t.Fatal("cache clear initialized or changed state")
+	}
+}
+
 func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +130,7 @@ func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t 
 		RequestID: 9, Reference: reference,
 	}}
 	requests := make(chan tea.Msg, 1)
-	filter := applicationRequestFilter(requests)
+	filter := applicationRequestFilter(context.Background(), requests)
 	if result := filter(nil, request); result != nil {
 		t.Fatalf("routed Evidence detail result = %#v", result)
 	}
@@ -114,6 +143,38 @@ func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t 
 	if !ok || failure.RequestID != request.Query.RequestID || failure.Evidence != reference ||
 		failure.RunID != reference.RunID || failure.ScopeGeneration != reference.Scope.Generation {
 		t.Fatalf("overflow Evidence failure identity = %#v", failure)
+	}
+}
+
+func TestApplicationRequestFilterAndDrainDestroyRejectedModelSecrets(t *testing.T) {
+	t.Parallel()
+
+	secret, err := application.NewModelSetupSecret("generated-filter-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	requests := make(chan tea.Msg, 1)
+	message := tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
+		RequestID: 11, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
+	}}
+	failure, ok := applicationRequestFilter(ctx, requests)(nil, message).(tui.ApplicationFailureMsg)
+	if !ok || !failure.ModelSetup || failure.RequestID != 11 || secret.IsSet() {
+		t.Fatalf("cancelled filter result = %#v secret set=%v", failure, secret.IsSet())
+	}
+
+	queuedSecret, err := application.NewModelSetupSecret("generated-queued-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests <- tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
+		RequestID: 12, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: queuedSecret,
+	}}
+	close(requests)
+	destroyPendingApplicationRequests(requests)
+	if queuedSecret.IsSet() {
+		t.Fatal("queued model setup secret survived request drain")
 	}
 }
 

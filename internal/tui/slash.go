@@ -14,6 +14,7 @@ type slashAction uint8
 const (
 	slashApplication slashAction = iota + 1
 	slashHelp
+	slashModel
 	slashStatus
 	slashQuit
 )
@@ -31,6 +32,7 @@ type SlashCommand struct {
 
 var fixedSlashCommands = [...]SlashCommand{
 	{Name: "help", Summary: "Show commands and key bindings", action: slashHelp},
+	{Name: "model", Summary: "Configure the single model runtime", action: slashModel},
 	{Name: "context", Usage: "[filter]", Summary: "Select the Kubernetes Context", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectContext},
 	{Name: "namespace", Aliases: []string{"ns"}, Usage: "[filter]", Summary: "Select the Kubernetes Namespace", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectNamespace},
 	{Name: "resource", Aliases: []string{"res"}, Usage: "[filter]", Summary: "Select or clear the target resource", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectResource},

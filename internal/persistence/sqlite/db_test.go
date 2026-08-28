@@ -13,7 +13,7 @@ import (
 
 const testApplicationVersion = "test-version"
 
-func TestOpenConfiguresPrivateFilesAndConnectionPragmas(t *testing.T) {
+func TestOpenRespectsExistingUserModesAndConfiguresConnectionPragmas(t *testing.T) {
 	stateDir := filepath.Join(testRealTempDir(t), "state directory")
 	if err := os.Mkdir(stateDir, 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
@@ -25,10 +25,16 @@ func TestOpenConfiguresPrivateFilesAndConnectionPragmas(t *testing.T) {
 
 	db := openTestDB(t, context.Background(), stateDir, "permissions")
 
-	assertMode(t, stateDir, 0o700)
-	assertMode(t, databasePath, 0o600)
+	assertMode(t, stateDir, 0o755)
+	assertMode(t, databasePath, 0o644)
 	for _, suffix := range []string{"-wal", "-shm"} {
-		assertMode(t, databasePath+suffix, 0o600)
+		info, err := os.Lstat(databasePath + suffix)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("SQLite sidecar %q is unavailable: %v", suffix, err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode for new SQLite sidecar %q = %04o, want 0600", suffix, info.Mode().Perm())
+		}
 	}
 
 	if got := db.handle.Stats().MaxOpenConnections; got != maxOpenConnections {
@@ -53,6 +59,16 @@ func TestOpenConfiguresPrivateFilesAndConnectionPragmas(t *testing.T) {
 			t.Errorf("%s = %q, want %q", check.query, got, check.want)
 		}
 	}
+}
+
+func TestOpenCreatesPrivateStateAndDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix mode contract")
+	}
+	stateDir := filepath.Join(testRealTempDir(t), "new-state")
+	db := openTestDB(t, context.Background(), stateDir, "new-permissions")
+	assertMode(t, stateDir, 0o700)
+	assertMode(t, db.databasePath, 0o600)
 }
 
 func TestDeleteAllLocalStateRemovesOnlyDatabaseFilesAndKeepsDirectory(t *testing.T) {

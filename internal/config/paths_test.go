@@ -1,77 +1,23 @@
 package config
 
 import (
-	"context"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
-func TestResolvePlatformPaths(t *testing.T) {
+func TestResolvePathsUsesOneFixedHomeLayout(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name  string
 		input PathInput
-		want  Paths
+		root  string
 	}{
-		{
-			name:  "Linux defaults",
-			input: PathInput{GOOS: "linux", HomeDir: "/home/alex"},
-			want: Paths{
-				ConfigDir:  "/home/alex/.config/kupilot",
-				ConfigFile: "/home/alex/.config/kupilot/config.yaml",
-				StateDir:   "/home/alex/.local/state/kupilot",
-				CacheDir:   "/home/alex/.cache/kupilot",
-				LogDir:     "/home/alex/.local/state/kupilot/logs",
-			},
-		},
-		{
-			name: "Linux XDG",
-			input: PathInput{
-				GOOS:          "linux",
-				HomeDir:       "/home/alex",
-				XDGConfigHome: "/mnt/config",
-				XDGStateHome:  "/mnt/state",
-				XDGCacheHome:  "/mnt/cache",
-			},
-			want: Paths{
-				ConfigDir:  "/mnt/config/kupilot",
-				ConfigFile: "/mnt/config/kupilot/config.yaml",
-				StateDir:   "/mnt/state/kupilot",
-				CacheDir:   "/mnt/cache/kupilot",
-				LogDir:     "/mnt/state/kupilot/logs",
-			},
-		},
-		{
-			name:  "macOS defaults",
-			input: PathInput{GOOS: "darwin", HomeDir: "/Users/alex"},
-			want: Paths{
-				ConfigDir:  "/Users/alex/Library/Application Support/KuPilot",
-				ConfigFile: "/Users/alex/Library/Application Support/KuPilot/config.yaml",
-				StateDir:   "/Users/alex/Library/Application Support/KuPilot",
-				CacheDir:   "/Users/alex/Library/Caches/KuPilot",
-				LogDir:     "/Users/alex/Library/Logs/KuPilot",
-			},
-		},
-		{
-			name: "macOS ignores XDG environment",
-			input: PathInput{
-				GOOS:          "darwin",
-				HomeDir:       "/Users/alex",
-				XDGConfigHome: "/mnt/config",
-				XDGStateHome:  "/mnt/state",
-				XDGCacheHome:  "/mnt/cache",
-			},
-			want: Paths{
-				ConfigDir:  "/Users/alex/Library/Application Support/KuPilot",
-				ConfigFile: "/Users/alex/Library/Application Support/KuPilot/config.yaml",
-				StateDir:   "/Users/alex/Library/Application Support/KuPilot",
-				CacheDir:   "/Users/alex/Library/Caches/KuPilot",
-				LogDir:     "/Users/alex/Library/Logs/KuPilot",
-			},
-		},
+		{name: "default", input: PathInput{HomeDir: "/home/alex"}, root: "/home/alex/.kupilot"},
+		{name: "override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: "/srv/alex-kupilot"}, root: "/srv/alex-kupilot"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -79,64 +25,119 @@ func TestResolvePlatformPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolvePaths() error = %v", err)
 			}
-			if got != tt.want {
-				t.Fatalf("ResolvePaths() = %#v, want %#v", got, tt.want)
+			want := Paths{
+				HomeDir: tt.root, ConfigFile: filepath.Join(tt.root, "config.yaml"),
+				StateDir: filepath.Join(tt.root, "state"), CacheDir: filepath.Join(tt.root, "cache"),
+				LogDir: filepath.Join(tt.root, "logs"),
+			}
+			if got != want {
+				t.Fatalf("ResolvePaths() = %#v, want %#v", got, want)
 			}
 		})
 	}
 }
 
-func TestResolvePathsRejectsUnsafeInputs(t *testing.T) {
+func TestResolvePathsRejectsInvalidRoots(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name  string
 		input PathInput
-		class ErrorClass
 		code  string
 	}{
-		{name: "unsupported platform", input: PathInput{GOOS: "windows", HomeDir: `C:\\Users\\alex`}, class: ClassUnsupported, code: "platform_unsupported"},
-		{name: "missing home", input: PathInput{GOOS: "linux"}, class: ClassConfigurationInvalid, code: "home_directory_invalid"},
-		{name: "relative home", input: PathInput{GOOS: "linux", HomeDir: "relative"}, class: ClassConfigurationInvalid, code: "home_directory_invalid"},
-		{name: "relative config XDG", input: PathInput{GOOS: "linux", HomeDir: "/home/alex", XDGConfigHome: "relative"}, class: ClassConfigurationInvalid, code: "xdg_path_invalid"},
-		{name: "relative state XDG", input: PathInput{GOOS: "linux", HomeDir: "/home/alex", XDGStateHome: "relative"}, class: ClassConfigurationInvalid, code: "xdg_path_invalid"},
-		{name: "relative cache XDG", input: PathInput{GOOS: "linux", HomeDir: "/home/alex", XDGCacheHome: "relative"}, class: ClassConfigurationInvalid, code: "xdg_path_invalid"},
+		{name: "missing user home", input: PathInput{}, code: "home_directory_invalid"},
+		{name: "relative user home", input: PathInput{HomeDir: "relative"}, code: "home_directory_invalid"},
+		{name: "relative override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: "relative"}, code: "kupilot_home_invalid"},
+		{name: "root override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: filepath.VolumeName(filepath.Clean(string(filepath.Separator))) + string(filepath.Separator)}, code: "kupilot_home_invalid"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := ResolvePaths(tt.input)
-			assertSafeError(t, err, tt.class, tt.code)
+			assertSafeError(t, err, ClassConfigurationInvalid, tt.code)
 		})
 	}
 }
 
-func TestConfigPathOverridesAreAbsoluteAndPrecedePlatformPaths(t *testing.T) {
-	t.Parallel()
+func TestSystemPathsUsesOverrideWithoutRequiringUserHome(t *testing.T) {
+	selected := t.TempDir()
+	t.Setenv("HOME", "")
+	t.Setenv(HomeEnvironmentVariable, selected)
 
-	root := t.TempDir()
-	configFile := filepath.Join(root, "config.yaml")
-	stateDir := filepath.Join(root, "custom-state")
-	cacheDir := filepath.Join(root, "custom-cache")
-	logDir := filepath.Join(root, "custom-logs")
-	writePrivateFile(t, configFile, []byte("version: 1\npaths:\n  state_dir: "+stateDir+"\n  cache_dir: "+cacheDir+"\n  log_dir: "+logDir+"\n"))
-
-	paths := testPaths(root)
-	paths.ConfigFile = configFile
-	got, err := Load(context.Background(), LoadOptions{
-		Paths: paths,
-		LookupEnv: lookupMap(map[string]string{
-			"KUPILOT_STATE_DIR": filepath.Join(root, "environment-state"),
-		}),
-	})
+	got, err := SystemPaths()
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("SystemPaths() error = %v", err)
 	}
-	if got.Paths.StateDir != filepath.Join(root, "environment-state") {
-		t.Errorf("StateDir = %q, want environment override", got.Paths.StateDir)
+	canonical, err := filepath.EvalSymlinks(selected)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.Paths.CacheDir != cacheDir || got.Paths.LogDir != logDir {
-		t.Errorf("file path overrides were not retained: %#v", got.Paths)
+	if got.HomeDir != canonical || got.ConfigFile != filepath.Join(canonical, "config.yaml") {
+		t.Fatalf("SystemPaths() = %#v", got)
 	}
+}
+
+func TestCanonicalizeExistingHomeResolvesRootSymlinkAndWarnsOnWideMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix symlink and mode contract")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "home-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	got, err := canonicalizeExistingHome(pathsForHome(link))
+	if err != nil {
+		t.Fatalf("canonicalizeExistingHome() error = %v", err)
+	}
+	canonicalTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HomeDir != canonicalTarget || !got.HomePermissionsWider || got.StateDir != filepath.Join(canonicalTarget, "state") {
+		t.Fatalf("canonicalized paths = %#v", got)
+	}
+}
+
+func TestCanonicalizeExistingHomeResolvesAncestorForMissingHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix symlink contract")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "ancestor-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	wantedRoot := filepath.Join(target, "missing", "home")
+	got, err := canonicalizeExistingHome(pathsForHome(filepath.Join(link, "missing", "home")))
+	if err != nil {
+		t.Fatalf("canonicalizeExistingHome() error = %v", err)
+	}
+	canonicalTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantedRoot = filepath.Join(canonicalTarget, "missing", "home")
+	if got != pathsForHome(wantedRoot) {
+		t.Fatalf("canonicalized missing Home = %#v, want %#v", got, pathsForHome(wantedRoot))
+	}
+}
+
+func TestCanonicalizeExistingHomeRejectsNonDirectory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	file := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := canonicalizeExistingHome(pathsForHome(file))
+	assertSafeError(t, err, ClassConfigurationInvalid, "kupilot_home_unsafe")
 }

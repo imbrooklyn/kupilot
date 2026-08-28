@@ -22,8 +22,6 @@ func TestRuntimeCompositionClosesInOwnedOrder(t *testing.T) {
 	recorder := newCloseRecorder()
 	composition := &runtimeComposition{
 		coordinator: &recordingCoordinatorClose{name: "coordinator", recorder: recorder},
-		agent:       &recordingWaitClose{name: "agent", recorder: recorder},
-		model:       &recordingWaitClose{name: "model", recorder: recorder},
 		scope:       &recordingErrorClose{name: "scope", recorder: recorder},
 		database:    &recordingErrorClose{name: "database", recorder: recorder},
 		logSink:     &recordingErrorClose{name: "logging", recorder: recorder},
@@ -31,7 +29,7 @@ func TestRuntimeCompositionClosesInOwnedOrder(t *testing.T) {
 	if err := composition.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	want := []string{"coordinator", "agent", "model", "scope", "database", "logging"}
+	want := []string{"coordinator", "scope", "database", "logging"}
 	if got := recorder.values(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("close order = %#v, want %#v", got, want)
 	}
@@ -43,14 +41,13 @@ func TestRuntimeCompositionClosesInOwnedOrder(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompositionDoesNotCloseAgentOrModelBeforeRunWait(t *testing.T) {
+func TestRuntimeCompositionDoesNotCloseDependenciesBeforeCoordinatorWait(t *testing.T) {
 	t.Parallel()
 	recorder := newCloseRecorder()
 	waitFailure := errors.New("generated wait failure")
 	composition := &runtimeComposition{
 		coordinator: &recordingCoordinatorClose{name: "coordinator", recorder: recorder, err: waitFailure},
-		agent:       &recordingWaitClose{name: "agent", recorder: recorder},
-		model:       &recordingWaitClose{name: "model", recorder: recorder},
+		scope:       &recordingErrorClose{name: "scope", recorder: recorder},
 	}
 	if err := composition.Close(context.Background()); !errors.Is(err, waitFailure) {
 		t.Fatalf("Close() error = %v", err)
@@ -216,13 +213,6 @@ func (closer *recordingCoordinatorClose) Shutdown(context.Context) error {
 	closer.recorder.add(closer.name)
 	return closer.err
 }
-
-type recordingWaitClose struct {
-	name     string
-	recorder *closeRecorder
-}
-
-func (closer *recordingWaitClose) Close() { closer.recorder.add(closer.name) }
 
 type recordingErrorClose struct {
 	name     string

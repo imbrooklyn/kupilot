@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0035
 
 ## Context
 
@@ -27,8 +28,10 @@ KuPilot adopts the normative
   cleanup never removes pending or approved authority; startup recovery first
   makes those requests terminal.
 - Raw container output, full Kubernetes objects, assembled prompts, raw model
-  streams or responses, raw Tool output, and credentials remain for zero days:
-  they are never persisted.
+  streams or responses, raw Tool output, and credentials remain for zero days
+  in SQLite and ordinary sinks. ADR-0035 admits only one exception: an explicit
+  plaintext model-key save to the fixed Home configuration, outside Session
+  retention.
 
 The future 60-second approval execution TTL is independent of the 180-day audit
 default.
@@ -64,8 +67,9 @@ Deleting one Session cascades through Messages, runs, model metadata,
 ToolInvocations, Evidence, Diagnoses, approval records, and linked read/write
 audit. This deletion may occur before 90 or 180 days because KuPilot is not a
 compliance ledger. Clear-history removes every Session graph. Delete-all local
-state additionally removes settings and consent from the validated KuPilot data
-paths. A failed deletion transaction is reported as not deleted.
+state additionally removes settings and consent from the validated database
+paths. Home configuration, cache, logs, exports, and backups are separate and
+remain. A failed deletion transaction is reported as not deleted.
 
 Deletion requires an explicit target-bound confirmation. A starting, active, or
 terminal-but-not-yet-quiesced run is cancelled and awaited first. Pending and
@@ -133,8 +137,9 @@ Costs and constraints:
 
 Retention never makes an excluded source eligible. Source denial, projection,
 sensitive-value handling, and size limits happen before persistence. The SQLite
-database remains unencrypted; owner-only permissions, operating-system disk
-encryption, and user-controlled backup policy remain important.
+database remains unencrypted; owner-only creation modes, user-selected existing
+permissions, operating-system disk encryption, and user-controlled backup
+policy remain important.
 
 Minimal-persistence cannot weaken future durable pre-write audit. Explicit user
 deletion can remove that local audit afterward, and the confirmation must make
@@ -175,3 +180,4 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0034: Export Only Versioned Redacted Session Summaries](0034-export-only-versioned-redacted-session-summaries.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)

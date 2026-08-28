@@ -49,12 +49,23 @@ Its supervised content includes:
 - In `v0.2` only, a dedicated default-reject Approval Dialog driven entirely by
   typed Application approval state.
 
-The compile-time Slash registry is limited to `/help`, `/context`,
+The compile-time Slash registry is limited to `/help`, `/model`, `/context`,
 `/namespace` (`/ns`), `/resource` (`/res`), `/status`, `/new`, `/resume`,
 `/rename`, `/privacy`, `/cancel`, and `/quit` (`/exit`). A Slash command is a
 typed local or Application command, never a model message or dynamic extension.
 Unknown commands and `!` syntax perform no external action. A leading `//`
 escapes a literal slash for ordinary chat.
+
+When the model endpoint, model identifier, or credential is absent, the same
+single-screen TUI opens a fixed model-setup flow before a question can start a
+run. `/model` opens that flow again. It reuses the one composer for endpoint,
+model identifier, and credential input; the credential step is masked and its
+value is excluded from transcript, draft history, completion requests,
+Application events, errors, and rendering. The user explicitly chooses either
+local plaintext persistence under the KuPilot Home or process-only use after
+seeing that local storage is not encrypted. Model reconfiguration cancels and
+joins an active run before Application replaces the single runtime and
+re-evaluates origin-bound consent.
 
 The Resource Picker is a bounded input aid, not an inventory or navigation tree.
 It has no full YAML, raw log view, Watch, live dashboard, action menu, write

@@ -71,17 +71,20 @@ type RunView struct {
 
 // Config supplies pure initial UI state; it contains no infrastructure client.
 type Config struct {
-	Width          int
-	Height         int
-	Theme          ThemeMode
-	DarkBackground bool
-	NoColor        bool
-	StartIntent    application.UIStartIntent
-	Scope          ScopeView
-	Resource       ResourceView
-	ModelName      string
-	PrivacyMode    domain.PrivacyMode
-	Now            func() time.Time
+	Width              int
+	Height             int
+	Theme              ThemeMode
+	DarkBackground     bool
+	NoColor            bool
+	StartIntent        application.UIStartIntent
+	Scope              ScopeView
+	Resource           ResourceView
+	ModelEndpoint      string
+	ModelName          string
+	ModelConfigured    bool
+	ModelConfiguredSet bool
+	PrivacyMode        domain.PrivacyMode
+	Now                func() time.Time
 }
 
 type resumeOrigin uint8
@@ -94,17 +97,19 @@ const (
 
 // Model is the root Bubble Tea state and owns exactly one editable composer.
 type Model struct {
-	width       int
-	height      int
-	focus       Focus
-	scope       ScopeView
-	resource    ResourceView
-	session     SessionView
-	startup     StartupView
-	run         RunView
-	modelName   string
-	privacyMode domain.PrivacyMode
-	now         func() time.Time
+	width           int
+	height          int
+	focus           Focus
+	scope           ScopeView
+	resource        ResourceView
+	session         SessionView
+	startup         StartupView
+	run             RunView
+	modelName       string
+	modelEndpoint   string
+	modelConfigured bool
+	privacyMode     domain.PrivacyMode
+	now             func() time.Time
 
 	composer        components.Composer
 	transcript      components.Transcript
@@ -135,6 +140,8 @@ type Model struct {
 	pendingDeleteID        uint64
 	pendingExportID        uint64
 	pendingApprovalID      uint64
+	pendingModelSetupID    uint64
+	modelSetup             *modelSetupState
 	privacyReview          *application.PrivacyReview
 	lifecycleReview        *application.SessionLifecycleReview
 	sessionDelete          *sessionDeleteState
@@ -180,10 +187,17 @@ func NewModel(config Config) Model {
 	if value := now(); value.IsZero() || value.UnixMilli() < 0 {
 		now = func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 	}
+	modelConfigured := true
+	if config.ModelConfiguredSet {
+		modelConfigured = config.ModelConfigured
+	}
 	model := Model{
 		width: width, height: height, focus: FocusComposer,
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
-		modelName: sanitizeExternalText(config.ModelName, 256), privacyMode: privacy, now: now,
+		modelName:       sanitizeExternalText(config.ModelName, 256),
+		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
+		modelConfigured: modelConfigured,
+		privacyMode:     privacy, now: now,
 		composer:        components.NewComposer(styles.composer, application.MaxQuestionBytes),
 		transcript:      components.NewTranscript(styles.transcript, styles.toolSteps),
 		slashMenu:       components.NewSlashMenu(styles.slashMenu),
@@ -199,6 +213,9 @@ func NewModel(config Config) Model {
 		styles:          styles, keymap: DefaultKeyMap(), terminalFocused: true,
 	}
 	model.configureStartup(config.StartIntent)
+	if !model.modelConfigured && model.startup.Ready {
+		model.beginMissingModelSetup()
+	}
 	model.reflow()
 	return model
 }
@@ -310,6 +327,10 @@ func (model *Model) reflow() {
 	model.namespacePicker.SetMaxVisible(visible)
 	model.resourcePicker.SetMaxVisible(visible)
 	model.sessionPicker.SetMaxVisible(visible)
-	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight
+	setupHeight := 0
+	if prompt := model.modelSetupView(); prompt != "" {
+		setupHeight = 1 + strings.Count(prompt, "\n")
+	}
+	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight - setupHeight
 	model.transcript.SetSize(model.width, max(1, transcriptHeight))
 }

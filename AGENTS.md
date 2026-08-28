@@ -204,11 +204,15 @@ MUST NOT depend on ignored or local-only documents.
   verification MUST be the default; plain HTTP MUST be loopback-only. Userinfo,
   query parameters, insecure TLS overrides, and cross-origin redirects MUST be
   rejected, and Authorization MUST NOT cross an origin boundary.
-- The model API key MUST come only from the approved ephemeral environment
-  source or one-shot safe process input. It MUST be read once into an opaque
-  non-renderable wrapper and the environment source MUST be unset. It MUST NOT
-  enter CLI value arguments, files, configuration values, child environments,
-  prompts, TUI, errors, logs, audit, SQLite, or model content.
+- The model API key MUST come only from masked TUI input, optional plaintext
+  `model.api_key`, or the one-shot `KUPILOT_MODEL_API_KEY` environment override.
+  It MUST enter an opaque non-renderable wrapper; the environment source MUST be
+  unset and the file field MUST be extracted before ordinary typed decoding.
+  The sole admitted durable credential location is the fixed Home configuration
+  after an explicit disclosed save choice. The key MUST NOT enter CLI value
+  arguments, Domain or ordinary configuration values, child environments,
+  prompts, rendered TUI or history, errors, logs, audit, SQLite, or model
+  content.
 - Before the first content transfer, Application MUST obtain informed consent
   bound to the policy version, canonical origin hash, and exact enabled data
   categories. A changed origin, category, meaning, or policy version MUST
@@ -247,12 +251,16 @@ MUST NOT depend on ignored or local-only documents.
 - Durable domain IDs MUST be application-generated UUIDv7 text. SQLite times
   MUST be UTC Unix milliseconds; retention and approval logic MUST use injected
   UTC clocks, while local-time conversion MUST remain presentation-only.
-- Persistence MUST follow the Data Retention Contract. Credentials, kubeconfig,
-  raw Kubernetes objects, raw Events or container output, full prompts, raw
-  model traffic or streams, raw Tool results, vendor errors, and framework
-  objects MUST never be persisted or placed in generic payload columns.
-- The state directory, database, and sidecars MUST use owner-only permissions on
-  supported platforms and reject unsafe symlink paths. KuPilot MUST NOT claim
+- Persistence MUST follow the Data Retention Contract. Except for the explicitly
+  saved plaintext model key in the fixed Home configuration, credentials,
+  kubeconfig, raw Kubernetes objects, raw Events or container output, full
+  prompts, raw model traffic or streams, raw Tool results, vendor errors, and
+  framework objects MUST never be persisted or placed in generic payload
+  columns.
+- Newly created Home, state, database, and sidecar paths MUST use owner-only
+  permissions on supported platforms. Existing user-managed modes MUST be
+  respected rather than rejected or changed solely for being wider. Unsafe
+  managed symlinks and file types MUST still be rejected. KuPilot MUST NOT claim
   SQLite encryption, tamper resistance, or forensic deletion.
 - A failed durable run start MUST prevent model and Tool I/O. A later read-only
   persistence failure MAY finish the in-memory Diagnosis only with visible
@@ -274,10 +282,11 @@ MUST NOT depend on ignored or local-only documents.
   client, live generation, approval, or write. Resume alone MUST cause zero
   model, Kubernetes, Tool, approval, and executor calls; later scope activation
   and model transfer require their own explicit verification and consent gates.
-- `help` and `version` MUST short-circuit without initializing the business
-  database, Kubernetes, model, or TUI workflow. CLI arguments MUST NOT accept
-  credential values, raw kubeconfig, questions, arbitrary commands, or approval
-  tokens.
+- `help`, `version`, and `cache clear` MUST short-circuit without initializing
+  the business database, Kubernetes, model, or TUI workflow. `cache clear` MUST
+  remove only entries below the fixed Home cache child. CLI arguments MUST NOT
+  accept credential values, raw kubeconfig, questions, arbitrary commands, or
+  approval tokens.
 - The TUI MUST remain a low-chrome single Agent-supervision screen: continuous
   transcript, inline Tool steps, exactly one three-to-eight-row multiline
   composer, optional untitled suggestions or Picker below it, and a scope footer

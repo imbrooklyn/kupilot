@@ -178,7 +178,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 		Endpoint:            server.URL + "/v1",
 		Origin:              server.URL,
 		Model:               "assurance-model",
-		APIKeySource:        domain.ModelAPIKeySourceEnvironment,
+		APIKeySource:        domain.ModelAPIKeySourceRuntime,
 		Temperature:         0.1,
 		MaxOutputTokens:     256,
 		RequestTimeout:      time.Second,

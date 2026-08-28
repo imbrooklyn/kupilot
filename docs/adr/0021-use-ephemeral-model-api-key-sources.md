@@ -1,9 +1,15 @@
 # ADR-0021: Use Ephemeral Model API Key Sources
 
-- Status: Accepted
+- Status: Superseded by ADR-0035
 - Date: 2026-08-08
 
 ## Context
+
+This decision is retained as design history. ADR-0035 supersedes its source
+restriction before the first public release. The one-shot environment handling,
+opaque runtime wrapper, origin binding, and sink exclusions remain applicable;
+the prohibition on a local configuration-file source and interactive TUI input
+does not.
 
 KuPilot needs one transport credential for the configured model endpoint.
 Accepting the value in a CLI flag exposes it to shell history and process

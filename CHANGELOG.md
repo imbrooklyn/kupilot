@@ -15,12 +15,15 @@ This file records notable user-visible changes to KuPilot.
   Deployment, failed Job, and Service without a ready Endpoint.
 - Explicit Session starts and resume by picker, exact UUIDv7 Session identifier,
   or `--last`, without cwd-based or automatic history selection.
-- Strict typed YAML configuration, one OpenAI-compatible streaming model
-  profile, ephemeral environment-sourced model credentials, and explicit
+- Strict version 1 YAML configuration, one OpenAI-compatible streaming model
+  runtime, masked interactive setup with explicit plaintext-local or
+  process-only credential storage, environment overrides, and explicit
   model-transfer consent.
+- One fixed user-managed Home for configuration, SQLite state, cache, and
+  bounded logs, plus a short-circuiting `kupilot cache clear` command.
 - Local SQLite Session history with bounded operational-detail retention,
-  owner-only path controls, forward checksummed migrations, and interruption
-  recovery.
+  private creation modes, respect for wider existing user-managed modes,
+  forward checksummed migrations, and interruption recovery.
 - Bounded allowlisted local operational logging with rotation and a disable
   setting.
 - Source-build, user, configuration, privacy, security, troubleshooting,
@@ -46,9 +49,12 @@ This file records notable user-visible changes to KuPilot.
 - The current read-only composition contains no Kubernetes mutation port,
   mutation adapter, write Tool, approval coordinator, shell, kubectl runner, or
   generic Kubernetes request surface.
-- Kubernetes credentials, model credentials, Secret data, raw objects, raw
-  container output, raw model traffic, and raw Tool results are excluded from
-  model content and durable storage by source, projection, and sink contracts.
+- Kubernetes credentials, Secret data, raw objects, raw container output, raw
+  model traffic, and raw Tool results are excluded from model content and
+  durable storage by source, projection, and sink contracts. A model key is
+  durable only after the explicit plaintext-local choice and only in the fixed
+  Home configuration; it remains excluded from SQLite, logs, audit, Session
+  content, and model content.
 - Context and Namespace generation checks reject stale work before external I/O,
   after return, and again at Application event acceptance.
 - The `v0.2` executor has one code-generated merge-patch entry point and one

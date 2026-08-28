@@ -206,13 +206,36 @@ func NewPrivacyManager(config PrivacyManagerConfig) (*PrivacyManager, error) {
 		version = PrivacyPolicyVersion
 	}
 	if config.Store == nil || config.Now == nil || !validCoordinatorTime(config.Now()) ||
-		!validPrivacyOrigin(config.Origin) || !validPrivacyPolicyVersion(version) {
+		config.Origin != "" && !validPrivacyOrigin(config.Origin) || !validPrivacyPolicyVersion(version) {
 		return nil, ErrPrivacyConfiguration
 	}
 	return &PrivacyManager{
 		store: config.Store, origin: config.Origin, originHash: privacyOriginHash(config.Origin),
 		policyVersion: version, now: config.Now, logsEnabled: config.LogsEnabled,
 	}, nil
+}
+
+// ReconfigureOrigin replaces the sole canonical model origin and invalidates
+// all in-memory authority when the binding changes. Durable records remain
+// historical and are matched again only by their exact origin hash.
+func (manager *PrivacyManager) ReconfigureOrigin(origin string) error {
+	if manager == nil || !validPrivacyOrigin(origin) {
+		return ErrPrivacyConfiguration
+	}
+	manager.writeMu.Lock()
+	defer manager.writeMu.Unlock()
+	manager.loadMu.Lock()
+	defer manager.loadMu.Unlock()
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.origin == origin {
+		return nil
+	}
+	manager.origin = origin
+	manager.originHash = privacyOriginHash(origin)
+	manager.loaded = false
+	manager.record = nil
+	return nil
 }
 
 // Review returns the exact current display contract after loading persisted state.
@@ -343,6 +366,12 @@ func (manager *PrivacyManager) ensureLoaded(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	manager.mu.RLock()
+	originConfigured := manager.origin != ""
+	manager.mu.RUnlock()
+	if !originConfigured {
+		return ErrModelUnconfigured
 	}
 	manager.mu.RLock()
 	loaded := manager.loaded

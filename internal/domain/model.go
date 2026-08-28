@@ -62,8 +62,9 @@ var (
 type ModelAPIKeySource string
 
 const (
-	// ModelAPIKeySourceEnvironment is the one admitted v0.1 source category.
-	ModelAPIKeySourceEnvironment ModelAPIKeySource = "environment"
+	// ModelAPIKeySourceRuntime means the opaque value has already been selected
+	// from the admitted file, environment, or interactive source.
+	ModelAPIKeySourceRuntime ModelAPIKeySource = "runtime"
 )
 
 // ModelTransportPolicy names the fixed endpoint and redirect behavior.
@@ -95,7 +96,7 @@ type ModelConfiguration struct {
 // Validate checks the fixed v0.1 model profile without accepting a credential.
 func (configuration ModelConfiguration) Validate() error {
 	if configuration.ProviderKind != ModelProviderOpenAICompatible ||
-		configuration.APIKeySource != ModelAPIKeySourceEnvironment ||
+		configuration.APIKeySource != ModelAPIKeySourceRuntime ||
 		configuration.TransportPolicy != ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP ||
 		!configuration.StreamingRequired || !configuration.ToolCallingRequired ||
 		!validModelEndpoint(configuration.Endpoint, configuration.Origin) ||

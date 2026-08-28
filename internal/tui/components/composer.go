@@ -3,6 +3,7 @@ package components
 import (
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -36,6 +37,7 @@ type Composer struct {
 	history     []string
 	historyAt   int
 	historyOpen bool
+	secretMode  bool
 }
 
 // NewComposer creates a focused three-to-eight-row multiline editor.
@@ -138,9 +140,23 @@ func (composer *Composer) ResetPlaceholder() {
 	composer.input.Placeholder = defaultPlaceholder
 }
 
+// SetMaxBytes changes the bounded input ceiling for one fixed composer mode.
+func (composer *Composer) SetMaxBytes(limit int) {
+	if limit > 0 {
+		composer.maxBytes = limit
+	}
+}
+
+// SetSecretMode masks rendering and disables history eligibility. The actual
+// value remains available only until the setup request is submitted.
+func (composer *Composer) SetSecretMode(enabled bool) {
+	composer.secretMode = enabled
+	composer.closeHistory()
+}
+
 // RecordSubmission adds one submitted message to local prompt history.
 func (composer *Composer) RecordSubmission(value string) {
-	if strings.TrimSpace(value) == "" {
+	if composer.secretMode || strings.TrimSpace(value) == "" {
 		return
 	}
 	if len(composer.history) == 0 || composer.history[len(composer.history)-1] != value {
@@ -185,7 +201,7 @@ func (composer *Composer) NextHistory() bool {
 
 // HistoryEligible reports whether Up/Down should recall history instead of moving a cursor.
 func (composer Composer) HistoryEligible() bool {
-	return composer.historyOpen || composer.input.Value() == "" && composer.input.LineCount() == 1
+	return !composer.secretMode && (composer.historyOpen || composer.input.Value() == "" && composer.input.LineCount() == 1)
 }
 
 func (composer *Composer) closeHistory() {
@@ -217,5 +233,10 @@ func (composer Composer) View() string {
 	if composer.input.Focused() {
 		style = composer.styles.FocusedSurface
 	}
-	return style.Width(max(1, composer.width-4)).Render(composer.input.View())
+	input := composer.input
+	if composer.secretMode && input.Value() != "" {
+		input.SetValue(strings.Repeat("•", utf8.RuneCountInString(input.Value())))
+		input.MoveToEnd()
+	}
+	return style.Width(max(1, composer.width-4)).Render(input.View())
 }

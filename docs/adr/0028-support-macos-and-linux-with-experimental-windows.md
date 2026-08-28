@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0035
 
 ## Context
 
@@ -28,9 +29,10 @@ must satisfy:
 
 - TUI input, resize, paste, signal/cancellation, alternate-screen, and terminal
   restoration behavior.
-- Per-user configuration and data-directory resolution without a repository or
-  working-directory state model.
-- Owner-only KuPilot data directory, SQLite database, and sidecar permissions.
+- One per-user KuPilot Home selected independently from a repository or working
+  directory.
+- Owner-only creation modes for new Home, SQLite, and sidecar paths, with
+  existing user-managed modes respected.
 - Direct exec credential process launch, environment filtering, timeout,
   cancellation, and child reaping.
 - Kubeconfig and TLS behavior through the selected client-go version.
@@ -79,9 +81,11 @@ Costs and constraints:
 
 ## Security and privacy impact
 
-Owner-only permission checks and exec-child containment are part of platform
-support, not optional best effort. A target that cannot satisfy them is
-unsupported until a reviewed equivalent control exists.
+Owner-only creation modes and exec-child containment are part of platform
+support, not optional best effort. Existing user-selected modes remain the
+local user's responsibility and are not an availability gate. A target that
+cannot satisfy the create-time guarantee is unsupported until a reviewed
+equivalent control exists.
 
 KuPilot still relies on operating-system account isolation and disk protection.
 Platform support does not imply SQLite encryption, sandboxing of a kubeconfig
@@ -97,8 +101,9 @@ Formal support requires CI or documented reproducible runs that record:
    using native runners for terminal, permission, exec, and SQLite behaviors that
    cross-builds cannot prove.
 3. Binary dependency/CGO characteristics and release archive contents.
-4. Signal, cancellation, terminal restoration, owner-only files, symlink
-   rejection, child reaping, and database sidecar behavior.
+4. Signal, cancellation, terminal restoration, owner-only creation, unchanged
+   existing modes, symlink rejection, child reaping, and database sidecar
+   behavior.
 5. Linux as the primary CI gate, macOS build/smoke evidence, clearly labeled
    experimental Windows results if produced, and any explicit minimum OS or
    terminal requirements.
@@ -119,4 +124,5 @@ The release support statement must not include a platform without this record.
 - [ADR-0005: Use Bubble Tea v2 for the TUI Runtime](0005-use-bubble-tea-v2.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0020: Contain Kubeconfig Exec Credentials](0020-contain-kubeconfig-exec-credentials.md)
+- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [Security Threat Model](../security.md)

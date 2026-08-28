@@ -8,6 +8,12 @@ the single controlled change allowed in `v0.2`.
 `v0.1` includes:
 
 - A local, single-process, single-user TUI with one active AgentRun at a time.
+- One fixed user-managed Home selected by `KUPILOT_HOME`, with configuration,
+  SQLite state, cache, and bounded logs under fixed descendants.
+- Bare unconfigured TUI startup, masked setup for the one model runtime, and an
+  explicit plaintext-local or process-only credential choice.
+- The fixed `kupilot cache clear` maintenance command, limited to entries below
+  the Home cache child and short-circuited before ordinary startup.
 - A new Session for every bare start and explicit Session resume by picker,
   exact Session identifier, or `--last`. Session history is not inferred from a
   working directory.

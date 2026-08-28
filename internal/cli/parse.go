@@ -16,6 +16,7 @@ const (
 	IntentResumePicker
 	IntentResumeID
 	IntentResumeLast
+	IntentCacheClear
 	IntentVersion
 	IntentHelp
 )
@@ -26,6 +27,7 @@ type HelpTopic uint8
 const (
 	HelpRoot HelpTopic = iota
 	HelpResume
+	HelpCache
 	HelpVersion
 	HelpHelp
 )
@@ -126,6 +128,9 @@ func parseShortcut(args []string) (StartIntent, bool, error) {
 }
 
 func helpTopicBeforeOption(args []string) (HelpTopic, error) {
+	if len(args) == 2 && args[0] == "cache" && args[1] == "clear" {
+		return HelpCache, nil
+	}
 	topic := HelpRoot
 	commandSeen := false
 	for index := 0; index < len(args); index++ {
@@ -177,7 +182,7 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.PersistentFlags().StringVar(&startup.configFile, "config", "", "Use an explicit non-sensitive YAML configuration file")
+	root.PersistentFlags().StringVar(&startup.configFile, "config", "", "Use an explicit YAML configuration file")
 	root.PersistentFlags().StringVar(&startup.context, "context", "", "Select the initial Kubernetes Context")
 	root.PersistentFlags().StringVar(&startup.namespace, "namespace", "", "Select the initial Kubernetes Namespace")
 	root.PersistentFlags().BoolVar(&startup.noColor, "no-color", false, "Disable color output")
@@ -192,11 +197,18 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 	root.AddCommand(
 		helpCommand,
 		newResumeCommand(intent, startup),
+		newCacheCommand(intent, startup),
 		newVersionCommand(intent),
 	)
 	root.SetHelpCommand(helpCommand)
 
 	return root
+}
+
+func (flags *startupFlags) changed(command *cobra.Command) bool {
+	persistent := command.Root().PersistentFlags()
+	return persistent.Changed("config") || persistent.Changed("context") ||
+		persistent.Changed("namespace") || persistent.Changed("no-color")
 }
 
 type startupFlags struct {
@@ -260,6 +272,44 @@ func newResumeCommand(intent *StartIntent, startup *startupFlags) *cobra.Command
 		return &parseFailure{message: "unknown resume option"}
 	})
 	return command
+}
+
+func newCacheCommand(intent *StartIntent, startup *startupFlags) *cobra.Command {
+	cache := &cobra.Command{
+		Use:   "cache",
+		Short: "Manage the local KuPilot cache",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return &parseFailure{message: "unknown cache command"}
+			}
+			return nil
+		},
+		RunE: func(*cobra.Command, []string) error {
+			return &parseFailure{message: "cache requires the clear command"}
+		},
+	}
+	clear := &cobra.Command{
+		Use:   "clear",
+		Short: "Clear entries from the local KuPilot cache",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return &parseFailure{message: "cache clear does not accept arguments"}
+			}
+			return nil
+		},
+		RunE: func(command *cobra.Command, _ []string) error {
+			if startup.changed(command) {
+				return &parseFailure{message: "cache clear does not accept startup options"}
+			}
+			*intent = StartIntent{Kind: IntentCacheClear}
+			return nil
+		},
+	}
+	clear.SetFlagErrorFunc(func(*cobra.Command, error) error {
+		return &parseFailure{message: "cache clear does not accept options"}
+	})
+	cache.AddCommand(clear)
+	return cache
 }
 
 func canonicalSessionID(value string) (string, bool) {
@@ -359,6 +409,8 @@ func helpTopicByName(name string) (HelpTopic, bool) {
 	switch name {
 	case "resume":
 		return HelpResume, true
+	case "cache":
+		return HelpCache, true
 	case "version":
 		return HelpVersion, true
 	case "help":

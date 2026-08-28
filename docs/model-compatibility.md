@@ -49,12 +49,13 @@ maps decoded text, indexed Tool-call fragments, finish reasons, and usage into
 project-owned events. KuPilot does not maintain a second SSE or provider JSON
 decoder.
 
-Construction validates configuration and credential availability locally,
-clones an independent HTTP transport, and performs no network request. A
-successfully constructed adapter owns the opaque credential. The composition
-root cancels and waits for owning model work before closing the adapter; close
-then rejects new requests, releases idle connections, and destroys the owned
-credential. There is no package-global client or credential.
+Construction validates the effective profile and credential locally, clones an
+independent HTTP transport, and performs no network request. A successfully
+constructed adapter owns the opaque credential. Application owns interactive
+replacement: it cancels and joins an active run, builds one replacement before
+swapping, and then closes the prior adapter. Close rejects new requests,
+releases idle connections, and destroys the owned credential. There is no
+package-global client or credential.
 
 KuPilot installs no Eino global callbacks. Each model call replaces any
 caller-provided callback context before giving data to the component. The
@@ -64,12 +65,14 @@ terminal paths.
 
 ## Model configuration
 
-`ModelConfiguration` contains only validated, non-sensitive values:
+The ordinary typed `ModelConfiguration` contains only validated, non-sensitive
+values:
 
 - The fixed provider kind `openai_compatible`.
 - One canonical endpoint base URL and its exact canonical origin.
 - A user-configured model identifier.
-- The API-key source category `environment`, never the API key value.
+- The fixed `runtime` credential-source marker, never the selected source or
+  key value.
 - Temperature from 0 through 0.2, a hard output-token limit from 1 through
   8,192, and a request timeout no greater than 45 seconds.
 - Required streaming and structured Tool-calling capability flags.
@@ -237,16 +240,20 @@ hostname validate against the process trust store. At most three same-origin
 redirects are followed, and only when the redirect preserves the authenticated
 POST and body; method-changing or otherwise ambiguous redirects are rejected.
 
-The model API key is a transport-only credential from the approved one-shot
-source. The Eino component receives a fixed non-secret placeholder; the guarded
-HTTP transport replaces it with the real Authorization value only after
-validating the exact origin, request method, content type, and bounded body.
+The model API key is a transport-only credential extracted from masked TUI
+input, an optional local plaintext file field, or the one-shot environment
+override. It is never an ordinary typed configuration field. The Eino component
+receives a fixed non-secret placeholder; the guarded HTTP transport replaces it
+with the real Authorization value only after validating the exact origin,
+request method, content type, and bounded body.
 The placeholder is restored before redirect processing, and Authorization is
-attached only to the validated origin. The key is never a configuration field,
-model message, request body, event, safe error, ordinary log field, callback,
-audit field, or persistence value. Request and logger capture tests may inspect
-a generated synthetic value in memory, but logs never record Authorization or
-request/response bodies.
+attached only to the validated origin. A dedicated extractor removes the
+optional `model.api_key` before Viper and the ordinary configuration object see
+it. The key is never a Domain value, model message, request body, Application
+event, rendered TUI or history value, safe error, ordinary log field, callback,
+audit field, SQLite value, or child environment entry. Request and logger
+capture tests may inspect a generated synthetic value in memory, but logs never
+record Authorization or request/response bodies.
 The adapter also fails closed before a request or neutral event can carry the
 transport credential as configuration, content, metadata, text, or Tool-call
 data. Endpoint error bodies are read only to the fixed discard limit and are

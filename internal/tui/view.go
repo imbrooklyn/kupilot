@@ -18,10 +18,11 @@ func (model Model) View() tea.View {
 }
 
 func (model Model) render() string {
-	sections := []string{
-		model.transcript.View(),
-		model.composer.View(),
+	sections := []string{model.transcript.View()}
+	if prompt := model.modelSetupView(); prompt != "" {
+		sections = append(sections, prompt)
 	}
+	sections = append(sections, model.composer.View())
 	if model.pickerOpen() {
 		sections = append(sections, model.pickerView())
 	} else if model.slashMenu.Open() {
@@ -68,7 +69,7 @@ func (model Model) footerView() string {
 		run += "-degraded"
 	}
 	modelStatus := "model/unconfigured"
-	if model.modelName != "" {
+	if model.modelConfigured && model.modelName != "" {
 		modelStatus = "model/" + model.modelName
 	}
 	approvalStatus := ""

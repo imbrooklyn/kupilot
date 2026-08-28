@@ -2,7 +2,7 @@
 
 - Review disposition: meets the read-only composition security-review risk
   threshold with no open finding or assurance gap
-- Baseline reviewed: 2026-08-15
+- Baseline reviewed: 2026-08-28
 - Authority: the [Security Threat Model](security.md),
   [Architecture](architecture.md), [Privacy Overview](privacy-overview.md), and
   [Data Retention Contract](data-retention.md)
@@ -15,10 +15,10 @@ explicit rather than inferred.
 
 ## Conclusion
 
-The review found no credential disclosure, cross-origin authorization leak,
-cross-scope acceptance, terminal-control execution, or reachable Kubernetes
-write path in the current composition. Both Medium findings are closed:
-model-originated free
+The review found no credential disclosure, automatic write outside the fixed
+Home, cache deletion escape, cross-origin authorization leak, cross-scope
+acceptance, terminal-control execution, or reachable Kubernetes write path in
+the current composition. Both Medium findings are closed: model-originated free
 text is processed before actions and sinks, and Agent plus SQLite use the same
 all-accepted-Evidence observation-window invariant.
 
@@ -80,6 +80,12 @@ Status meanings:
   [`internal/persistence/sqlite/migrate_test.go`](../internal/persistence/sqlite/migrate_test.go)
   and
   [`internal/persistence/sqlite/session_repository_static_test.go`](../internal/persistence/sqlite/session_repository_static_test.go).
+- [`internal/config`](../internal/config) freezes one canonical Home, extracts
+  the optional file credential before ordinary decoding, atomically publishes
+  only the fixed Home configuration, and clears cache entries through a
+  non-following boundary. Model setup and single-runtime replacement remain
+  Application-owned, with delivery-only masked input in
+  [`internal/tui`](../internal/tui).
 
 ## Threat-to-control-to-test-to-status matrix
 
@@ -88,7 +94,7 @@ Status meanings:
 | Threat | Control and code evidence | Deterministic test evidence | Status |
 | --- | --- | --- | --- |
 | T01: Kubernetes credentials reach a prohibited sink, or unsafe kubeconfig permissions are missed | C01, C02, C08, and C10; credential loading and client construction remain in [`internal/kube`](../internal/kube), while SQLite fields are allowlisted | `TestSecurityAssuranceKubernetesCredentialSourceMatrix`, `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestConfigLoaderReportsUnsafePermissionsWithoutChangingOrExposingPath`, and exec-credential strict-denial, environment, output, and cancellation tests | **Pass — SR-003 closed.** Distinct kubeconfig, bearer-token, client-certificate, private-key, exec-stdout, and exec-stderr canaries reach only their permitted adapter use and are absent from every prohibited sink; permissions remain unchanged. |
-| T02: the model API key is persisted, rendered, inherited, disclosed, or redirected | C01-C03 and C10; one-shot opaque secret source, child-environment filtering, and same-origin transport policy in [`internal/config`](../internal/config) and [`internal/llm/openaicompat`](../internal/llm/openaicompat) | `TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink`, `TestEnvironmentSecretSourceReadsOnceAndUnsets`, `TestFilterChildEnvironmentRemovesEveryModelAPIKeyEntry`, `TestCredentialCanaryIsBlockedFromRequestAndResponseValues`, `TestCrossOriginRedirectIsDeniedBeforeAuthorizationCanMove`, and `TestExecCredentialsAllowDirectLaunchAndRemoveModelKey` | **Pass.** The synthetic key is confined to the configured-origin authorization header, and denial paths observe zero forbidden forwarding. |
+| T02: the model API key is saved without explicit choice, rendered, retained after failure, inherited, disclosed, or redirected | C01-C03, C10, and C14; pre-Viper file extraction, one-shot opaque environment and TUI sources, masked input, queue cleanup, child-environment filtering, atomic fixed-Home publication, and same-origin transport policy | `TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink`, `TestFileModelAPIKeyCanaryIsExtractedFromOrdinaryConfiguration`, `TestLoadEnvironmentCredentialOverridesFileAndIsUnsetOnce`, `TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest`, `TestApplicationRequestFilterAndDrainDestroyRejectedModelSecrets`, `TestCoordinatorModelSetupConstructionFailureKeepsOldRuntime`, redirect tests, and exec-child tests | **Pass.** A synthetic key reaches only the explicitly selected Home file or configured-origin Authorization header. Process-only and failed setup publish no key, while ordinary Config, render/history, errors, logs, audit, SQLite, child, and redirect sinks exclude it. |
 | T03: Secret or other high-risk text is read or smuggled through eligible content | C04/C07 model-text processing plus C06 source denial and the ordered egress pipeline in [`internal/agent`](../internal/agent), [`internal/tools`](../internal/tools), and [`internal/security/redactor.go`](../internal/security/redactor.go) | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, Kubernetes source-denial tests, `FuzzRedactorSafety`, and the full sink canary integration test | **Pass — SR-001 closed.** Lower-risk eligible text is replaced before downstream use; high-confidence model text is blocked before Tool/Kubernetes action, and denial tests observe zero forbidden calls or sinks. |
 | T04: prompt or Tool-result injection changes runtime authority | C04, C05, C07, and C11; authority comes from immutable run state and fixed dispatch in [`internal/agent`](../internal/agent) | `TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection`, `TestAdapterRejectsHostileToolSelectionsBeforeHandler`, `TestMaliciousToolOutputCannotAuthorizeAnotherTool`, scope-generation tests, and zero-action Slash denials | **Pass.** Hostile text does not alter catalog, endpoint, scope, budgets, approval state, or write authority. |
 | T05: structured Tool input adds scope, Kind, selector, deadline, or larger limits | C04 strict decoding, runtime scope injection, and C09 ceilings in [`internal/agent/catalog.go`](../internal/agent/catalog.go) | `TestToolCatalogIsExactStrictAndScopeFree`, `TestToolCallPolicyRejectsUnknownForbiddenAndInvalidBeforeHandler`, `TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults`, and `FuzzBindToolCallStrictSchema` | **Pass.** Invalid authority is rejected before handler I/O; accepted canonical calls retain only runtime-injected scope and ceilings. |
@@ -96,7 +102,7 @@ Status meanings:
 | T07: stale Context or Namespace work reaches a sink | C05 three-gate generation checks in [`internal/application/scope_manager.go`](../internal/application/scope_manager.go), Agent runtime, and Application event acceptance | `TestScopeManagerSwitchContextInvalidatesBeforeCreatingTarget`, `TestScopeManagerDropsBlockedOldGenerationResourceResult`, `TestCoordinatorCancelsOneRunAndRejectsLateEvents`, `TestGetEventsDiscardsLateResultAfterScopeBecomesStale`, `TestGetPodLogsDiscardsRawContentAfterScopeBecomesStale`, and TUI stale-result tests | **Pass.** Before-call stale work performs zero action; in-flight and late work is rejected before Evidence, model, persistence, or current TUI state. |
 | T08: broad RBAC permits access outside fixed Kind, relationship, Namespace, or projection policy | C06 task-specific read ports and projections in [`internal/kube`](../internal/kube) | Exact-action tests for resources, Events, logs, and related resources in `tool_resources_test.go`, `tool_events_logs_test.go`, and `tool_related_resources_test.go`; denial tests assert zero forbidden client actions | **Pass.** Recorded requests use only admitted verbs, resources, Namespace, subresources, and limits; relationship traversal stays within fixed nodes, edges, and hops. |
 | T09: prose, malformed streams, duplicate calls, or invented Tools bypass structured calling | C04 structured events without text fallback and C09 bounded decoding | `TestCompatibilityFixturesProduceNeutralStreamEvents`, `TestMalformedAndOversizeFixturesHaveOneClassifiedTerminalError`, `TestNeutralModelContractIsMinimalAndRejectsAmbiguity`, hostile Tool selection tests, duplicate Diagnosis tests, and `FuzzBoundedSSEBodyIsChunkIndependent` | **Pass.** Malformed or invented authority produces one classified terminal outcome and no unintended handler call. |
-| T10: SQLite leaks excluded data, accepts SQL authority, opens unsafe paths, or silently loses integrity | C08 fixed safe paths, permissions, allowlisted schema, bound SQL, checksummed migrations, integrity gates, model-text processing, and the all-accepted-Evidence Diagnosis window invariant in [`internal/persistence/sqlite`](../internal/persistence/sqlite) | Database/WAL canary scans, path and mode tests, `TestRepositorySourcesKeepExplicitSQLBoundary`, migration corruption and unknown-schema tests, `TestDiagnosisRepositoryUsesAllAcceptedEvidenceForObservationWindow`, truncation with and without Evidence, cross-run rejection, retention-state tests, and `TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis` | **Pass — SR-001 and SR-002 closed.** Sensitive model values do not reach SQLite, every cited Evidence ID remains same-run validated, and zero, one, subset, and truncated reference sets preserve the exact all-accepted-Evidence window without false degradation. |
+| T10: SQLite leaks excluded data, accepts SQL authority, opens unsafe paths, changes a user-managed mode, or silently loses integrity | C08/C14 fixed safe paths, create-only permissions, allowlisted schema, bound SQL, checksummed migrations, integrity gates, model-text processing, and the all-accepted-Evidence Diagnosis window invariant in [`internal/persistence/sqlite`](../internal/persistence/sqlite) | Database/WAL canary scans, `TestOpenRespectsExistingUserModesAndConfiguresConnectionPragmas`, `TestOpenCreatesPrivateStateAndDatabase`, path tests, `TestRepositorySourcesKeepExplicitSQLBoundary`, migration corruption and unknown-schema tests, Diagnosis window and retention tests, and `TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis` | **Pass — SR-001 and SR-002 closed.** New files use private modes, existing modes remain unchanged, sensitive model values do not reach SQLite, and every accepted or cited Evidence invariant remains same-run validated without false degradation. |
 | T11: retention exceeds policy, minimal mode resumes, deletion is partial, or cleanup failure is hidden | C08 plus explicit retention repositories and startup/run gates | cutoff, minimal-shell, cascade, rollback, cancellation, startup maintenance, resume eligibility, and durable-run-start zero-model/Tool-call tests in [`internal/persistence/sqlite`](../internal/persistence/sqlite), [`internal/application`](../internal/application), and [`cmd/kupilot`](../cmd/kupilot) | **Pass.** Cutoffs and cascades are transactional; mandatory failures are visible and fail before prohibited work. |
 | T12: external text executes terminal controls, spoofs typed state, or hides scope | C07 local styling, sanitization, bounded render state, typed scope/approval meaning, and fixed Slash registry in [`internal/tui`](../internal/tui) | `TestSanitizeExternalTextRemovesTerminalAndBidiControls`, `TestApplicationTextAndScopeAreSanitizedBeforeRenderState`, golden/render tests, paste and stale-event tests, `TestSlashRegistryIsFixedAndReadOnly`, and `FuzzParseSlashDraftHasNoDynamicAuthority` | **Pass.** Escape, control, bidi, invalid UTF-8, and dynamic Slash inputs do not become terminal or runtime authority. |
 | T13: streams, results, logs, recursion, retries, or queues exceed budgets | C09 atomic ceilings, child deadlines, owned cancellation, local projection bounds, and bounded event/render state | `TestRunBudgetEnforcesExactHardLimits`, one-over and concurrent reservation tests, exact Tool result/log/graph limits, event queue and TUI cumulative stream tests, oversize model fixtures, and `FuzzBoundedSSEBodyIsChunkIndependent` | **Pass.** Boundary and one-over cases stop with bounded output, no post-exhaustion call, and one terminal result. |
@@ -107,10 +113,13 @@ Status meanings:
 | T18: kubeconfig exec is model-influenced, shell-launched, leaking, hanging, key-inheriting, or not strictly denied | C02 selected-config ownership, direct launch, clean environment, bounded output, owner cancellation, and strict deny in [`internal/kube`](../internal/kube) | `TestExecCredentialsStrictDenyPerformsZeroLaunches`, `TestExecCredentialsAllowDirectLaunchAndRemoveModelKey`, protocol denial, safe output/failure, and owner-cancellation tests | **Pass.** Strict mode launches nothing; allowed mode owns exact argv without a shell or model key and bounds failure output. |
 | T19: model or TUI events bypass Application and invoke an executor | C11 composition isolation, consumer-owned ports, typed UI commands, and fixed Tool dispatch | Agent, Application, Tool, and TUI boundary tests; forged/unknown Slash and model execution-claim tests; composition no-write test | **Pass.** Neither Agent nor TUI can reference an executor, and forged text/events produce no approval or write action. |
 | T20: restart issues a broader or repeated write, or conflates acceptance with verification | C11 excludes the C12 operation from `v0.1` | exact catalog, read-only boundary, composition, and request-recorder tests | **Not reachable.** `restart_deployment` and all Kubernetes write methods are absent from the reviewed composition. This does not pre-approve a future implementation. |
+| T21: summary export leaks a prohibited source or path, overwrites, follows a link, publishes partial bytes, races deletion, or replays | C08, C10, and C13 fixed projection, two-pass guard, content-free audit, serialization, and atomic no-replace publication | Export projection, filesystem, Application integration, deletion-barrier, restart, and cross-sink canary tests named in the accepted export contract | **Pass.** Only a confirmed new Markdown target receives the bounded versioned projection; denial and race paths leave no partial output or reusable authority. |
+| T22: startup or model save writes outside Home, overwrites an external configuration, changes existing modes, follows a managed link, or leaves a partial key file | C14 canonical fixed descendants, read-only external inputs, create-only mode policy, pre-Viper extraction, target revalidation, and atomic publication | `TestResolvePathsUsesOneFixedHomeLayout`, canonical Home-link tests, `TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential`, existing-mode, cancellation, symlink, target-replacement, temporary-cleanup, and file-canary tests | **Pass.** Automatic writes stay under canonical Home, external configuration remains read-only, new paths receive private modes, existing modes are preserved, and failed publication does not change the selected target. |
+| T23: cache clearing initializes ordinary services, deletes non-cache data, follows a link, escapes a replacement, creates missing paths, or falsely reports partial completion | C14 fixed short-circuit command and descriptor-relative non-following deletion on supported Unix platforms | `TestCompositionRootCacheClearShortCircuitsOrdinaryStartup`, `TestClearCacheIsIdempotentAndDoesNotCreateHome`, nested/link/non-directory/cancellation tests, and `TestClearCacheEntryReplacementDoesNotEscapeCache` | **Pass.** Only entries below the canonical cache child are removed. Missing cache is unchanged, link targets and displaced entries survive, ordinary composition is untouched, and cancellation returns an incomplete outcome. |
 
 <!-- markdownlint-enable MD013 -->
 
-Threat status totals are 17 Pass, 0 Finding, 0 Gap, and 3 Not reachable.
+Threat status totals are 20 Pass, 0 Finding, 0 Gap, and 3 Not reachable.
 
 ## Findings
 
@@ -208,17 +217,19 @@ preserves cancellation identity without exposing raw causes, and
 ## Release decision and limitations
 
 No Critical, High, Medium, or Low finding or assurance gap remains open for the
-reviewed read-only composition. SR-003 and SR-004 are closed by deterministic
-synthetic-canary matrices and return to review when a covered source, sink, or
-error aggregation boundary changes.
+reviewed read-only composition. The fixed-Home, interactive model setup, and
+cache-maintenance changes add no Kubernetes authority. SR-003 and SR-004 are
+closed by deterministic synthetic-canary matrices and return to review when a
+covered source, sink, or error aggregation boundary changes.
 
 This review uses synthetic canaries, local fakes, request-recording HTTP
 fixtures, temporary SQLite databases, static import/composition checks, and
 deterministic fuzz seeds. It does not use a real cluster, real model endpoint,
-real credential, public network, third-party penetration test, or dependency
-vulnerability scanner. It does not claim SQLite encryption, tamper resistance,
+real credential, public network, or third-party penetration test. It does not
+claim encryption for SQLite or a locally saved plaintext key, tamper resistance,
 forensic deletion, live RBAC correctness, or live-cluster security properties
-for the isolated `v0.2` write workflow.
+for the isolated `v0.2` write workflow. Dependency vulnerability scanning is a
+separate repository gate rather than evidence for these behavioral controls.
 
 No raw canary value is included in this document. Tests construct their values
 locally so that public documentation and fixtures cannot become a source of a

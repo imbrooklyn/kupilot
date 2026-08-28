@@ -14,7 +14,7 @@ func TestCommandCatalogIsFixed(t *testing.T) {
 	}
 
 	commands := command.Commands()
-	want := []string{"help", "resume", "version"}
+	want := []string{"cache", "help", "resume", "version"}
 	if len(commands) != len(want) {
 		t.Fatalf("command count = %d, want %d", len(commands), len(want))
 	}
@@ -40,6 +40,7 @@ func TestParseAcceptedIntents(t *testing.T) {
 		{name: "resume exact ID", args: []string{"resume", sessionID}, want: StartIntent{Kind: IntentResumeID, SessionID: sessionID}},
 		{name: "resume canonicalizes ID", args: []string{"resume", strings.ToUpper(sessionID)}, want: StartIntent{Kind: IntentResumeID, SessionID: sessionID}},
 		{name: "resume last", args: []string{"resume", "--last"}, want: StartIntent{Kind: IntentResumeLast}},
+		{name: "cache clear", args: []string{"cache", "clear"}, want: StartIntent{Kind: IntentCacheClear}},
 		{name: "version command", args: []string{"version"}, want: StartIntent{Kind: IntentVersion}},
 		{name: "version option", args: []string{"--version"}, want: StartIntent{Kind: IntentVersion}},
 		{name: "help command", args: []string{"help"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpRoot}},
@@ -48,6 +49,8 @@ func TestParseAcceptedIntents(t *testing.T) {
 		{name: "resume help command", args: []string{"help", "resume"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpResume}},
 		{name: "resume help option", args: []string{"resume", "--help"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpResume}},
 		{name: "resume short help option", args: []string{"resume", "-h"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpResume}},
+		{name: "cache help command", args: []string{"help", "cache"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpCache}},
+		{name: "cache clear help option", args: []string{"cache", "clear", "--help"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpCache}},
 		{name: "version help command", args: []string{"help", "version"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpVersion}},
 		{name: "version help option", args: []string{"version", "--help"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpVersion}},
 		{name: "help help command", args: []string{"help", "help"}, want: StartIntent{Kind: IntentHelp, HelpTopic: HelpHelp}},
@@ -154,10 +157,15 @@ func TestParseRejectsInvalidArguments(t *testing.T) {
 		{name: "resume non-v7 ID", args: []string{"resume", "0198a46e-7d2a-4d34-9b6f-2df5f45a2a10"}, wantErr: "session ID must be a valid UUIDv7"},
 		{name: "resume invalid variant", args: []string{"resume", "0198a46e-7d2a-7d34-7b6f-2df5f45a2a10"}, wantErr: "session ID must be a valid UUIDv7"},
 		{name: "resume overlong ID", args: []string{"resume", strings.Repeat("a", 64)}, wantErr: "session ID must be a valid UUIDv7"},
+		{name: "cache without clear", args: []string{"cache"}, wantErr: "cache requires the clear command"},
+		{name: "unknown cache command", args: []string{"cache", "prune"}, wantErr: "unknown cache command"},
+		{name: "cache clear argument", args: []string{"cache", "clear", "extra"}, wantErr: "cache clear does not accept arguments"},
+		{name: "cache clear startup option", args: []string{"cache", "clear", "--no-color"}, wantErr: "cache clear does not accept startup options"},
 		{name: "resume Unicode-confusable ID", args: []string{"resume", "0198a46e-7d2a-" + string(rune(0xff17)) + "d34-9b6f-2df5f45a2a10"}, wantErr: "session ID must be a valid UUIDv7"},
 		{name: "version argument", args: []string{"version", "extra"}, wantErr: "version does not accept arguments"},
 		{name: "version option argument", args: []string{"--version", "extra"}, wantErr: "--version does not accept arguments"},
 		{name: "help unknown command", args: []string{"help", "status"}, wantErr: "help is unavailable for that command"},
+		{name: "help cache child without parent", args: []string{"help", "clear"}, wantErr: "help is unavailable for that command"},
 		{name: "help too many commands", args: []string{"help", "resume", "version"}, wantErr: "help accepts at most one command"},
 		{name: "help option argument", args: []string{"--help", "resume"}, wantErr: "--help does not accept arguments"},
 		{name: "help option value", args: []string{"--help=false"}, wantErr: "--help does not accept arguments"},

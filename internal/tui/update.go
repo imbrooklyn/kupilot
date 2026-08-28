@@ -14,6 +14,7 @@ import (
 )
 
 const helpText = `/help                 Show commands and key bindings
+/model                Configure the single model runtime
 /context [filter]     Select the Kubernetes Context
 /namespace [filter]   Select the Kubernetes Namespace
 /resource [filter]    Select or clear the target resource
@@ -72,7 +73,16 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.acceptCommandOutcome(message.Result)
 		model.reflow()
 		return model, nil
+	case ModelSetupResultMsg:
+		model.acceptModelSetupResult(message.Result)
+		model.reflow()
+		return model, nil
 	case ApplicationFailureMsg:
+		if model.acceptModelSetupFailure(message) {
+			model.showDialog("Model setup unavailable", "The model settings were not applied and no replacement runtime was activated. Review the endpoint and model, then enter the API key again.")
+			model.reflow()
+			return model, nil
+		}
 		if model.acceptEvidenceFailure(message) {
 			model.reflow()
 			return model, nil
@@ -280,7 +290,7 @@ func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	}
 	updated, cmd, err := model.composer.Update(message)
 	if err != nil {
-		model.showDialog("Input limit", "The draft is too long. The maximum is 65536 bytes.")
+		model.showComposerLimit()
 		return model, nil
 	}
 	model.composer = updated
@@ -390,6 +400,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if key.Matches(message, model.keymap.Close) {
+		if model.cancelOptionalModelSetup() {
+			return model, nil
+		}
 		if model.pickerOpen() {
 			return model.cancelPicker()
 		}
@@ -470,13 +483,21 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	updated, cmd, err := model.composer.Update(message)
 	if err != nil {
-		model.showDialog("Input limit", "The draft is too long. The maximum is 65536 bytes.")
+		model.showComposerLimit()
 		return model, nil
 	}
 	model.composer = updated
 	queryCmd := model.syncSuggestionsAfterEdit()
 	model.reflow()
 	return model, combineCommands(cmd, queryCmd)
+}
+
+func (model *Model) showComposerLimit() {
+	if model.modelSetup != nil {
+		model.showDialog("Input limit", "The current model setup value exceeds its fixed byte limit.")
+		return
+	}
+	model.showDialog("Input limit", "The draft is too long. The maximum is 65536 bytes.")
 }
 
 func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -530,6 +551,9 @@ func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd)
 }
 
 func (model Model) submitDraft() (tea.Model, tea.Cmd) {
+	if model.modelSetup != nil {
+		return model.submitModelSetupDraft()
+	}
 	draft := model.composer.Value()
 	historyDraft := draft
 	if strings.TrimSpace(draft) == "" {
@@ -572,6 +596,11 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	}
 	if model.scope.Switching {
 		model.showDialog("Scope switching", "Wait for scope activation to finish before sending a question.")
+		return model, nil
+	}
+	if !model.modelConfigured {
+		model.beginMissingModelSetup()
+		model.showDialog("Model required", "Configure the model endpoint, model identifier, and API key before sending a question.")
 		return model, nil
 	}
 	if model.scope.Generation < 1 || !model.scope.ReadOnly {
@@ -642,6 +671,10 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		model.composer.Reset()
 		model.slashMenu.Close()
 		model.showDialog("Help", helpText)
+		return model, nil
+	case slashModel:
+		model.beginModelSetup()
+		model.reflow()
 		return model, nil
 	case slashStatus:
 		model.composer.Reset()
@@ -1084,6 +1117,12 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.showPrivacyReview(*result.Privacy, nil)
 			return
 		}
+		if result.Failure == application.UIQueryModelRequired {
+			model.modelConfigured = false
+			model.beginMissingModelSetup()
+			model.showDialog("Model required", "Configure the model before sending another question.")
+			return
+		}
 		if result.Failure != "" {
 			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
 		}
@@ -1163,7 +1202,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.resetAfterHistoryDeletion()
 			model.quitAfterLocalDeletion = true
 			if result.Failure != "" {
-				model.showDialog("Local database deletion incomplete", "KuPilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the configured state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
+				model.showDialog("Local database deletion incomplete", "KuPilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the fixed KUPILOT_HOME/state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
 				return
 			}
 			model.showDialog("Local database state deleted", "KuPilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc or Enter to exit.")
