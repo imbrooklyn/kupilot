@@ -84,10 +84,39 @@ the supported finish states. It does not fall back to non-streaming responses,
 prose-parsed Tool calls, the Responses API, another provider, or another origin.
 See [Model Compatibility](model-compatibility.md).
 
+For the official OpenAI API, a compatible configuration example is:
+
+```yaml
+model:
+  provider_kind: openai_compatible
+  endpoint: https://api.openai.com/v1
+  model: gpt-4o-mini
+```
+
+OpenAI documents `gpt-4o-mini` and later models as supporting Structured
+Outputs. A third-party relay must preserve the same streaming function-call and
+strict-schema behavior; using an OpenAI model name through a relay does not by
+itself establish compatibility. See the official
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+
 HTTP status text and endpoint response bodies are deliberately not echoed.
 Check the configured model identifier, provider-side authorization and quota,
 TLS trust, and provider documentation without copying sensitive responses into
 KuPilot configuration or public reports.
+
+## The model returned an invalid Agent response
+
+This error means the endpoint completed an accepted stream, but the final
+assistant content did not satisfy the strict four-collection Diagnosis JSON
+contract. KuPilot rejects Markdown fences, commentary, missing or null
+collections, unknown or duplicate keys, invalid enum values, trailing content,
+and malformed JSON. Partial or invalid model content is not persisted.
+
+Use a current KuPilot build whose System Prompt includes the exact final JSON
+shape and enum values. If the error persists through a relay, verify that the
+relay serves the configured model without injecting prose or rewriting the
+assistant content. Switching only the model name cannot make such rewriting
+compatible; test the official endpoint when organizational policy permits.
 
 ## Context or Namespace cannot be activated
 
@@ -129,6 +158,22 @@ The common optional gaps are:
 KuPilot does not retry with a broader identity, resource, selector, Namespace,
 or limit. Do not solve a narrow denial by granting `cluster-admin`. A partial or
 forbidden observation belongs in Diagnosis missing information.
+
+## A question asks for Nodes, Namespaces, or cluster-wide inventory
+
+The `v0.1` Agent can directly observe only Pod, Deployment, ReplicaSet, Job, and
+Service objects in the active Namespace. Node objects, Namespace objects,
+Namespace discovery, all-Namespace queries, and cluster-wide inventory are
+outside the fixed Agent Tool catalog. The Agent should make no Kubernetes Tool
+call for such a question and should return an `unsupported` missing-information
+item that explains the boundary.
+
+The scope footer and Diagnosis identify the one active Namespace, but that
+trusted scope value is not Evidence that other Namespaces do or do not exist.
+Use the fixed `/namespace` selector when you need to choose from Namespaces that
+the current Kubernetes identity may list. KuPilot does not provide Node
+inventory in `v0.1`; inspect it independently under your organization's access
+policy.
 
 ## Pod logs are not used
 

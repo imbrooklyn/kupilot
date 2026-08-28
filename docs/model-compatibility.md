@@ -94,6 +94,12 @@ the configured `model`, neutral `messages`, six strict function `tools`,
 `stream: true`, `stream_options.include_usage: true`, the bounded
 `temperature`, and `max_tokens`. Tool definitions use `type: "function"`, a
 fixed name and description, a strict JSON object schema, and `strict: true`.
+Every property at each object level is included in `required`, and every object
+sets `additionalProperties: false`. Model-visible fields that have local
+defaults are required but nullable; `null` is canonicalized to the code-defined
+default before runtime authorization. Schema keywords outside the accepted
+Structured Outputs subset are not sent. Runtime validation independently
+enforces length, value, duplicate-item, scope, and hard-budget constraints.
 
 The response must have the `text/event-stream` media type and use single-line
 SSE `data:` records. Empty lines and SSE comment lines are allowed. Each JSON

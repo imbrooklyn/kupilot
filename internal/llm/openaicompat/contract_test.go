@@ -956,7 +956,7 @@ func fixtureModelRequest() domain.ModelRequest {
 			Name:            name,
 			Version:         "fixture-v1",
 			Description:     "Exercise the fixed structured Tool compatibility contract.",
-			InputSchemaJSON: `{"additionalProperties":false,"properties":{},"type":"object"}`,
+			InputSchemaJSON: `{"additionalProperties":false,"properties":{},"required":[],"type":"object"}`,
 		})
 	}
 	return domain.ModelRequest{

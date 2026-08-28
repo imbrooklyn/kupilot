@@ -686,19 +686,91 @@ func validStrictModelToolSchema(value string) bool {
 	if err != nil || string(canonical) != value {
 		return false
 	}
-	var objectType string
-	if json.Unmarshal(fields["type"], &objectType) != nil || objectType != "object" {
+	var rootType string
+	if json.Unmarshal(fields["type"], &rootType) != nil || rootType != "object" {
 		return false
 	}
-	var additionalProperties bool
-	if json.Unmarshal(fields["additionalProperties"], &additionalProperties) != nil || additionalProperties {
+	return validStrictModelSchemaNode(fields)
+}
+
+func validStrictModelSchemaNode(fields map[string]json.RawMessage) bool {
+	for _, unsupported := range []string{
+		"allOf", "dependentRequired", "dependentSchemas", "if", "not", "then", "else", "uniqueItems",
+	} {
+		if _, exists := fields[unsupported]; exists {
+			return false
+		}
+	}
+
+	if schemaIncludesType(fields["type"], "object") {
+		var additionalProperties bool
+		if json.Unmarshal(fields["additionalProperties"], &additionalProperties) != nil || additionalProperties {
+			return false
+		}
+		var properties map[string]json.RawMessage
+		if json.Unmarshal(fields["properties"], &properties) != nil {
+			return false
+		}
+		var required []string
+		if json.Unmarshal(fields["required"], &required) != nil || len(required) != len(properties) {
+			return false
+		}
+		seen := make(map[string]bool, len(required))
+		for _, name := range required {
+			if seen[name] {
+				return false
+			}
+			if _, exists := properties[name]; !exists {
+				return false
+			}
+			seen[name] = true
+		}
+		for _, raw := range properties {
+			var child map[string]json.RawMessage
+			if json.Unmarshal(raw, &child) != nil || !validStrictModelSchemaNode(child) {
+				return false
+			}
+		}
+	} else if _, exists := fields["properties"]; exists {
 		return false
 	}
-	var properties map[string]json.RawMessage
-	if json.Unmarshal(fields["properties"], &properties) != nil {
-		return false
+
+	if raw, exists := fields["items"]; exists {
+		var child map[string]json.RawMessage
+		if json.Unmarshal(raw, &child) != nil || !validStrictModelSchemaNode(child) {
+			return false
+		}
+	}
+	if raw, exists := fields["anyOf"]; exists {
+		var choices []json.RawMessage
+		if json.Unmarshal(raw, &choices) != nil || len(choices) == 0 {
+			return false
+		}
+		for _, choice := range choices {
+			var child map[string]json.RawMessage
+			if json.Unmarshal(choice, &child) != nil || !validStrictModelSchemaNode(child) {
+				return false
+			}
+		}
 	}
 	return true
+}
+
+func schemaIncludesType(raw json.RawMessage, wanted string) bool {
+	var single string
+	if json.Unmarshal(raw, &single) == nil {
+		return single == wanted
+	}
+	var multiple []string
+	if json.Unmarshal(raw, &multiple) != nil {
+		return false
+	}
+	for _, current := range multiple {
+		if current == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func hasModelTraversalSegment(value string) bool {

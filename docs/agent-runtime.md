@@ -100,6 +100,15 @@ and model output cannot change this choice. Project-owned structured field names
 and the four Diagnosis headings remain English. There is no language setting,
 locale negotiation, or probabilistic runtime language detector.
 
+Before selecting a Tool, the System Prompt requires the Agent to distinguish an
+admitted current-Namespace diagnostic request from an unsupported source request.
+Node and Namespace objects, Namespace discovery, cluster-wide inventory, and
+every unlisted Kind are explicit examples. The Agent must not use an admitted
+Kind as a proxy for such a request. It returns a structured `unsupported` gap
+without a Tool call and may identify the active Namespace as trusted scope, not
+as Kubernetes Evidence. Namespace discovery remains available only through the
+fixed `/namespace` selector outside an AgentRun.
+
 ## Fixed Tool contract
 
 The `kupilot-read-tools-v1` catalog contains exactly these six structured,
@@ -113,12 +122,14 @@ read-only Tools in fixed order:
 6. `get_related_resources`
 
 Each specification has a code-defined English description and strict JSON
-Schema with `additionalProperties: false`. A structured selection is decoded
-strictly, normalized with code-defined defaults, and re-serialized canonically
-before its digest is calculated. Unknown Tools, extra or duplicate fields,
-wrong types, invalid Kinds or names, and prohibited authority fields are denied
-before handler resolution. If any selection in one model batch is invalid, no
-handler from that batch is invoked.
+Schema with `additionalProperties: false`. Every property at each object level
+is listed in `required`; a field with a code-defined default is nullable in the
+model schema and its `null` value is normalized locally to that default. A
+structured selection is decoded strictly, normalized, and re-serialized
+canonically before its digest is calculated. Unknown Tools, extra or duplicate
+fields, wrong types, invalid Kinds or names, and prohibited authority fields are
+denied before handler resolution. If any selection in one model batch is
+invalid, no handler from that batch is invoked.
 
 Model arguments contain no Context, Namespace, ClusterScope, generic GVR,
 endpoint, credential, kubeconfig, deadline, or hard ceiling. A
@@ -204,7 +215,9 @@ A model Diagnosis is an untrusted four-part draft:
 The final model message must be one bare JSON object containing exactly these
 four fields. Unknown or duplicate keys, missing or null collections, trailing
 content, and malformed JSON are rejected. Parsing never recognizes a Tool call
-from text.
+from text. The System Prompt states the exact item keys, allowed enum values,
+non-null collection rules, prohibition on Markdown fences or commentary, and a
+valid all-empty object for cases where no item can be populated safely.
 
 Final validation performs these deterministic operations:
 

@@ -38,11 +38,90 @@ func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
 			}
 		}
 	}
+	listDescription := specifications[1].Description
+	for _, required := range []string{
+		"Pod, Deployment, ReplicaSet, Job, or Service",
+		"Never use this Tool for Namespace discovery",
+		"Node inventory",
+		"cluster-wide inventory",
+	} {
+		if !strings.Contains(listDescription, required) {
+			t.Fatalf("list_resources description missing %q", required)
+		}
+	}
 
 	copyOfCatalog := ToolSpecifications()
 	copyOfCatalog[0].Name = "changed"
 	if ToolSpecifications()[0].Name != domain.ToolNameGetResource {
 		t.Fatal("ToolSpecifications() returned mutable catalog storage")
+	}
+}
+
+func TestToolCatalogNullableDefaultsCanonicalizeLocally(t *testing.T) {
+	input := testRunInput(t, "Inspect the selected Pod.")
+	tests := []struct {
+		name      string
+		tool      domain.ToolName
+		arguments string
+		want      []string
+	}{
+		{
+			name:      "get resource",
+			tool:      domain.ToolNameGetResource,
+			arguments: `{"detail":null,"purpose":"Inspect the selected Pod.","resource":{"api_version":null,"kind":"Pod","name":"sample-pod"}}`,
+			want:      []string{`"api_version":"v1"`, `"detail":"diagnostic"`},
+		},
+		{
+			name:      "list resources",
+			tool:      domain.ToolNameListResources,
+			arguments: `{"health_filter":null,"kind":"Pod","limit":null,"name_query":null,"purpose":"Find bounded Pod candidates."}`,
+			want:      []string{`"health_filter":"abnormal"`, `"limit":20`},
+		},
+		{
+			name:      "get events",
+			tool:      domain.ToolNameGetEvents,
+			arguments: `{"limit":null,"purpose":"Inspect recent Pod events.","resource":{"api_version":null,"kind":"Pod","name":"sample-pod","uid":null},"since_seconds":null}`,
+			want:      []string{`"api_version":"v1"`, `"limit":30`, `"since_seconds":3600`},
+		},
+		{
+			name:      "get Pod logs",
+			tool:      domain.ToolNameGetPodLogs,
+			arguments: `{"container":null,"pod_name":"sample-pod","purpose":"Inspect current Pod logs.","since_seconds":null,"tail_lines":null}`,
+			want:      []string{`"since_seconds":900`, `"tail_lines":200`},
+		},
+		{
+			name:      "get previous Pod logs",
+			tool:      domain.ToolNameGetPreviousPodLogs,
+			arguments: `{"container":null,"pod_name":"sample-pod","purpose":"Inspect previous Pod logs.","since_seconds":null,"tail_lines":null}`,
+			want:      []string{`"since_seconds":900`, `"tail_lines":200`},
+		},
+		{
+			name:      "get related resources",
+			tool:      domain.ToolNameGetRelatedResources,
+			arguments: `{"include":null,"purpose":"Inspect bounded Pod relationships.","relation_depth":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod","uid":null}}`,
+			want:      []string{`"include":["owners","service_endpoints","services"]`, `"relation_depth":2`},
+		},
+	}
+
+	for index, current := range tests {
+		t.Run(current.name, func(t *testing.T) {
+			bound, err := BindToolCall(input, invocationID(index+20), domain.ModelToolCall{
+				ID:            "nullable-call",
+				Name:          current.tool,
+				ArgumentsJSON: current.arguments,
+			})
+			if err != nil {
+				t.Fatalf("BindToolCall() error = %v", err)
+			}
+			if strings.Contains(bound.ArgumentsJSON(), "null") {
+				t.Fatalf("canonical arguments retained null: %s", bound.ArgumentsJSON())
+			}
+			for _, wanted := range current.want {
+				if !strings.Contains(bound.ArgumentsJSON(), wanted) {
+					t.Fatalf("canonical arguments = %s, missing %s", bound.ArgumentsJSON(), wanted)
+				}
+			}
+		})
 	}
 }
 
@@ -63,6 +142,7 @@ func TestToolCallPolicyRejectsUnknownForbiddenAndInvalidBeforeHandler(t *testing
 		{name: "extra field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"},"surprise":true}`}},
 		{name: "Secret Kind", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Secret","name":"sample-secret"}}`}},
 		{name: "wrong type", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":7,"resource":{"kind":"Pod","name":"sample-pod"}}`}},
+		{name: "null required field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"detail":null,"purpose":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod"}}`}},
 	}
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {

@@ -84,6 +84,40 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 	}
 }
 
+func TestAdapterCompletesUnsupportedSourceDiagnosisWithoutToolCall(t *testing.T) {
+	clock := newTestClock()
+	guard := newTestScopeGuard()
+	const diagnosisJSON = `{"confirmed_facts":[],"hypotheses":[],"missing_information":[{"kind":"unsupported","detail":"Namespace discovery is outside the fixed Agent Tool catalog.","impact":"This run cannot list Namespace objects or present a cluster-wide Namespace inventory."}],"recommended_actions":[]}`
+	model := &recordingModel{scripts: []modelScript{
+		func(ctx context.Context, request domain.ModelRequest, consume agent.ModelStreamConsumer) *domain.ModelError {
+			if !strings.Contains(request.Messages[0].Content, "do not call any Tool as a proxy") ||
+				!strings.Contains(request.Tools[1].Description, "Never use this Tool for Namespace discovery") {
+				t.Fatal("unsupported-source policy is absent from the initial model request")
+			}
+			return scriptedEvents(diagnosisEvents(diagnosisJSON)...)(ctx, request, consume)
+		},
+	}}
+	tool := new(recordingTool)
+	recorder := newEventRecorder()
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
+
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	foundUnsupported := false
+	for _, missing := range outcome.Diagnosis.MissingInformation {
+		foundUnsupported = foundUnsupported || missing.Kind == domain.MissingInformationUnsupported
+	}
+	if !foundUnsupported {
+		t.Fatalf("missing information = %#v", outcome.Diagnosis.MissingInformation)
+	}
+	if len(model.Requests()) != 1 || len(tool.Calls()) != 0 {
+		t.Fatalf("unsupported-source calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
+	}
+	assertTerminalSequence(t, recorder.Events())
+}
+
 func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 	blockedCanary := strings.Join([]string{"synthetic", "blocked", "adapter", "canary", "4601"}, "-")
 	blockedText := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
@@ -254,7 +288,7 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
 	}
-	const expectedSnapshotSHA256 = "107f3b5170474952dfe27a518c450a7ecd47f835c3f8fc5a60170eb390a5e947"
+	const expectedSnapshotSHA256 = "db693c07c9dab53c9609a2e28552abf3455b339eb494c1e6163b265c027fa408"
 	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
 		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
 	}
