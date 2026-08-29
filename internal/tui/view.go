@@ -57,34 +57,47 @@ func (model Model) render() string {
 func (model Model) footerView() string {
 	resource := ""
 	if model.resource.Kind != "" && model.resource.Name != "" {
-		resource = "res/" + model.resource.Kind + "/" + model.resource.Name
+		resource = model.resource.Kind + "/" + model.resource.Name
 	}
-	run := "run/idle"
+	run := "idle"
 	if model.run.Active {
-		run = "run/active"
+		run = "diagnosing"
 	} else if model.run.Status != "" {
-		run = "run/" + model.run.Status
+		switch model.run.Status {
+		case "completed":
+			run = "diagnosis complete"
+		case "cancelled":
+			run = "diagnosis cancelled"
+		case "failed":
+			run = "diagnosis failed"
+		default:
+			run = "diagnosis " + model.run.Status
+		}
 	}
 	if model.run.PersistenceDegraded {
-		run += "-degraded"
+		run += " · storage degraded"
 	}
-	modelStatus := "model/unconfigured"
+	modelStatus := "model not configured"
 	if model.modelConfigured && model.modelName != "" {
-		modelStatus = "model/" + model.modelName
+		modelStatus = "model " + model.modelName
 	}
 	approvalStatus := ""
 	if model.pendingApproval != nil {
-		approvalStatus = "approval/pending"
+		approvalStatus = "approval pending"
 		if model.approvalState == domain.ApprovalStateApproved {
-			approvalStatus = "approval/approved-not-executed"
+			approvalStatus = "approved · not executed"
 		} else if model.pendingApprovalID != 0 {
-			approvalStatus = "approval/deciding"
+			approvalStatus = "approval in progress"
 		}
+	}
+	privacyStatus := "history saved"
+	if model.privacyMode == domain.PrivacyModeMinimal {
+		privacyStatus = "memory-only history"
 	}
 	return model.footer.View(model.width, components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
 		Approval: approvalStatus, Resource: resource, Run: run, Model: modelStatus,
-		Privacy: "privacy/" + string(model.privacyMode),
+		Privacy: privacyStatus,
 	})
 }

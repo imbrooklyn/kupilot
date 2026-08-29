@@ -249,9 +249,13 @@ type ToolResult struct {
 	Status       ToolResultStatus
 	DataJSON     string
 	Evidence     []Evidence
-	Warnings     []ToolResultWarning
-	Truncation   ToolResultTruncation
-	Error        *ToolResultError
+	// ResourceSummaries is the local-only safe projection used to render
+	// list_resources results deterministically. It is excluded from the model
+	// envelope and persistence.
+	ResourceSummaries []ResourceSummary
+	Warnings          []ToolResultWarning
+	Truncation        ToolResultTruncation
+	Error             *ToolResultError
 }
 
 // Validate checks the safe ToolResult envelope and all Evidence provenance that
@@ -262,7 +266,7 @@ func (result ToolResult) Validate() error {
 		!validToolScopeSnapshot(result.Scope) || !validPersistenceTime(result.ObservedAt) ||
 		!validCanonicalSafeJSONObject(result.DataJSON, MaxToolResultBytes) ||
 		len(result.Evidence) > MaxEvidenceItemsPerResult || len(result.Warnings) > maxToolResultWarnings ||
-		!result.Truncation.valid() {
+		!result.Truncation.valid() || !validToolResultResourceSummaries(result) {
 		return ErrInvalidToolResult
 	}
 	switch result.Status {
@@ -298,6 +302,29 @@ func (result ToolResult) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validToolResultResourceSummaries(result ToolResult) bool {
+	if len(result.ResourceSummaries) == 0 {
+		return true
+	}
+	if result.Name != ToolNameListResources || len(result.ResourceSummaries) != len(result.Evidence) ||
+		len(result.ResourceSummaries) > MaxResourceSummaries {
+		return false
+	}
+	seen := make(map[ResourceRef]struct{}, len(result.ResourceSummaries))
+	for index, summary := range result.ResourceSummaries {
+		if summary.Validate() != nil || summary.Reference.Namespace != result.Scope.Namespace ||
+			result.Evidence[index].Category != EvidenceCategoryResourceStatus ||
+			result.Evidence[index].Resource != summary.Reference {
+			return false
+		}
+		if _, duplicate := seen[summary.Reference]; duplicate {
+			return false
+		}
+		seen[summary.Reference] = struct{}{}
+	}
+	return true
 }
 
 // Retryable reports the stable Tool error classification only. It never

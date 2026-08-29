@@ -242,7 +242,7 @@ func (tool *GetRelatedResourcesTool) project(
 			safeNode.Truncated = safeNode.Truncated || statusMetadata.truncated || statusMetadata.blocked
 		}
 		if current.blocked {
-			warnings = appendWarning(warnings, relatedSensitiveWarning, "One projected relationship identity field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, relatedSensitiveWarning, "One related-resource identity field was hidden because it may contain sensitive data.")
 		}
 		data.Nodes = append(data.Nodes, safeNode)
 	}
@@ -430,7 +430,7 @@ func fitRelatedResult(
 		}
 		currentWarnings := append([]domain.ToolResultWarning(nil), warnings...)
 		if outputTrimmed {
-			currentWarnings = appendWarning(currentWarnings, "output_limited", "The Tool returned a deterministic relationship subset because the fixed output limit was reached.")
+			currentWarnings = appendWarning(currentWarnings, "output_limited", "The cluster read returned a deterministic relationship subset because the fixed output limit was reached.")
 		}
 		raw, encodeErr := json.Marshal(data)
 		encoded := ""

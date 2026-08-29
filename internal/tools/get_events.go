@@ -317,7 +317,7 @@ func (tool *GetEventsTool) project(
 	metadata := resourceMetadata
 	warnings := []domain.ToolResultWarning{}
 	if resourceMetadata.blocked {
-		warnings = appendWarning(warnings, eventSensitiveWarningCode, "One projected Event identity field was blocked by the sensitive-output policy.")
+		warnings = appendWarning(warnings, eventSensitiveWarningCode, "One Kubernetes Event identity field was hidden because it may contain sensitive data.")
 	}
 	aggregated := make(map[string]safeEventItem, len(observations.Items))
 	for _, observation := range observations.Items {
@@ -330,7 +330,7 @@ func (tool *GetEventsTool) project(
 		}
 		metadata.merge(current)
 		if current.blocked {
-			warnings = appendWarning(warnings, eventSensitiveWarningCode, "One projected Event field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, eventSensitiveWarningCode, "One Kubernetes Event field was hidden because it may contain sensitive data.")
 		}
 		key := strings.Join([]string{item.Type, item.Reason, item.Message, item.ReportingSource, item.ReportingController}, "\x00")
 		if existing, exists := aggregated[key]; exists {
@@ -519,7 +519,7 @@ func fitEventResult(
 		data.ReturnedCount = len(data.Items)
 		currentWarnings := append([]domain.ToolResultWarning(nil), warnings...)
 		if outputTrimmed {
-			currentWarnings = appendWarning(currentWarnings, "output_limited", "The Tool returned a deterministic Event subset because the fixed output limit was reached.")
+			currentWarnings = appendWarning(currentWarnings, "output_limited", "The cluster read returned a deterministic Event subset because the fixed output limit was reached.")
 		}
 		raw, encodeErr := json.Marshal(data)
 		encoded := ""

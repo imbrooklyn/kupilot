@@ -156,7 +156,7 @@ func (dialog ApprovalDialog) View(width int) string {
 		if dialog.terminal {
 			content = append(content, dialog.styles.Muted.Render("Enter or Esc closes this result."))
 		} else {
-			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The PATCH will not be retried."))
+			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The restart request will not be retried."))
 		}
 	} else {
 		content = append(content,

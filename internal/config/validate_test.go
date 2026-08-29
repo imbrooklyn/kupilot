@@ -100,6 +100,7 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "namespace uppercase", mutate: func(c *Config) { c.Namespace = "Default" }, code: "config_namespace_invalid"},
 		{name: "namespace all", mutate: func(c *Config) { c.Namespace = "*" }, code: "config_namespace_invalid"},
 		{name: "provider kind", mutate: func(c *Config) { c.Model.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
+		{name: "reasoning effort", mutate: func(c *Config) { c.Model.ReasoningEffort = "medium" }, code: "config_reasoning_effort_invalid"},
 		{name: "temperature below zero", mutate: func(c *Config) { c.Model.Temperature = -0.01 }, code: "config_temperature_invalid"},
 		{name: "temperature above maximum", mutate: func(c *Config) { c.Model.Temperature = 0.21 }, code: "config_temperature_invalid"},
 		{name: "output tokens zero", mutate: func(c *Config) { c.Model.MaxOutputTokens = 0 }, code: "config_output_limit_invalid"},

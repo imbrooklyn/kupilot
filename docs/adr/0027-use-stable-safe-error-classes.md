@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0036
 
 ## Context
 
@@ -66,8 +67,11 @@ regular-expression, localized-message, HTTP-body, SQL-text, or vendor-type check
 outside the adapter. Retryability is conservative and is additionally bounded by
 ADR-0016; a retryable class does not itself schedule a retry.
 
-Raw causes remain within the adapter's current call stack for mapping and are
-discarded. Ordinary logs and AuditEvents receive only allowlisted safe fields.
+Raw causes remain within the adapter for mapping and never cross the safe error
+boundary. AuditEvents and default operational logs receive only allowlisted
+safe fields. ADR-0036 permits an explicitly enabled, bounded, credential-
+redacted model-failure copy in the local rotating log; runtime decisions never
+consume that copy.
 
 ## Consequences
 
@@ -105,6 +109,8 @@ Safe errors are output projections. They follow the same allowlist, byte,
 terminal, and retention rules as other external-facing data. A safe error never
 includes kubeconfig or API-key material, auth headers, exec output, raw endpoint
 bodies, raw Kubernetes data, SQL, arbitrary local paths, or stack dumps.
+The opt-in local diagnostic record from ADR-0036 is not a SafeError and is never
+shown in the TUI, sent to the model, audited, or stored in SQLite.
 
 Permission, blocked-output, and unsupported failures become explicit gaps; they
 never trigger broader access or transport of the original value.
@@ -120,7 +126,9 @@ from:
 - Application and Agent events.
 - Model messages and Tool results.
 - TUI frames.
-- Ordinary logs, AuditEvents, and every durable field.
+- Default operational logs, AuditEvents, and every durable field. ADR-0036
+  sensitive model-failure logs instead prove bounded admission and exact model
+  credential removal.
 
 Tests must also prove no runtime package outside an adapter branches on raw error
 text or vendor error types and that retryable classes still obey remaining
@@ -144,3 +152,4 @@ strings and unverified API behavior never become runtime contracts.
 - [Security Threat Model](../security.md)
 - [Data Retention Contract](../data-retention.md)
 - [ADR-0016: Freeze Runtime Budgets](0016-freeze-runtime-budgets.md)
+- [ADR-0036: Record Bounded Model Failure Diagnostics](0036-record-bounded-safe-model-failure-diagnostics.md)

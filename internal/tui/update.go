@@ -23,11 +23,11 @@ const helpText = `/help                 Show commands and key bindings
 /resume [filter]      Resume a local Session
 /rename [title]       Rename the current Session
 /privacy              Show privacy, retention, and Session controls
-/cancel               Cancel the active AgentRun
+/cancel               Cancel the active diagnostic run
 /quit                 Exit KuPilot
 
 Enter sends. Ctrl+J inserts a newline. Tab completes a command.
-Ctrl+E selects cited Evidence.`
+Ctrl+E opens supporting observation details.`
 
 // Update reduces one message into pure UI state and deferred typed commands.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -591,7 +591,7 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	}
 
 	if model.run.Active {
-		model.showDialog("Run active", "Cancel the active AgentRun before sending another question.")
+		model.showDialog("Run active", "Cancel the active diagnostic run before sending another question.")
 		return model, nil
 	}
 	if model.scope.Switching {
@@ -728,11 +728,11 @@ func (model Model) slashAvailability(command SlashCommand) (bool, string) {
 	switch command.Name {
 	case "cancel":
 		if !model.run.Active {
-			return false, "There is no active AgentRun to cancel."
+			return false, "There is no active diagnostic run to cancel."
 		}
 	case "new", "resume", "quit":
 		if model.run.Active {
-			return false, "Cancel the active AgentRun first."
+			return false, "Cancel the active diagnostic run first."
 		}
 	}
 	return true, ""
@@ -833,31 +833,24 @@ func (model *Model) acceptEvidenceDetailResult(result application.UIEvidenceDeta
 			model.evidenceDialog.ShowUnavailable(string(result.Reference.EvidenceID))
 			return
 		}
-		filter := "not applied"
-		if detail.SensitiveFilter == application.UIEvidenceSensitiveFilterApplied {
-			filter = "applied"
-		}
 		partial := result.Reference.State == application.UIEvidenceDetailPartial
+		status := "complete"
+		if partial || detail.Truncated {
+			status = "partial"
+		}
 		model.evidenceDialog.ShowDetail(components.EvidenceDetailContent{
-			EvidenceID: string(result.Reference.EvidenceID),
-			RunID:      string(result.Reference.RunID),
-			Category:   string(detail.Category),
-			Source:     sanitizeExternalText(detail.SourcePath, 1024),
-			Scope: fmt.Sprintf("%s / %s / generation %d",
+			Category: string(detail.Category),
+			Scope: fmt.Sprintf("%s / %s",
 				sanitizeExternalText(result.Reference.Scope.Context, 253),
-				sanitizeExternalText(result.Reference.Scope.Namespace, 63),
-				result.Reference.Scope.Generation),
-			Resource: fmt.Sprintf("%s %s %s/%s",
-				sanitizeExternalText(detail.Resource.APIVersion, 253),
+				sanitizeExternalText(result.Reference.Scope.Namespace, 63)),
+			Resource: fmt.Sprintf("%s %s/%s",
 				sanitizeExternalText(detail.Resource.Kind, 63),
 				sanitizeExternalText(detail.Resource.Namespace, 63),
 				sanitizeExternalText(detail.Resource.Name, 253)),
-			ObservedAt:      detail.ObservedAt.UTC().Format(time.RFC3339Nano),
-			State:           string(result.Reference.State),
-			Partial:         yesNo(partial),
-			Truncated:       yesNo(detail.Truncated),
-			SensitiveFilter: filter,
-			Projection:      sanitizeExternalText(detail.Projection, application.MaxUIEvidenceProjectionBytes),
+			ObservedAt:        detail.ObservedAt.UTC().Format(time.RFC3339Nano),
+			Status:            status,
+			SensitiveFiltered: detail.SensitiveFilter == application.UIEvidenceSensitiveFilterApplied,
+			Projection:        sanitizeExternalText(detail.Projection, application.MaxUIEvidenceProjectionBytes),
 		}, partial)
 	}
 }
@@ -896,13 +889,6 @@ func (model *Model) closeEvidenceInteraction() {
 func sameUIEvidenceIdentity(left, right application.UIEvidenceReference) bool {
 	return left.EvidenceID == right.EvidenceID && left.RunID == right.RunID &&
 		left.Scope == right.Scope && left.Sequence == right.Sequence
-}
-
-func yesNo(value bool) string {
-	if value {
-		return "yes"
-	}
-	return "no"
 }
 
 func quitCommand() tea.Cmd {
@@ -1239,7 +1225,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		if !model.finishPrivacyAction(result.RequestID) {
 			return
 		}
-		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active AgentRun was cancelled.")
+		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active diagnostic run was cancelled.")
 	case application.UICommandCancelPrivacy:
 		model.finishPrivacyAction(result.RequestID)
 	case application.UICommandApproveRestart, application.UICommandRejectRestart, application.UICommandExpireRestart:
@@ -1394,39 +1380,39 @@ func (model *Model) resetAfterHistoryDeletion() {
 func privacyReviewText(review application.PrivacyReview, lifecycle *application.SessionLifecycleReview) string {
 	var builder strings.Builder
 	if lifecycle != nil {
-		mode := "none"
+		mode := domain.PrivacyMode("")
 		if lifecycle.CurrentSession != nil {
-			mode = string(lifecycle.CurrentSession.PrivacyMode)
+			mode = lifecycle.CurrentSession.PrivacyMode
 		}
-		fmt.Fprintf(&builder, "Local persistence:\nPersistence mode: %s\n", mode)
+		builder.WriteString("Local persistence:\n")
 		switch mode {
-		case string(domain.PrivacyModeStandard):
-			builder.WriteString("Session content: retained until explicit Session deletion.\n")
-		case string(domain.PrivacyModeMinimal):
-			builder.WriteString("Session content: memory only and unavailable for cross-process resume.\n")
+		case domain.PrivacyModeStandard:
+			builder.WriteString("Session storage: history saved until explicit Session deletion.\n")
+		case domain.PrivacyModeMinimal:
+			builder.WriteString("Session storage: memory only and unavailable after this process exits.\n")
 		default:
-			builder.WriteString("Session content: no current Session.\n")
+			builder.WriteString("Session storage: no current Session.\n")
 		}
-		fmt.Fprintf(&builder, "Operational detail: %d days (can only be tightened; 0 keeps operational detail in memory only).\n", lifecycle.OperationalDetailRetentionDays)
-		fmt.Fprintf(&builder, "Read/lifecycle audit: %d days.\nApproval/write audit: %d days.\n", lifecycle.ReadAuditRetentionDays, lifecycle.WriteAuditRetentionDays)
-		builder.WriteString("Impact: minimal Sessions cannot be resumed across processes and retain no Message, Diagnosis, Tool, Evidence, or model-request detail.\n")
+		fmt.Fprintf(&builder, "Operational details: kept for %d days (can only be shortened; 0 means memory only).\n", lifecycle.OperationalDetailRetentionDays)
+		fmt.Fprintf(&builder, "Read and lifecycle audit: %d days.\nApproval and write audit: %d days.\n", lifecycle.ReadAuditRetentionDays, lifecycle.WriteAuditRetentionDays)
+		builder.WriteString("Impact: memory-only Sessions cannot be resumed after exit and retain no messages, diagnoses, cluster-read or observation details, or model-request details.\n")
 		builder.WriteString("Deletion is logical deletion, not forensic erasure; SQLite free pages, WAL, backups, snapshots, swap, and storage media may retain old bytes.\n\n")
 	}
-	fmt.Fprintf(&builder, "Destination: %s\nConsent policy: %s\nDecision: %s\n\nEligible data categories:\n",
-		sanitizeExternalText(review.Origin, 2048), review.PolicyVersion, review.Decision)
+	fmt.Fprintf(&builder, "Destination: %s\nPolicy version: %s\nConsent: %s\n\nData eligible to be sent:\n",
+		sanitizeExternalText(review.Origin, 2048), review.PolicyVersion, privacyDecisionLabel(review.Decision))
 	for _, category := range review.Categories {
-		state := "disabled"
+		state := "not included"
 		if category.Enabled {
-			state = "enabled"
+			state = "included"
 		}
-		fmt.Fprintf(&builder, "- [%s] %s: %s\n", state, category.ID, category.Description)
+		fmt.Fprintf(&builder, "- [%s] %s: %s\n", state, privacyCategoryLabel(category.ID), category.Description)
 	}
 	builder.WriteString("\nNever eligible:\n")
 	for _, value := range review.NeverEligible {
 		fmt.Fprintf(&builder, "- %s\n", value)
 	}
 	if lifecycle != nil {
-		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | T tighten retention | M new Session mode")
+		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | T shorten retention | M switch Session storage")
 		if lifecycle.CurrentSession != nil && lifecycle.CurrentSession.PrivacyMode == domain.PrivacyModeStandard {
 			builder.WriteString(" | E export redacted summary")
 		}
@@ -1439,6 +1425,38 @@ func privacyReviewText(review application.PrivacyReview, lifecycle *application.
 		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
 	}
 	return builder.String()
+}
+
+func privacyDecisionLabel(decision application.PrivacyDecision) string {
+	switch decision {
+	case application.PrivacyDecisionAccepted:
+		return "Accepted"
+	case application.PrivacyDecisionRejected:
+		return "Rejected"
+	case application.PrivacyDecisionRevoked:
+		return "Revoked"
+	default:
+		return "Not yet accepted"
+	}
+}
+
+func privacyCategoryLabel(category application.ModelDataCategory) string {
+	switch category {
+	case application.DataCategoryUserQuestion:
+		return "User question"
+	case application.DataCategorySafeConversationContext:
+		return "Conversation context"
+	case application.DataCategoryResourceReferences:
+		return "Resource references"
+	case application.DataCategoryProjectedStatus:
+		return "Kubernetes status"
+	case application.DataCategoryProjectedEvents:
+		return "Kubernetes events"
+	case application.DataCategoryRedactedContainerOutput:
+		return "Container output"
+	default:
+		return "Other bounded data"
+	}
 }
 
 func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1563,7 +1581,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 			model.transcript.AppendNotice(text)
 		}
 	}
-	model.transcript.AppendNotice("Session resumed. Historic Evidence is display-only and cannot support facts in a new AgentRun.")
+	model.transcript.AppendNotice("Session resumed. Saved observations are display-only and cannot support new facts until a new diagnostic run collects them again.")
 	if model.terminalFocused {
 		_ = model.composer.Focus()
 	}
@@ -1615,7 +1633,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
 	}
 	if changed {
-		model.transcript.AppendNotice("Scope changed. The selected Resource and old-generation Picker results were cleared.")
+		model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")
 	}
 }
 
@@ -1623,7 +1641,7 @@ func (model *Model) finishRunForScopeChange() {
 	if !model.run.Active {
 		return
 	}
-	const cancellation = "The AgentRun was cancelled because the scope changed."
+	const cancellation = "The diagnostic run was cancelled because the scope changed."
 	model.run.Active = false
 	model.run.Terminal = true
 	model.run.Status = "cancelled"
@@ -1646,7 +1664,7 @@ func statusText(status application.UIStatusResult) string {
 	}
 	run := "idle"
 	if status.RunActive {
-		run = "run active"
+		run = "diagnosing"
 	}
 	return fmt.Sprintf("Context: %s · Namespace: %s · %s · %s", contextName, namespace, access, run)
 }
@@ -1707,15 +1725,15 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		}
 		request := *event.Approval
 		content := components.ApprovalDialogContent{
-			Operation: string(request.Operation),
-			Scope: fmt.Sprintf("%s / %s / generation %d",
+			Operation: approvalOperationLabel(request.Operation),
+			Scope: fmt.Sprintf("%s / %s · scope revision %d",
 				sanitizeExternalText(request.Scope.Context, 253),
 				sanitizeExternalText(request.Scope.Namespace, 63), request.Scope.Generation),
-			Resource: fmt.Sprintf("%s %s %s/%s (UID %s)",
-				sanitizeExternalText(request.Target.APIVersion, 253),
+			Resource: fmt.Sprintf("%s %s/%s · API %s · UID %s",
 				sanitizeExternalText(request.Target.Kind, 63),
 				sanitizeExternalText(request.Target.Namespace, 63),
 				sanitizeExternalText(request.Target.Name, 253),
+				sanitizeExternalText(request.Target.APIVersion, 253),
 				sanitizeExternalText(request.Target.UID, 1024)),
 			Current:  sanitizeExternalText(request.CurrentSummary, 4096),
 			Proposed: sanitizeExternalText(request.ProposedSummary, 4096),
@@ -1781,11 +1799,11 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		if text == "" {
 			switch event.Kind {
 			case application.UIEventRunCompleted:
-				text = "The AgentRun completed without displayable text."
+				text = "The diagnostic run completed without a displayable result."
 			case application.UIEventRunCancelled:
-				text = "The AgentRun was cancelled."
+				text = "The diagnostic run was cancelled."
 			default:
-				text = "The AgentRun failed safely."
+				text = "The diagnostic run failed safely."
 			}
 		}
 		model.run.StreamedText = text
@@ -1810,16 +1828,23 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	return nil
 }
 
+func approvalOperationLabel(operation domain.ApprovalOperation) string {
+	if operation == domain.ApprovalOperationRestartDeployment {
+		return "Restart Deployment"
+	}
+	return "Unavailable operation"
+}
+
 func restartExecutionStatus(execution application.UIRestartExecution) string {
 	switch execution.State {
 	case application.UIRestartPatchAccepted:
-		return fmt.Sprintf("PATCH accepted. Observing Deployment generation %d with %d target replicas.", execution.TargetGeneration, execution.TargetReplicas)
+		return fmt.Sprintf("Restart request accepted by Kubernetes. Verifying Deployment generation %d with %d target replicas.", execution.TargetGeneration, execution.TargetReplicas)
 	case application.UIRestartPatchFailed:
-		return "The PATCH failed and will not be retried."
+		return "The restart request failed and will not be retried."
 	case application.UIRestartPatchOutcomeUnknown:
-		return "The PATCH outcome is unknown. It will not be retried automatically."
+		return "The restart request outcome is unknown. It will not be retried automatically."
 	case application.UIRestartNotAttempted:
-		return "The approved PATCH was not attempted. The approval cannot be reused."
+		return "The approved restart was not attempted. The approval cannot be reused."
 	case application.UIRestartRolloutProgress:
 		return fmt.Sprintf(
 			"Rollout progress: observed generation %d/%d; updated %d/%d; available %d/%d.",
@@ -1834,14 +1859,29 @@ func restartExecutionStatus(execution application.UIRestartExecution) string {
 			execution.AvailableReplicas, execution.TargetReplicas,
 		)
 	case application.UIRestartRolloutTimedOut:
-		return "PATCH accepted; rollout verification timed out without claiming success or PATCH failure."
+		return "Restart request accepted; rollout verification timed out without claiming success or request failure."
 	case application.UIRestartRolloutFailed:
-		return "PATCH accepted; rollout failed (" + string(execution.FailureCode) + ")."
+		return "Restart request accepted; rollout failed because " + restartRolloutFailureLabel(execution.FailureCode) + "."
 	case application.UIRestartRolloutUnavailable:
-		return "PATCH accepted; rollout verification became unavailable. The PATCH will not be retried."
+		return "Restart request accepted; rollout verification became unavailable. The request will not be retried."
 	case application.UIRestartResultAuditFailed:
 		return "High-priority error: the write result audit could not be stored after bounded retries."
 	default:
 		return "The restart result is unavailable."
+	}
+}
+
+func restartRolloutFailureLabel(code application.RestartRolloutFailureCode) string {
+	switch code {
+	case application.RestartRolloutFailureProgressDeadline:
+		return "the progress deadline was exceeded"
+	case application.RestartRolloutFailureReplica:
+		return "the Deployment reported a replica failure"
+	case application.RestartRolloutFailureTargetReplaced:
+		return "the Deployment was replaced"
+	case application.RestartRolloutFailureTargetChanged:
+		return "the Deployment changed during verification"
+	default:
+		return "verification reported a safe failure"
 	}
 }

@@ -57,7 +57,7 @@ Config, Domain, model-content, log, audit, error, SQLite, formatting, or generic
 serialization value.
 
 A bare `kupilot` starts the single-screen TUI even when endpoint, model, or key
-is absent. The UI reports `model/unconfigured` and opens the fixed model-setup
+is absent. The UI reports `model not configured` and opens the fixed model-setup
 flow. The flow collects endpoint, model identifier, credential, and one of two
 explicit storage choices: `Save locally` or `Use for this run`. The former
 discloses that the key is plaintext and not encrypted, then atomically publishes

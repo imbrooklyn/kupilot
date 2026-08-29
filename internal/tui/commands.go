@@ -45,7 +45,7 @@ func DispatchApplication(ctx context.Context, consumer ApplicationConsumer, mess
 	case ApplicationEvidenceDetailMsg:
 		result, err := consumer.QueryEvidenceDetail(ctx, request.Query)
 		if err != nil || result.Validate() != nil {
-			return applicationFailure(message, "Evidence detail is unavailable.")
+			return applicationFailure(message, "Observation detail is unavailable.")
 		}
 		return EvidenceDetailResultMsg{Result: result}
 	case ApplicationCommandMsg:

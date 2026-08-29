@@ -244,14 +244,8 @@ func (transcript Transcript) renderContent() string {
 			if steps := stepRenderer.View(); steps != "" {
 				rendered += "\n" + steps
 			}
-			for _, reference := range entry.EvidenceReferences {
-				marker := "  "
-				style := transcript.styles.Evidence
-				if transcript.selecting && reference.Index == transcript.selected {
-					marker = "› "
-					style = transcript.styles.Selected
-				}
-				rendered += "\n" + style.Render(fmt.Sprintf("%sEvidence %s · %s", marker, reference.ID, reference.State))
+			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences); references != "" {
+				rendered += "\n" + references
 			}
 		case EntryNotice:
 			rendered = transcript.styles.NoticeText.Render(entry.Text)
@@ -259,6 +253,36 @@ func (transcript Transcript) renderContent() string {
 		parts = append(parts, rendered)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (transcript Transcript) renderEvidenceReferences(references []EvidenceReference) string {
+	if len(references) == 0 || !transcript.selecting {
+		return ""
+	}
+	for position, reference := range references {
+		if reference.Index == transcript.selected {
+			return transcript.styles.Selected.Render(fmt.Sprintf(
+				"› Observation %d/%d · %s",
+				position+1,
+				len(references),
+				observationReferenceStatus(reference.State),
+			))
+		}
+	}
+	return ""
+}
+
+func observationReferenceStatus(state string) string {
+	switch state {
+	case "available":
+		return "ready"
+	case "partial":
+		return "partial"
+	case "expired":
+		return "expired"
+	default:
+		return "unavailable"
+	}
 }
 
 func (transcript Transcript) evidenceIndexes() []int {

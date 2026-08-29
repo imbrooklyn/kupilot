@@ -241,7 +241,7 @@ func (tool *GetResourceTool) project(
 	data.Resource = resource
 	metadata.merge(currentMetadata)
 	if currentMetadata.blocked {
-		warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+		warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 	}
 	status, currentMetadata, err := tool.safeStatus(observation)
 	if err != nil {
@@ -256,7 +256,7 @@ func (tool *GetResourceTool) project(
 		}
 		metadata.merge(current)
 		if current.blocked {
-			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 			continue
 		}
 		data.Labels = append(data.Labels, safeLabel{Key: label.Key, Value: value})
@@ -268,7 +268,7 @@ func (tool *GetResourceTool) project(
 		}
 		metadata.merge(current)
 		if current.blocked {
-			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 		}
 		data.Owners = append(data.Owners, projected)
 	}
@@ -280,7 +280,7 @@ func (tool *GetResourceTool) project(
 			}
 			metadata.merge(current)
 			if current.blocked {
-				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 			}
 			data.Conditions = append(data.Conditions, projected)
 		}
@@ -291,7 +291,7 @@ func (tool *GetResourceTool) project(
 			}
 			metadata.merge(current)
 			if current.blocked {
-				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 			}
 			data.Containers = append(data.Containers, projected)
 		}
@@ -302,7 +302,7 @@ func (tool *GetResourceTool) project(
 			}
 			metadata.merge(current)
 			if current.blocked {
-				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+				warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 			}
 			data.ServicePorts = append(data.ServicePorts, projected)
 		}
@@ -692,7 +692,7 @@ func fitGetResourceResult(
 		data.Truncated = data.Truncated || partial
 		currentWarnings := append([]domain.ToolResultWarning(nil), warnings...)
 		if outputTrimmed {
-			currentWarnings = appendWarning(currentWarnings, "output_limited", "The Tool returned a deterministic subset because the fixed output limit was reached.")
+			currentWarnings = appendWarning(currentWarnings, "output_limited", "The cluster read returned a deterministic subset because the fixed output limit was reached.")
 		}
 		raw, encodeErr := json.Marshal(data)
 		encoded := ""

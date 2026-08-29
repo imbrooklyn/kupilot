@@ -233,6 +233,47 @@ func TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection(t *testing.T) {
 	}
 }
 
+func TestSystemPromptAdmitsBoundedCurrentNamespaceKindList(t *testing.T) {
+	const question = "List Pods in the current Namespace."
+	input := testRunInput(t, question)
+	prompt, err := BuildSystemPrompt(input)
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt() error = %v", err)
+	}
+	for _, required := range []string{
+		"Namespace discovery means listing, discovering, or selecting Namespace objects",
+		"does not include observing allowlisted resource objects inside the already verified active Namespace",
+		"A bounded request to enumerate one admitted Kind inside the active Namespace is an admitted diagnostic observation",
+		"even when the user asks only for that list",
+		"for Pods in the current Namespace, select list_resources in the current response before returning a Diagnosis",
+		"do not classify the request as unsupported, defer the Tool call to a recommendation, or report the Evidence as absent",
+		"When the user requests the list without a health restriction, set health_filter to any",
+		"use abnormal only when the question explicitly asks for unhealthy resources",
+		"When an admitted Tool can directly obtain the fact requested by the user, select that Tool before returning the final Diagnosis",
+		"Do not recommend a future KuPilot Tool call or report an absent observation instead of attempting the admitted call now",
+		"When list_resources returns multiple resources, create one concise confirmed_facts item per resource",
+		"cite only that resource's Evidence ID, and never concatenate multiple resource rows into one statement",
+		"The runtime owns tabular and provenance presentation",
+		"do not add citation labels, table syntax, or other presentation markup to a statement",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("System Prompt missing admitted list policy %q", required)
+		}
+	}
+	request, err := BuildInitialModelRequest(input, testModelID)
+	if err != nil {
+		t.Fatalf("BuildInitialModelRequest() error = %v", err)
+	}
+	if len(request.Tools) != 6 || request.Tools[1].Name != domain.ToolNameListResources ||
+		!strings.Contains(request.Tools[1].Description, "A request for Pods in the current Namespace is supported") ||
+		!strings.Contains(request.Tools[1].Description, "use health_filter=any when no health restriction was requested") {
+		t.Fatalf("list_resources specification = %#v", request.Tools)
+	}
+	if request.Messages[1].Content != question || strings.Contains(request.Messages[0].Content, question) {
+		t.Fatalf("question placement = %#v", request.Messages)
+	}
+}
+
 func TestStoppedPolicyCreatesNoSubsequentModelOrToolCall(t *testing.T) {
 	input := testRunInput(t, "Inspect the selected Pod.")
 	request, err := BuildInitialModelRequest(input, testModelID)

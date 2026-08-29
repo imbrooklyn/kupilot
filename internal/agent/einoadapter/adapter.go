@@ -201,7 +201,7 @@ func invalidInputOutcome() agent.RunOutcome {
 	return agent.RunOutcome{
 		Status:      domain.AgentRunStatusFailed,
 		ErrorClass:  &class,
-		SafeMessage: "The Agent run input is invalid.",
+		SafeMessage: "The diagnostic request is invalid.",
 	}
 }
 
@@ -226,7 +226,7 @@ func normalizeFrameworkError(err error) error {
 		return &runtimeFailure{
 			status:      domain.AgentRunStatusCancelled,
 			class:       domain.SafeErrorClassCancelled,
-			safeMessage: "The Agent run was cancelled.",
+			safeMessage: "The diagnostic run was cancelled.",
 			stopReason:  agent.RunStopCancelled,
 			cause:       err,
 		}
@@ -235,7 +235,7 @@ func normalizeFrameworkError(err error) error {
 		return &runtimeFailure{
 			status:      domain.AgentRunStatusTimedOut,
 			class:       domain.SafeErrorClassTimeout,
-			safeMessage: "The Agent run reached its deadline.",
+			safeMessage: "The diagnostic run reached its time limit.",
 			stopReason:  agent.RunStopTimedOut,
 			cause:       err,
 		}

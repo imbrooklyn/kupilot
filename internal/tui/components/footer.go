@@ -58,7 +58,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if accessOnSecond {
 		lineTwo = access
 	}
-	for _, value := range []string{status.Approval, status.Resource, status.Run, status.Model, status.Privacy} {
+	for _, value := range []string{status.Approval, status.Privacy, status.Resource, status.Run, status.Model} {
 		if value == "" {
 			continue
 		}
@@ -77,42 +77,37 @@ func (footer Footer) View(width int, status FooterStatus) string {
 }
 
 func requiredFooterLine(width int, contextName, namespace, access string) (string, bool) {
-	full := "ctx/" + contextName + " · ns/" + namespace + " · " + access
+	full := "Context " + contextName + " · Namespace " + namespace + " · " + access
 	if lipgloss.Width(full) <= width {
 		return full, false
 	}
-	access = compactFooterAccess(access)
 
-	withoutAccessOverhead := lipgloss.Width("ctx/ · ns/")
+	withoutAccessOverhead := lipgloss.Width("Context  · Namespace ")
 	if width < withoutAccessOverhead+2 {
-		return clipFooterColumns("ctx/… ns/…", width), true
+		separatorWidth := lipgloss.Width(" / ")
+		nameBudget := max(2, width-separatorWidth)
+		contextBudget := max(1, nameBudget/2)
+		namespaceBudget := max(1, nameBudget-contextBudget)
+		return clipFooterColumns(
+			middleElideColumns(contextName, contextBudget)+" / "+middleElideColumns(namespace, namespaceBudget),
+			width,
+		), true
 	}
 	nameBudget := width - withoutAccessOverhead
 	contextBudget := max(1, nameBudget/2)
 	namespaceBudget := max(1, nameBudget-contextBudget)
-	withoutAccess := "ctx/" + middleElideColumns(contextName, contextBudget) +
-		" · ns/" + middleElideColumns(namespace, namespaceBudget)
+	withoutAccess := "Context " + middleElideColumns(contextName, contextBudget) +
+		" · Namespace " + middleElideColumns(namespace, namespaceBudget)
 
-	withAccessOverhead := lipgloss.Width("ctx/ · ns/ · " + access)
+	withAccessOverhead := lipgloss.Width("Context  · Namespace  · " + access)
 	if width >= withAccessOverhead+2 {
 		nameBudget = width - withAccessOverhead
 		contextBudget = max(1, nameBudget/2)
 		namespaceBudget = max(1, nameBudget-contextBudget)
-		return "ctx/" + middleElideColumns(contextName, contextBudget) +
-			" · ns/" + middleElideColumns(namespace, namespaceBudget) + " · " + access, false
+		return "Context " + middleElideColumns(contextName, contextBudget) +
+			" · Namespace " + middleElideColumns(namespace, namespaceBudget) + " · " + access, false
 	}
 	return clipFooterColumns(withoutAccess, width), true
-}
-
-func compactFooterAccess(value string) string {
-	switch value {
-	case "read-only":
-		return "RO"
-	case "scope switching":
-		return "switching"
-	default:
-		return "unverified"
-	}
 }
 
 func appendFooterSegment(line, value string, width int) string {
@@ -127,7 +122,7 @@ func appendFooterSegment(line, value string, width int) string {
 	if remaining < 4 {
 		return line
 	}
-	return line + " · " + middleElideColumns(value, remaining)
+	return line
 }
 
 func middleElideColumns(value string, width int) string {

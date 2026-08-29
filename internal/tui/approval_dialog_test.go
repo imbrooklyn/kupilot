@@ -28,12 +28,15 @@ func TestApprovalDialogDefaultsRejectAndEmitsOneBoundDecision(t *testing.T) {
 	}
 	view := model.render()
 	for _, want := range []string{
-		"Restart approval", "› Reject", "Current: Deployment generation 8",
+		"Restart approval", "Operation: Restart Deployment", "scope revision 7", "› Reject", "Current: Deployment generation 8",
 		"Proposed: Update only", string(request.Digest),
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dialog view missing %q", want)
 		}
+	}
+	if strings.Contains(view, "restart_deployment") || strings.Contains(view, "/ generation 7") {
+		t.Fatalf("approval dialog exposed protocol labels:\n%s", view)
 	}
 	model, decisionCmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	decision := commandFromCmd(t, decisionCmd)
@@ -70,8 +73,8 @@ func TestApprovalDialogRendersOrderedPatchAndRolloutResults(t *testing.T) {
 	accepted := testRestartExecution(request, 1, application.UIRestartPatchAccepted)
 	accepted.TargetGeneration, accepted.TargetReplicas = 9, 3
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(accepted)})
-	if !strings.Contains(model.render(), "PATCH accepted. Observing Deployment generation 9") {
-		t.Fatal("approval dialog did not render PATCH acceptance")
+	if view := model.render(); !strings.Contains(view, "Restart request accepted") || !strings.Contains(view, "generation 9 with 3 target replicas") {
+		t.Fatalf("approval dialog did not render restart-request acceptance:\n%s", view)
 	}
 	progress := testRestartExecution(request, 2, application.UIRestartRolloutProgress)
 	progress.TargetGeneration, progress.ObservedGeneration = 9, 8
@@ -91,7 +94,7 @@ func TestApprovalDialogRendersOrderedPatchAndRolloutResults(t *testing.T) {
 	terminal.UpdatedReplicas, terminal.AvailableReplicas, terminal.TargetReplicas = 2, 1, 3
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: restartExecutionUIEvent(terminal)})
 	if view := model.render(); !model.approvalDialog.Terminal() || !strings.Contains(view, "timed out") ||
-		!strings.Contains(view, "PATCH failure") {
+		!strings.Contains(view, "request failure") {
 		t.Fatalf("approval dialog did not distinguish rollout timeout:\n%s", view)
 	}
 	result := application.UIApprovalResult{
@@ -145,7 +148,7 @@ func TestRestartExecutionStatusDistinguishesTerminalOutcomes(t *testing.T) {
 		{
 			state:   application.UIRestartRolloutFailed,
 			failure: application.RestartRolloutFailureProgressDeadline,
-			want:    "progress_deadline_exceeded",
+			want:    "progress deadline was exceeded",
 		},
 		{state: application.UIRestartRolloutTimedOut, want: "timed out"},
 		{state: application.UIRestartRolloutUnavailable, want: "became unavailable"},
@@ -214,7 +217,7 @@ func TestApprovalDialogApproveRequiresExplicitSelectionAndRejectsStaleMessages(t
 	if model.pendingApproval == nil || model.pendingApprovalID != 0 || model.approvalDialog.Open() {
 		t.Fatal("matching approval result did not retain only the hidden expiry proof")
 	}
-	if !strings.Contains(model.render(), "approval/approved-not-executed") {
+	if !strings.Contains(model.render(), "approved · not executed") {
 		t.Fatal("footer did not expose the approved-not-executed state")
 	}
 	model, late := updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{

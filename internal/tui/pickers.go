@@ -304,7 +304,7 @@ func (model *Model) acceptScopeResult(result application.UIScopeResult) {
 	model.pendingScopeID = 0
 	model.scope.Switching = false
 	if model.run.Active {
-		const cancellation = "The AgentRun was cancelled because the scope changed."
+		const cancellation = "The diagnostic run was cancelled because the scope changed."
 		model.run.Active = false
 		model.run.Terminal = true
 		model.run.Status = "cancelled"
@@ -325,7 +325,7 @@ func (model *Model) acceptScopeResult(result application.UIScopeResult) {
 		Namespace:  sanitizeExternalText(result.Namespace, 63),
 		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
 	}
-	model.transcript.AppendNotice("Scope changed. The selected Resource and old-generation Picker results were cleared.")
+	model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")
 }
 
 func (model *Model) acceptResourceSelectionResult(result application.UIResourceSelectionResult) {
@@ -350,7 +350,7 @@ func (model *Model) acceptResourceSelectionResult(result application.UIResourceS
 		Namespace: result.Resource.Namespace, Name: result.Resource.Name,
 	})
 	model.pendingResource = ResourceView{}
-	model.transcript.AppendNotice("The Resource candidate was selected. It does not create Evidence or prove current existence.")
+	model.transcript.AppendNotice("Resource selected for the next question. Selection does not verify that it currently exists.")
 }
 
 func sanitizedResumedSession(value application.UIResumedSession) application.UIResumedSession {
@@ -393,7 +393,7 @@ func (model *Model) applyResumedSession(resumed application.UIResumedSession) {
 		_ = model.composer.Focus()
 	}
 	model.focus = FocusComposer
-	model.transcript.AppendNotice("Session resumed. History does not restore a live AgentRun, scope authority, or Resource verification.")
+	model.transcript.AppendNotice("Session resumed. History does not restore an active diagnostic run or verify the saved scope and resource.")
 }
 
 func resumeFailureText(code application.UIQueryFailureCode) string {
@@ -425,7 +425,7 @@ func scopeLabel(contextName, namespace string) string {
 	if namespace == "" {
 		namespace = "unavailable"
 	}
-	return "ctx/" + contextName + " · ns/" + namespace
+	return contextName + " / " + namespace
 }
 
 func (model *Model) setPickerLoading(kind application.UICompletionKind) {

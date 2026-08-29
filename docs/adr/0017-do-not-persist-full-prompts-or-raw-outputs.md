@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0036
 
 ## Context
 
@@ -21,20 +22,25 @@ ADR defines the narrower eligibility decision for prompts and raw outputs.
 
 ## Decision
 
-KuPilot will never persist an assembled prompt or raw external output in
-`v0.1`. This zero-day rule also applies to the admitted `v0.2` approval flow
-unless a future Accepted ADR explicitly changes the data category.
+KuPilot will never persist an assembled prompt or general raw external output
+in `v0.1`. This zero-day rule also applies to the admitted `v0.2` approval flow
+unless an Accepted ADR explicitly changes a narrow data category. ADR-0036
+admits one such exception: explicitly enabled, bounded model-failure details in
+the local rotating operational log, never in SQLite, audit, history, export, or
+model content.
 
 The prohibited durable forms are:
 
 - Complete system, developer, user-history, Tool, or context messages assembled
   as one model request.
-- Raw model requests, responses, stream chunks, headers, protocol events, error
-  bodies, or framework callback and checkpoint payloads.
+- Raw model requests, successful responses, stream chunks, headers, protocol
+  events, or framework callback and checkpoint payloads. The bounded failed
+  response-body prefix admitted by ADR-0036 is the only exception.
 - Raw Tool input or result envelopes, Kubernetes objects, Events, container
   output, or exec credential output.
-- Raw application or container logs, stack dumps, arbitrary error chains,
-  request dumps, debug bundles, and environment snapshots.
+- Raw application or container logs, request dumps, debug bundles, and
+  environment snapshots. The bounded model error chain and current-goroutine
+  stack admitted by ADR-0036 are the only exceptions.
 - A serialized copy of any prohibited form inside a text, JSON, metadata,
   attachment, audit, error, tracing, or fallback column.
 
@@ -67,10 +73,12 @@ ADR-0025. Minimal-persistence stores no user or assistant Message, Diagnosis,
 Evidence, Tool detail, model-request detail, final answer, or assembled model
 context. A storage or adapter failure never falls back to a raw dump.
 
-No debug flag, environment variable, configuration key, SQL migration, or
-support workflow may enable prohibited persistence. Adding such a category
-requires an Accepted ADR, threat-model and retention updates, an explicit
-schema migration, user-facing privacy review, and deterministic sink tests.
+No flag, environment variable, configuration key, SQL migration, or support
+workflow may enable any other prohibited persistence. Adding a category
+requires an Accepted ADR, threat-model and retention updates, user-facing
+privacy review, deterministic sink tests, and a schema migration only when a
+durable schema is affected. ADR-0036 defines the sole current configuration
+exception and does not change SQLite schema.
 
 ## Consequences
 
@@ -103,8 +111,10 @@ Costs and constraints:
 - Encrypting raw payloads in SQLite was rejected because the project does not
   include an encryption or key-management system and source minimization is the
   accepted control.
-- Allowing opt-in debug capture was rejected because configuration mistakes,
-  support instructions, and failure paths could bypass the normal sink policy.
+- Allowing broad opt-in debug capture was rejected because configuration
+  mistakes, support instructions, and failure paths could bypass the normal
+  sink policy. ADR-0036 instead admits only a fixed, bounded model-failure
+  projection with a visible warning and unchanged credential exclusions.
 - Relying only on a redactor was rejected because forbidden sources must be
   excluded before redaction and a detector cannot prove complete sanitization.
 
@@ -115,10 +125,12 @@ history anonymous or encrypted. Sanitized user Messages, Evidence, Diagnosis,
 and safe metadata may still reveal cluster or operational context and remain
 subject to owner-only files, retention, and user deletion.
 
-Raw content must also stay out of ordinary logs, AuditEvents, safe errors, TUI
-history, crash output, and future diagnostic exports. In-memory presence remains
-bounded by the current process and is still protected by source, scope,
-projection, sensitive-value, terminal, and model-egress controls.
+Raw content must also stay out of default operational logs, AuditEvents, safe
+errors, TUI history, crash output, and future diagnostic exports. The explicit
+ADR-0036 sensitive model-failure projection remains local, bounded, and outside
+runtime authority. In-memory presence remains bounded by the current process
+and is still protected by source, scope, projection, sensitive-value, terminal,
+and model-egress controls.
 
 ## Validation
 
@@ -130,8 +142,10 @@ adapters, TUI, audit, and persistence must:
 2. Use separate expected values for eligible projected derivatives so a safe
    Message or Evidence fact is not confused with a raw envelope.
 3. Prove prohibited canaries and complete serialized envelopes are absent from
-   every repository input, logical row, database file, WAL, ordinary log,
-   AuditEvent, safe error, TUI history, and restart recovery path.
+   every repository input, logical row, database file, WAL, default operational
+   log, AuditEvent, safe error, TUI history, and restart recovery path. The
+   ADR-0036 sensitive-log tests instead prove bounded admission and exact model
+   credential removal.
 4. Inspect schema and query allowlists for generic text, JSON, attachment,
    debug, trace, checkpoint, request, response, prompt, and raw-output escape
    paths.
@@ -159,3 +173,4 @@ must demonstrate these properties.
 - [ADR-0006: Use Eino Behind an Agent Adapter](0006-use-eino-behind-an-agent-adapter.md)
 - [ADR-0008: Use SQLite for Local Persistence](0008-use-sqlite-for-local-persistence.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0036: Record Bounded Model Failure Diagnostics](0036-record-bounded-safe-model-failure-diagnostics.md)

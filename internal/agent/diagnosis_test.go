@@ -62,7 +62,9 @@ func TestDiagnosisValidatorRejectsUnregisteredEvidenceAndExecutionClaims(t *test
 			t.Fatalf("rendered Diagnosis contains rejected claim %q", rejected)
 		}
 	}
-	if !strings.Contains(diagnosis.AnswerMarkdown, string(testEvidenceID)) || !strings.Contains(diagnosis.AnswerMarkdown, "Not executed") {
+	if strings.Contains(diagnosis.AnswerMarkdown, string(testEvidenceID)) ||
+		strings.Contains(diagnosis.AnswerMarkdown, "Supporting Evidence") ||
+		!strings.Contains(diagnosis.AnswerMarkdown, "Not executed") {
 		t.Fatalf("rendered Diagnosis = %s", diagnosis.AnswerMarkdown)
 	}
 }
@@ -273,6 +275,158 @@ func TestDiagnosisRecordsToolResultLevelTruncationWithoutEvidence(t *testing.T) 
 	if diagnosis.EvidenceDetailsState != domain.EvidenceDetailPartial ||
 		!hasMissingKind(diagnosis.MissingInformation, domain.MissingInformationTruncated) {
 		t.Fatalf("truncated Diagnosis = %#v", diagnosis)
+	}
+}
+
+func TestDiagnosisRendererUsesKubectlStyleTableAndKeepsEvidenceInternal(t *testing.T) {
+	input := testRunInput(t, "List Pods in the current Namespace.")
+	call, err := BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID: "call-1", Name: domain.ToolNameListResources,
+		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","purpose":"List Pods in the current Namespace."}`,
+	})
+	if err != nil {
+		t.Fatalf("BindToolCall() error = %v", err)
+	}
+	result := testToolResult(t, call, testEvidenceID, input.Scope().ActivatedAt)
+	ids := make([]domain.EvidenceID, 9)
+	result.Evidence = make([]domain.Evidence, len(ids))
+	result.ResourceSummaries = make([]domain.ResourceSummary, len(ids))
+	facts := make([]domain.ConfirmedFact, len(ids))
+	for index := range ids {
+		ids[index] = evidenceID(index)
+		evidence := testToolResult(t, call, ids[index], input.Scope().ActivatedAt).Evidence[0]
+		evidence.Resource.Name = fmt.Sprintf("sample-pod-%d", index+1)
+		evidence.Category = domain.EvidenceCategoryResourceStatus
+		evidence.Fact = fmt.Sprintf("Pod sample-pod-%d was observed; phase Running; ready 1 of 1.", index+1)
+		evidence.Fingerprint = domain.SHA256Hex(evidence.Fact)
+		result.Evidence[index] = evidence
+		status := domain.ResourceStatus{Phase: "Running", Ready: domain.Count(1), Desired: domain.Count(1)}
+		if index == 1 {
+			status = domain.ResourceStatus{Phase: "Succeeded", Reason: "Completed", Ready: domain.Count(0), Desired: domain.Count(1)}
+		}
+		result.ResourceSummaries[index] = domain.ResourceSummary{Reference: evidence.Resource, Status: status}
+		facts[index] = domain.ConfirmedFact{
+			Statement:   fmt.Sprintf("A validated observation exists for sample-pod-%d.", index+1),
+			EvidenceIDs: []domain.EvidenceID{ids[index]},
+		}
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("ToolResult.Validate() error = %v", err)
+	}
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if accepted, err := registry.AcceptToolResult(call, result); err != nil || accepted != len(ids) {
+		t.Fatalf("AcceptToolResult() = %d, %v", accepted, err)
+	}
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		ConfirmedFacts: facts,
+		Hypotheses: []domain.Hypothesis{{
+			Statement:             "The projected statuses may share a cause.",
+			SupportingEvidenceIDs: append([]domain.EvidenceID(nil), ids...),
+			Confidence:            domain.DiagnosisConfidenceLow,
+			Falsifier:             "A bounded follow-up observation shows unrelated conditions.",
+		}},
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt.Add(time.Millisecond)}, registry)
+	if err != nil {
+		t.Fatalf("ValidateDiagnosis() error = %v", err)
+	}
+	for index, id := range ids {
+		if strings.Contains(diagnosis.AnswerMarkdown, string(id)) ||
+			!strings.Contains(diagnosis.AnswerMarkdown, fmt.Sprintf("sample-pod-%d", index+1)) {
+			t.Fatalf("table row %d or hidden provenance = %s", index+1, diagnosis.AnswerMarkdown)
+		}
+	}
+	if !strings.Contains(diagnosis.AnswerMarkdown, "NAME          READY  STATUS") ||
+		!strings.Contains(diagnosis.AnswerMarkdown, "sample-pod-2  0/1    Completed") ||
+		strings.Contains(diagnosis.AnswerMarkdown, "was observed") ||
+		strings.Contains(diagnosis.AnswerMarkdown, "-----------") ||
+		strings.Contains(diagnosis.AnswerMarkdown, "Evidence") ||
+		len(diagnosis.ReferencedEvidenceIDs()) != len(ids) {
+		t.Fatalf("resource table or typed provenance = %s / %#v", diagnosis.AnswerMarkdown, diagnosis.ReferencedEvidenceIDs())
+	}
+}
+
+func TestDiagnosisResourceTablesUseKindSpecificReadableColumns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		kind       domain.ResourceKind
+		status     domain.ResourceStatus
+		wantHeader string
+		wantRow    string
+	}{
+		{
+			name: "Deployment", kind: domain.ResourceKindDeployment,
+			status: domain.ResourceStatus{
+				Ready: domain.Count(2), Desired: domain.Count(3), Available: domain.Count(1), Reason: "Progressing",
+			},
+			wantHeader: "NAME|READY|AVAILABLE|REASON",
+			wantRow:    "sample-deployment|2/3|1/3|Progressing",
+		},
+		{
+			name: "ReplicaSet", kind: domain.ResourceKindReplicaSet,
+			status: domain.ResourceStatus{
+				Desired: domain.Count(3), Ready: domain.Count(2), Available: domain.Count(1), Reason: "Progressing",
+			},
+			wantHeader: "NAME|DESIRED|READY|AVAILABLE|REASON",
+			wantRow:    "sample-replicaset|3|2|1|Progressing",
+		},
+		{
+			name: "Job", kind: domain.ResourceKindJob,
+			status: domain.ResourceStatus{
+				Phase: "Running", Desired: domain.Count(3), Succeeded: domain.Count(1), Failed: domain.Count(0), Reason: "Backoff",
+			},
+			wantHeader: "NAME|STATUS|COMPLETIONS|FAILED|REASON",
+			wantRow:    "sample-job|Running|1/3|0|Backoff",
+		},
+		{
+			name: "Service", kind: domain.ResourceKindService,
+			status:     domain.ResourceStatus{ServiceType: "ClusterIP"},
+			wantHeader: "NAME|TYPE",
+			wantRow:    "sample-service|ClusterIP",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			name := "sample-" + strings.ToLower(tt.name)
+			got := renderDiagnosisResourceStatusTable([]diagnosisResourceStatusRow{{summary: domain.ResourceSummary{
+				Reference: domain.ResourceRef{
+					APIVersion: tt.kind.APIVersion(), Kind: string(tt.kind), Namespace: "test-namespace", Name: name,
+				},
+				Status: tt.status,
+			}}})
+			lines := strings.Split(strings.TrimSpace(got), "\n")
+			if len(lines) != 2 || strings.Join(strings.Fields(lines[0]), "|") != tt.wantHeader ||
+				strings.Join(strings.Fields(lines[1]), "|") != tt.wantRow {
+				t.Fatalf("resource table = %q, want header %q and row %q", got, tt.wantHeader, tt.wantRow)
+			}
+			for _, forbidden := range []string{"Evidence", "was observed", "phase ", "projected."} {
+				if strings.Contains(got, forbidden) {
+					t.Fatalf("resource table contains implementation prose %q: %q", forbidden, got)
+				}
+			}
+		})
+	}
+}
+
+func TestDiagnosisRendererBreaksAggregatedBulkFactClauses(t *testing.T) {
+	t.Parallel()
+	fullwidthSemicolon := string(rune(0xff1b))
+	for _, separator := range []string{"; ", fullwidthSemicolon} {
+		statement := strings.Join([]string{
+			"Pod sample-1 has a projected status",
+			"Pod sample-2 has a projected status",
+			"Pod sample-3 has a projected status",
+			"Pod sample-4 has a projected status",
+		}, separator)
+		got := markdownConfirmedFactText(statement, 4)
+		if strings.Count(got, "\n    ") != 3 || strings.Contains(got, separator+"Pod sample-2") {
+			t.Fatalf("markdownConfirmedFactText(%q) = %q", separator, got)
+		}
 	}
 }
 

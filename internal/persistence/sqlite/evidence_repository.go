@@ -110,11 +110,11 @@ func (repository *EvidenceRepository) GetByID(ctx context.Context, id domain.Evi
 	if err := repository.db.handle.GetContext(ctx, &row, getEvidenceByIDSQL, id); errors.Is(err, sql.ErrNoRows) {
 		return domain.Evidence{}, ErrEvidenceNotFound
 	} else if err != nil {
-		return domain.Evidence{}, repositoryFailure(repository.db, "evidence_read_failed", "get_evidence", "KuPilot could not read Evidence.", err)
+		return domain.Evidence{}, repositoryFailure(repository.db, "evidence_read_failed", "get_evidence", "KuPilot could not read the supporting observation.", err)
 	}
 	value, err := row.domainEvidence()
 	if err != nil {
-		return domain.Evidence{}, repositoryFailure(repository.db, "evidence_row_invalid", "get_evidence", "KuPilot could not read Evidence safely.", err)
+		return domain.Evidence{}, repositoryFailure(repository.db, "evidence_row_invalid", "get_evidence", "KuPilot could not read the supporting observation safely.", err)
 	}
 	return value, nil
 }
@@ -129,26 +129,26 @@ func (repository *EvidenceRepository) ListByInvocation(ctx context.Context, invo
 	}
 	rows, err := repository.db.handle.QueryxContext(ctx, listEvidenceByInvocationSQL, invocationID)
 	if err != nil {
-		return nil, repositoryFailure(repository.db, "evidence_list_failed", "list_invocation_evidence", "KuPilot could not list Evidence.", err)
+		return nil, repositoryFailure(repository.db, "evidence_list_failed", "list_invocation_evidence", "KuPilot could not list supporting observations.", err)
 	}
 	defer rows.Close()
 	values := make([]domain.Evidence, 0, 101)
 	for rows.Next() {
 		var row evidenceRow
 		if err := rows.StructScan(&row); err != nil {
-			return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read Evidence safely.", err)
+			return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read a supporting observation safely.", err)
 		}
 		value, err := row.domainEvidence()
 		if err != nil || value.InvocationID != invocationID {
-			return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read Evidence safely.", err)
+			return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read a supporting observation safely.", err)
 		}
 		values = append(values, value)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repositoryFailure(repository.db, "evidence_list_failed", "list_invocation_evidence", "KuPilot could not list Evidence.", err)
+		return nil, repositoryFailure(repository.db, "evidence_list_failed", "list_invocation_evidence", "KuPilot could not list supporting observations.", err)
 	}
 	if len(values) > 100 {
-		return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read Evidence safely.", domain.ErrInvalidEvidence)
+		return nil, repositoryFailure(repository.db, "evidence_row_invalid", "list_invocation_evidence", "KuPilot could not read a supporting observation safely.", domain.ErrInvalidEvidence)
 	}
 	return values, nil
 }

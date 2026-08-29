@@ -46,7 +46,10 @@ func TestEvidenceDetailUpdateRejectsLateRequestRunScopeAndSequence(t *testing.T)
 
 	model, _ = updateModel(t, model, EvidenceDetailResultMsg{Result: accepted})
 	if content := model.View().Content; !strings.Contains(content, accepted.Detail.Projection) ||
-		!strings.Contains(content, string(reference.EvidenceID)) {
+		strings.Contains(content, string(reference.EvidenceID)) || strings.Contains(content, string(reference.RunID)) ||
+		!strings.Contains(content, "Observation detail") || !strings.Contains(content, "Type: Condition") ||
+		strings.Contains(content, "projected.status") || strings.Contains(content, "generation 7") ||
+		strings.Contains(content, "partial:") || strings.Contains(content, "truncated:") {
 		t.Fatalf("matching Evidence detail is not visible: %q", content)
 	}
 
@@ -147,8 +150,8 @@ func TestEvidenceDetailNarrowNoColorPartialAndExpiredStates(t *testing.T) {
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 40, Height: 28})
 	content := model.View().Content
 	if lipgloss.Width(content) > 40 || lipgloss.Height(content) > 28 || strings.Contains(content, "\x1b[") ||
-		!strings.Contains(content, "Esc or Enter to close") || !strings.Contains(content, "State: partial") ||
-		!strings.Contains(content, "yes · truncated: yes") {
+		!strings.Contains(content, "Esc or Enter to close") || !strings.Contains(content, "Status: partial") ||
+		strings.Contains(content, "partial:") || strings.Contains(content, "truncated:") {
 		t.Fatalf("narrow no-color partial detail is unusable: %dx%d\n%s", lipgloss.Width(content), lipgloss.Height(content), content)
 	}
 
@@ -220,7 +223,10 @@ func TestEvidenceDetailReferencesSurviveSafeHistoryRestore(t *testing.T) {
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
-	if !sameUIEvidenceIdentity(query.Reference, reference) || !strings.Contains(model.View().Content, string(reference.EvidenceID)) {
+	content := model.View().Content
+	if !sameUIEvidenceIdentity(query.Reference, reference) ||
+		strings.Contains(content, string(reference.EvidenceID)) ||
+		!strings.Contains(content, "Loading the saved observation") {
 		t.Fatalf("historic Evidence reference/query = %#v", query.Reference)
 	}
 }

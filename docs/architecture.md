@@ -741,8 +741,9 @@ ModelConfiguration is a validated, serializable, non-sensitive runtime value
 rather than a vendor SDK object. It contains the fixed provider kind
 `openai_compatible`, endpoint origin, configured model identifier, a fixed
 `runtime` marker showing that an opaque credential was selected before this
-boundary, bounded temperature and output settings, request timeout, required
-streaming and Tool-calling capabilities, and transport policy.
+boundary, an optional typed `none` reasoning-effort setting, bounded temperature
+and output settings, request timeout, required streaming and Tool-calling
+capabilities, and transport policy.
 
 The API key itself is a runtime transport credential and is not a
 ModelConfiguration field. A configuration adapter may extract it from the

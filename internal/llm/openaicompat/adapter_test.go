@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
 
 	"github.com/imbrooklyn/kupilot/internal/config"
@@ -62,15 +64,69 @@ func newFixtureAdapter(
 	apiKey string,
 	logger *slog.Logger,
 ) *Adapter {
+	return newFixtureAdapterWithDiagnostics(t, configuration, apiKey, logger, DiagnosticOptions{})
+}
+
+func newFixtureAdapterWithDiagnostics(
+	t *testing.T,
+	configuration domain.ModelConfiguration,
+	apiKey string,
+	logger *slog.Logger,
+	diagnostics DiagnosticOptions,
+) *Adapter {
 	t.Helper()
 	credential := newFixtureCredential(t, apiKey)
-	adapter, modelError := New(configuration, credential, logger)
+	adapter, modelError := New(configuration, credential, logger, diagnostics)
 	if modelError != nil {
 		credential.Destroy()
 		t.Fatalf("New() error = %v", modelError)
 	}
 	t.Cleanup(adapter.Close)
 	return adapter
+}
+
+func TestGPT5CompatibleIdentifierReachesHTTPWithFixedPayload(t *testing.T) {
+	t.Parallel()
+
+	server := newFixtureServer(t, "provider-rejection")
+	configuration := fixtureConfiguration(server.endpoint("reasoning-none"), time.Second)
+	configuration.Model = "gpt-5.6-luna"
+	configuration.ReasoningEffort = domain.ModelReasoningEffortNone
+	var logBuffer bytes.Buffer
+	adapter := newFixtureAdapter(
+		t,
+		configuration,
+		strings.Repeat("g", 43)+"-generated",
+		fixtureLogger(&logBuffer),
+	)
+	events := 0
+	modelError := adapter.Stream(context.Background(), fixtureModelRequest(), func(domain.ModelStreamEvent) {
+		events++
+	})
+	if modelError != nil {
+		t.Fatalf("model error = %v", modelError)
+	}
+	if events == 0 {
+		t.Fatal("reasoning-none fixture returned no accepted stream events")
+	}
+	requests := server.capturedRequests()
+	if len(requests) != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", len(requests))
+	}
+	var payload requestPayload
+	if err := json.Unmarshal(requests[0].Body, &payload); err != nil {
+		t.Fatalf("decode fixed request payload: %v", err)
+	}
+	if payload.Model != configuration.Model || payload.Temperature != configuration.Temperature ||
+		payload.MaxOutputTokens != configuration.MaxOutputTokens || payload.ReasoningEffort != domain.ModelReasoningEffortNone {
+		t.Fatalf(
+			"fixed payload model/reasoning/temperature/tokens = %q/%q/%v/%d",
+			payload.Model, payload.ReasoningEffort, payload.Temperature, payload.MaxOutputTokens,
+		)
+	}
+	if !strings.Contains(logBuffer.String(), `"outcome":"success"`) || !strings.Contains(logBuffer.String(), `"http_status":200`) {
+		t.Fatalf("successful model stream was not logged accurately: %s", logBuffer.String())
+	}
 }
 
 func newFixtureCredential(t *testing.T, apiKey string) *config.SecretValue {
@@ -730,6 +786,164 @@ func TestHTTPAndTransportErrorCanariesAreBoundedAndDiscarded(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("opt-in transport detail redacts credential", func(t *testing.T) {
+		t.Parallel()
+
+		apiCanary := strings.Repeat("q", 47) + "-generated"
+		causeCanary := strings.Repeat("r", 49) + "-generated"
+		credential := newFixtureCredential(t, apiCanary)
+		var logBuffer bytes.Buffer
+		adapter, modelError := newAdapterWithDiagnostics(
+			fixtureConfiguration("http://127.0.0.1:8080/v1", time.Second),
+			credential,
+			fixtureLogger(&logBuffer),
+			roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("%s: %s", causeCanary, request.Header.Get("Authorization"))
+			}),
+			DiagnosticOptions{Sensitive: true},
+		)
+		if modelError != nil {
+			credential.Destroy()
+			t.Fatalf("newAdapterWithDiagnostics() error = %v", modelError)
+		}
+		defer adapter.Close()
+
+		modelError = adapter.Stream(context.Background(), fixtureModelRequest(), func(domain.ModelStreamEvent) {})
+		if modelError == nil || modelError.Class() != domain.SafeErrorClassUnavailable {
+			t.Fatalf("model error = %#v, want unavailable", modelError)
+		}
+		content := logBuffer.String()
+		if !strings.Contains(content, causeCanary) || !strings.Contains(content, `"sensitive_error_chain"`) ||
+			!strings.Contains(content, sensitiveRedactionMarker) {
+			t.Fatalf("sensitive transport detail is incomplete: %s", content)
+		}
+		if strings.Contains(content, apiCanary) {
+			t.Fatal("sensitive transport detail contains the model credential")
+		}
+	})
+
+	t.Run("opt-in provider body is bounded and credential-redacted", func(t *testing.T) {
+		t.Parallel()
+
+		apiCanary := strings.Repeat("u", 47) + "-generated"
+		providerCanary := strings.Repeat("v", 49) + "-generated"
+		otherCredentialCanary := "Bearer " + strings.Repeat("w", 49) + "-generated"
+		unsafeControl := "\x1b[31m\u202e"
+		server := newFixtureServer(t, providerCanary+" "+apiCanary+" "+otherCredentialCanary+unsafeControl)
+		var logBuffer bytes.Buffer
+		adapter := newFixtureAdapterWithDiagnostics(
+			t,
+			fixtureConfiguration(server.endpoint("error-400"), time.Second),
+			apiCanary,
+			fixtureLogger(&logBuffer),
+			DiagnosticOptions{Sensitive: true},
+		)
+		modelError := adapter.Stream(context.Background(), fixtureModelRequest(), func(domain.ModelStreamEvent) {})
+		if modelError == nil || modelError.Class() != domain.SafeErrorClassUnsupported {
+			t.Fatalf("model error = %#v, want unsupported", modelError)
+		}
+		content := logBuffer.String()
+		for _, want := range []string{
+			`"sensitive_endpoint"`, `"sensitive_model"`, `"sensitive_error_chain"`,
+			`"sensitive_provider_error_body"`, providerCanary, sensitiveRedactionMarker,
+		} {
+			if !strings.Contains(content, want) {
+				t.Errorf("sensitive provider diagnostic does not contain %q: %s", want, content)
+			}
+		}
+		if strings.Contains(content, apiCanary) {
+			t.Fatal("sensitive provider diagnostic contains the model credential")
+		}
+		if strings.Contains(content, otherCredentialCanary) || strings.Contains(content, "\\u001b") ||
+			strings.Contains(content, "\\u202e") || strings.Contains(content, "\u202e") {
+			t.Fatal("sensitive provider diagnostic contains another credential or unsafe terminal control")
+		}
+	})
+}
+
+func TestModelRequestErrorMappingUsesObservedHTTPStatusWithoutRetainingRawCause(t *testing.T) {
+	t.Parallel()
+
+	canary := strings.Repeat("d", 49) + "-generated"
+	tests := []struct {
+		name       string
+		cause      error
+		status     int
+		entered    bool
+		cancel     bool
+		wantCode   domain.ModelErrorCode
+		wantCause  modelFailureCause
+		wantStatus int
+	}{
+		{
+			name: "generic SDK error after bad request", status: http.StatusBadRequest,
+			wantCode: domain.ModelErrorCodeUnsupportedResponse, wantCause: modelFailureHTTPStatus, wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "generic SDK error after server failure", status: http.StatusBadGateway,
+			wantCode: domain.ModelErrorCodeServiceUnavailable, wantCause: modelFailureHTTPStatus, wantStatus: http.StatusBadGateway,
+		},
+		{
+			name: "generic SDK error after accepted stream", status: http.StatusOK,
+			wantCode: domain.ModelErrorCodeMalformedStream, wantCause: modelFailureStreamProtocol, wantStatus: http.StatusOK,
+		},
+		{
+			name:     "generic SDK error before transport",
+			wantCode: domain.ModelErrorCodeUnsupportedResponse, wantCause: modelFailureTransportValidation,
+		},
+		{
+			name:     "API error without status before transport",
+			cause:    &einoopenai.APIError{Message: canary},
+			wantCode: domain.ModelErrorCodeUnsupportedResponse, wantCause: modelFailureTransportValidation,
+		},
+		{
+			name: "timeout before transport", cause: context.DeadlineExceeded,
+			wantCode: domain.ModelErrorCodeTimeout, wantCause: modelFailureTransportTimeout,
+		},
+		{
+			name: "generic transport error before response", entered: true,
+			wantCode: domain.ModelErrorCodeServiceUnavailable, wantCause: modelFailureTransportUnavailable,
+		},
+		{
+			name: "cancellation wins over observed response", status: http.StatusBadRequest, cancel: true,
+			wantCode: domain.ModelErrorCodeCancelled, wantCause: modelFailureContextCancelled, wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, current := range tests {
+		current := current
+		t.Run(current.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			if current.cancel {
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			state := &transportRequestState{}
+			state.setHTTPStatus(current.status)
+			if current.entered {
+				state.markTransportEntered()
+			}
+			cause := current.cause
+			if cause == nil {
+				cause = fmt.Errorf("wrapped transport failure: %w", errors.New(canary))
+			}
+			failure := mapModelRequestError(ctx, cause, state)
+			if failure.code != current.wantCode || failure.cause != current.wantCause || failure.httpStatus != current.wantStatus {
+				t.Fatalf(
+					"failure = code %q, cause %q, status %d; want %q, %q, %d",
+					failure.code, failure.cause, failure.httpStatus,
+					current.wantCode, current.wantCause, current.wantStatus,
+				)
+			}
+			if strings.Contains(fmt.Sprintf("%#v", failure), canary) {
+				t.Fatal("safe model failure diagnostics retained the raw cause")
+			}
+		})
+	}
 }
 
 func TestSameOriginTemporaryRedirectPreservesBoundedPostAndAuthorization(t *testing.T) {

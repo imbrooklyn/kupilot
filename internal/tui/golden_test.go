@@ -56,10 +56,10 @@ func TestGoldenStructureAfterANSIRemoval(t *testing.T) {
 		content := sanitizeExternalText(raw, 0)
 		questionAt := strings.Index(content, "Why is payment-api unavailable?")
 		agentAt := strings.Index(content, "The Deployment has no available replicas.")
-		toolAt := strings.Index(content, "get_resource · succeeded")
+		toolAt := strings.Index(content, "Inspect resource · done")
 		composerAt := strings.Index(content, "/resource pay")
 		candidateAt := strings.Index(content, "Deployment/payment-api")
-		footerAt := strings.Index(content, "ctx/development")
+		footerAt := strings.Index(content, "Context development")
 		if !(questionAt >= 0 && questionAt < agentAt && agentAt < toolAt && toolAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
 			t.Fatalf("theme %v has invalid structural order", mode)
 		}

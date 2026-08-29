@@ -28,6 +28,9 @@ func Validate(config *Config) error {
 	if config.Model.ProviderKind != ProviderOpenAICompatible {
 		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "model.provider_kind must be openai_compatible.")
 	}
+	if config.Model.ReasoningEffort != "" && config.Model.ReasoningEffort != ModelReasoningEffortNone {
+		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "model.reasoning_effort must be omitted or set to none.")
+	}
 	if math.IsNaN(config.Model.Temperature) || math.IsInf(config.Model.Temperature, 0) || config.Model.Temperature < 0 || config.Model.Temperature > 0.2 {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "model.temperature must be between 0 and 0.2.")
 	}

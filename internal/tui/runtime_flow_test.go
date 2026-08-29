@@ -63,13 +63,15 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 		Command: application.UICommandShowPrivacy, RequestID: show.RequestID, Privacy: &review, Lifecycle: &lifecycle,
 	}})
 	frame := model.render()
-	for _, want := range []string{"https://model.example", application.PrivacyPolicyVersion, "user_question", "redacted_container_output", "Never eligible"} {
+	for _, want := range []string{"https://model.example", application.PrivacyPolicyVersion, "User question", "Container output", "Never eligible"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("privacy frame missing %q", want)
 		}
 	}
-	if strings.Contains(frame, "api-key-sink-canary") {
-		t.Fatal("privacy frame contained a credential canary")
+	for _, forbidden := range []string{"user_question", "redacted_container_output", "api-key-sink-canary"} {
+		if strings.Contains(frame, forbidden) {
+			t.Fatalf("privacy frame contained internal or sensitive value %q", forbidden)
+		}
 	}
 
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'l'})
@@ -128,11 +130,22 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 	}})
 	frame := model.render()
 	for _, want := range []string{
-		"Persistence mode: standard", "Operational detail: 30 days", "Read/lifecycle audit: 90 days",
-		"Approval/write audit: 180 days", "minimal Sessions cannot be resumed", "not forensic erasure",
+		"Session storage: history saved", "Operational details: kept for 30 days", "Read and lifecycle audit: 90 days",
+		"Approval and write audit: 180 days", "memory-only Sessions cannot be resumed", "not forensic erasure",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("privacy lifecycle frame missing %q", want)
+		}
+	}
+	reviewText := privacyReviewText(privacy, &lifecycle)
+	for _, want := range []string{"Consent: Not yet accepted", "User question", "Conversation context", "Kubernetes status", "Container output"} {
+		if !strings.Contains(reviewText, want) {
+			t.Fatalf("privacy review missing readable label %q: %q", want, reviewText)
+		}
+	}
+	for _, forbidden := range []string{"safe_conversation_context", "resource_names_and_references", "projected_kubernetes_status", "redacted_container_output"} {
+		if strings.Contains(reviewText, forbidden) {
+			t.Fatalf("privacy review exposed internal category %q: %q", forbidden, reviewText)
 		}
 	}
 	if model.EditorCount() != 1 {
@@ -143,8 +156,8 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 	minimalSession.PrivacyMode = domain.PrivacyModeMinimal
 	minimalLifecycle.CurrentSession = &minimalSession
 	minimalText := privacyReviewText(privacy, &minimalLifecycle)
-	if !strings.Contains(minimalText, "Session content: memory only") ||
-		strings.Contains(minimalText, "Session content: retained until") {
+	if !strings.Contains(minimalText, "Session storage: memory only") ||
+		strings.Contains(minimalText, "Session storage: history saved") {
 		t.Fatalf("minimal persistence impact was not rendered accurately: %q", minimalText)
 	}
 
@@ -371,8 +384,8 @@ func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing
 		wantStatus string
 	}{
 		{name: "completion", terminal: application.UIEventRunCompleted, text: "Final diagnosis.", wantStatus: "completed"},
-		{name: "cancellation", terminal: application.UIEventRunCancelled, text: "The AgentRun was cancelled.", wantStatus: "cancelled"},
-		{name: "safe error", terminal: application.UIEventRunFailed, text: "The AgentRun failed safely.", wantStatus: "failed"},
+		{name: "cancellation", terminal: application.UIEventRunCancelled, text: "The diagnostic run was cancelled.", wantStatus: "cancelled"},
+		{name: "safe error", terminal: application.UIEventRunFailed, text: "The diagnostic run failed safely.", wantStatus: "failed"},
 	}
 
 	for _, tt := range tests {
@@ -433,7 +446,7 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
 	}
 	if !model.run.PersistenceDegraded || model.run.Status != "completed" ||
-		!strings.Contains(model.footerView(), "run/completed-degraded") {
+		!strings.Contains(model.footerView(), "diagnosis complete · storage degraded") {
 		t.Fatalf("degraded terminal run = %#v; footer=%q", model.run, model.footerView())
 	}
 	entries := model.transcript.Entries()
@@ -466,7 +479,7 @@ func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "The AgentRun was cancelled.",
+		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
 	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "next question" {
 		t.Fatal("ordinary cancellation exited or discarded the draft")
@@ -487,7 +500,7 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "The AgentRun was cancelled.",
+		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
 	if !commandQuits(cmd) || model.quitAfterCancel {
 		t.Fatal("terminal cancellation did not complete bounded exit")

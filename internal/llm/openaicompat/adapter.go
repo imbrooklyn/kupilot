@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -21,13 +22,47 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
 const (
-	maxModelRedirects           = 3
-	maxModelResponseHeaderBytes = 64 * 1024
-	einoCredentialPlaceholder   = "kupilot-transport-managed"
+	maxModelRedirects            = 3
+	maxModelResponseHeaderBytes  = 64 * 1024
+	einoCredentialPlaceholder    = "kupilot-transport-managed"
+	modelRequestLogEvent         = "model_request"
+	maxSensitiveErrorLogBytes    = 16 * 1024
+	maxSensitiveEndpointLogBytes = 4096
+	maxSensitiveModelLogBytes    = 128
+	sensitiveRedactionMarker     = "[REDACTED]"
 )
+
+type modelFailureCause string
+
+const (
+	modelFailureAdapterInvariant     modelFailureCause = "adapter_invariant"
+	modelFailureContextCancelled     modelFailureCause = "context_cancelled"
+	modelFailureDeadlineExceeded     modelFailureCause = "deadline_exceeded"
+	modelFailureHTTPStatus           modelFailureCause = "http_status"
+	modelFailureRedirectPolicy       modelFailureCause = "redirect_policy"
+	modelFailureResponseMedia        modelFailureCause = "response_media"
+	modelFailureStreamLimit          modelFailureCause = "stream_limit"
+	modelFailureStreamProtocol       modelFailureCause = "stream_protocol"
+	modelFailureTransportTimeout     modelFailureCause = "transport_timeout"
+	modelFailureTransportUnavailable modelFailureCause = "transport_unavailable"
+	modelFailureTransportValidation  modelFailureCause = "transport_validation"
+)
+
+type modelFailure struct {
+	code       domain.ModelErrorCode
+	cause      modelFailureCause
+	httpStatus int
+}
+
+// DiagnosticOptions controls explicitly opted-in local model-failure detail.
+// Sensitive mode never admits the transport credential or Authorization.
+type DiagnosticOptions struct {
+	Sensitive bool
+}
 
 var (
 	errRedirectOriginDenied      = errors.New("model redirect origin denied")
@@ -49,6 +84,7 @@ type Adapter struct {
 	model         *einoopenai.ChatModel
 	client        *http.Client
 	logger        *slog.Logger
+	diagnostics   DiagnosticOptions
 	withTimeout   func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 
 	lifecycleMu sync.RWMutex
@@ -64,8 +100,9 @@ func New(
 	configuration domain.ModelConfiguration,
 	credential *config.SecretValue,
 	logger *slog.Logger,
+	diagnostics DiagnosticOptions,
 ) (*Adapter, *domain.ModelError) {
-	return newAdapter(configuration, credential, logger, nil)
+	return newAdapterWithDiagnostics(configuration, credential, logger, nil, diagnostics)
 }
 
 func newAdapter(
@@ -73,6 +110,16 @@ func newAdapter(
 	credential *config.SecretValue,
 	logger *slog.Logger,
 	baseTransport http.RoundTripper,
+) (*Adapter, *domain.ModelError) {
+	return newAdapterWithDiagnostics(configuration, credential, logger, baseTransport, DiagnosticOptions{})
+}
+
+func newAdapterWithDiagnostics(
+	configuration domain.ModelConfiguration,
+	credential *config.SecretValue,
+	logger *slog.Logger,
+	baseTransport http.RoundTripper,
+	diagnostics DiagnosticOptions,
 ) (*Adapter, *domain.ModelError) {
 	if configuration.Validate() != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInvalidRequest, "model-configuration")
@@ -100,15 +147,14 @@ func newAdapter(
 		},
 		CheckRedirect: redirectPolicy(origin),
 	}
-	maximumTokens := configuration.MaxOutputTokens
-	temperature := float32(configuration.Temperature)
+	// The fixed payload modifier below owns the actual request values. Leaving
+	// optional SDK scaffolding parameters unset prevents vendor model-name
+	// heuristics from rejecting a valid OpenAI-compatible request before HTTP.
 	chatModel, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
-		APIKey:      einoCredentialPlaceholder,
-		HTTPClient:  client,
-		BaseURL:     strings.TrimRight(configuration.Endpoint, "/"),
-		Model:       configuration.Model,
-		MaxTokens:   &maximumTokens,
-		Temperature: &temperature,
+		APIKey:     einoCredentialPlaceholder,
+		HTTPClient: client,
+		BaseURL:    strings.TrimRight(configuration.Endpoint, "/"),
+		Model:      configuration.Model,
 	})
 	if err != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
@@ -122,6 +168,7 @@ func newAdapter(
 		model:         chatModel,
 		client:        client,
 		logger:        logger,
+		diagnostics:   diagnostics,
 		withTimeout:   context.WithTimeout,
 	}, nil
 }
@@ -232,13 +279,19 @@ func (adapter *Adapter) Stream(
 
 	requestContext, cancel := adapter.withTimeout(ctx, adapter.configuration.RequestTimeout)
 	defer cancel()
-	state := &transportRequestState{}
+	state := &transportRequestState{sensitiveDiagnostics: adapter.diagnostics.Sensitive}
 	requestContext = context.WithValue(requestContext, transportRequestStateKey{}, state)
 	// KuPilot does not install Eino global callbacks. Reinitializing the local
 	// callback context prevents caller-owned handlers from observing model data.
 	requestContext = einocallbacks.InitCallbacks(requestContext, nil)
 
-	adapter.logger.Info("model request started", "request_id", request.ID)
+	adapter.logger.Info(
+		modelRequestLogEvent,
+		"component", "model",
+		"operation", string(domain.ModelOperationRequest),
+		"phase", "started",
+		"request_id", string(request.ID),
+	)
 	stream, err := adapter.model.Stream(
 		requestContext,
 		mapEinoMessages(request.Messages),
@@ -246,7 +299,13 @@ func (adapter *Adapter) Stream(
 		einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
 	)
 	if err != nil {
-		return adapter.finishWithError(request.ID, mapModelRequestError(requestContext, err), domain.ModelOperationRequest)
+		return adapter.finishWithError(
+			request.ID,
+			mapModelRequestError(requestContext, err, state),
+			domain.ModelOperationRequest,
+			err,
+			state,
+		)
 	}
 	defer func() {
 		stream.Close()
@@ -265,18 +324,20 @@ func (adapter *Adapter) Stream(
 	if providerRequestID := state.requestID(); providerRequestID != "" {
 		metadata := domain.ModelResponseMetadata{ProviderRequestID: providerRequestID}
 		if metadata.Validate() != nil || credentialAppearsInStrings(adapter.credential, providerRequestID) {
-			return adapter.finishWithError(request.ID, domain.ModelErrorCodeMalformedStream, domain.ModelOperationStream)
+			return adapter.finishWithError(request.ID, modelFailure{
+				code: domain.ModelErrorCodeMalformedStream, cause: modelFailureStreamProtocol, httpStatus: state.status(),
+			}, domain.ModelOperationStream, nil, state)
 		}
 		if modelError := decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventMetadata, Metadata: &metadata}); modelError != nil {
-			adapter.logFinished(request.ID, modelError)
+			adapter.logFinished(request.ID, modelError, failureForModelError(modelError, state.status()), nil, state)
 			return modelError
 		}
 	}
 	if modelError := decoder.decode(stream); modelError != nil {
-		adapter.logFinished(request.ID, modelError)
+		adapter.logFinished(request.ID, modelError, failureForModelError(modelError, state.status()), decoder.rawFailure, state)
 		return modelError
 	}
-	adapter.logFinished(request.ID, nil)
+	adapter.logFinished(request.ID, nil, modelFailure{httpStatus: state.status()}, nil, state)
 	return nil
 }
 
@@ -353,31 +414,76 @@ func (scanner *credentialScanner) Contains(fragment string) bool {
 	return found
 }
 
-func mapModelRequestError(ctx context.Context, cause error) domain.ModelErrorCode {
+func mapModelRequestError(ctx context.Context, cause error, state *transportRequestState) modelFailure {
 	if code, cancelled := contextModelErrorCode(ctx); cancelled {
-		return code
+		return modelFailure{code: code, cause: contextFailureCause(code), httpStatus: observedHTTPStatus(state)}
 	}
 	switch {
 	case errors.Is(cause, errRedirectOriginDenied):
-		return domain.ModelErrorCodeRedirectDenied
+		return modelFailure{
+			code: domain.ModelErrorCodeRedirectDenied, cause: modelFailureRedirectPolicy, httpStatus: observedHTTPStatus(state),
+		}
 	case errors.Is(cause, errRedirectLimitReached), errors.Is(cause, errRedirectUnsupported),
-		errors.Is(cause, errTransportRequestInvalid), errors.Is(cause, errUnsupportedResponseMedia),
-		errors.Is(cause, errUnsupportedProviderChunk):
-		return domain.ModelErrorCodeUnsupportedResponse
+		errors.Is(cause, errTransportRequestInvalid):
+		return modelFailure{
+			code: domain.ModelErrorCodeUnsupportedResponse, cause: modelFailureTransportValidation, httpStatus: observedHTTPStatus(state),
+		}
+	case errors.Is(cause, errUnsupportedResponseMedia):
+		return modelFailure{
+			code: domain.ModelErrorCodeUnsupportedResponse, cause: modelFailureResponseMedia, httpStatus: observedHTTPStatus(state),
+		}
+	case errors.Is(cause, errUnsupportedProviderChunk):
+		return modelFailure{
+			code: domain.ModelErrorCodeUnsupportedResponse, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state),
+		}
 	case errors.Is(cause, errModelResponseLimitReached):
-		return domain.ModelErrorCodeStreamLimitExceeded
+		return modelFailure{
+			code: domain.ModelErrorCodeStreamLimitExceeded, cause: modelFailureStreamLimit, httpStatus: observedHTTPStatus(state),
+		}
 	case errors.Is(cause, errMalformedProviderChunk):
-		return domain.ModelErrorCodeMalformedStream
+		return modelFailure{
+			code: domain.ModelErrorCodeMalformedStream, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state),
+		}
+	}
+	if status := observedHTTPStatus(state); status != 0 {
+		if status == http.StatusOK {
+			return modelFailure{
+				code: domain.ModelErrorCodeMalformedStream, cause: modelFailureStreamProtocol, httpStatus: status,
+			}
+		}
+		return modelFailure{code: mapHTTPStatus(status), cause: modelFailureHTTPStatus, httpStatus: status}
 	}
 	var apiError *einoopenai.APIError
 	if errors.As(cause, &apiError) {
-		return mapHTTPStatus(apiError.HTTPStatusCode)
+		if status := validHTTPStatus(apiError.HTTPStatusCode); status != 0 {
+			return modelFailure{
+				code: mapHTTPStatus(status), cause: modelFailureHTTPStatus,
+				httpStatus: status,
+			}
+		}
 	}
 	var networkError net.Error
 	if errors.As(cause, &networkError) && networkError.Timeout() {
-		return domain.ModelErrorCodeTimeout
+		return modelFailure{code: domain.ModelErrorCodeTimeout, cause: modelFailureTransportTimeout}
 	}
-	return domain.ModelErrorCodeServiceUnavailable
+	if state != nil && !state.transportEntered() {
+		return modelFailure{code: domain.ModelErrorCodeUnsupportedResponse, cause: modelFailureTransportValidation}
+	}
+	return modelFailure{code: domain.ModelErrorCodeServiceUnavailable, cause: modelFailureTransportUnavailable}
+}
+
+func observedHTTPStatus(state *transportRequestState) int {
+	if state == nil {
+		return 0
+	}
+	return state.status()
+}
+
+func validHTTPStatus(status int) int {
+	if status < 100 || status > 599 {
+		return 0
+	}
+	return status
 }
 
 func mapHTTPStatus(status int) domain.ModelErrorCode {
@@ -395,22 +501,147 @@ func mapHTTPStatus(status int) domain.ModelErrorCode {
 	}
 }
 
-func (adapter *Adapter) finishWithError(requestID domain.ModelRequestID, code domain.ModelErrorCode, operation domain.ModelOperation) *domain.ModelError {
-	modelError := domain.NewModelError(code, operation, string(requestID))
-	adapter.logFinished(requestID, modelError)
+func contextFailureCause(code domain.ModelErrorCode) modelFailureCause {
+	if code == domain.ModelErrorCodeTimeout {
+		return modelFailureDeadlineExceeded
+	}
+	return modelFailureContextCancelled
+}
+
+func failureForModelError(modelError *domain.ModelError, status int) modelFailure {
+	if modelError == nil {
+		return modelFailure{httpStatus: status}
+	}
+	failure := modelFailure{code: modelError.Code(), httpStatus: validHTTPStatus(status)}
+	switch modelError.Code() {
+	case domain.ModelErrorCodeAuthenticationFailed, domain.ModelErrorCodePermissionDenied,
+		domain.ModelErrorCodeRateLimited:
+		failure.cause = modelFailureHTTPStatus
+	case domain.ModelErrorCodeServiceUnavailable:
+		if failure.httpStatus != 0 {
+			failure.cause = modelFailureHTTPStatus
+		} else {
+			failure.cause = modelFailureTransportUnavailable
+		}
+	case domain.ModelErrorCodeUnsupportedResponse, domain.ModelErrorCodeMalformedStream:
+		failure.cause = modelFailureStreamProtocol
+	case domain.ModelErrorCodeStreamLimitExceeded:
+		failure.cause = modelFailureStreamLimit
+	case domain.ModelErrorCodeRedirectDenied:
+		failure.cause = modelFailureRedirectPolicy
+	case domain.ModelErrorCodeTimeout:
+		failure.cause = modelFailureDeadlineExceeded
+	case domain.ModelErrorCodeCancelled:
+		failure.cause = modelFailureContextCancelled
+	default:
+		failure.cause = modelFailureAdapterInvariant
+	}
+	return failure
+}
+
+func (adapter *Adapter) finishWithError(
+	requestID domain.ModelRequestID,
+	failure modelFailure,
+	operation domain.ModelOperation,
+	rawCause error,
+	state *transportRequestState,
+) *domain.ModelError {
+	modelError := domain.NewModelError(failure.code, operation, string(requestID))
+	adapter.logFinished(requestID, modelError, failure, rawCause, state)
 	return modelError
 }
 
-func (adapter *Adapter) logFinished(requestID domain.ModelRequestID, modelError *domain.ModelError) {
+func (adapter *Adapter) logFinished(
+	requestID domain.ModelRequestID,
+	modelError *domain.ModelError,
+	failure modelFailure,
+	rawCause error,
+	state *transportRequestState,
+) {
 	if modelError == nil {
-		adapter.logger.Info("model request finished", "request_id", requestID, "status", "succeeded")
+		attributes := []any{
+			"component", "model",
+			"operation", string(domain.ModelOperationRequest),
+			"phase", "terminal",
+			"outcome", "success",
+			"request_id", string(requestID),
+		}
+		if failure.httpStatus != 0 {
+			attributes = append(attributes, "http_status", failure.httpStatus)
+		}
+		adapter.logger.Info(modelRequestLogEvent, attributes...)
 		return
 	}
-	adapter.logger.Info(
-		"model request finished",
-		"request_id", requestID,
-		"status", "failed",
-		"error_class", modelError.Class(),
-		"error_code", modelError.Code(),
-	)
+	outcome := "failure"
+	if modelError.Class() == domain.SafeErrorClassCancelled {
+		outcome = "cancelled"
+	}
+	attributes := []any{
+		"component", "model",
+		"operation", string(modelError.Operation()),
+		"phase", "terminal",
+		"outcome", outcome,
+		"request_id", string(requestID),
+		"error_class", string(modelError.Class()),
+		"error_code", string(modelError.Code()),
+		"retryable", modelError.Retryable(),
+		"cause", string(failure.cause),
+	}
+	if failure.httpStatus != 0 {
+		attributes = append(attributes, "http_status", failure.httpStatus)
+	}
+	attributes = append(attributes, adapter.sensitiveFailureAttributes(rawCause, state)...)
+	if modelError.Class() == domain.SafeErrorClassCancelled {
+		adapter.logger.Warn(modelRequestLogEvent, attributes...)
+		return
+	}
+	adapter.logger.Error(modelRequestLogEvent, attributes...)
+}
+
+func (adapter *Adapter) sensitiveFailureAttributes(rawCause error, state *transportRequestState) []any {
+	if adapter == nil || !adapter.diagnostics.Sensitive {
+		return nil
+	}
+	attributes := make([]any, 0, 12)
+	if endpoint, _ := adapter.sensitiveDiagnosticText(adapter.configuration.Endpoint, maxSensitiveEndpointLogBytes); endpoint != "" {
+		attributes = append(attributes, "sensitive_endpoint", endpoint)
+	}
+	if model, _ := adapter.sensitiveDiagnosticText(adapter.configuration.Model, maxSensitiveModelLogBytes); model != "" {
+		attributes = append(attributes, "sensitive_model", model)
+	}
+	if rawCause != nil {
+		detail := fmt.Sprintf("%T: %+v", rawCause, rawCause)
+		if detail, truncated := adapter.sensitiveDiagnosticText(detail, maxSensitiveErrorLogBytes); detail != "" {
+			attributes = append(attributes,
+				"sensitive_error_chain", detail,
+				"sensitive_error_truncated", truncated,
+			)
+		}
+	}
+	if state != nil {
+		body, bodyTruncated := state.providerError()
+		if body, textTruncated := adapter.sensitiveDiagnosticText(body, domain.MaxModelErrorBodyBytes); body != "" {
+			attributes = append(attributes,
+				"sensitive_provider_error_body", body,
+				"sensitive_provider_body_truncated", bodyTruncated || textTruncated,
+			)
+		}
+	}
+	return attributes
+}
+
+func (adapter *Adapter) sensitiveDiagnosticText(value string, maximum int) (string, bool) {
+	if adapter == nil || !adapter.diagnostics.Sensitive || value == "" || maximum < 1 || adapter.credential == nil {
+		return "", false
+	}
+	if err := adapter.credential.Use(func(secret string) {
+		value = strings.ReplaceAll(value, secret, sensitiveRedactionMarker)
+	}); err != nil {
+		return "", false
+	}
+	processed, err := security.NewRedactor().ProcessLines(value, maximum)
+	if err != nil {
+		return "", false
+	}
+	return processed.Value, processed.Truncated
 }

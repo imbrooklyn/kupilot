@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-08
 - Amended: 2026-08-10
+- Amended by: ADR-0036
 
 ## Context
 
@@ -151,8 +152,10 @@ registration cannot widen ClusterScope, Kind allowlists, budgets, endpoint, or
 write authority.
 
 The model adapter must close response streams and bodies, bound buffers,
-discard raw provider error bodies, and prevent model requests or responses from
-entering SQLite or ordinary logs. KuPilot must not install Eino global
+discard provider error bodies in default logging mode, and prevent model
+requests or responses from entering SQLite or default operational logs.
+ADR-0036 permits only an explicitly enabled bounded failed-response prefix in
+the local model-failure log. KuPilot must not install Eino global
 callbacks; caller-provided callbacks are removed before model data enters the
 component. Framework callbacks cannot receive model credentials, raw HTTP
 values, or a Kubernetes client.

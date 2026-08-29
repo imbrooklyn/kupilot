@@ -152,7 +152,7 @@ func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "agent_run_begin_failed", "begin_agent_run", "KuPilot could not durably start the AgentRun.", err)
+		return repositoryFailure(repository.db, "agent_run_begin_failed", "begin_agent_run", "KuPilot could not durably start the diagnostic run.", err)
 	}
 	return nil
 }
@@ -170,7 +170,7 @@ func (repository *AgentRunRepository) GetByID(ctx context.Context, id domain.Age
 		return domain.AgentRun{}, sessioncontract.ErrAgentRunNotFound
 	}
 	if err != nil {
-		return domain.AgentRun{}, repositoryFailure(repository.db, "agent_run_row_invalid", "get_agent_run", "KuPilot could not read the AgentRun safely.", err)
+		return domain.AgentRun{}, repositoryFailure(repository.db, "agent_run_row_invalid", "get_agent_run", "KuPilot could not read the diagnostic run safely.", err)
 	}
 	return run, nil
 }
@@ -203,7 +203,7 @@ func (repository *AgentRunRepository) Finish(ctx context.Context, run domain.Age
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "agent_run_finish_failed", "finish_agent_run", "KuPilot could not store the terminal AgentRun state.", err)
+		return repositoryFailure(repository.db, "agent_run_finish_failed", "finish_agent_run", "KuPilot could not store the completed diagnostic run state.", err)
 	}
 	return nil
 }
@@ -242,7 +242,7 @@ func (repository *AgentRunRepository) FinishWithMessage(ctx context.Context, mes
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "agent_run_finish_failed", "finish_agent_run_with_message", "KuPilot could not store the final AgentRun result.", err)
+		return repositoryFailure(repository.db, "agent_run_finish_failed", "finish_agent_run_with_message", "KuPilot could not store the final diagnosis.", err)
 	}
 	return nil
 }
@@ -275,7 +275,7 @@ func (repository *AgentRunRepository) RecoverInterrupted(ctx context.Context, re
 		return err
 	})
 	if err != nil {
-		return sessioncontract.RecoveryResult{}, repositoryFailure(repository.db, "agent_run_recovery_failed", "recover_interrupted_agent_runs", "KuPilot could not recover interrupted AgentRuns.", err)
+		return sessioncontract.RecoveryResult{}, repositoryFailure(repository.db, "agent_run_recovery_failed", "recover_interrupted_agent_runs", "KuPilot could not recover interrupted diagnostic runs.", err)
 	}
 	return sessioncontract.RecoveryResult{Interrupted: interrupted}, nil
 }

@@ -106,25 +106,27 @@ means all Namespaces.
 
 ## Complete the first-run flow
 
-1. If the footer shows `model/unconfigured`, complete the four-step endpoint,
+1. If the footer shows `model not configured`, complete the four-step endpoint,
    model, storage, and masked-key flow. `/model` can reconfigure it later.
 2. Confirm the footer shows the intended verified Context, Namespace, and
    `read-only` state. If no scope is active, use `/context` and `/namespace`.
 3. Optionally use `/resource` to attach one Pod, Deployment, ReplicaSet, Job, or
-   Service. Picker selection is only an input aid; it is not Evidence and does
-   not prove that the object still exists.
+   Service. Picker selection is only an input aid; it is not an observation and
+   does not prove that the object still exists.
 4. Open `/privacy`. Review the canonical model destination, every enabled data
    category, and every never-eligible category. Container output is disabled by
    default. Accepting consent authorizes only the exact displayed tuple.
 5. Enter one diagnostic question. KuPilot durably begins the run before any
-   model or Tool I/O, binds it to the immutable ClusterScope, and shows each
-   bounded Tool step.
+   model or cluster read, binds it to the verified Context and Namespace, and
+   shows each bounded activity step with a readable label.
 6. Review the final confirmed facts, hypotheses, missing information, and
    recommendations. Every recommendation is marked `Not executed`. Press
-   `Ctrl+E` to inspect bounded safe details for cited Evidence.
+   `Ctrl+E` to inspect bounded safe observation details when needed. Repeated
+   homogeneous resource statuses appear as a compact, non-interactive table
+   with columns appropriate to Pod, Deployment, ReplicaSet, Job, or Service.
 
 Changing Context, Namespace, or the container-output privacy category cancels
-an active AgentRun and invalidates stale work before another transfer.
+an active diagnostic run and invalidates stale work before another transfer.
 
 ## TUI commands
 
@@ -142,7 +144,7 @@ The compile-time command registry is fixed:
 | `/resume [filter]` | Open eligible local Session selection inside the TUI. |
 | `/rename [title]` | Rename the current standard-persistence Session. |
 | `/privacy` | Review model data sharing, persistence, retention, deletion, and export controls. |
-| `/cancel` | Cancel the active AgentRun. |
+| `/cancel` | Cancel the active diagnostic run. |
 | `/quit`, `/exit` | Exit KuPilot. |
 
 Unknown commands and `!` syntax perform no external action. Use a leading `//`
@@ -151,7 +153,7 @@ to submit an ordinary question that begins with `/`.
 Key bindings include `Enter` to submit, `Ctrl+J` for a newline, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
-`Ctrl+E` to inspect cited Evidence, `Ctrl+X` to cancel a run, and `Ctrl+C` to
+`Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C` to
 quit.
 
 ## Stop safely

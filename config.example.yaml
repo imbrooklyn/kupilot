@@ -10,6 +10,7 @@ model:
   provider_kind: openai_compatible
   endpoint: https://model.example.invalid/v1
   model: diagnostic-model
+  # reasoning_effort: none
   temperature: 0.1
   max_output_tokens: 2048
   request_timeout_seconds: 45
@@ -22,3 +23,4 @@ kubernetes:
 logging:
   enabled: true
   level: info
+  sensitive_diagnostics: false

@@ -29,6 +29,7 @@ type writableModelConfig struct {
 	ProviderKind          string  `yaml:"provider_kind"`
 	Endpoint              string  `yaml:"endpoint"`
 	Model                 string  `yaml:"model"`
+	ReasoningEffort       string  `yaml:"reasoning_effort,omitempty"`
 	APIKey                string  `yaml:"api_key"`
 	Temperature           float64 `yaml:"temperature"`
 	MaxOutputTokens       int     `yaml:"max_output_tokens"`
@@ -55,7 +56,8 @@ func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile Mod
 		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor,
 		Model: writableModelConfig{
 			ProviderKind: base.Model.ProviderKind, Endpoint: base.Model.Endpoint, Model: base.Model.Model,
-			Temperature: base.Model.Temperature, MaxOutputTokens: base.Model.MaxOutputTokens,
+			ReasoningEffort: base.Model.ReasoningEffort,
+			Temperature:     base.Model.Temperature, MaxOutputTokens: base.Model.MaxOutputTokens,
 			RequestTimeoutSeconds: base.Model.RequestTimeoutSeconds,
 			Streaming:             base.Model.Streaming, ToolCallingRequired: base.Model.ToolCallingRequired,
 		},

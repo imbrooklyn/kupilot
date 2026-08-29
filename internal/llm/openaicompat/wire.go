@@ -11,13 +11,14 @@ import (
 )
 
 type requestPayload struct {
-	Model           string               `json:"model"`
-	Messages        []messagePayload     `json:"messages"`
-	Tools           []toolPayload        `json:"tools"`
-	Stream          bool                 `json:"stream"`
-	StreamOptions   streamOptionsPayload `json:"stream_options"`
-	Temperature     float64              `json:"temperature"`
-	MaxOutputTokens int                  `json:"max_tokens"`
+	Model           string                      `json:"model"`
+	ReasoningEffort domain.ModelReasoningEffort `json:"reasoning_effort,omitempty"`
+	Messages        []messagePayload            `json:"messages"`
+	Tools           []toolPayload               `json:"tools"`
+	Stream          bool                        `json:"stream"`
+	StreamOptions   streamOptionsPayload        `json:"stream_options"`
+	Temperature     float64                     `json:"temperature"`
+	MaxOutputTokens int                         `json:"max_tokens"`
 }
 
 type streamOptionsPayload struct {
@@ -90,6 +91,7 @@ func marshalWireRequest(configuration domain.ModelConfiguration, request domain.
 
 	return json.Marshal(requestPayload{
 		Model:           configuration.Model,
+		ReasoningEffort: configuration.ReasoningEffort,
 		Messages:        messages,
 		Tools:           tools,
 		Stream:          true,

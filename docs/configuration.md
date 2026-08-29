@@ -20,7 +20,7 @@ outside Home.
 
 A bare `kupilot` starts the TUI without requiring a configuration file, model
 endpoint, model identifier, or API key. When any model requirement is missing,
-the footer shows `model/unconfigured` and the sole composer opens a fixed setup
+the footer shows `model not configured` and the sole composer opens a fixed setup
 flow:
 
 1. Enter the OpenAI-compatible endpoint.
@@ -32,7 +32,7 @@ flow:
 atomically writes the effective typed settings and key to
 `KUPILOT_HOME/config.yaml`. `session` keeps the key only in the current KuPilot
 process. `/model` repeats setup. Reconfiguration cancels and joins an active
-AgentRun, constructs one replacement runtime, invalidates consent if the
+diagnostic run, constructs one replacement runtime, invalidates consent if the
 canonical model origin changed, and closes the prior runtime after the swap.
 
 Adapter construction is local and network-free. The endpoint's complete stream
@@ -86,6 +86,7 @@ an actual key so it remains safe to copy and inspect.
 | `model.endpoint` | Empty until configured; HTTPS is required except for explicit loopback HTTP. |
 | `model.model` | Empty until configured; 1–128 ASCII letters, digits, `.`, `_`, `-`, `/`, or `:`. |
 | `model.api_key` | Optional plaintext credential. It is extracted before Viper and is never part of the ordinary typed `Config` value. |
+| `model.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. Use it when a reasoning model must disable reasoning to combine Chat Completions with function Tools. |
 | `model.temperature` | `0.1`; accepted range `0` through `0.2`. |
 | `model.max_output_tokens` | `2048`; accepted range `1` through the code-defined ceiling `8192`. |
 | `model.request_timeout_seconds` | `45`; accepted range `1` through the hard model-request ceiling `45`. |
@@ -94,6 +95,7 @@ an actual key so it remains safe to copy and inspect.
 | `kubernetes.exec_credentials` | `allow`; may be set to `deny`. It never selects or supplies a command. |
 | `logging.enabled` | `true`; may be disabled. |
 | `logging.level` | `info`; `warn` and `error` are also accepted. Debug logging is unavailable. |
+| `logging.sensitive_diagnostics` | `false`; when explicitly enabled, terminal model failures may add bounded endpoint, model, provider-error, and full Go stack details to the local log. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -107,8 +109,8 @@ The admitted environment variables are:
 - Scope and rendering: `KUPILOT_CONTEXT`, `KUPILOT_NAMESPACE`,
   `KUPILOT_NO_COLOR`, and `NO_COLOR`.
 - Model: `KUPILOT_MODEL_ENDPOINT`, `KUPILOT_MODEL`,
-  `KUPILOT_MODEL_API_KEY`, `KUPILOT_MODEL_TEMPERATURE`,
-  `KUPILOT_MODEL_MAX_OUTPUT_TOKENS`, and
+  `KUPILOT_MODEL_API_KEY`, `KUPILOT_MODEL_REASONING_EFFORT`,
+  `KUPILOT_MODEL_TEMPERATURE`, `KUPILOT_MODEL_MAX_OUTPUT_TOKENS`, and
   `KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS`.
 - Kubernetes: `KUPILOT_EXEC_CREDENTIALS`.
 - Logging: `KUPILOT_LOG_ENABLED` and `KUPILOT_LOG_LEVEL`.
@@ -197,13 +199,36 @@ records to terminal stdout. The fixed ceilings are:
 - At most 1 MiB per file.
 - At most three files, including the current file.
 - Rotation after seven days, with stale known files pruned when the sink opens.
-- At most 12 validated attributes in one record; additional input is dropped.
+- At most 12 validated safe attributes in one record; sensitive mode may add
+  only its nine fixed bounded diagnostic attributes.
 
 Configuration may disable the sink or raise its minimum level, but cannot
-expand these ceilings. The handler admits only code-defined `startup` and
-`agent_run` events and validated scalar fields. It does not write arbitrary
-messages, raw errors, headers, bodies, arguments, configuration contents,
-credentials, or cluster payloads.
+expand these ceilings. The handler admits only code-defined `startup`,
+`agent_run`, and `model_request` events and validated scalar fields. Terminal
+model failures use `error`, except cancellation at `warn`, and may include the
+local request ID, stable error metadata, observed HTTP status, fixed cause
+category, and a sink-generated call chain of at most 32 KuPilot function names
+and 512 bytes. In the default mode, it does not write arbitrary messages,
+caller-provided stacks, raw errors, file names or lines, headers, bodies,
+arguments, configuration contents, credentials, or cluster payloads.
+
+Set `logging.sensitive_diagnostics: true` only while diagnosing a model failure.
+Terminal `model_request` failures may then add the configured endpoint and
+model, a credential-redacted error chain capped at 16 KiB, the first 4 KiB of a
+provider error response with a truncation flag, and a current-goroutine Go stack
+capped at 64 KiB with file names, line numbers, and a truncation flag. KuPilot
+normalizes these external fields and applies its fixed sensitive-value handling
+before logging them. It prints a startup warning while this mode is active.
+KuPilot does not deliberately attach headers, the model API key, request bodies,
+successful responses, streams, prompts, Tool data, or Kubernetes content to the
+record. The untrusted provider error and error chain may nevertheless echo user
+or cluster content after fixed sensitive-value handling, so the resulting file
+must still be treated as sensitive.
+
+Sensitive records use the same local files and seven-day rotation. Disable the
+setting after reproduction and remove `logs/kupilot.log` plus its numbered
+rotations when the diagnostic copy is no longer needed. KuPilot does not encrypt
+these files or remove them when the setting is turned off.
 
 Set `logging.enabled: false` or `KUPILOT_LOG_ENABLED=false` to disable this
 sink. This is independent from the container-output category in `/privacy`.

@@ -15,7 +15,7 @@ import (
 
 const (
 	// ToolCatalogVersion versions the complete fixed v0.1 model-visible catalog.
-	ToolCatalogVersion = "kupilot-read-tools-v1"
+	ToolCatalogVersion = "kupilot-read-tools-v2"
 
 	maxToolPurposeBytes = 1024
 	maxNameQueryBytes   = 128
@@ -51,7 +51,7 @@ const (
 func ToolSpecifications() []domain.ModelToolSpecification {
 	return []domain.ModelToolSpecification{
 		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one allowlisted resource's bounded diagnostic projection in the active Namespace.", InputSchemaJSON: getResourceSchema},
-		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one selected allowlisted Kind (Pod, Deployment, ReplicaSet, Job, or Service) in the active Namespace. Never use this Tool for Namespace discovery, Node inventory, or cluster-wide inventory.", InputSchemaJSON: listResourcesSchema},
+		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one selected allowlisted Kind (Pod, Deployment, ReplicaSet, Job, or Service) in the active Namespace for bounded Evidence. A request for Pods in the current Namespace is supported; use health_filter=any when no health restriction was requested. Never use this Tool to list or discover Namespace objects, inspect Nodes, or perform cluster-wide inventory.", InputSchemaJSON: listResourcesSchema},
 		{Name: domain.ToolNameGetEvents, Version: ToolCatalogVersion, Description: "Read bounded, normalized recent Kubernetes Events related to one allowlisted resource in the active Namespace.", InputSchemaJSON: getEventsSchema},
 		{Name: domain.ToolNameGetPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized current Pod container log tail without follow mode.", InputSchemaJSON: getPodLogsSchema},
 		{Name: domain.ToolNameGetPreviousPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized previous Pod container log tail when a previous instance exists.", InputSchemaJSON: getPodLogsSchema},

@@ -333,7 +333,7 @@ func validateResourceContext(ctx context.Context, scope domain.ClusterScope, ope
 			ClassInvalidInput,
 			"kubernetes_scope_invalid",
 			operation,
-			"The Kubernetes ClusterScope is invalid.",
+			"The active Kubernetes context and namespace are invalid.",
 		)
 	}
 	return nil
@@ -379,7 +379,7 @@ func NewToolResourceReader(
 			ClassInvalidInput,
 			"kubernetes_tool_reader_binding_invalid",
 			"bind_tool_resource_reader",
-			"The Kubernetes Tool reader binding is invalid.",
+			"The Kubernetes reader is not bound to the active context and namespace.",
 		)
 	}
 	if _, err := gateway.resourceBundle(client, scope, "bind_tool_resource_reader"); err != nil {
@@ -414,7 +414,7 @@ func (reader *ToolResourceReader) ReadResource(
 			ClassInvalidInput,
 			"kubernetes_tool_resource_request_invalid",
 			"tool_get_resource",
-			"The Kubernetes Tool resource request is invalid.",
+			"The Kubernetes resource request is invalid.",
 		)
 	}
 	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, "tool_get_resource")
@@ -479,7 +479,7 @@ func (reader *ToolResourceReader) ListResources(
 			ClassInvalidInput,
 			"kubernetes_tool_resource_list_invalid",
 			"tool_list_resources",
-			"The Kubernetes Tool resource list request is invalid.",
+			"The Kubernetes resource-list request is invalid.",
 		)
 	}
 	list, err := reader.gateway.ListResources(ctx, reader.client, request.Scope, request.Kind, request.Limit)
@@ -1877,7 +1877,7 @@ func (reader *ToolResourceReader) validateContext(ctx context.Context, scope dom
 			ClassStaleScope,
 			"kubernetes_tool_reader_scope_stale",
 			operation,
-			"The bound Kubernetes Tool reader scope is stale.",
+			"The Kubernetes context or namespace changed before the read could start.",
 		)
 	}
 	return nil

@@ -97,7 +97,7 @@ type RunBudgetError struct {
 
 func (budgetError *RunBudgetError) Error() string {
 	if budgetError == nil {
-		return "The Agent run stopped safely."
+		return "The diagnostic run stopped safely."
 	}
 	return budgetError.message
 }
@@ -405,39 +405,39 @@ func newRunBudgetError(reason RunStopReason) *RunBudgetError {
 	switch reason {
 	case RunStopCancelled:
 		budgetError.class = domain.SafeErrorClassCancelled
-		budgetError.message = "The Agent run was cancelled before another call could start."
+		budgetError.message = "The diagnostic run was cancelled before another request could start."
 	case RunStopTimedOut:
 		budgetError.class = domain.SafeErrorClassTimeout
-		budgetError.message = "The Agent run reached its wall-clock deadline."
+		budgetError.message = "The diagnostic run reached its time limit."
 	case RunStopStaleScope:
 		budgetError.class = domain.SafeErrorClassStaleScope
-		budgetError.message = "The Agent run stopped because its ClusterScope is stale."
+		budgetError.message = "The diagnostic run stopped because the Kubernetes context or namespace changed."
 	case RunStopStepLimit:
-		budgetError.message = "The Agent run reached its step limit."
+		budgetError.message = "The diagnostic run reached its reasoning-step limit."
 	case RunStopToolCallLimit:
-		budgetError.message = "The Agent run reached its Tool-call limit."
+		budgetError.message = "The diagnostic run reached its cluster-read limit."
 	case RunStopModelCallLimit:
-		budgetError.message = "The Agent run reached its model-call limit."
+		budgetError.message = "The diagnostic run reached its model-request limit."
 	case RunStopToolResultBytes:
-		budgetError.message = "The Agent run reached its ToolResult byte limit."
+		budgetError.message = "The diagnostic run reached its collected-data size limit."
 	case RunStopRepeatedToolCall:
 		budgetError.class = domain.SafeErrorClassPolicyDenied
-		budgetError.message = "The Agent run stopped a repeated Tool call."
+		budgetError.message = "The diagnostic run stopped after a repeated cluster read."
 	case RunStopNoProgress:
 		budgetError.class = domain.SafeErrorClassPolicyDenied
-		budgetError.message = "The Agent run reached its configured no-progress limit."
+		budgetError.message = "The diagnostic run stopped after repeated steps made no progress."
 	case RunStopLogCallLimit:
-		budgetError.message = "The Agent run reached its log-call limit."
+		budgetError.message = "The diagnostic run reached its log-read limit."
 	case RunStopCompleted:
 		budgetError.class = domain.SafeErrorClassInternal
-		budgetError.message = "The Agent run is already complete."
+		budgetError.message = "The diagnostic run is already complete."
 	case RunStopFailed, RunStopInterrupted, RunStopInvalidState:
 		budgetError.class = domain.SafeErrorClassInternal
-		budgetError.message = "The Agent run stopped safely."
+		budgetError.message = "The diagnostic run stopped safely."
 	default:
 		budgetError.reason = RunStopInvalidState
 		budgetError.class = domain.SafeErrorClassInternal
-		budgetError.message = "The Agent run stopped safely."
+		budgetError.message = "The diagnostic run stopped safely."
 	}
 	return budgetError
 }

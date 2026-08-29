@@ -88,6 +88,213 @@ func TestFileLoggerWritesTextFreeRunLifecycleMetadata(t *testing.T) {
 	}
 }
 
+func TestFileLoggerWritesBoundedSafeModelFailureDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	canary := strings.Repeat("s", 47) + "-generated"
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{
+		Directory: root,
+		Level:     slog.LevelInfo,
+		Now:       fixedClock(time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	sink.Logger.InfoContext(context.Background(), EventModelRequest,
+		"component", "model",
+		"operation", "model_request",
+		"phase", "started",
+		"request_id", "00000000-0000-7000-8000-000000001201",
+	)
+	sink.Logger.ErrorContext(context.Background(), EventModelRequest,
+		"call_stack", canary,
+		"error", errors.New(canary),
+		"body", canary,
+		"sensitive_error_chain", canary,
+		"sensitive_provider_error_body", canary,
+		"component", "model",
+		"operation", "model_request",
+		"phase", "terminal",
+		"outcome", "failure",
+		"request_id", "00000000-0000-7000-8000-000000001201",
+		"error_class", "unsupported",
+		"error_code", "model_response_unsupported",
+		"retryable", false,
+		"cause", "http_status",
+		"http_status", 400,
+	)
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	content := readCurrentLog(t, root)
+	for _, want := range []string{
+		`"level":"INFO"`, `"level":"ERROR"`, `"msg":"model_request"`, `"component":"model"`,
+		`"operation":"model_request"`, `"phase":"started"`, `"phase":"terminal"`, `"outcome":"failure"`,
+		`"request_id":"00000000-0000-7000-8000-000000001201"`,
+		`"error_class":"unsupported"`, `"error_code":"model_response_unsupported"`,
+		`"retryable":false`, `"cause":"http_status"`, `"http_status":400`,
+		`"call_stack":"internal/platform/logging.TestFileLoggerWritesBoundedSafeModelFailureDiagnostics`,
+		`"stack_truncated":`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("model diagnostic log does not contain %q: %s", want, content)
+		}
+	}
+	for _, forbidden := range []string{canary, `"error"`, `"body"`, "/Users/", ".go:", "log/slog", "runtime."} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("model diagnostic log contains forbidden value %q: %s", forbidden, content)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("model diagnostic record count = %d, want 2", len(lines))
+	}
+	for _, line := range lines {
+		if len(line) > 1024 {
+			t.Fatalf("model diagnostic record size = %d, want at most 1024", len(line))
+		}
+	}
+}
+
+func TestFileLoggerWritesOnlyExplicitOptInSensitiveModelDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	errorCanary := strings.Repeat("e", 47) + "-generated"
+	bodyCanary := strings.Repeat("p", 47) + "-generated"
+	credentialCanary := strings.Repeat("k", 47) + "-generated"
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{
+		Directory:            root,
+		SensitiveDiagnostics: true,
+		Now:                  fixedClock(time.Date(2026, 8, 29, 1, 2, 3, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	sink.Logger.ErrorContext(context.Background(), EventModelRequest,
+		"component", "model",
+		"operation", "model_request",
+		"phase", "terminal",
+		"outcome", "failure",
+		"request_id", "00000000-0000-7000-8000-000000001203",
+		"error_class", "unsupported",
+		"error_code", "model_response_unsupported",
+		"retryable", false,
+		"cause", "http_status",
+		"http_status", 400,
+		"sensitive_endpoint", "https://private-model.example.test/v1",
+		"sensitive_model", "private-model",
+		"sensitive_error_chain", errorCanary,
+		"sensitive_error_truncated", false,
+		"sensitive_provider_error_body", bodyCanary,
+		"sensitive_provider_body_truncated", false,
+		"authorization", credentialCanary,
+		"sensitive_api_key", credentialCanary,
+	)
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	content := readCurrentLog(t, root)
+	for _, want := range []string{
+		`"sensitive_diagnostics":true`,
+		`"sensitive_endpoint":"https://private-model.example.test/v1"`,
+		`"sensitive_model":"private-model"`,
+		`"sensitive_error_chain":"` + errorCanary + `"`,
+		`"sensitive_provider_error_body":"` + bodyCanary + `"`,
+		`"sensitive_call_stack":`,
+		`logging_test.go:`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("sensitive diagnostic log does not contain %q: %s", want, content)
+		}
+	}
+	if strings.Contains(content, credentialCanary) || strings.Contains(content, "authorization") || strings.Contains(content, "sensitive_api_key") {
+		t.Fatal("sensitive diagnostic log admitted a credential-shaped caller field")
+	}
+}
+
+func TestFileLoggerBoundsOptInSensitiveFields(t *testing.T) {
+	t.Parallel()
+
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{Directory: root, SensitiveDiagnostics: true})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	errorPrefix := strings.Repeat("x", 31) + "-error-prefix"
+	bodyPrefix := strings.Repeat("y", 31) + "-body-prefix"
+	sink.Logger.ErrorContext(context.Background(), EventModelRequest,
+		"component", "model",
+		"operation", "model_request",
+		"phase", "terminal",
+		"outcome", "failure",
+		"request_id", "00000000-0000-7000-8000-000000001204",
+		"error_class", "unsupported",
+		"error_code", "model_response_unsupported",
+		"retryable", false,
+		"cause", "transport_validation",
+		"sensitive_error_chain", errorPrefix+strings.Repeat("e", maxSensitiveErrorBytes),
+		"sensitive_provider_error_body", bodyPrefix+strings.Repeat("b", maxSensitiveBodyBytes),
+	)
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	content := readCurrentLog(t, root)
+	if !strings.Contains(content, errorPrefix) || !strings.Contains(content, bodyPrefix) {
+		t.Fatal("bounded sensitive diagnostic log dropped the admitted prefixes")
+	}
+	if len(content) > maxSensitiveStackBytes+maxSensitiveErrorBytes+maxSensitiveBodyBytes+4096 {
+		t.Fatalf("sensitive diagnostic record is not bounded: %d bytes", len(content))
+	}
+}
+
+func TestFileLoggerMarksSafeModelCallStackTruncation(t *testing.T) {
+	t.Parallel()
+
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{Directory: root})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	writeRecursiveModelFailure(sink.Logger, maxCallStackFrames+1)
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	content := readCurrentLog(t, root)
+	if !strings.Contains(content, `"stack_truncated":true`) {
+		t.Fatalf("deep model failure did not mark its call stack as truncated: %s", content)
+	}
+	if strings.Contains(content, "/Users/") || strings.Contains(content, ".go:") || len(content) > 1024 {
+		t.Fatalf("deep model failure log is unsafe or unbounded: %s", content)
+	}
+}
+
+//go:noinline
+func writeRecursiveModelFailure(logger *slog.Logger, remaining int) {
+	if remaining > 0 {
+		writeRecursiveModelFailure(logger, remaining-1)
+		return
+	}
+	logger.ErrorContext(context.Background(), EventModelRequest,
+		"component", "model",
+		"operation", "model_stream",
+		"phase", "terminal",
+		"outcome", "failure",
+		"request_id", "00000000-0000-7000-8000-000000001202",
+		"error_class", "invalid_external_response",
+		"error_code", "model_stream_invalid",
+		"retryable", false,
+		"cause", "stream_protocol",
+		"http_status", 200,
+	)
+}
+
 func TestFileLoggerDropsUnsafeMessagesFieldsAndValues(t *testing.T) {
 	t.Parallel()
 

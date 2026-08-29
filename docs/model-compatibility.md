@@ -44,6 +44,8 @@ The component owns Chat Completions request integration and stream decoding.
 KuPilot supplies a fixed request-payload modifier so the serialized body remains
 the exact six-Tool contract, and wraps the response body before the component
 can read it to enforce raw wire-byte, data-record, and record-size limits. A
+component scaffold leaves optional sampling and output fields unset so SDK
+model-name heuristics cannot reject the project-owned payload before HTTP. A
 response-chunk modifier rejects ambiguous choice envelopes, while the adapter
 maps decoded text, indexed Tool-call fragments, finish reasons, and usage into
 project-owned events. KuPilot does not maintain a second SSE or provider JSON
@@ -95,8 +97,12 @@ POST {configured-endpoint}/chat/completions
 The request uses JSON and asks for one streamed choice. Its supported fields are
 the configured `model`, neutral `messages`, six strict function `tools`,
 `stream: true`, `stream_options.include_usage: true`, the bounded
-`temperature`, and `max_tokens`. Tool definitions use `type: "function"`, a
-fixed name and description, a strict JSON object schema, and `strict: true`.
+`temperature`, and `max_tokens`. When the typed configuration explicitly sets
+`model.reasoning_effort: none`, the request also includes
+`reasoning_effort: "none"`; otherwise that field is absent. The adapter never
+infers it from a model name or retries based on an endpoint error body. Tool
+definitions use `type: "function"`, a fixed name and description, a strict JSON
+object schema, and `strict: true`.
 Every property at each object level is included in `required`, and every object
 sets `additionalProperties: false`. Model-visible fields that have local
 defaults are required but nullable; `null` is canonicalized to the code-defined
@@ -226,7 +232,11 @@ the remaining run budget.
 <!-- markdownlint-enable MD013 -->
 
 An endpoint error body is bounded and discarded. Its text, headers, URL, and raw
-cause cannot enter the safe error.
+cause cannot enter the safe error. The guarded transport records an observed
+HTTP status before SDK decoding. Cancellation and fixed policy failures take
+precedence; otherwise that status controls classification even if the SDK loses
+its typed error wrapper. A generic SDK failure after an accepted HTTP 200 SSE
+response is `invalid_external_response`, not `unavailable`.
 
 ## Endpoint, credential, and logging rules
 
@@ -253,11 +263,26 @@ it. The key is never a Domain value, model message, request body, Application
 event, rendered TUI or history value, safe error, ordinary log field, callback,
 audit field, SQLite value, or child environment entry. Request and logger
 capture tests may inspect a generated synthetic value in memory, but logs never
-record Authorization or request/response bodies.
+record Authorization or request bodies.
 The adapter also fails closed before a request or neutral event can carry the
 transport credential as configuration, content, metadata, text, or Tool-call
-data. Endpoint error bodies are read only to the fixed discard limit and are
-never decoded into an error or metadata value.
+data. Endpoint error bodies are read only to the fixed limit and are never
+decoded into a safe error or metadata value. Default logs discard them.
+Explicit sensitive diagnostics may retain only the credential-redacted prefix
+documented by ADR-0036.
+
+By default, the fixed local `model_request` log event records only the local
+request ID, operation, phase, outcome, stable class and code, retryability,
+observed HTTP status, fixed cause category, and a sink-generated project-
+function call chain. The chain is limited to 32 names and 512 bytes and contains
+no source file, line, argument, local value, dependency frame, or raw error.
+Invalid neutral requests still fail before HTTP and before this log event.
+
+With `logging.sensitive_diagnostics: true`, terminal model failures may also
+record the endpoint, model, bounded formatted error chain, bounded failed-
+response prefix, and bounded Go call stack. These fields never affect the safe
+classification or runtime policy and remain excluded from Application, Agent,
+TUI, audit, SQLite, and model content.
 
 ## Deterministic compatibility fixtures
 
@@ -271,6 +296,8 @@ synthetic English content and loopback `httptest` servers.
 | `normal.sse` | Text deltas, optional request metadata and usage, finish reason, `[DONE]` |
 | `tool-call-fragments.sse` | Ordered identifier, name, and argument fragments |
 | `no-usage-eof.sse` | Optional usage and terminal EOF after finish reason |
+| `reasoning-none` route | Explicit `reasoning_effort: "none"` admission before a valid stream |
+| `error-400.json` | Unsupported compatibility classification and generic-SDK status fallback |
 | `error-401.json` | Authentication classification and error-body confinement |
 | `error-429.json` | Rate-limit classification and bounded retry metadata |
 | `error-500.json` | Unavailable classification and error-body confinement |

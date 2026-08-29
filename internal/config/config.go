@@ -3,6 +3,7 @@ package config
 const (
 	CurrentVersion                    = 1
 	ProviderOpenAICompatible          = "openai_compatible"
+	ModelReasoningEffortNone          = "none"
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
@@ -34,6 +35,7 @@ type ModelConfig struct {
 	Endpoint              string  `mapstructure:"endpoint" yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	Origin                string  `mapstructure:"-" yaml:"-" json:"origin,omitempty"`
 	Model                 string  `mapstructure:"model" yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort       string  `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 	Temperature           float64 `mapstructure:"temperature" yaml:"temperature" json:"temperature"`
 	MaxOutputTokens       int     `mapstructure:"max_output_tokens" yaml:"max_output_tokens" json:"max_output_tokens"`
 	RequestTimeoutSeconds int     `mapstructure:"request_timeout_seconds" yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
@@ -69,8 +71,9 @@ type KubernetesConfig struct {
 // LoggingConfig controls the fixed local file logger. Rotation ceilings remain
 // code-defined in the logging adapter and cannot be expanded by configuration.
 type LoggingConfig struct {
-	Enabled bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
-	Level   string `mapstructure:"level" yaml:"level" json:"level"`
+	Enabled              bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
+	Level                string `mapstructure:"level" yaml:"level" json:"level"`
+	SensitiveDiagnostics bool   `mapstructure:"sensitive_diagnostics" yaml:"sensitive_diagnostics" json:"sensitive_diagnostics"`
 }
 
 // StringOverride distinguishes an absent CLI value from an explicit value.
@@ -107,8 +110,9 @@ func Defaults() Config {
 		},
 		Kubernetes: KubernetesConfig{ExecCredentials: ExecCredentialsAllow},
 		Logging: LoggingConfig{
-			Enabled: true,
-			Level:   "info",
+			Enabled:              true,
+			Level:                "info",
+			SensitiveDiagnostics: false,
 		},
 	}
 }

@@ -80,7 +80,7 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 			filtered = append(filtered, observation)
 		}
 	}
-	data, templates, warnings, processingLimited, err := tool.project(filtered, arguments, matchedCount)
+	data, summaries, templates, warnings, processingLimited, err := tool.project(filtered, arguments, matchedCount)
 	if err != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
@@ -96,9 +96,10 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 	}
 	if len(templates) < len(data.Items) {
 		data.Items = data.Items[:len(templates)]
+		summaries = summaries[:len(templates)]
 		data.ReturnedCount = len(data.Items)
 	}
-	planned := fitListResourcesResult(call, observed, data, previewEvidence(call, observed, templates), warnings, reason)
+	planned := fitListResourcesResult(call, observed, data, summaries, previewEvidence(call, observed, templates), warnings, reason)
 	if planned.Status == domain.ToolResultStatusDenied || planned.Status == domain.ToolResultStatusError {
 		return planned
 	}
@@ -141,7 +142,7 @@ func (tool *ListResourcesTool) project(
 	observations []ResourceObservation,
 	arguments listResourcesArguments,
 	matchedCount int,
-) (listResourcesData, []evidenceTemplate, []domain.ToolResultWarning, bool, error) {
+) (listResourcesData, []domain.ResourceSummary, []evidenceTemplate, []domain.ToolResultWarning, bool, error) {
 	data := listResourcesData{
 		HealthFilter:  arguments.HealthFilter,
 		Items:         make([]listResourceItem, 0, len(observations)),
@@ -157,19 +158,19 @@ func (tool *ListResourcesTool) project(
 	for _, observation := range observations {
 		reference, current, err := getProjector.safeResourceReference(observation)
 		if err != nil {
-			return listResourcesData{}, nil, nil, false, err
+			return listResourcesData{}, nil, nil, nil, false, err
 		}
 		metadata.merge(current)
 		if current.blocked {
-			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 		}
 		status, current, err := getProjector.safeStatus(observation)
 		if err != nil {
-			return listResourcesData{}, nil, nil, false, err
+			return listResourcesData{}, nil, nil, nil, false, err
 		}
 		metadata.merge(current)
 		if current.blocked {
-			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One projected Kubernetes field was blocked by the sensitive-output policy.")
+			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 		}
 		item := listResourceItem{Reference: reference, Status: status}
 		if !observation.Summary.CreatedAt.IsZero() {
@@ -180,9 +181,19 @@ func (tool *ListResourcesTool) project(
 	data.InstructionLike = metadata.instructionLike
 	data.RedactionCount = metadata.redactions
 	data.Truncated = metadata.truncated || metadata.blocked
+	summaries := make([]domain.ResourceSummary, 0, len(data.Items))
 	templates := make([]evidenceTemplate, 0, len(data.Items))
-	for _, item := range data.Items {
+	for index, item := range data.Items {
 		reference := domainReference(item.Reference)
+		summary := domain.ResourceSummary{
+			Reference: reference,
+			CreatedAt: observations[index].Summary.CreatedAt,
+			Status:    domainResourceStatus(item.Status),
+		}
+		if summary.Validate() != nil {
+			return listResourcesData{}, nil, nil, nil, false, ErrInvalidResourceRead
+		}
+		summaries = append(summaries, summary)
 		fact, factTruncated := boundedEvidenceFact(resourceStatusFact(item.Reference, item.Status))
 		templates = append(templates, evidenceTemplate{
 			category:       domain.EvidenceCategoryResourceStatus,
@@ -194,13 +205,14 @@ func (tool *ListResourcesTool) project(
 			truncated:      item.Status.truncated || factTruncated,
 		})
 	}
-	return data, templates, warnings, data.Truncated || evidenceTemplatesTruncated(templates), nil
+	return data, summaries, templates, warnings, data.Truncated || evidenceTemplatesTruncated(templates), nil
 }
 
 func fitListResourcesResult(
 	call BoundToolCall,
 	observed time.Time,
 	data listResourcesData,
+	summaries []domain.ResourceSummary,
 	evidence []domain.Evidence,
 	warnings []domain.ToolResultWarning,
 	reason string,
@@ -217,7 +229,7 @@ func fitListResourcesResult(
 		data.ReturnedCount = len(data.Items)
 		currentWarnings := append([]domain.ToolResultWarning(nil), warnings...)
 		if outputTrimmed {
-			currentWarnings = appendWarning(currentWarnings, "output_limited", "The Tool returned a deterministic subset because the fixed output limit was reached.")
+			currentWarnings = appendWarning(currentWarnings, "output_limited", "The cluster read returned a deterministic subset because the fixed output limit was reached.")
 		}
 		raw, encodeErr := json.Marshal(data)
 		encoded := ""
@@ -226,15 +238,16 @@ func fitListResourcesResult(
 		}
 		if encodeErr == nil {
 			result := ToolResult{
-				InvocationID: call.InvocationID(),
-				Name:         call.Name(),
-				Version:      call.Version(),
-				Scope:        call.Scope().Snapshot(),
-				ObservedAt:   observed,
-				Status:       domain.ToolResultStatusSuccess,
-				DataJSON:     encoded,
-				Evidence:     append([]domain.Evidence(nil), evidence...),
-				Warnings:     currentWarnings,
+				InvocationID:      call.InvocationID(),
+				Name:              call.Name(),
+				Version:           call.Version(),
+				Scope:             call.Scope().Snapshot(),
+				ObservedAt:        observed,
+				Status:            domain.ToolResultStatusSuccess,
+				DataJSON:          encoded,
+				Evidence:          append([]domain.Evidence(nil), evidence...),
+				ResourceSummaries: append([]domain.ResourceSummary(nil), summaries...),
+				Warnings:          currentWarnings,
 				Truncation: domain.ToolResultTruncation{
 					Truncated:     partial,
 					ReturnedCount: len(data.Items),
@@ -263,8 +276,32 @@ func fitListResourcesResult(
 		if len(evidence) > len(data.Items) {
 			evidence = evidence[:len(data.Items)]
 		}
+		if len(summaries) > len(data.Items) {
+			summaries = summaries[:len(data.Items)]
+		}
 	}
 	return failedResult(call, observed, domain.SafeErrorClassBudgetExhausted)
+}
+
+func domainResourceStatus(status safeResourceStatus) domain.ResourceStatus {
+	return domain.ResourceStatus{
+		Phase:       status.Phase,
+		Reason:      status.Reason,
+		ServiceType: status.ServiceType,
+		Ready:       domainOptionalCount(status.Ready),
+		Desired:     domainOptionalCount(status.Desired),
+		Available:   domainOptionalCount(status.Available),
+		Active:      domainOptionalCount(status.Active),
+		Succeeded:   domainOptionalCount(status.Succeeded),
+		Failed:      domainOptionalCount(status.Failed),
+	}
+}
+
+func domainOptionalCount(value *int32) domain.OptionalCount {
+	if value == nil {
+		return domain.OptionalCount{}
+	}
+	return domain.Count(*value)
 }
 
 func resourceAbnormal(summary domain.ResourceSummary) bool {

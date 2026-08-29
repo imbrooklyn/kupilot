@@ -35,13 +35,14 @@ type referenceModel struct {
 }
 
 type wireRequest struct {
-	Model           string        `json:"model"`
-	Messages        []wireMessage `json:"messages"`
-	Tools           []wireTool    `json:"tools"`
-	Stream          bool          `json:"stream"`
-	StreamOptions   streamOptions `json:"stream_options"`
-	Temperature     float64       `json:"temperature"`
-	MaxOutputTokens int           `json:"max_tokens"`
+	Model           string                      `json:"model"`
+	ReasoningEffort domain.ModelReasoningEffort `json:"reasoning_effort,omitempty"`
+	Messages        []wireMessage               `json:"messages"`
+	Tools           []wireTool                  `json:"tools"`
+	Stream          bool                        `json:"stream"`
+	StreamOptions   streamOptions               `json:"stream_options"`
+	Temperature     float64                     `json:"temperature"`
+	MaxOutputTokens int                         `json:"max_tokens"`
 }
 
 type streamOptions struct {
@@ -315,6 +316,7 @@ func encodeWireRequest(configuration domain.ModelConfiguration, request domain.M
 
 	return json.Marshal(wireRequest{
 		Model:           configuration.Model,
+		ReasoningEffort: configuration.ReasoningEffort,
 		Messages:        messages,
 		Tools:           tools,
 		Stream:          true,
@@ -588,6 +590,11 @@ func TestNeutralModelContractIsMinimalAndRejectsAmbiguity(t *testing.T) {
 	invalidConfigurations := []domain.ModelConfiguration{
 		func() domain.ModelConfiguration {
 			value := configuration
+			value.ReasoningEffort = "medium"
+			return value
+		}(),
+		func() domain.ModelConfiguration {
+			value := configuration
 			value.Endpoint = "http://model.example.test/v1"
 			value.Origin = "http://model.example.test"
 			return value
@@ -748,11 +755,13 @@ func TestHTTPErrorFixturesMapToSafeClassesWithoutBodyLeakage(t *testing.T) {
 	tests := []struct {
 		scenario  string
 		wantClass domain.SafeErrorClass
+		wantCode  domain.ModelErrorCode
 		retryable bool
 	}{
-		{scenario: "error-401", wantClass: domain.SafeErrorClassAuthenticationFailed},
-		{scenario: "error-429", wantClass: domain.SafeErrorClassRateLimited, retryable: true},
-		{scenario: "error-500", wantClass: domain.SafeErrorClassUnavailable, retryable: true},
+		{scenario: "error-401", wantClass: domain.SafeErrorClassAuthenticationFailed, wantCode: domain.ModelErrorCodeAuthenticationFailed},
+		{scenario: "error-400", wantClass: domain.SafeErrorClassUnsupported, wantCode: domain.ModelErrorCodeUnsupportedResponse},
+		{scenario: "error-429", wantClass: domain.SafeErrorClassRateLimited, wantCode: domain.ModelErrorCodeRateLimited, retryable: true},
+		{scenario: "error-500", wantClass: domain.SafeErrorClassUnavailable, wantCode: domain.ModelErrorCodeServiceUnavailable, retryable: true},
 	}
 	for _, current := range tests {
 		current := current
@@ -772,6 +781,18 @@ func TestHTTPErrorFixturesMapToSafeClassesWithoutBodyLeakage(t *testing.T) {
 			assertTerminalContract(t, events, modelError)
 			if modelError.Class() != current.wantClass || modelError.Retryable() != current.retryable {
 				t.Fatalf("model error = class %q retryable %t, want %q %t", modelError.Class(), modelError.Retryable(), current.wantClass, current.retryable)
+			}
+			for _, want := range []string{
+				`"msg":"model_request"`,
+				`"level":"ERROR"`,
+				`"error_class":"` + string(current.wantClass) + `"`,
+				`"error_code":"` + string(current.wantCode) + `"`,
+				`"cause":"http_status"`,
+				`"http_status":` + strings.TrimPrefix(current.scenario, "error-"),
+			} {
+				if !strings.Contains(logBuffer.String(), want) {
+					t.Errorf("model failure log does not contain %q: %s", want, logBuffer.String())
+				}
 			}
 			assertRequestAndSinkSafety(t, server, apiCanary, errorCanary, logBuffer.String(), modelError)
 		})
@@ -1072,6 +1093,13 @@ func assertRequestAndSinkSafety(t *testing.T, server *fixtureServer, apiCanary, 
 	if payload.Model != "fixture-model" || !payload.Stream || !payload.StreamOptions.IncludeUsage ||
 		len(payload.Messages) == 0 || len(payload.Tools) != 6 {
 		t.Fatal("captured request does not match the fixed streaming Tool profile")
+	}
+	var rawPayload map[string]json.RawMessage
+	if err := json.Unmarshal(request.Body, &rawPayload); err != nil {
+		t.Fatalf("decode captured request fields: %v", err)
+	}
+	if _, exists := rawPayload["reasoning_effort"]; exists {
+		t.Fatal("omitted reasoning effort entered the fixed request")
 	}
 	seenTools := make(map[string]struct{}, len(payload.Tools))
 	for _, tool := range payload.Tools {

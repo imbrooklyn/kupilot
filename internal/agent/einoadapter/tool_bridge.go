@@ -67,7 +67,7 @@ func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON stri
 	}
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
-		return failBatch(failedRuntime(domain.SafeErrorClassPolicyDenied, "The Tool call correlation is invalid.", nil))
+		return failBatch(failedRuntime(domain.SafeErrorClassPolicyDenied, "The cluster-read request correlation is invalid.", nil))
 	}
 	if err := bridge.state.toolBatchAbort(); err != nil {
 		return "", err
@@ -146,7 +146,7 @@ func sameJSON(left, right string) bool {
 
 func (state *runState) bindToolCalls(ctx context.Context, selections []domain.ModelToolCall) error {
 	if len(selections) == 0 {
-		return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested an empty Tool-call batch.", nil)
+		return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested an empty cluster-read batch.", nil)
 	}
 	if err := state.checkScope(ctx); err != nil {
 		return err
@@ -156,14 +156,14 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 	startSequence := state.toolSequence
 	state.mu.Unlock()
 	if startSequence+len(selections) > domain.MaxAgentToolCalls {
-		return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model requested more Tool calls than the run can represent.", nil)
+		return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model requested more cluster reads than the diagnostic run can represent.", nil)
 	}
 	entries := make([]*boundExecution, len(selections))
 	seen := make(map[string]struct{}, len(selections))
 	seenInvocationIDs := make(map[domain.ToolInvocationID]struct{}, len(selections))
 	for index, selection := range selections {
 		if _, duplicate := seen[selection.ID]; duplicate {
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a Tool call identifier.", nil)
+			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
 		}
 		seen[selection.ID] = struct{}{}
 		invocationID, err := state.identifiers.NewToolInvocationID()
@@ -179,7 +179,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 			if errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
 				return failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 			}
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a Tool call outside the fixed policy.", err)
+			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", err)
 		}
 		safeSelection := domain.ModelToolCall{
 			ID: selection.ID, Name: call.Name(), ArgumentsJSON: call.ArgumentsJSON(),
@@ -223,7 +223,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 	for _, execution := range entries {
 		if _, exists := state.boundCalls[execution.modelCall.ID]; exists {
 			state.mu.Unlock()
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a Tool call identifier.", nil)
+			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
 		}
 		if _, exists := state.toolInvocationIDs[execution.call.InvocationID()]; exists {
 			state.mu.Unlock()
@@ -250,7 +250,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	execution := state.boundCalls[callID]
 	if execution == nil || execution.executed || execution.toolName != name {
 		state.mu.Unlock()
-		return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The Tool call is not bound to this run.", nil)
+		return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The cluster-read request is not bound to this diagnostic run.", nil)
 	}
 	execution.executed = true
 	state.mu.Unlock()
@@ -262,7 +262,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	})
 	if err != nil || rebound.Identity() != execution.call.Identity() ||
 		rebound.ArgumentsJSON() != execution.call.ArgumentsJSON() || rebound.ModelCallID() != execution.call.ModelCallID() {
-		return "", state.failTool(ctx, execution, domain.SafeErrorClassPolicyDenied, "The Tool arguments changed after policy binding.", err)
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassPolicyDenied, "The cluster-read arguments changed after policy binding.", err)
 	}
 	if err := state.checkScope(ctx); err != nil {
 		return "", state.failToolForRuntime(ctx, execution, err)
@@ -282,7 +282,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	}
 	handler, err := state.tools.Resolve(name)
 	if err != nil {
-		return "", state.failTool(ctx, execution, domain.SafeErrorClassPolicyDenied, "The Tool is not admitted by the fixed catalog.", err)
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassPolicyDenied, "The requested cluster read is not admitted by the fixed catalog.", err)
 	}
 	toolCtx, cancel := context.WithTimeout(ctx, reservation.Timeout)
 	result := handler.Execute(toolCtx, execution.call)

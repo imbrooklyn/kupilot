@@ -14,11 +14,11 @@ var (
 )
 
 const (
-	safeInternalFailure           = "The Agent runtime failed safely."
-	safeInvalidModelResponse      = "The model returned an invalid Agent response."
-	safeInvalidToolResult         = "A Tool returned data outside the safe result contract."
-	safeEventRejected             = "The Agent event stream could not be accepted safely."
-	safeScopeStale                = "The Agent run stopped because its ClusterScope is stale."
+	safeInternalFailure           = "The diagnostic runtime failed safely."
+	safeInvalidModelResponse      = "The model returned an invalid diagnostic response."
+	safeInvalidToolResult         = "A cluster-reading tool returned data outside the safe result contract."
+	safeEventRejected             = "The diagnostic event stream could not be accepted safely."
+	safeScopeStale                = "The diagnostic run stopped because the Kubernetes context or namespace changed."
 	safeSensitiveModelTextBlocked = "Sensitive model output was blocked before downstream use."
 	safeModelProgress             = "Validating the model response."
 )

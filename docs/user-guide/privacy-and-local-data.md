@@ -8,9 +8,14 @@ retention before using KuPilot with a cluster.
 ## Cloud model categories
 
 Before the first model-content request, `/privacy` displays the canonical model
-destination, consent-policy version, current decision, and the exact enabled
-categories. The same dialog also displays local persistence and retention; those
-controls do not grant model-transfer consent.
+destination, policy version, current decision, and the exact included
+categories using readable labels. The same dialog also displays local
+persistence and retention; those controls do not grant model-transfer consent.
+
+The protocol category identifiers are documented below for configuration and
+audit interpretation. The TUI labels them `User question`, `Conversation
+context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
+`Container output` rather than exposing the identifiers directly.
 
 1. `user_question`: the question after local normalization,
    sensitive-value handling, and byte limits.
@@ -60,8 +65,10 @@ diagnostic completeness.
 
 ## Local persistence and retention controls
 
-`/privacy` displays the current Session's persistence mode and the effective
-retention periods. A standard-persistence Session may keep:
+`/privacy` displays the current Session storage as `history saved` or `memory
+only` and shows the effective retention periods. The footer uses `history
+saved` or `memory-only history` for the same state. A standard-persistence
+Session may keep:
 
 - Session and AgentRun metadata.
 - Locally processed committed user Messages and final validated assistant
@@ -185,11 +192,26 @@ The extractor keeps the value out of ordinary typed configuration, TUI history,
 SQLite, logs, audit, model content, and child environments. Choosing `session`
 instead keeps it only in the current KuPilot process.
 
-The operational log is limited to code-defined startup and AgentRun lifecycle
-events and allowlisted scalar fields. It stores no Messages, Tool arguments,
+The default operational log is limited to code-defined startup, AgentRun
+lifecycle, and admitted model-request lifecycle events with allowlisted scalar
+fields. A model failure may retain its local request ID, stable class and code,
+retryability, observed HTTP status, fixed cause category, and a bounded
+function-name-only KuPilot call chain. It stores no Messages, Tool arguments,
 resource names, cluster payloads, request or response bodies, headers,
-credentials, raw errors, or database rows. Each file is at most 1 MiB; at most
-three files are kept; rotation or pruning occurs at seven days.
+credentials, raw errors, file paths, line numbers, local values, or database
+rows.
+
+For a short-lived model investigation, `logging.sensitive_diagnostics: true`
+adds the configured endpoint and model, a bounded credential-redacted error
+chain, the first 4 KiB of a failed provider response, and a bounded Go stack
+with local paths and lines. KuPilot warns at startup. Provider errors may echo
+operational content, and these local files are not encrypted. Disable the
+setting after reproduction and delete the current log and numbered rotations
+when they are no longer needed. KuPilot does not deliberately attach
+Authorization, the model key, request bodies, successful responses, streams,
+Tool data, or Kubernetes payloads, but an untrusted error may echo operational
+content after fixed sensitive-value handling. Each file is at most 1 MiB; at
+most three files are kept; rotation or pruning occurs at seven days.
 
 Disable this local application log before startup with:
 

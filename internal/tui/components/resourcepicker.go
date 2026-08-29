@@ -19,7 +19,7 @@ type ResourcePicker struct {
 // NewResourcePicker creates one closed Resource Picker.
 func NewResourcePicker(styles PickerStyles) ResourcePicker {
 	return ResourcePicker{list: newPickerList("No matching resources", func(candidate ResourceCandidate) string {
-		parts := []string{candidate.Kind + "/" + candidate.Name, "ns/" + candidate.Namespace}
+		parts := []string{candidate.Kind + "/" + candidate.Name}
 		if candidate.Status != "" {
 			parts = append(parts, candidate.Status)
 		}

@@ -170,10 +170,23 @@ backup, and deletion after publication.
 ## Local operational logging
 
 A bounded allowlisted JSON operational log is enabled by default. It contains
-only code-defined startup and AgentRun lifecycle events with validated scalar
-fields, not conversation content, Tool arguments, resource names, cluster
-payloads, request or response bodies, credentials, or raw errors. It is limited
-to three files of at most 1 MiB each and seven days.
+only code-defined startup, AgentRun lifecycle, and admitted model-request
+lifecycle events with validated scalar fields. A terminal model failure may add
+its local request ID, stable class and code, retryability, observed HTTP status,
+fixed cause category, and a sink-generated function-name-only KuPilot call
+chain. In default mode it never contains conversation content, Tool arguments,
+resource names, cluster payloads, request or response bodies, credentials, raw
+errors, file paths, line numbers, or local values.
+
+The explicit `logging.sensitive_diagnostics: true` setting adds bounded model-
+failure details: endpoint, model, a credential-redacted error chain, a failed
+provider-response prefix, and a Go stack with local paths and lines. Provider
+content may reflect user or cluster data, so this mode is intended only for
+short-lived local troubleshooting. KuPilot does not deliberately attach
+Authorization, the model key, request bodies, successful responses, streams,
+Tool data, or Kubernetes payloads, but an untrusted error may echo operational
+content after fixed sensitive-value handling. The log remains limited to three
+files of at most 1 MiB each and seven days.
 
 Set `logging.enabled: false` or `KUPILOT_LOG_ENABLED=false` to disable this local
 file sink. This is separate from the `/privacy` container-output category: one

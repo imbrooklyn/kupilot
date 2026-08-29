@@ -40,14 +40,14 @@ func TestPrivacyExportUsesOnlyTheRootComposerAndExplicitConfirmation(t *testing.
 		application.ExportSummarySchemaVersion,
 		"committed user and final assistant text",
 		"four structured Diagnosis sections",
-		"referenced Evidence summaries",
+		"referenced observation summaries",
 		"will not overwrite",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("export confirmation missing %q", want)
 		}
 	}
-	for _, denied := range []string{"raw Tool results", "raw logs", "approval nonce"} {
+	for _, denied := range []string{"raw cluster-read requests and results", "raw logs", "approval nonce"} {
 		if !strings.Contains(frame, denied) {
 			t.Fatalf("export confirmation did not disclose exclusion %q", denied)
 		}

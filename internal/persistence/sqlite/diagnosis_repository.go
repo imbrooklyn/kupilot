@@ -195,7 +195,7 @@ func (repository *DiagnosisRepository) GetByRunID(ctx context.Context, runID dom
 	}
 	summary, err := summarizeDiagnosisEvidence(ctx, repository.db.handle, diagnosis)
 	if err != nil {
-		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_evidence_read_failed", "get_diagnosis", "KuPilot could not determine historic Evidence availability.", err)
+		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_evidence_read_failed", "get_diagnosis", "KuPilot could not determine whether historic observation details remain available.", err)
 	}
 	diagnosis.EvidenceDetailsState = summary.State
 	if err := diagnosis.Validate(); err != nil {

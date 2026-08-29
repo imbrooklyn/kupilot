@@ -4,16 +4,16 @@ palette enabled=false base=none muted=none surface=none border=none accent=none 
 ╰──────────────────────────────────────────────────────────────────╯
 <blank rows=1>
 The Deployment has no available replicas.
-└─ ✓ get_resource · succeeded · Inspect the selected Deployment. · No av
-ailable replicas. · 2 evidence
-  Evidence 0198a46e-7d2a-7d34-9b6f-2df5f45a2a12 · available
+└─ ✓ Inspect resource · done
+   Purpose: Inspect the selected Deployment.
+   Result: No available replicas.
 <blank rows=5>
 ╭──────────────────────────────────────────────────────────────────╮
 │ /resource pay                                                    │
 │                                                                  │
 │                                                                  │
 ╰──────────────────────────────────────────────────────────────────╯
-› Deployment/payment-api · ns/payments · Unavailable
-  Pod/payment-api-7d9 · ns/payments · Pending
-ctx/development · ns/payments · read-only
-res/Deployment/payment-api · run/completed · model/diagnostic-model
+› Deployment/payment-api · Unavailable
+  Pod/payment-api-7d9 · Pending
+Context development · Namespace payments · read-only
+history saved · Deployment/payment-api · diagnosis complete

@@ -1,7 +1,6 @@
 package components
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -19,18 +18,13 @@ type EvidenceDetailStyles struct {
 
 // EvidenceDetailContent contains only Application-projected display strings.
 type EvidenceDetailContent struct {
-	EvidenceID      string
-	RunID           string
-	Category        string
-	Source          string
-	Scope           string
-	Resource        string
-	ObservedAt      string
-	State           string
-	Partial         string
-	Truncated       string
-	SensitiveFilter string
-	Projection      string
+	Category          string
+	Scope             string
+	Resource          string
+	ObservedAt        string
+	Status            string
+	SensitiveFiltered bool
+	Projection        string
 }
 
 type evidenceDialogState uint8
@@ -71,7 +65,6 @@ func (dialog *EvidenceDetailDialog) ShowDetail(content EvidenceDetailContent, pa
 	if partial {
 		dialog.state = evidenceDialogPartial
 	}
-	dialog.evidenceID = content.EvidenceID
 	dialog.content = content
 }
 
@@ -107,44 +100,65 @@ func (dialog EvidenceDetailDialog) View(width, height int) string {
 		return ""
 	}
 	lines := []string{
-		dialog.styles.Title.Render("Evidence detail"),
+		dialog.styles.Title.Render("Observation detail"),
 		dialog.styles.Muted.Render("Esc or Enter to close"),
 	}
 	switch dialog.state {
 	case evidenceDialogLoading:
 		lines = append(lines,
-			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
-			dialog.styles.Body.Render("Loading the safe projected detail…"),
+			dialog.styles.Body.Render("Loading the saved observation…"),
 		)
 	case evidenceDialogExpired:
 		lines = append(lines,
-			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
 			dialog.styles.Warning.Render("State: expired"),
 			dialog.styles.Body.Render("Supporting detail was deleted, expired, or is no longer retained."),
 		)
 	case evidenceDialogUnavailable:
 		lines = append(lines,
-			dialog.styles.Muted.Render("Evidence ID: "+dialog.evidenceID),
 			dialog.styles.Warning.Render("State: unavailable"),
-			dialog.styles.Body.Render("The detail could not be matched to the cited run and scope safely."),
+			dialog.styles.Body.Render("The detail could not be matched to the recorded run and scope safely."),
 		)
 	case evidenceDialogAvailable, evidenceDialogPartial:
 		content := dialog.content
 		lines = append(lines,
-			dialog.styles.Body.Render("Evidence ID: "+content.EvidenceID),
-			dialog.styles.Muted.Render("Run ID: "+content.RunID),
-			dialog.styles.Body.Render("Category: "+content.Category),
-			dialog.styles.Body.Render("Source: "+content.Source),
-			dialog.styles.Body.Render("Scope: "+content.Scope),
 			dialog.styles.Body.Render("Resource: "+content.Resource),
-			dialog.styles.Body.Render("Observed at: "+content.ObservedAt),
-			dialog.styles.Body.Render(fmt.Sprintf("State: %s · partial: %s · truncated: %s", content.State, content.Partial, content.Truncated)),
-			dialog.styles.Body.Render("Sensitive filtering: "+content.SensitiveFilter),
-			dialog.styles.Muted.Render("Bounded projection:"),
+			dialog.styles.Body.Render("Scope: "+content.Scope),
+			dialog.styles.Body.Render("Observed: "+content.ObservedAt),
+			dialog.styles.Body.Render("Type: "+observationCategoryLabel(content.Category)),
+			dialog.styles.Body.Render("Status: "+content.Status),
+		)
+		if content.SensitiveFiltered {
+			lines = append(lines, dialog.styles.Warning.Render("Sensitive values were filtered."))
+		}
+		lines = append(lines,
+			dialog.styles.Muted.Render("Details:"),
 			dialog.styles.Body.Render(content.Projection),
 		)
 	}
 	contentWidth := max(1, min(width-6, 82))
 	contentHeight := max(1, height-4)
 	return dialog.styles.Frame.Width(contentWidth).MaxHeight(contentHeight).Render(strings.Join(lines, "\n"))
+}
+
+func observationCategoryLabel(category string) string {
+	switch category {
+	case "resource_status":
+		return "Resource status"
+	case "condition":
+		return "Condition"
+	case "container_state":
+		return "Container state"
+	case "event":
+		return "Kubernetes event"
+	case "log_excerpt":
+		return "Log excerpt"
+	case "owner":
+		return "Owner relationship"
+	case "rollout":
+		return "Rollout status"
+	case "service_endpoint":
+		return "Service readiness"
+	default:
+		return "Observation"
+	}
 }

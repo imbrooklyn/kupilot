@@ -100,6 +100,61 @@ func TestToolInvocationValidationCoversClosedCatalogLifecycleAndBounds(t *testin
 	}
 }
 
+func TestToolResultResourceSummariesAreLocalTypedListPresentationData(t *testing.T) {
+	t.Parallel()
+	observed := time.UnixMilli(20).UTC()
+	scope := ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 2}
+	reference := ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: scope.Namespace, Name: "sample-pod"}
+	evidence := Evidence{
+		ID: "00000000-0000-7000-8000-000000001011", RunID: "00000000-0000-7000-8000-000000001012",
+		InvocationID: "00000000-0000-7000-8000-000000001013", Category: EvidenceCategoryResourceStatus,
+		Scope: scope, Resource: reference, Fact: "Pod sample-pod was observed; phase Running; ready 1 of 1.",
+		Fingerprint: SHA256Hex("safe-status"), ObservedAt: observed,
+	}
+	result := ToolResult{
+		InvocationID: evidence.InvocationID, Name: ToolNameListResources, Version: "tool-v1", Scope: scope,
+		ObservedAt: observed, Status: ToolResultStatusSuccess, DataJSON: `{"items":[]}`,
+		Evidence: []Evidence{evidence},
+		ResourceSummaries: []ResourceSummary{{
+			Reference: reference,
+			Status:    ResourceStatus{Phase: "Running", Ready: Count(1), Desired: Count(1)},
+		}},
+		Truncation: ToolResultTruncation{ReturnedCount: 1},
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("ToolResult.Validate() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ToolResult)
+	}{
+		{name: "wrong Tool", mutate: func(value *ToolResult) { value.Name = ToolNameGetResource }},
+		{name: "missing Evidence", mutate: func(value *ToolResult) { value.Evidence = nil }},
+		{name: "wrong category", mutate: func(value *ToolResult) {
+			value.Evidence = append([]Evidence(nil), value.Evidence...)
+			value.Evidence[0].Category = EvidenceCategoryCondition
+		}},
+		{name: "wrong resource", mutate: func(value *ToolResult) {
+			value.ResourceSummaries = append([]ResourceSummary(nil), value.ResourceSummaries...)
+			value.ResourceSummaries[0].Reference.Name = "other-pod"
+		}},
+	}
+	for _, current := range tests {
+		current := current
+		t.Run(current.name, func(t *testing.T) {
+			t.Parallel()
+			value := result
+			value.Evidence = append([]Evidence(nil), result.Evidence...)
+			value.ResourceSummaries = append([]ResourceSummary(nil), result.ResourceSummaries...)
+			current.mutate(&value)
+			if err := value.Validate(); err == nil {
+				t.Fatal("ToolResult.Validate() error = nil")
+			}
+		})
+	}
+}
+
 func TestModelRequestMetadataValidationExcludesBodiesAndBoundsFields(t *testing.T) {
 	startedAt := time.UnixMilli(20).UTC()
 	finishedAt := time.UnixMilli(21).UTC()

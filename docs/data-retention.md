@@ -57,11 +57,20 @@ disk encryption, and backup lifecycle remain the user's controls.
 <!-- markdownlint-enable MD013 -->
 
 The separate allowlisted local application log is not Session persistence. TUI
-mode uses bounded `info` logging by default and lets the user disable it. The log
-contains no request or response body, Tool arguments, raw object, raw container
-output, credential, or arbitrary error text. The file sink remains disabled
-unless its file-count, byte, and age rotation ceilings are fixed, documented,
-and tested.
+mode uses bounded `info` logging by default and lets the user disable it. Default
+records contain no request or response body, Tool arguments, raw object, raw
+container output, credential, or arbitrary error text. They may contain the
+bounded safe model-failure projection from ADR-0036: local request ID, stable
+error metadata, observed HTTP status, fixed cause category, and a sink-generated
+project-function chain without files, lines, arguments, or values.
+
+Explicit `logging.sensitive_diagnostics` adds only the ADR-0036 bounded model-
+failure endpoint, model, error-chain, failed-response prefix, and Go stack
+fields. These records remain outside SQLite and Session deletion. They use the
+same three-file, 1 MiB-per-file, seven-day rotation and are not removed merely
+by disabling the setting. The user controls earlier deletion of the log files.
+The file sink remains disabled unless all file-count, byte, age, and sensitive-
+field ceilings are fixed, documented, and tested.
 
 The 60-second approval execution TTL is not a retention period. It limits when a
 specific proposal may execute; its terminal audit record follows the 180-day
@@ -242,8 +251,10 @@ a crash bundle, or another KuPilot-created durable store:
   SDK values, stream deltas, invalid drafts, partial assistant Messages, and
   capability-check bodies.
 - Process environment snapshots, value-bearing CLI arguments, SQL bind values in
-  debug output, raw database rows outside explicit mappings, stack dumps,
-  arbitrary vendor errors, and raw application logs.
+  debug output, raw database rows outside explicit mappings, and raw application
+  logs. ADR-0036 admits only its safe function-name chain by default and its
+  bounded model error, failed-response prefix, and current-goroutine stack when
+  the user explicitly enables sensitive diagnostics.
 - Terminal byte streams, escape sequences, clipboard or device-control content,
   and model-selected styling.
 - Live clients, HTTP transports, database handles, transactions, Contexts,

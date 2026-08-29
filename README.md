@@ -85,10 +85,12 @@ submitting a change.
    first model-content transfer, review the exact destination and enabled cloud
    data categories, then accept or reject consent.
 
-4. Ask one diagnostic question. KuPilot shows bounded Tool steps and returns a
-   structured Diagnosis. Press `Ctrl+E` to inspect the bounded safe provenance
-   behind cited Evidence. Evaluate any recommendation independently; the
-   current composed binary cannot execute it.
+4. Ask one diagnostic question. KuPilot shows bounded activity steps with
+   readable labels and returns a structured Diagnosis. Homogeneous
+   resource-status results use a compact, kind-specific, non-interactive table.
+   Press `Ctrl+E` to inspect bounded safe observation details when needed.
+   Evaluate any recommendation independently; the current composed binary
+   cannot execute it.
 
 The [Getting Started Guide](docs/user-guide/getting-started.md) covers the TUI,
 scope selection, privacy review, cancellation, and common first-run failures.
@@ -146,11 +148,16 @@ Redaction reduces risk but cannot guarantee that every sensitive value in an
 otherwise eligible field is recognized.
 
 KuPilot stores sanitized Session history, cache, configuration, and a small
-allowlisted rotating operational log under one fixed Home. SQLite and logs are
-not encrypted. A model key saved through the TUI is also plaintext and is kept
-out of SQLite, logs, model content, transcript history, and ordinary typed
-configuration. Local logging can be disabled independently from the privacy
-control for container-output Tools.
+allowlisted rotating operational log under one fixed Home. The log includes
+bounded safe model-failure metadata and a function-name-only KuPilot call chain,
+by default. An explicit sensitive-diagnostics setting may temporarily add
+bounded provider failure details and a full local Go stack. It never
+deliberately attaches the model key, Authorization, or request content, but an
+untrusted error may echo operational content after sensitive-value handling.
+SQLite and logs are not encrypted. A model key saved through the TUI is also
+plaintext and is kept out of SQLite, logs, model content, transcript history,
+and ordinary typed configuration. Local logging can be disabled independently
+from the privacy control for container-output Tools.
 
 The `/privacy` surface can start a new standard- or minimal-persistence Session,
 tighten operational-detail retention, delete the current Session, and export a

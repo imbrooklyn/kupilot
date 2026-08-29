@@ -695,13 +695,13 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 	case agent.RunEventRunFailed:
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage})
 	case agent.RunEventRunCancelled:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The AgentRun was cancelled."})
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The diagnostic run was cancelled."})
 	case agent.RunEventRunTimedOut:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun reached its deadline."})
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run reached its time limit."})
 	case agent.RunEventRunStaleScope:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun stopped because its Kubernetes scope changed."})
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run stopped because the Kubernetes context or namespace changed."})
 	case agent.RunEventRunInterrupted:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The AgentRun was interrupted."})
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run was interrupted."})
 	default:
 		return ErrInvalidUIEvent
 	}
@@ -800,13 +800,10 @@ func projectToolStep(event agent.RunEvent) (ToolStep, error) {
 		if invocation.Truncated {
 			step.Status = ToolStepPartial
 		}
-		if step.Summary == "" {
-			step.Summary = "Tool collection completed."
-		}
 	case agent.RunEventToolCallDenied:
 		step.Status = ToolStepDenied
 		if step.Summary == "" {
-			step.Summary = "The Tool call was denied safely."
+			step.Summary = "The cluster read was blocked safely."
 		}
 	case agent.RunEventToolCallFailed:
 		step.Status = ToolStepFailed
@@ -814,7 +811,7 @@ func projectToolStep(event agent.RunEvent) (ToolStep, error) {
 			step.Status = ToolStepCancelled
 		}
 		if step.Summary == "" {
-			step.Summary = "The Tool call failed safely."
+			step.Summary = "The cluster read failed safely."
 		}
 	default:
 		return ToolStep{}, ErrInvalidUIEvent

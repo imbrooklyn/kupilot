@@ -73,7 +73,7 @@ func (gateway *ToolScopeBinding) InvalidateScope(generation int64) error {
 			ClassInvalidInput,
 			"kubernetes_scope_generation_invalid",
 			"invalidate_tool_scope",
-			"The Kubernetes scope generation is invalid.",
+			"The Kubernetes scope state is invalid.",
 		)
 	}
 	gateway.mu.Lock()
@@ -83,7 +83,7 @@ func (gateway *ToolScopeBinding) InvalidateScope(generation int64) error {
 			ClassStaleScope,
 			"kubernetes_scope_generation_stale",
 			"invalidate_tool_scope",
-			"The Kubernetes scope generation is stale.",
+			"The Kubernetes scope changed before the request could start.",
 		)
 	}
 	gateway.generation = generation
@@ -158,7 +158,7 @@ func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolReso
 			ClassInvalidInput,
 			"kubernetes_tool_reader_binding_invalid",
 			"bind_tool_scope_reader",
-			"The Kubernetes Tool reader binding is invalid.",
+			"The Kubernetes reader is not bound to the active context and namespace.",
 		)
 	}
 	gateway.mu.Lock()
@@ -168,7 +168,7 @@ func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolReso
 			ClassStaleScope,
 			"kubernetes_scope_generation_stale",
 			"bind_tool_scope_reader",
-			"The Kubernetes scope changed before the Tool read completed.",
+			"The Kubernetes context or namespace changed before the read completed.",
 		)
 	}
 	if gateway.reader != nil {

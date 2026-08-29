@@ -201,6 +201,11 @@ overrides, and cross-origin redirects are rejected. No endpoint value can
 originate in a question, model response, Kubernetes field, resumed Session, or
 Tool argument.
 
+The optional `reasoning_effort: none` request field comes only from typed user
+configuration. It is allowlisted exactly, is not inferred from the model name
+or endpoint error text, and cannot change origin, consent, Tool authority,
+budgets, or retry policy.
+
 The user sees the endpoint host and eligible data categories before the first
 transfer. Changing the origin or any eligible category invalidates consent.
 Capability checks contain no cluster data or conversation content. The model API
@@ -302,10 +307,24 @@ also have fixed bounds.
 Vendor and raw transport errors terminate at their adapter. A project-owned
 error contains a stable class, safe operation, retryability, user-safe message,
 correlation identifier, and optional allowlisted scope or ResourceRef. Runtime
-decisions use the class, never substring matching. Ordinary logs and AuditEvents
-use explicit fields and never serialize arbitrary objects, request or response
-bodies, environment, headers, SQL rows, or stack frames containing external
-data.
+decisions use the class, never substring matching. AuditEvents and default
+operational logs use explicit fields and never serialize arbitrary objects,
+request or response bodies, environment, headers, SQL rows, or stack frames
+containing external data. ADR-0036 additionally admits a bounded safe local
+model-failure projection: observed HTTP status, fixed cause category, and a
+sink-generated chain of KuPilot function names without files, lines, arguments,
+values, dependency frames, or raw causes.
+
+When the user explicitly sets `logging.sensitive_diagnostics: true`, the same
+failure event may also contain the configured endpoint and model, a 16 KiB
+credential-redacted error chain, the first 4 KiB of a failed provider response,
+and a 64 KiB current-goroutine Go stack with paths and lines. This copy never
+enters safe errors, runtime decisions, AuditEvents, SQLite, TUI, model content,
+or exports. KuPilot does not deliberately attach Authorization, the model
+credential, headers, requests, successful responses, streams, prompts, Tool
+data, Kubernetes content, environment, or SQL. The untrusted provider error or
+error chain may still echo user or cluster content after fixed sensitive-value
+handling. Startup warns while the mode is enabled.
 
 ### C11: `v0.1` write absence
 
@@ -426,7 +445,7 @@ security test oracle.
 | T03 | Secret data or another high-risk value is read from Kubernetes or smuggled through an Event, resource field, question, container output, Tool selection, or Diagnosis draft | C04 and C07 model-text processing plus C06 source denial and the ordered egress pipeline | `TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler`, `TestDiagnosisValidatorSanitizesEveryModelFreeTextField`, `TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence`, `TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction`, and the full sink integration test prove typed redaction or blocking before model, Tool/Kubernetes, TUI, Evidence, audit/log, and persistence sinks; denial paths assert zero forbidden calls |
 | T04 | Prompt or Tool-result injection asks the Agent to ignore policy, reveal data, change endpoint, cross scope, write, or approve itself | C04, C05, C07, C11, C12; authority exists only in runtime state and fixed dispatch | Feed injection fixtures through user, Event, container-output, resource-name, historic-message, and model channels; assert unchanged catalog, endpoint, scope, budgets, approval state, and zero forbidden adapter calls |
 | T05 | A structured Tool selection supplies unknown fields, scope, arbitrary Kind, raw selector, deadline, or larger limit | C04 strict decoding, internal scope binding, and C09 ceilings | Table-test missing, duplicate, unknown, wrong-type, overlong, and boundary fields; fuzz decoding; assert denial occurs before reservation or external I/O and canonical arguments contain only schema fields |
-| T06 | A malicious endpoint, URL confusion, redirect, or error body exfiltrates the API key or cluster data | C03 canonical origin validation, normal TLS, loopback-only HTTP, cross-origin redirect denial, consent binding, and safe errors | Table-test public/private HTTPS, loopback HTTP, non-loopback HTTP, user information, query, and redirect forms; prove no credential forwarding; change origin after consent and assert zero model-content requests until renewed consent |
+| T06 | A malicious endpoint, URL confusion, redirect, or error body exfiltrates the API key or cluster data, or endpoint text changes request policy | C03 canonical origin validation, normal TLS, loopback-only HTTP, cross-origin redirect denial, typed reasoning configuration, consent binding, and safe errors | Table-test public/private HTTPS, loopback HTTP, non-loopback HTTP, user information, query, redirect, and optional reasoning-field forms; prove no credential forwarding or error-driven field change; change origin after consent and assert zero model-content requests until renewed consent |
 | T07 | A Context or Namespace switch allows a stale result into the model, database, TUI, Evidence, or approval state | C05 three-gate generation protocol and approval invalidation | Move generation with barriers before invocation and during I/O; assert respectively zero external calls and zero accepted sinks; deliver late and duplicate events and assert terminal state is unchanged |
 | T08 | Broad RBAC permits reads outside KuPilot's Kind, relationship, Namespace, or field policy | C06 task-specific ports, code allowlists, projection, and local limits | Run every Tool against a request-recording fake API; compare exact verbs, resources, Namespace, limits, and projected fields to golden allowlists; assert adversarial owner graphs stop at fixed edges and hops |
 | T09 | Model output bypasses structured Tool calling through prose, malformed stream fragments, duplicate calls, or an invented Tool name | C04 strict structured events and no text fallback; C09 repetition and loop limits | Replay chunk-boundary permutations, malformed events, duplicate identifiers, invented names, and prose that resembles a call; assert no unintended handler call and one classified terminal outcome |
@@ -434,7 +453,7 @@ security test oracle.
 | T11 | Retained data outlives its contract, minimal-persistence becomes resumable, deletion is partial, an approval survives deletion, or cleanup failure is hidden | C08, C12, and the Data Retention Contract | Use a fake clock at cutoff boundaries; assert one-way retention updates, complete transactional cascades, no content rows in minimal mode, no resume candidate, target-bound confirmation, active-run cancellation, pending/approved invalidation, zero executor calls on denial, honest deletion failure, and a startup/run gate when mandatory pruning fails |
 | T12 | Kubernetes, model, or user-controlled text executes terminal control sequences, spoofs approval, or hides scope | C07 local-only styling and typed approval state | Golden-test escape, control, invalid UTF-8, bidirectional, wide, combining, and oversized input from every external source; assert rendered bytes contain no forbidden sequence and approval fields cannot originate in text |
 | T13 | Unbounded model streams, Kubernetes results, logs, recursion, retries, or event queues exhaust memory, time, or model budget | C09 atomic hard ceilings and owned cancellation | Test each exact boundary and one-over value with fake clocks and counters; fuzz stream chunks; assert bounded allocations/queues, no call after exhaustion, one terminal result, and an explicit gap |
-| T14 | Raw vendor errors or logs disclose credentials, endpoint bodies, SQL, local paths, or cluster data | C01 and C10 safe classification and allowlisted logging | `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestSecurityAssuranceSafeErrorCancellationIdentity`, and `TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors` cover direct, nested, wrapped, joined, and formatted adapter failures; stable classes and cancellation identity remain while every enumerated model, Tool, TUI, log, audit, SQLite, child-process, CLI, and error sink excludes the canary |
+| T14 | Raw vendor errors or logs disclose credentials, endpoint bodies, SQL, local paths, or cluster data outside the explicit sensitive model-failure mode | C01 and C10 safe classification, default allowlisted logging, and bounded opt-in diagnostics | `TestSecurityAssuranceSafeErrorSourceSinkMatrix`, `TestSecurityAssuranceSafeErrorCancellationIdentity`, `TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors`, `TestModelRequestErrorMappingUsesObservedHTTPStatusWithoutRetainingRawCause`, `TestFileLoggerWritesBoundedSafeModelFailureDiagnostics`, `TestFileLoggerWritesOnlyExplicitOptInSensitiveModelDiagnostics`, and model credential-redaction tests cover direct, nested, wrapped, joined, and formatted adapter failures; default sinks exclude every canary, while sensitive mode admits only documented bounded fields and removes the exact credential |
 | T15 | A hidden Kubernetes write path exists in `v0.1` through a Tool, TUI shortcut, generic client, dependency, or model claim | C11 absent composition and read-only contracts | Static import and method checks plus a request-recording fake assert only admitted read verbs; exercise every command and Tool; validate that claimed execution prose is not accepted as fact |
 | T16 | A future approval is replayed, broadened, approved after expiry or scope change, or executed against a changed Deployment | C12 versioned digest, 60-second TTL, nonce, one-time state, re-read, fingerprint, and concurrency precondition | With a fake clock and store, mutate each bound field individually, replay decisions, cross restart, cross generation, and race target changes; assert external write count zero for every mismatch |
 | T17 | A database failure bypasses approval audit or causes an automatic duplicate write | C08 and C12 durable pre-operation gate, consumed state, no automatic retry | Fail each transaction boundary and interrupt before and after the fake external request; assert no request before durable consumed/audit state, at most one request, visible unknown outcome where needed, and no startup replay |
@@ -463,10 +482,16 @@ and cannot replace these tests.
 
 Public examples, fixtures committed for documentation, issue templates, and
 screenshots must not contain kubeconfig material, credentials, Secret objects or
-data, raw cluster output, raw container output, or model API keys. TUI mode writes
-a bounded allowlisted local info log by default and lets the user disable it; it
-never records bodies or Tool arguments. A future diagnostic bundle requires a
-separate Accepted ADR and threat review.
+data, raw cluster output, raw container output, or model API keys. TUI mode
+writes a bounded allowlisted local info log by default and lets the user disable
+it. The fixed `model_request` event records only the ADR-0036 safe failure
+projection by default, including a bounded project-symbol call chain without
+files, lines, arguments, values, external frames, or raw causes. The explicit
+ADR-0036 sensitive mode adds only its bounded failure fields and never Tool
+arguments or request content as direct sources. Its untrusted failure fields may
+echo operational content after sensitive-value handling, but must never retain
+the exact model credential. A future diagnostic bundle requires a separate
+Accepted ADR and threat review.
 
 ## 9. Failure policy
 
@@ -594,6 +619,7 @@ under the [Security Policy](../SECURITY.md).
 - [ADR-0016: Freeze Runtime Budgets](adr/0016-freeze-runtime-budgets.md)
 - [ADR-0020: Contain Kubeconfig Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](adr/0035-use-one-user-managed-home-and-interactive-model-setup.md)
+- [ADR-0036: Record Bounded Model Failure Diagnostics](adr/0036-record-bounded-safe-model-failure-diagnostics.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0027: Use Stable Safe Error Classes](adr/0027-use-stable-safe-error-classes.md)
 - [ADR-0029: Limit `v0.2` to Deployment Restart](adr/0029-limit-v0.2-to-deployment-restart.md)

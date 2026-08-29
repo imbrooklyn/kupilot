@@ -36,6 +36,7 @@ type responseDecoder struct {
 	sawTool       bool
 	lastToolIndex int
 	tools         map[int]*toolCallAssembly
+	rawFailure    error
 }
 
 type responseEnvelope struct {
@@ -80,6 +81,7 @@ func (decoder *responseDecoder) decode(stream *schema.StreamReader[*schema.Messa
 			return decoder.complete()
 		}
 		if receiveError != nil {
+			decoder.rawFailure = receiveError
 			return decoder.modelError(mapModelStreamError(decoder.ctx, receiveError))
 		}
 		if modelError := decoder.consumeMessage(message); modelError != nil {

@@ -278,7 +278,7 @@ func (repository *AgentRunRepository) BeginWithAudit(
 		err,
 		"agent_run_begin_failed",
 		"begin_agent_run_with_audit",
-		"KuPilot could not durably start the AgentRun.",
+		"KuPilot could not durably start the diagnostic run.",
 	)
 }
 
@@ -306,7 +306,7 @@ func (repository *AgentRunRepository) FinishWithAudit(
 		err,
 		"agent_run_finish_failed",
 		"finish_agent_run_with_audit",
-		"KuPilot could not store the terminal AgentRun state.",
+		"KuPilot could not store the completed diagnostic run state.",
 	)
 }
 
@@ -364,7 +364,7 @@ func (repository *AgentRunRepository) CompleteWithAudit(
 		err,
 		"agent_run_finish_failed",
 		"complete_agent_run_with_audit",
-		"KuPilot could not store the final AgentRun result.",
+		"KuPilot could not store the final diagnosis.",
 	)
 }
 
@@ -422,7 +422,7 @@ func (repository *ToolInvocationRepository) SaveWithAudit(
 			repository.db,
 			"tool_invocation_save_failed",
 			"save_tool_invocation_with_audit",
-			"KuPilot could not store safe ToolInvocation metadata.",
+			"KuPilot could not store safe tool-activity metadata.",
 			err,
 		)
 	}

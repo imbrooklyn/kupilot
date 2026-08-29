@@ -201,7 +201,7 @@ func (collector *modelCollector) accept(event domain.ModelStreamEvent) error {
 		assembly.arguments.WriteString(fragment.ArgumentsFragment)
 		if assembly.id.Len() > domain.MaxModelToolCallIDBytes || assembly.name.Len() > domain.MaxModelToolNameBytes ||
 			assembly.arguments.Len() > domain.MaxModelToolArgumentsBytes {
-			return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model Tool call exceeded a fixed limit.", nil)
+			return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model's cluster-read request exceeded a fixed limit.", nil)
 		}
 		collector.sawTool = true
 		if fragment.Index > collector.maxIndex {
@@ -252,7 +252,7 @@ func (collector *modelCollector) finalMessage(ctx context.Context) (*schema.Mess
 				ArgumentsJSON: assembly.arguments.String(),
 			}
 			if call.Validate() != nil {
-				return nil, failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a Tool call outside the fixed policy.", nil)
+				return nil, failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", nil)
 			}
 			calls[index] = call
 		}

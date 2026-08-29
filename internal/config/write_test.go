@@ -20,6 +20,8 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	}
 	defer secret.Destroy()
 	base := Defaults()
+	base.Model.ReasoningEffort = ModelReasoningEffortNone
+	base.Logging.SensitiveDiagnostics = true
 	if err := SaveModelProfile(context.Background(), paths, base, ModelProfile{
 		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret); err != nil {
@@ -35,7 +37,8 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	}
 	defer loaded.Credential.Destroy()
 	if loaded.Model.Endpoint != "https://model.example.test/v1" || loaded.Model.Model != "diagnostic-model" ||
-		loaded.CredentialSource != CredentialSourceFile || !loaded.Credential.IsSet() {
+		loaded.Model.ReasoningEffort != ModelReasoningEffortNone || loaded.CredentialSource != CredentialSourceFile ||
+		!loaded.Credential.IsSet() || !loaded.Logging.SensitiveDiagnostics {
 		t.Fatalf("loaded model profile = %#v source=%q credential=%v", loaded.Model, loaded.CredentialSource, loaded.Credential.IsSet())
 	}
 	encoded, err := json.Marshal(loaded.Config)

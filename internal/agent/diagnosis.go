@@ -25,13 +25,14 @@ var (
 type EvidenceRegistry struct {
 	mu sync.Mutex
 
-	runID       domain.AgentRunID
-	scope       domain.ClusterScope
-	invocations map[domain.ToolInvocationID]struct{}
-	items       map[domain.EvidenceID]domain.Evidence
-	truncated   bool
-	sealed      bool
-	revision    uint64
+	runID             domain.AgentRunID
+	scope             domain.ClusterScope
+	invocations       map[domain.ToolInvocationID]struct{}
+	items             map[domain.EvidenceID]domain.Evidence
+	resourceSummaries map[domain.EvidenceID]domain.ResourceSummary
+	truncated         bool
+	sealed            bool
+	revision          uint64
 }
 
 // NewEvidenceRegistry creates an empty runtime-owned registry for one run and
@@ -41,10 +42,11 @@ func NewEvidenceRegistry(runID domain.AgentRunID, scope domain.ClusterScope) (*E
 		return nil, ErrInvalidEvidenceRegistry
 	}
 	return &EvidenceRegistry{
-		runID:       runID,
-		scope:       scope,
-		invocations: make(map[domain.ToolInvocationID]struct{}),
-		items:       make(map[domain.EvidenceID]domain.Evidence),
+		runID:             runID,
+		scope:             scope,
+		invocations:       make(map[domain.ToolInvocationID]struct{}),
+		items:             make(map[domain.EvidenceID]domain.Evidence),
+		resourceSummaries: make(map[domain.EvidenceID]domain.ResourceSummary),
 	}, nil
 }
 
@@ -73,8 +75,11 @@ func (registry *EvidenceRegistry) AcceptToolResult(call BoundToolCall, result do
 			return 0, ErrInvalidEvidenceRegistry
 		}
 	}
-	for _, evidence := range result.Evidence {
+	for index, evidence := range result.Evidence {
 		registry.items[evidence.ID] = cloneEvidence(evidence)
+		if len(result.ResourceSummaries) > 0 {
+			registry.resourceSummaries[evidence.ID] = cloneResourceSummary(result.ResourceSummaries[index])
+		}
 	}
 	registry.invocations[result.InvocationID] = struct{}{}
 	if result.Truncation.Truncated {
@@ -97,9 +102,10 @@ func (registry *EvidenceRegistry) Len() int {
 }
 
 type evidenceSnapshot struct {
-	items     map[domain.EvidenceID]domain.Evidence
-	truncated bool
-	revision  uint64
+	items             map[domain.EvidenceID]domain.Evidence
+	resourceSummaries map[domain.EvidenceID]domain.ResourceSummary
+	truncated         bool
+	revision          uint64
 }
 
 func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
@@ -115,7 +121,14 @@ func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
 	for id, evidence := range registry.items {
 		items[id] = cloneEvidence(evidence)
 	}
-	return evidenceSnapshot{items: items, truncated: registry.truncated, revision: registry.revision}, nil
+	resourceSummaries := make(map[domain.EvidenceID]domain.ResourceSummary, len(registry.resourceSummaries))
+	for id, summary := range registry.resourceSummaries {
+		resourceSummaries[id] = cloneResourceSummary(summary)
+	}
+	return evidenceSnapshot{
+		items: items, resourceSummaries: resourceSummaries,
+		truncated: registry.truncated, revision: registry.revision,
+	}, nil
 }
 
 func (registry *EvidenceRegistry) seal(revision uint64) error {
@@ -141,6 +154,12 @@ func cloneEvidence(evidence domain.Evidence) domain.Evidence {
 	return cloned
 }
 
+func cloneResourceSummary(summary domain.ResourceSummary) domain.ResourceSummary {
+	cloned := summary
+	cloned.Owners = append([]domain.ResourceOwner(nil), summary.Owners...)
+	return cloned
+}
+
 // DiagnosisDraft is the model-decoded, untrusted four-part content. Runtime
 // injects identity, scope, observation times, warnings, and rendered Markdown.
 type DiagnosisDraft struct {
@@ -158,8 +177,8 @@ type DiagnosisMetadata struct {
 }
 
 const (
-	warningConfirmedFactRemoved = "A confirmed fact was removed because it did not cite accepted Evidence from this AgentRun."
-	warningHypothesisReference  = "Invalid or duplicate Evidence references were removed from a hypothesis."
+	warningConfirmedFactRemoved = "A confirmed fact was removed because it did not cite an accepted observation from this diagnostic run."
+	warningHypothesisReference  = "Invalid or duplicate observation references were removed from a hypothesis."
 	warningExecutionRejected    = "An execution claim was rejected; recommendations are not executed in v0.1."
 	maxDiagnosisDraftTextBytes  = 16 * 1024
 )
@@ -242,28 +261,28 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	if len(snapshot.items) == 0 && !hasMissingKind(missing, domain.MissingInformationAbsent) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationAbsent,
-			Detail: "No accepted Evidence was collected for this AgentRun.",
+			Detail: "No accepted cluster observation was collected for this diagnostic run.",
 			Impact: "No cluster observation can be presented as a confirmed fact.",
 		})
 	}
 	if truncated && !hasMissingKind(missing, domain.MissingInformationTruncated) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationTruncated,
-			Detail: "At least one accepted Evidence item was truncated by a fixed limit.",
-			Impact: "The Diagnosis cannot account for content outside the admitted result.",
+			Detail: "At least one accepted observation was truncated by a fixed limit.",
+			Impact: "The diagnosis cannot account for content outside the admitted result.",
 		})
 	}
 	if removedConfirmed && !hasMissingKind(missing, domain.MissingInformationUnsupported) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationUnsupported,
-			Detail: "At least one draft confirmed fact did not cite accepted Evidence from this AgentRun.",
-			Impact: "The rejected draft entry was excluded from the final Diagnosis.",
+			Detail: "At least one draft confirmed fact did not reference an accepted observation from this diagnostic run.",
+			Impact: "The rejected draft entry was excluded from the final diagnosis.",
 		})
 	}
 	if removedHypothesisReference && !hasMissingKind(missing, domain.MissingInformationUnsupported) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationUnsupported,
-			Detail: "At least one hypothesis citation was invalid or duplicated after binding to accepted Evidence from this AgentRun.",
+			Detail: "At least one hypothesis source reference was invalid or duplicated after binding to accepted observations from this diagnostic run.",
 			Impact: "The citation was removed and the affected hypothesis confidence was reduced.",
 		})
 	}
@@ -285,7 +304,7 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		CreatedAt:            metadata.CreatedAt,
 		EvidenceDetailsState: detailState,
 	}
-	diagnosis.AnswerMarkdown = renderDiagnosisMarkdown(diagnosis)
+	diagnosis.AnswerMarkdown = renderDiagnosisMarkdown(diagnosis, snapshot.items, snapshot.resourceSummaries)
 	if diagnosis.Validate() != nil {
 		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 	}
@@ -437,68 +456,245 @@ func evidenceWindow(items map[domain.EvidenceID]domain.Evidence) (*time.Time, *t
 	return &earliest, &latest, state, truncated
 }
 
-func renderDiagnosisMarkdown(diagnosis domain.Diagnosis) string {
+func renderDiagnosisMarkdown(
+	diagnosis domain.Diagnosis,
+	evidenceByID map[domain.EvidenceID]domain.Evidence,
+	resourceSummaries map[domain.EvidenceID]domain.ResourceSummary,
+) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Observed ClusterScope: context=%q namespace=%q generation=%d\n", diagnosis.Scope.Context, diagnosis.Scope.Namespace, diagnosis.Scope.Generation)
-	if diagnosis.ObservedFrom == nil {
-		builder.WriteString("Observation window: no accepted Evidence\n\n")
+	fmt.Fprintf(&builder, "Scope: %s / %s\n", diagnosis.Scope.Context, diagnosis.Scope.Namespace)
+	if diagnosis.ObservedFrom == nil || diagnosis.ObservedTo == nil {
+		builder.WriteString("Observed: unavailable\n\n")
+	} else if diagnosis.ObservedFrom.Equal(*diagnosis.ObservedTo) {
+		fmt.Fprintf(&builder, "Observed: %s\n\n", diagnosis.ObservedFrom.Format(time.RFC3339Nano))
 	} else {
-		fmt.Fprintf(&builder, "Observation window: %s to %s\n\n", diagnosis.ObservedFrom.Format(time.RFC3339Nano), diagnosis.ObservedTo.Format(time.RFC3339Nano))
+		fmt.Fprintf(&builder, "Observed: %s to %s\n\n", diagnosis.ObservedFrom.Format(time.RFC3339Nano), diagnosis.ObservedTo.Format(time.RFC3339Nano))
 	}
 	builder.WriteString("## Confirmed facts\n\n")
 	if len(diagnosis.ConfirmedFacts) == 0 {
-		builder.WriteString("- None.\n")
-	}
-	for _, fact := range diagnosis.ConfirmedFacts {
-		fmt.Fprintf(&builder, "- %s (Evidence: %s)\n", markdownBulletText(fact.Statement), markdownEvidenceIDs(fact.EvidenceIDs))
+		builder.WriteString("None.\n")
+	} else if rows, ok := diagnosisResourceStatusRows(diagnosis.ConfirmedFacts, evidenceByID, resourceSummaries); ok {
+		builder.WriteString(renderDiagnosisResourceStatusTable(rows))
+	} else {
+		for _, fact := range diagnosis.ConfirmedFacts {
+			fmt.Fprintf(&builder, "- %s\n", markdownConfirmedFactText(fact.Statement, len(fact.EvidenceIDs)))
+		}
 	}
 	builder.WriteString("\n## Hypotheses\n\n")
 	if len(diagnosis.Hypotheses) == 0 {
-		builder.WriteString("- None.\n")
+		builder.WriteString("None.\n")
 	}
 	for _, hypothesis := range diagnosis.Hypotheses {
-		support := "none"
-		if len(hypothesis.SupportingEvidenceIDs) > 0 {
-			support = markdownEvidenceIDs(hypothesis.SupportingEvidenceIDs)
-		}
-		fmt.Fprintf(&builder, "- %s (Confidence: %s; Supporting Evidence: %s; Falsifier: %s)\n",
-			markdownBulletText(hypothesis.Statement), hypothesis.Confidence, support, markdownBulletText(hypothesis.Falsifier))
+		fmt.Fprintf(&builder, "- %s\n  Confidence: %s\n  Check: %s\n",
+			markdownBulletText(hypothesis.Statement), hypothesis.Confidence, markdownBulletText(hypothesis.Falsifier))
 	}
 	builder.WriteString("\n## Missing information\n\n")
 	if len(diagnosis.MissingInformation) == 0 {
-		builder.WriteString("- None.\n")
+		builder.WriteString("None.\n")
 	}
 	for _, missing := range diagnosis.MissingInformation {
-		fmt.Fprintf(&builder, "- [%s] %s Impact: %s\n", missing.Kind, markdownBulletText(missing.Detail), markdownBulletText(missing.Impact))
+		fmt.Fprintf(&builder, "- %s: %s\n  Impact: %s\n",
+			missingInformationLabel(missing.Kind), markdownBulletText(missing.Detail), markdownBulletText(missing.Impact))
 	}
 	builder.WriteString("\n## Recommended actions\n\n")
 	if len(diagnosis.RecommendedActions) == 0 {
-		builder.WriteString("- None.\n")
+		builder.WriteString("None.\n")
 	}
 	for _, action := range diagnosis.RecommendedActions {
-		fmt.Fprintf(&builder, "- %s Risk: %s", markdownBulletText(action.Action), markdownBulletText(action.Risk))
+		fmt.Fprintf(&builder, "- %s\n  Risk: %s\n", markdownBulletText(action.Action), markdownBulletText(action.Risk))
 		if len(action.Prerequisites) > 0 {
-			builder.WriteString(" Prerequisites: ")
+			builder.WriteString("  Before acting: ")
 			for index, prerequisite := range action.Prerequisites {
 				if index > 0 {
 					builder.WriteString("; ")
 				}
 				builder.WriteString(markdownBulletText(prerequisite))
 			}
+			builder.WriteByte('\n')
 		}
-		builder.WriteString(" Status: Not executed.\n")
+		builder.WriteString("  Status: Not executed.\n")
 	}
 	return builder.String()
+}
+
+func missingInformationLabel(kind domain.MissingInformationKind) string {
+	switch kind {
+	case domain.MissingInformationAbsent:
+		return "Unavailable"
+	case domain.MissingInformationForbidden:
+		return "Not permitted"
+	case domain.MissingInformationUnsupported:
+		return "Unsupported"
+	case domain.MissingInformationStale:
+		return "Outdated"
+	case domain.MissingInformationConflicting:
+		return "Conflicting"
+	case domain.MissingInformationTruncated:
+		return "Partial"
+	case domain.MissingInformationSensitiveOutputBlocked:
+		return "Sensitive value withheld"
+	default:
+		return "Unavailable"
+	}
 }
 
 func markdownBulletText(value string) string {
 	return strings.ReplaceAll(value, "\n", "\n    ")
 }
 
-func markdownEvidenceIDs(ids []domain.EvidenceID) string {
-	values := make([]string, len(ids))
-	for index, id := range ids {
-		values[index] = "`" + string(id) + "`"
+const minBulkFactEvidenceCount = 4
+
+func markdownConfirmedFactText(value string, evidenceCount int) string {
+	if evidenceCount < minBulkFactEvidenceCount {
+		return markdownBulletText(value)
 	}
-	return strings.Join(values, ", ")
+	for _, separator := range []string{";", string(rune(0xff1b))} {
+		parts := strings.Split(value, separator)
+		if len(parts) == 1 {
+			continue
+		}
+		for index := 1; index < len(parts); index++ {
+			parts[index] = strings.TrimLeft(parts[index], " \n")
+		}
+		value = strings.Join(parts, separator+"\n")
+	}
+	return markdownBulletText(value)
+}
+
+type diagnosisResourceStatusRow struct {
+	summary domain.ResourceSummary
+}
+
+func diagnosisResourceStatusRows(
+	facts []domain.ConfirmedFact,
+	evidenceByID map[domain.EvidenceID]domain.Evidence,
+	resourceSummaries map[domain.EvidenceID]domain.ResourceSummary,
+) ([]diagnosisResourceStatusRow, bool) {
+	if len(facts) == 0 || len(evidenceByID) == 0 || len(resourceSummaries) == 0 {
+		return nil, false
+	}
+	rows := make([]diagnosisResourceStatusRow, 0, len(facts))
+	seen := make(map[domain.EvidenceID]struct{}, len(facts))
+	resourceKind := ""
+	for _, fact := range facts {
+		if len(fact.EvidenceIDs) != 1 {
+			return nil, false
+		}
+		id := fact.EvidenceIDs[0]
+		if _, duplicate := seen[id]; duplicate {
+			return nil, false
+		}
+		evidence, exists := evidenceByID[id]
+		if !exists || evidence.Category != domain.EvidenceCategoryResourceStatus {
+			return nil, false
+		}
+		summary, exists := resourceSummaries[id]
+		if !exists || summary.Validate() != nil || summary.Reference != evidence.Resource {
+			return nil, false
+		}
+		if resourceKind == "" {
+			resourceKind = summary.Reference.Kind
+		} else if summary.Reference.Kind != resourceKind {
+			return nil, false
+		}
+		seen[id] = struct{}{}
+		rows = append(rows, diagnosisResourceStatusRow{
+			summary: cloneResourceSummary(summary),
+		})
+	}
+	sort.Slice(rows, func(left, right int) bool {
+		return rows[left].summary.Reference.Name < rows[right].summary.Reference.Name
+	})
+	return rows, true
+}
+
+func renderDiagnosisResourceStatusTable(rows []diagnosisResourceStatusRow) string {
+	kind := domain.ResourceKind(rows[0].summary.Reference.Kind)
+	headers := []string{"NAME", "STATUS"}
+	values := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		name := row.summary.Reference.Name
+		status := row.summary.Status
+		switch kind {
+		case domain.ResourceKindPod:
+			headers = []string{"NAME", "READY", "STATUS"}
+			values = append(values, []string{name, countRatio(status.Ready, status.Desired), podDisplayStatus(status)})
+		case domain.ResourceKindDeployment:
+			headers = []string{"NAME", "READY", "AVAILABLE", "REASON"}
+			values = append(values, []string{name, countRatio(status.Ready, status.Desired), countRatio(status.Available, status.Desired), tableValue(status.Reason)})
+		case domain.ResourceKindReplicaSet:
+			headers = []string{"NAME", "DESIRED", "READY", "AVAILABLE", "REASON"}
+			values = append(values, []string{name, optionalCount(status.Desired), optionalCount(status.Ready), optionalCount(status.Available), tableValue(status.Reason)})
+		case domain.ResourceKindJob:
+			headers = []string{"NAME", "STATUS", "COMPLETIONS", "FAILED", "REASON"}
+			values = append(values, []string{name, tableValue(status.Phase), countRatio(status.Succeeded, status.Desired), optionalCount(status.Failed), tableValue(status.Reason)})
+		case domain.ResourceKindService:
+			headers = []string{"NAME", "TYPE"}
+			values = append(values, []string{name, tableValue(status.ServiceType)})
+		default:
+			values = append(values, []string{name, tableValue(status.Phase)})
+		}
+	}
+	return renderDiagnosisColumns(headers, values)
+}
+
+func podDisplayStatus(status domain.ResourceStatus) string {
+	if status.Reason != "" {
+		return tableValue(status.Reason)
+	}
+	return tableValue(status.Phase)
+}
+
+func countRatio(value, desired domain.OptionalCount) string {
+	if value.Present && desired.Present {
+		return fmt.Sprintf("%d/%d", value.Value, desired.Value)
+	}
+	return optionalCount(value)
+}
+
+func optionalCount(value domain.OptionalCount) string {
+	if !value.Present {
+		return "-"
+	}
+	return fmt.Sprintf("%d", value.Value)
+}
+
+func tableValue(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func renderDiagnosisColumns(headers []string, rows [][]string) string {
+	widths := make([]int, len(headers))
+	for index, header := range headers {
+		widths[index] = len(header)
+	}
+	for _, row := range rows {
+		for index, value := range row {
+			widths[index] = max(widths[index], len(value))
+		}
+	}
+	var builder strings.Builder
+	writeDiagnosisColumns(&builder, headers, widths)
+	for _, row := range rows {
+		writeDiagnosisColumns(&builder, row, widths)
+	}
+	return builder.String()
+}
+
+func writeDiagnosisColumns(builder *strings.Builder, values []string, widths []int) {
+	for index, value := range values {
+		if index > 0 {
+			builder.WriteString("  ")
+		}
+		if index == len(values)-1 {
+			builder.WriteString(value)
+			continue
+		}
+		fmt.Fprintf(builder, "%-*s", widths[index], value)
+	}
+	builder.WriteByte('\n')
 }

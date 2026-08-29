@@ -21,10 +21,10 @@ func TestViewStructureKeepsTranscriptComposerSuggestionsAndFooterOrder(t *testin
 
 	questionAt := strings.Index(content, "Why is the Pod restarting?")
 	agentAt := strings.Index(content, "Final diagnosis.")
-	toolAt := strings.Index(content, "get_resource · succeeded")
+	toolAt := strings.Index(content, "Inspect resource · done")
 	composerAt := strings.Index(content, "/r")
 	candidateAt := strings.Index(content, "/resource")
-	footerAt := strings.Index(content, "ctx/test-context")
+	footerAt := strings.Index(content, "Context test-context")
 	if !(questionAt >= 0 && questionAt < agentAt && agentAt < toolAt && toolAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
 		t.Fatalf("unexpected vertical order: question=%d agent=%d tool=%d composer=%d candidate=%d footer=%d\n%s",
 			questionAt, agentAt, toolAt, composerAt, candidateAt, footerAt, content)
@@ -57,12 +57,12 @@ func TestViewNoColorSemanticGolden(t *testing.T) {
 <user-surface> Why is the Pod restarting?
 <surface-border>
 <agent> Final diagnosis.
-<tool> get_resource · succeeded
+<tool> Inspect resource · done
 <surface-border>
 <composer> /r
 <surface-border>
 <candidate> /resource
-<footer> ctx/test-context · ns/test-namespace · read-only`)
+<footer> Context test-context · Namespace test-namespace · read-only`)
 	if got != want {
 		t.Fatalf("semantic golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -167,14 +167,14 @@ func semanticViewSnapshot(content string) string {
 			snapshot = append(snapshot, "<user-surface> Why is the Pod restarting?")
 		case strings.Contains(trimmed, "Final diagnosis."):
 			snapshot = append(snapshot, "<agent> Final diagnosis.")
-		case strings.Contains(trimmed, "get_resource · succeeded"):
-			snapshot = append(snapshot, "<tool> get_resource · succeeded")
+		case strings.Contains(trimmed, "Inspect resource · done"):
+			snapshot = append(snapshot, "<tool> Inspect resource · done")
 		case strings.Contains(trimmed, "│ /r"):
 			snapshot = append(snapshot, "<composer> /r")
 		case strings.HasPrefix(trimmed, "› /resource"):
 			snapshot = append(snapshot, "<candidate> /resource")
-		case strings.Contains(trimmed, "ctx/test-context"):
-			snapshot = append(snapshot, "<footer> ctx/test-context · ns/test-namespace · read-only")
+		case strings.Contains(trimmed, "Context test-context"):
+			snapshot = append(snapshot, "<footer> Context test-context · Namespace test-namespace · read-only")
 		}
 	}
 	return strings.Join(snapshot, "\n")

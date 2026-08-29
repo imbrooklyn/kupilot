@@ -76,7 +76,7 @@ ReAct accumulation and branch loop without adding admitted behavior.
 
 ## Versioned System Prompt and language
 
-`kupilot-agent-policy-v1` is a deterministic English System Prompt. It defines
+`kupilot-agent-policy-v2` is a deterministic English System Prompt. It defines
 the read-only diagnostic role, Evidence-first behavior, fixed four-part
 Diagnosis, unexecuted recommendation rule, Tool-result trust boundary, and
 language policy. A machine-generated JSON block contains only:
@@ -102,16 +102,47 @@ locale negotiation, or probabilistic runtime language detector.
 
 Before selecting a Tool, the System Prompt requires the Agent to distinguish an
 admitted current-Namespace diagnostic request from an unsupported source request.
-Node and Namespace objects, Namespace discovery, cluster-wide inventory, and
-every unlisted Kind are explicit examples. The Agent must not use an admitted
-Kind as a proxy for such a request. It returns a structured `unsupported` gap
-without a Tool call and may identify the active Namespace as trusted scope, not
-as Kubernetes Evidence. Namespace discovery remains available only through the
-fixed `/namespace` selector outside an AgentRun.
+Namespace discovery specifically means listing, discovering, or selecting
+Namespace objects; it does not include collecting a bounded list of an admitted
+Kind inside the already verified active Namespace. The latter is supported
+through `list_resources`, including when the user asks only for that bounded
+list. When an admitted Tool can directly obtain the requested fact, the Agent
+must select it in the current response rather than defer it as a recommendation
+or report its not-yet-collected Evidence as absent. An unqualified list request
+uses `health_filter=any`; `abnormal` remains for questions explicitly restricted
+to unhealthy resources. Node and Namespace objects, cluster-wide inventory, and
+every unlisted Kind remain unsupported. The Agent must not use an admitted Kind
+as a proxy for such a request. It returns a structured `unsupported` gap without
+a Tool call and may identify the active Namespace as trusted scope, not as
+Kubernetes Evidence. Namespace discovery remains available only through the
+fixed `/namespace` selector outside an AgentRun. For a homogeneous set of
+resource-status facts from `list_resources`, the runtime retains one local-only
+typed `ResourceSummary` beside each accepted Evidence item. Those summaries
+come from the already projected Tool result; they are excluded from the model
+envelope and are not persisted as a new field. The local renderer ignores model
+prose for table cells and emits a compact, non-interactive, kind-specific
+result:
+
+- Pod: `NAME`, `READY`, `STATUS`
+- Deployment: `NAME`, `READY`, `AVAILABLE`, `REASON`
+- ReplicaSet: `NAME`, `DESIRED`, `READY`, `AVAILABLE`, `REASON`
+- Job: `NAME`, `STATUS`, `COMPLETIONS`, `FAILED`, `REASON`
+- Service: `NAME`, `TYPE`
+
+Mixed or non-list facts remain concise bullets. This is a bounded result
+presentation, not a primary inventory table, Picker, browser, Watch, or kubectl
+execution path. The Agent must still produce one concise confirmed fact per
+resource and must not build presentation markup or concatenate rows itself.
+
+Evidence IDs and citation aliases are not part of the default Diagnosis or Tool
+timeline. Exact typed references remain bound to the Diagnosis for validation,
+persistence, and explicit observation-detail lookup. `Ctrl+E` enters that
+non-editable inspection surface without exposing correlation IDs in the normal
+transcript or detail view.
 
 ## Fixed Tool contract
 
-The `kupilot-read-tools-v1` catalog contains exactly these six structured,
+The `kupilot-read-tools-v2` catalog contains exactly these six structured,
 read-only Tools in fixed order:
 
 1. `get_resource`
@@ -231,8 +262,11 @@ Final validation performs these deterministic operations:
 - The observed time window and complete or partial Evidence-detail state are
   derived from registered Evidence. Truncation creates an explicit gap.
 - Final Markdown is rendered locally from only the validated collections, uses
-  the four stable English headings, cites accepted Evidence IDs, shows the
-  observed scope and time window, and marks every recommendation `Not executed`.
+  the four stable English headings, keeps accepted Evidence references in the
+  typed Diagnosis instead of user-facing prose, shows a concise Context /
+  Namespace and observation time without the internal generation, renders
+  structured list results from typed local summaries, and marks every
+  recommendation `Not executed`.
 
 The registry is sealed only after the final Diagnosis passes the complete
 domain validation. A successful AgentRun means that this policy was followed;

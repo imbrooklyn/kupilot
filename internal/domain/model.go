@@ -77,6 +77,15 @@ const (
 	ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP ModelTransportPolicy = "verified_https_or_loopback_http_same_origin"
 )
 
+// ModelReasoningEffort is the optional fixed Chat Completions reasoning mode.
+// The empty value omits the provider field; none explicitly disables reasoning.
+type ModelReasoningEffort string
+
+const (
+	ModelReasoningEffortOmitted ModelReasoningEffort = ""
+	ModelReasoningEffortNone    ModelReasoningEffort = "none"
+)
+
 // ModelConfiguration contains only validated, serializable, non-sensitive
 // settings. It contains no credential, header, client, callback, or SDK value.
 type ModelConfiguration struct {
@@ -84,6 +93,7 @@ type ModelConfiguration struct {
 	Endpoint            string
 	Origin              string
 	Model               string
+	ReasoningEffort     ModelReasoningEffort
 	APIKeySource        ModelAPIKeySource
 	Temperature         float64
 	MaxOutputTokens     int
@@ -101,6 +111,7 @@ func (configuration ModelConfiguration) Validate() error {
 		!configuration.StreamingRequired || !configuration.ToolCallingRequired ||
 		!validModelEndpoint(configuration.Endpoint, configuration.Origin) ||
 		!validModelIdentifier(configuration.Model) ||
+		configuration.ReasoningEffort != ModelReasoningEffortOmitted && configuration.ReasoningEffort != ModelReasoningEffortNone ||
 		math.IsNaN(configuration.Temperature) || math.IsInf(configuration.Temperature, 0) ||
 		configuration.Temperature < 0 || configuration.Temperature > 0.2 ||
 		configuration.MaxOutputTokens < 1 || configuration.MaxOutputTokens > 8192 ||

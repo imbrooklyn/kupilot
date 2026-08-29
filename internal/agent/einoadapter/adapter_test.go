@@ -91,7 +91,9 @@ func TestAdapterCompletesUnsupportedSourceDiagnosisWithoutToolCall(t *testing.T)
 	model := &recordingModel{scripts: []modelScript{
 		func(ctx context.Context, request domain.ModelRequest, consume agent.ModelStreamConsumer) *domain.ModelError {
 			if !strings.Contains(request.Messages[0].Content, "do not call any Tool as a proxy") ||
-				!strings.Contains(request.Tools[1].Description, "Never use this Tool for Namespace discovery") {
+				!strings.Contains(request.Tools[1].Description, "Never use this Tool to list or discover Namespace objects") ||
+				!strings.Contains(request.Tools[1].Description, "A request for Pods in the current Namespace is supported") ||
+				!strings.Contains(request.Tools[1].Description, "use health_filter=any when no health restriction was requested") {
 				t.Fatal("unsupported-source policy is absent from the initial model request")
 			}
 			return scriptedEvents(diagnosisEvents(diagnosisJSON)...)(ctx, request, consume)
@@ -288,7 +290,7 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
 	}
-	const expectedSnapshotSHA256 = "db693c07c9dab53c9609a2e28552abf3455b339eb494c1e6163b265c027fa408"
+	const expectedSnapshotSHA256 = "ee65b8f1a94da99a0282298174b461aef8b711d77e1dacbe51ff8e34725a9316"
 	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
 		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
 	}

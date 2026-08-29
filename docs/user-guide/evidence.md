@@ -1,52 +1,60 @@
-# Evidence Details
+# Supporting Observation Details
 
-KuPilot conclusions cite Evidence collected by the fixed read-only Tools. An
-Evidence reference explains which accepted observation supports a conclusion;
-it is not a resource browser, log viewer, YAML viewer, or proof of causality.
+Internally, every confirmed fact remains bound to machine-checked Evidence from
+the current diagnostic run. The normal interface presents these records as
+supporting observations and does not expose their correlation identifiers. An
+observation explains what supported a conclusion; it is not a resource browser,
+log viewer, YAML viewer, or proof of causality.
 
 ## Open and close a detail
 
-Completed Agent answers show each cited Evidence ID and its retained-detail
-state below the answer.
+Completed answers do not show Evidence IDs, citation aliases, or repeated
+reference rows. Those correlation values remain internal and machine-checked.
+Pressing `Ctrl+E` explicitly enters observation inspection and shows only the
+selected position and a friendly state such as `ready` or `partial` before the
+safe detail is opened.
 
-- Press `Ctrl+E` to select cited Evidence in the transcript.
+- Press `Ctrl+E` to select a supporting observation in the transcript.
 - Press `Up` or `Ctrl+P` and `Down` or `Ctrl+N` to move between references.
 - Press `Enter` to request the selected safe detail.
 - Press `Esc`, `Enter`, or `Ctrl+E` to close the detail. `Esc` also cancels a
   pending display request; a later result is discarded.
 
-The root screen always retains its single composer. Evidence selection and the
-detail overlay are non-editable keyboard surfaces.
+The root screen always retains its single composer. Observation selection and
+the detail overlay are non-editable keyboard surfaces.
 
 ## Displayed fields
 
 An available detail contains only these bounded fields:
 
-- Evidence ID and the exact AgentRun ID;
-- Evidence category and a code-allowlisted projected source path;
-- the historic Context, Namespace, and scope generation;
-- API version, Kind, Namespace, and resource name;
-- the UTC observation time;
-- `available` or `partial` state, plus explicit partial and truncation flags;
-- whether sensitive-value filtering applied replacements; and
+- resource Kind, Namespace, and name;
+- historic Context and Namespace;
+- UTC observation time;
+- a friendly observation type such as `Condition`, `Kubernetes event`, or
+  `Service readiness`;
+- `complete` or `partial` status;
+- a warning only when sensitive values were filtered; and
 - a locally revalidated concise projection of at most 512 UTF-8 bytes.
 
-The resource summary excludes UID, resource version, annotations, addresses,
-object bodies, and other non-allowlisted metadata.
+Evidence ID, run ID, API version, scope generation, projected source-path enum,
+and raw partial, truncation, or filtering booleans remain internal. The resource
+summary also excludes UID, resource version, annotations, addresses, object
+bodies, and other non-allowlisted metadata.
 
 ## Detail states
 
 | State | Meaning |
 | --- | --- |
-| `available` | The cited safe observation is retained and its displayed projection is complete. |
+| `ready` / `complete` | The cited safe observation is retained and its displayed projection is complete. |
 | `partial` | The accepted observation or its display projection was truncated. Treat it conservatively. |
 | `expired` | Supporting detail was deleted, expired, or is no longer retained. The historic conclusion remains display-only. |
 | `unavailable` | The request could not be matched to the cited run and scope safely. No detail is shown. |
 
-Explicitly resumed history can restore machine-checked Evidence references from
-the retained Diagnosis. It does not restore an AgentRun, Tool authority, live
-scope, or resource verification. A scope-generation change closes any pending
-detail request, and late results cannot replace detail in the current Context.
+Explicitly resumed history can restore machine-checked links to retained
+supporting observations. It does not restore an active diagnostic run,
+cluster-read authority, live scope, or resource verification. A scope change
+closes any pending detail request, and late results cannot replace detail in the
+current Context.
 
 ## Safety boundary
 

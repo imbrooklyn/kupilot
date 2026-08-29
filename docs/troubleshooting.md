@@ -103,10 +103,60 @@ strict-schema behavior; using an OpenAI model name through a relay does not by
 itself establish compatibility. See the official
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-HTTP status text and endpoint response bodies are deliberately not echoed.
-Check the configured model identifier, provider-side authorization and quota,
-TLS trust, and provider documentation without copying sensitive responses into
-KuPilot configuration or public reports.
+Some reasoning models default to a reasoning mode that a Chat Completions relay
+does not combine with function Tools. When the provider explicitly requires
+reasoning to be disabled, configure:
+
+```yaml
+model:
+  reasoning_effort: none
+```
+
+KuPilot then sends `reasoning_effort: "none"` on every model request. It omits
+the field by default, accepts no other value, and never guesses from the model
+name. Official OpenAI documentation lists `none` as supported for
+[`gpt-5.6-luna`](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+and documents the Chat Completions field in its
+[model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+
+HTTP status text and endpoint response bodies are deliberately not echoed in
+the TUI or default logs. Check the configured model identifier, provider-side
+authorization and quota, TLS trust, and provider documentation without copying
+sensitive responses into KuPilot configuration or public reports.
+
+When local logging is enabled, inspect
+`KUPILOT_HOME/logs/kupilot.log` (`~/.kupilot/logs/kupilot.log` by default) and
+find the most recent terminal `model_request` record. Its local request ID
+correlates the start and terminal records inside the log. The terminal record
+reports the stable class and code, retryability, observed HTTP status when
+available, fixed cause category, and a bounded KuPilot function-name call
+chain. For example, HTTP 400 with `cause: http_status` and
+`error_class: unsupported` means the endpoint rejected the admitted streaming
+and Tool contract; it does not mean the network is unavailable. The log never
+contains the provider body, Authorization header, key, URL, question, cluster
+content, file paths, line numbers, or raw error in its default mode. No model
+record is expected when neutral request validation rejected the request before
+the model adapter. `cause: transport_validation` without an HTTP status means
+an SDK or local transport constraint rejected the call before network I/O;
+`cause: transport_unavailable` without a status means the guarded transport was
+entered but no valid HTTP response was observed.
+
+For a private, short-lived reproduction, add:
+
+```yaml
+logging:
+  sensitive_diagnostics: true
+```
+
+Restart KuPilot and reproduce the failure. The terminal model record may then
+include `sensitive_endpoint`, `sensitive_model`, `sensitive_error_chain`,
+`sensitive_provider_error_body`, and `sensitive_call_stack`. Error, provider-
+body, and stack fields have fixed size ceilings and explicit truncation flags.
+External fields are normalized and pass fixed sensitive-value handling. The
+model credential and Authorization remain excluded, but a provider error may
+still echo user or cluster content. Do not post this log publicly. Disable the
+setting after reproduction and remove `kupilot.log` plus numbered rotations
+when the diagnostic copy is no longer needed.
 
 ## The model returned an invalid Agent response
 

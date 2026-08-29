@@ -29,13 +29,24 @@ func NewSessionPicker(styles PickerStyles) SessionPicker {
 			parts = append(parts, candidate.UpdatedAt)
 		}
 		if candidate.Context != "" && candidate.Namespace != "" {
-			parts = append(parts, "ctx/"+candidate.Context+" · ns/"+candidate.Namespace)
+			parts = append(parts, candidate.Context+" / "+candidate.Namespace)
 		}
-		if candidate.Privacy != "" {
-			parts = append(parts, "privacy/"+candidate.Privacy)
+		if privacy := sessionPrivacyLabel(candidate.Privacy); privacy != "" {
+			parts = append(parts, privacy)
 		}
 		return strings.Join(parts, " · ")
 	}, styles)}
+}
+
+func sessionPrivacyLabel(value string) string {
+	switch value {
+	case "standard":
+		return "history saved"
+	case "minimal":
+		return "memory only"
+	default:
+		return ""
+	}
 }
 
 func (picker *SessionPicker) SetLoading()                             { picker.list.setLoading() }

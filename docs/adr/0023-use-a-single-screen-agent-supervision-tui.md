@@ -29,8 +29,10 @@ It uses a low-chrome single screen with this fixed vertical order:
    with at most eight displayed completion candidates. Every Picker reuses the
    same composer text and no second editor or search box exists.
 4. A scope footer of at most two rows, prioritizing Context, Namespace,
-   read-only or approval state, ResourceRef, run, model, and privacy state in
-   that order as width permits.
+   read-only or approval state, privacy mode, ResourceRef, diagnostic-run
+   state, and model state in that order as width permits. Optional
+   lower-priority segments are omitted as whole units rather than rendered as
+   clipped fragments.
 
 Its supervised content includes:
 
@@ -38,9 +40,10 @@ Its supervised content includes:
 - Session and conversation view with one natural-language question input.
 - Optional bounded Resource Picker for Pod, Deployment, ReplicaSet, Job, or
   Service in the current Namespace.
-- Ordered ToolInvocation timeline showing fixed Tool name, bounded purpose,
-  pending/running/succeeded/partial/denied/failed state, safe summary, and
-  truncation or permission gaps.
+- Ordered ToolInvocation timeline showing a code-defined readable label for
+  each fixed Tool, bounded purpose, queued/reading/done/partial/blocked/failed
+  state, safe summary, and truncation or permission gaps. Protocol identifiers
+  remain internal.
 - Streaming assistant progress that is visibly provisional until a validated
   final Diagnosis replaces it.
 - Cancellation, recoverable safe errors, persistence-degraded state, and clear
@@ -71,6 +74,13 @@ The Resource Picker is a bounded input aid, not an inventory or navigation tree.
 It has no full YAML, raw log view, Watch, live dashboard, action menu, write
 shortcut, shell, kubectl, or arbitrary filter. Selecting a ResourceRef does not
 create Evidence or prove existence.
+
+A completed `list_resources` result may appear inside the transcript as one
+non-interactive, kind-specific table derived locally from typed projected
+summaries. It is result formatting for the current diagnostic turn, not a
+resource browser, persistent inventory surface, or kubectl execution path.
+Evidence identifiers, scope generations, source-path enums, and raw boolean
+flags remain outside the default transcript and observation detail view.
 
 TUI state is a projection of Application events. Commands and completions carry
 expected scope generation or request identity where stale work is possible.

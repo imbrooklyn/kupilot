@@ -2388,14 +2388,14 @@ func (coordinator *Coordinator) forceFailedTerminal(ctx context.Context, state *
 	class := domain.SafeErrorClassInternal
 	event := agent.RunEvent{
 		Kind:    agent.RunEventRunFailed,
-		Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The AgentRun failed safely."},
+		Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The diagnostic run failed safely."},
 	}
 	terminalContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), coordinator.persistenceLimit)
 	defer cancel()
 	if err := coordinator.persistTerminal(terminalContext, state, event, terminalAudit(event)); err != nil {
 		_ = coordinator.markRunPersistenceDegraded(terminalContext, state)
 	}
-	_ = state.bridge.forceFailed(terminalContext, "The AgentRun failed safely.")
+	_ = state.bridge.forceFailed(terminalContext, "The diagnostic run failed safely.")
 	coordinator.observe(terminalContext, RunObservation{
 		Kind: RunObservationTerminal, RunID: state.run.ID,
 		ScopeGeneration: state.run.Scope.Generation, Status: domain.AgentRunStatusFailed,

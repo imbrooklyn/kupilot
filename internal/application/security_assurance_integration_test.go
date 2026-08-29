@@ -185,7 +185,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 		StreamingRequired:   true,
 		ToolCallingRequired: true,
 		TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
-	}, &credential, nil)
+	}, &credential, nil, openaicompat.DiagnosticOptions{})
 	if modelErr != nil {
 		credential.Destroy()
 		t.Fatalf("openaicompat.New() error = %v", modelErr)

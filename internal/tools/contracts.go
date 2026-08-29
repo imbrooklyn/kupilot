@@ -810,7 +810,7 @@ func classifyFailure(ctx context.Context, raw error) domain.SafeErrorClass {
 func safeFailureDefinition(class domain.SafeErrorClass) (string, bool) {
 	switch class {
 	case domain.SafeErrorClassInvalidInput:
-		return "The Tool request is invalid.", false
+		return "The cluster-read request is invalid.", false
 	case domain.SafeErrorClassConfigurationInvalid:
 		return "The Kubernetes client configuration is invalid.", false
 	case domain.SafeErrorClassConsentRequired:
@@ -826,11 +826,11 @@ func safeFailureDefinition(class domain.SafeErrorClass) (string, bool) {
 	case domain.SafeErrorClassUnsupported:
 		return "The requested Kubernetes observation is unsupported.", false
 	case domain.SafeErrorClassPolicyDenied:
-		return "The Tool request was denied by the fixed policy.", false
+		return "The cluster-read request was blocked by the fixed policy.", false
 	case domain.SafeErrorClassStaleScope:
-		return "The bound Kubernetes scope is no longer current.", false
+		return "The Kubernetes context or namespace changed before the read completed.", false
 	case domain.SafeErrorClassBudgetExhausted:
-		return "The Tool reached a fixed output or item limit.", false
+		return "The cluster read reached a fixed output or item limit.", false
 	case domain.SafeErrorClassRateLimited:
 		return "Kubernetes temporarily limited the request rate.", true
 	case domain.SafeErrorClassUnavailable:
@@ -840,15 +840,15 @@ func safeFailureDefinition(class domain.SafeErrorClass) (string, bool) {
 	case domain.SafeErrorClassCancelled:
 		return "The Kubernetes read was cancelled.", false
 	case domain.SafeErrorClassSensitiveOutputBlocked:
-		return "A projected field was blocked by the sensitive-output policy.", false
+		return "A Kubernetes field was hidden because it may contain sensitive data.", false
 	case domain.SafeErrorClassInvalidExternalResponse:
-		return "Kubernetes returned data that could not be projected safely.", false
+		return "Kubernetes returned fields that KuPilot could not display safely.", false
 	case domain.SafeErrorClassPersistenceUnavailable:
 		return "Required local persistence is unavailable.", false
 	case domain.SafeErrorClassInternal:
-		return "The Tool failed safely.", false
+		return "The cluster read failed safely.", false
 	default:
-		return "The Tool failed safely.", false
+		return "The cluster read failed safely.", false
 	}
 }
 

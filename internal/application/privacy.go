@@ -76,12 +76,12 @@ type privacyCategoryDefinition struct {
 }
 
 var privacyCategoryCatalog = [...]privacyCategoryDefinition{
-	{DataCategoryUserQuestion, "The user question after local normalization, sensitive-value handling, and byte limits."},
-	{DataCategorySafeConversationContext, "Bounded safe context from the current AgentRun, including structured Tool results and Evidence."},
-	{DataCategoryResourceReferences, "Context, Namespace, and admitted resource names or references from the immutable run scope."},
-	{DataCategoryProjectedStatus, "Allowlisted projected Kubernetes status, conditions, counts, times, and relationships."},
-	{DataCategoryProjectedEvents, "Bounded projected Kubernetes Event reasons and messages after local safety processing."},
-	{DataCategoryRedactedContainerOutput, "Bounded current or previous container-output facts after normalization and redaction."},
+	{DataCategoryUserQuestion, "Your question after local text cleanup, sensitive-value handling, and size limits."},
+	{DataCategorySafeConversationContext, "Relevant conversation context from this diagnostic run, including safe cluster-read results and supporting observations."},
+	{DataCategoryResourceReferences, "The active Context and Namespace, plus permitted resource names and references used by this diagnostic run."},
+	{DataCategoryProjectedStatus, "Permitted Kubernetes status, conditions, counts, times, and resource relationships."},
+	{DataCategoryProjectedEvents, "Recent permitted Kubernetes Event reasons and messages after local safety checks."},
+	{DataCategoryRedactedContainerOutput, "Recent current or previous container output after local cleanup, size limits, and sensitive-value filtering."},
 }
 
 var neverEligibleModelData = [...]string{

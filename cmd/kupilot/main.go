@@ -91,8 +91,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if loaded.Logging.Enabled {
 		logSink, openErr := platformlogging.Open(ctx, platformlogging.Options{
-			Directory: loaded.Paths.LogDir,
-			Level:     configuredLogLevel(loaded.Logging.Level),
+			Directory:            loaded.Paths.LogDir,
+			Level:                configuredLogLevel(loaded.Logging.Level),
+			SensitiveDiagnostics: loaded.Logging.SensitiveDiagnostics,
 		})
 		if openErr != nil {
 			_, _ = fmt.Fprintln(stderr, "Warning: local operational logging is unavailable and has been disabled for this process.")
@@ -690,7 +691,12 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 	if err != nil {
 		return nil, err
 	}
-	modelAdapter, modelErr := openaicompat.New(modelConfiguration(settings.Model), &credential, factory.logger)
+	modelAdapter, modelErr := openaicompat.New(
+		modelConfiguration(settings.Model),
+		&credential,
+		factory.logger,
+		openaicompat.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
+	)
 	if modelErr != nil {
 		credential.Destroy()
 		return nil, modelErr
@@ -893,8 +899,9 @@ func modelConfiguration(value config.ModelConfig) domain.ModelConfiguration {
 	return domain.ModelConfiguration{
 		ProviderKind: domain.ModelProviderOpenAICompatible,
 		Endpoint:     value.Endpoint, Origin: value.Origin, Model: value.Model,
-		APIKeySource: domain.ModelAPIKeySourceRuntime,
-		Temperature:  value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
+		APIKeySource:    domain.ModelAPIKeySourceRuntime,
+		ReasoningEffort: domain.ModelReasoningEffort(value.ReasoningEffort),
+		Temperature:     value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
 		RequestTimeout:    time.Duration(value.RequestTimeoutSeconds) * time.Second,
 		StreamingRequired: value.Streaming, ToolCallingRequired: value.ToolCallingRequired,
 		TransportPolicy: domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,

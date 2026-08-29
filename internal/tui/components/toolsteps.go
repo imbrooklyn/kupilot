@@ -64,48 +64,68 @@ func terminalToolStepStatus(status string) bool {
 // Items returns a defensive copy.
 func (steps ToolSteps) Items() []ToolStep { return append([]ToolStep(nil), steps.steps...) }
 
-// View renders Tool steps inline beneath Agent prose.
+// View renders compact Tool headers with optional details on separate lines.
 func (steps ToolSteps) View() string {
-	lines := make([]string, 0, len(steps.steps))
+	lines := make([]string, 0, len(steps.steps)*3)
 	for index, step := range steps.steps {
 		branch := "├─"
 		if index == len(steps.steps)-1 {
 			branch = "└─"
 		}
 		symbol, label, style := steps.status(step.Status)
-		line := fmt.Sprintf("%s %s %s · %s", branch, symbol, step.Name, label)
-		if step.Purpose != "" {
-			line += " · " + step.Purpose
-		}
-		if step.Summary != "" {
-			line += " · " + step.Summary
-		}
-		if step.EvidenceCount > 0 {
-			line += fmt.Sprintf(" · %d evidence", step.EvidenceCount)
-		}
+		header := fmt.Sprintf("%s %s %s · %s", branch, symbol, toolStepDisplayName(step.Name), label)
 		if step.Truncated {
-			line += " · truncated"
+			header += " · limited"
 		}
-		lines = append(lines, steps.styles.Muted.Render(branch+" ")+style.Render(strings.TrimPrefix(line, branch+" ")))
+		lines = append(lines, steps.styles.Muted.Render(branch+" ")+style.Render(strings.TrimPrefix(header, branch+" ")))
+		if step.Purpose != "" {
+			lines = append(lines, steps.styles.Muted.Render("   Purpose: ")+style.Render(indentToolStepDetail(step.Purpose)))
+		}
+		if step.Summary != "" && step.Summary != step.Purpose {
+			lines = append(lines, steps.styles.Muted.Render("   Result: ")+style.Render(indentToolStepDetail(step.Summary)))
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func toolStepDisplayName(name string) string {
+	switch name {
+	case "get_resource":
+		return "Inspect resource"
+	case "list_resources":
+		return "List resources"
+	case "get_events":
+		return "Read events"
+	case "get_pod_logs":
+		return "Read current logs"
+	case "get_previous_pod_logs":
+		return "Read previous logs"
+	case "get_related_resources":
+		return "Inspect related resources"
+	default:
+		return "Cluster activity"
+	}
+}
+
+func indentToolStepDetail(value string) string {
+	return strings.ReplaceAll(value, "\n", "\n   ")
 }
 
 func (steps ToolSteps) status(status string) (string, string, lipgloss.Style) {
 	switch status {
 	case "succeeded":
-		return "✓", "succeeded", steps.styles.Success
+		return "✓", "done", steps.styles.Success
 	case "partial":
 		return "!", "partial", steps.styles.Warning
 	case "denied":
-		return "×", "denied", steps.styles.Danger
+		return "×", "blocked", steps.styles.Danger
 	case "failed":
 		return "×", "failed", steps.styles.Danger
 	case "cancelled":
 		return "×", "cancelled", steps.styles.Warning
 	case "running":
-		return "◌", "running", steps.styles.Muted
+		return "◌", "reading", steps.styles.Muted
 	default:
-		return "○", "requested", steps.styles.Muted
+		return "○", "queued", steps.styles.Muted
 	}
 }

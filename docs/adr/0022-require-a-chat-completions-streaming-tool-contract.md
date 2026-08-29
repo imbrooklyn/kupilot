@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0036
 
 ## Context
 
@@ -45,7 +46,9 @@ classification from a content-free capability check.
 The user must configure the model identifier; KuPilot does not embed a provider
 default. Temperature is accepted only in the low range from 0 through 0.2, and a
 hard output-token limit is mandatory. The concrete default must remain inside
-that range and be documented with the model adapter configuration.
+that range and be documented with the model adapter configuration. An optional
+typed reasoning-effort field may be omitted or set only to `none`; it is never
+inferred from the model identifier or an endpoint error.
 
 Raw provider request, response, stream, error, and usage objects stay in the
 adapter. Application and Agent core see only neutral bounded events and safe
@@ -88,9 +91,11 @@ Structured capability does not authorize a Tool; fixed runtime dispatch, scope,
 allowlists, budgets, and generation checks still decide. Model output cannot
 create Evidence, consent, endpoint changes, approval, or execution results.
 
-Raw stream and error bodies are never persisted or ordinarily logged. Stream
-buffers and text deltas pass byte, control-character, and terminal-safety limits
-before any sink.
+Raw streams and successful response bodies are never persisted or logged.
+Provider error bodies are absent from default logs; ADR-0036 permits only an
+explicitly enabled, bounded failed-response prefix in the local rotating log.
+Stream buffers and text deltas pass byte, control-character, and terminal-
+safety limits before any sink.
 
 ## Validation
 
@@ -103,10 +108,12 @@ Local fake-endpoint and Eino adapter tests must prove:
 4. No Tool dispatch from prose or unsupported fallback behavior.
 5. Safe mapping of finish reasons, optional usage, authentication, permission,
    throttling, timeout, unavailable, and malformed responses.
-6. Required model configuration, the 0 through 0.2 temperature range, and hard
-   output bounds without a hard-coded provider model default.
-7. Absence of raw provider objects and bodies from Application, TUI, logs, and
-   SQLite.
+6. Required model configuration, the optional exact `none` reasoning effort,
+   the 0 through 0.2 temperature range, and hard output bounds without a hard-
+   coded provider model default.
+7. Absence of raw provider objects and bodies from Application, TUI, default
+   logs, and SQLite, plus bounded credential-redacted admission in the explicit
+   ADR-0036 sensitive logging mode.
 
 ## Revisit triggers
 
@@ -123,3 +130,4 @@ Local fake-endpoint and Eino adapter tests must prove:
 - [ADR-0009: Use Fixed Structured Tools](0009-use-fixed-structured-tools.md)
 - [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
 - [ADR-0015: Require the Evidence and Diagnosis Contract](0015-evidence-and-diagnosis-contract.md)
+- [ADR-0036: Record Bounded Model Failure Diagnostics](0036-record-bounded-safe-model-failure-diagnostics.md)

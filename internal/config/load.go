@@ -117,6 +117,9 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	if permissionsWider {
 		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain a plaintext model API key.")
 	}
+	if config.Logging.SensitiveDiagnostics {
+		warnings = append(warnings, "Sensitive model diagnostics are enabled; local logs may contain endpoint details, provider error content, and source paths.")
+	}
 	return Loaded{
 		Config: config, Paths: options.Paths, Credential: credential,
 		CredentialSource: credentialSource, Warnings: warnings,
@@ -248,7 +251,7 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
-		case "provider_kind", "endpoint", "model":
+		case "provider_kind", "endpoint", "model", "reasoning_effort":
 			return yamlString(value)
 		case "api_key":
 			return allowCredential && yamlString(value)
@@ -273,7 +276,7 @@ func validKubernetesYAML(node *yaml.Node) bool {
 func validLoggingYAML(node *yaml.Node) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
-		case "enabled":
+		case "enabled", "sensitive_diagnostics":
 			return yamlScalar(value, "!!bool")
 		case "level":
 			return yamlString(value)
@@ -341,6 +344,7 @@ func setDefaults(instance *viper.Viper) {
 	instance.SetDefault("model.provider_kind", defaults.Model.ProviderKind)
 	instance.SetDefault("model.endpoint", defaults.Model.Endpoint)
 	instance.SetDefault("model.model", defaults.Model.Model)
+	instance.SetDefault("model.reasoning_effort", defaults.Model.ReasoningEffort)
 	instance.SetDefault("model.temperature", defaults.Model.Temperature)
 	instance.SetDefault("model.max_output_tokens", defaults.Model.MaxOutputTokens)
 	instance.SetDefault("model.request_timeout_seconds", defaults.Model.RequestTimeoutSeconds)
@@ -349,6 +353,7 @@ func setDefaults(instance *viper.Viper) {
 	instance.SetDefault("kubernetes.exec_credentials", defaults.Kubernetes.ExecCredentials)
 	instance.SetDefault("logging.enabled", defaults.Logging.Enabled)
 	instance.SetDefault("logging.level", defaults.Logging.Level)
+	instance.SetDefault("logging.sensitive_diagnostics", defaults.Logging.SensitiveDiagnostics)
 }
 
 type environmentValueKind uint8
@@ -371,6 +376,7 @@ func applyEnvironment(instance *viper.Viper, lookup func(string) (string, bool))
 		{environment: "KUPILOT_NO_COLOR", key: "no_color", kind: environmentBool},
 		{environment: "KUPILOT_MODEL_ENDPOINT", key: "model.endpoint", kind: environmentString},
 		{environment: "KUPILOT_MODEL", key: "model.model", kind: environmentString},
+		{environment: "KUPILOT_MODEL_REASONING_EFFORT", key: "model.reasoning_effort", kind: environmentString},
 		{environment: "KUPILOT_MODEL_TEMPERATURE", key: "model.temperature", kind: environmentFloat},
 		{environment: "KUPILOT_MODEL_MAX_OUTPUT_TOKENS", key: "model.max_output_tokens", kind: environmentInt},
 		{environment: "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS", key: "model.request_timeout_seconds", kind: environmentInt},

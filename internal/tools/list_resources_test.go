@@ -36,7 +36,8 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 	}
 	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"abnormal","kind":"Pod","purpose":"Find abnormal Pods."}`)
 	result := tool.Execute(context.Background(), call)
-	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 2 {
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 2 ||
+		len(result.ResourceSummaries) != 2 {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
 	}
 	if strings.Contains(result.DataJSON, canary) || !strings.Contains(result.DataJSON, "[REDACTED]") ||
@@ -69,10 +70,17 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 			evidence.SourcePath == nil || *evidence.SourcePath != "projected.status" || strings.Contains(evidence.Fact, canary) {
 			t.Fatalf("Evidence[%d] = %#v", index, evidence)
 		}
+		if summary := result.ResourceSummaries[index]; summary.Reference != evidence.Resource ||
+			strings.Contains(fmt.Sprintf("%#v", summary), canary) {
+			t.Fatalf("ResourceSummaries[%d] = %#v", index, summary)
+		}
 	}
-	_, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+	message, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
 	if err != nil || measured != result.Truncation.ReturnedBytes || measured > call.Ceilings().MaxResultBytes {
 		t.Fatalf("BuildToolResultMessage() bytes/error = %d/%v, result = %#v", measured, err, result.Truncation)
+	}
+	if strings.Contains(message.Content, "resource_summaries") {
+		t.Fatalf("local presentation summaries entered the model envelope: %s", message.Content)
 	}
 }
 
@@ -129,7 +137,9 @@ func TestListResourcesOmitsSensitiveIdentityFromDataAndEvidence(t *testing.T) {
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != fieldLimitReason ||
 		strings.Contains(result.DataJSON, canary) || len(result.Evidence) != 1 || result.Evidence[0].Resource.UID != "" ||
-		result.Evidence[0].Resource.ResourceVersion != "" {
+		result.Evidence[0].Resource.ResourceVersion != "" || len(result.ResourceSummaries) != 1 ||
+		result.ResourceSummaries[0].Reference.UID != "" || result.ResourceSummaries[0].Reference.ResourceVersion != "" ||
+		strings.Contains(fmt.Sprintf("%#v", result.ResourceSummaries), canary) {
 		t.Fatalf("Execute() identity result = %#v, validation = %v", result, result.Validate())
 	}
 }
@@ -204,7 +214,7 @@ func TestListResourcesEnforcesRequestedAndHardItemLimitsWithPartialMetadata(t *t
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || !result.Truncation.Truncated ||
 		result.Truncation.Reason != "output_limit" || result.Truncation.ReturnedCount > domain.MaxResourceSummaries ||
-		len(result.Evidence) != result.Truncation.ReturnedCount {
+		len(result.Evidence) != result.Truncation.ReturnedCount || len(result.ResourceSummaries) != len(result.Evidence) {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
 	}
 	_, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)

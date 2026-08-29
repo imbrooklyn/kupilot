@@ -55,6 +55,7 @@ func newFixtureServer(t *testing.T, errorCanary string) *fixtureServer {
 		"tool-call-fragments.sse",
 		"no-usage-eof.sse",
 		"malformed.sse",
+		"error-400.json",
 		"error-401.json",
 		"error-429.json",
 		"error-500.json",
@@ -125,6 +126,17 @@ func (fixture *fixtureServer) serveHTTP(response http.ResponseWriter, request *h
 		fixture.serveSSE(response, "no-usage-eof.sse", "")
 	case "/v1/malformed/chat/completions":
 		fixture.serveSSE(response, "malformed.sse", "request-fixture-malformed")
+	case "/v1/reasoning-none/chat/completions":
+		var payload struct {
+			ReasoningEffort string `json:"reasoning_effort"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil || payload.ReasoningEffort != "none" {
+			fixture.serveError(response, http.StatusBadRequest, "error-400.json")
+			return
+		}
+		fixture.serveSSE(response, "normal.sse", "request-fixture-reasoning-none")
+	case "/v1/error-400/chat/completions":
+		fixture.serveError(response, http.StatusBadRequest, "error-400.json")
 	case "/v1/error-401/chat/completions":
 		fixture.serveError(response, http.StatusUnauthorized, "error-401.json")
 	case "/v1/error-429/chat/completions":

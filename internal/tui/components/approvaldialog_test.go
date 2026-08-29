@@ -12,8 +12,8 @@ func TestApprovalDialogDefaultsToRejectAndRendersBoundSummary(t *testing.T) {
 	dialog := NewApprovalDialog(ApprovalDialogStyles{})
 	deadline := time.UnixMilli(1_700_000_060_000).UTC()
 	dialog.Show(ApprovalDialogContent{
-		Operation: "restart_deployment", Scope: "test-context / test-namespace / generation 7",
-		Resource: "apps/v1 Deployment test-namespace/sample-deployment",
+		Operation: "Restart Deployment", Scope: "test-context / test-namespace · scope revision 7",
+		Resource: "Deployment test-namespace/sample-deployment · API apps/v1",
 		Current:  "Deployment generation 8 with Pod template fingerprint " + strings.Repeat("a", 64) + ".",
 		Proposed: "Update only the KuPilot-owned restart annotation to create a new Pod template revision.",
 		Reason:   "Restart after diagnosis.", Risk: "Pods may be replaced.",
@@ -24,7 +24,7 @@ func TestApprovalDialogDefaultsToRejectAndRendersBoundSummary(t *testing.T) {
 	}
 	view := dialog.View(100)
 	for _, want := range []string{
-		"Restart approval", "Operation: restart_deployment", "Scope: test-context / test-namespace / generation 7",
+		"Restart approval", "Operation: Restart Deployment", "Scope: test-context / test-namespace · scope revision 7",
 		"Current: Deployment generation 8", "Proposed: Update only", "TTL: 17s", strings.Repeat("b", 64),
 		"› Reject", "  Approve",
 	} {
@@ -42,8 +42,8 @@ func TestApprovalDialogSelectionSubmissionAndExpiryAreFailClosed(t *testing.T) {
 	dialog := NewApprovalDialog(styles)
 	now := time.UnixMilli(1_700_000_100_000).UTC()
 	dialog.Show(ApprovalDialogContent{
-		Operation: "restart_deployment", Scope: "context / namespace / generation 7",
-		Resource: "apps/v1 Deployment namespace/sample", Current: "Current.", Proposed: "Proposed.",
+		Operation: "Restart Deployment", Scope: "context / namespace · scope revision 7",
+		Resource: "Deployment namespace/sample · API apps/v1", Current: "Current.", Proposed: "Proposed.",
 		Reason: "Reason.", Risk: "Risk.", Digest: strings.Repeat("c", 64), ExpiresAt: now.Add(time.Minute),
 	}, now)
 	dialog.Move(1)
@@ -57,8 +57,8 @@ func TestApprovalDialogSelectionSubmissionAndExpiryAreFailClosed(t *testing.T) {
 		t.Fatal("submitted approval status is not visible")
 	}
 	if dialog.SetExecutionStatus(2, "Out of order.", false) ||
-		!dialog.SetExecutionStatus(1, "PATCH accepted. Observing rollout.", false) ||
-		!strings.Contains(dialog.View(100), "PATCH accepted. Observing rollout.") {
+		!dialog.SetExecutionStatus(1, "Restart request accepted. Observing rollout.", false) ||
+		!strings.Contains(dialog.View(100), "Restart request accepted. Observing rollout.") {
 		t.Fatal("ordered nonterminal execution status is not enforced or visible")
 	}
 	if dialog.SetExecutionStatus(1, "Duplicate.", false) ||
@@ -75,8 +75,8 @@ func TestApprovalDialogSelectionSubmissionAndExpiryAreFailClosed(t *testing.T) {
 		t.Fatal("Close() did not clear authority and restore default Reject")
 	}
 	dialog.Show(ApprovalDialogContent{
-		Operation: "restart_deployment", Scope: "context / namespace / generation 7",
-		Resource: "apps/v1 Deployment namespace/sample", Current: "Current.", Proposed: "Proposed.",
+		Operation: "Restart Deployment", Scope: "context / namespace · scope revision 7",
+		Resource: "Deployment namespace/sample · API apps/v1", Current: "Current.", Proposed: "Proposed.",
 		Reason: "Reason.", Risk: "Risk.", Digest: strings.Repeat("d", 64), ExpiresAt: now,
 	}, now)
 	if dialog.Open() {

@@ -24,8 +24,8 @@ func TestFooterUsesTwoRowPriorityForResourceRunModelAndPrivacy(t *testing.T) {
 	model.run.Active = true
 	footer := model.footerView()
 	for _, want := range []string{
-		"ctx/development", "ns/payments", "read-only", "res/Deployment/payment-api",
-		"run/active", "model/diagnostic-model", "privacy/minimal",
+		"Context development", "Namespace payments", "read-only", "Deployment/payment-api",
+		"diagnosing", "model diagnostic-model", "memory-only history",
 	} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
@@ -33,6 +33,31 @@ func TestFooterUsesTwoRowPriorityForResourceRunModelAndPrivacy(t *testing.T) {
 	}
 	if lines := strings.Split(footer, "\n"); len(lines) != 2 {
 		t.Fatalf("footer rows = %d, want 2: %q", len(lines), footer)
+	}
+}
+
+func TestFooterUsesReadableLabelsAndDropsWholeLowPrioritySegments(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 72, Height: 22, Theme: ThemeNoColor,
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Resource: ResourceView{
+			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "payments", Name: "payment-api",
+		},
+		ModelName: "a-model-name-that-does-not-fit", PrivacyMode: domain.PrivacyModeStandard,
+	})
+	model.run.Status = "completed"
+	footer := model.footerView()
+	for _, want := range []string{"history saved", "Deployment/payment-api", "diagnosis complete"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+	for _, forbidden := range []string{"ctx/", "ns/", "res/", "run/", "model/", "privacy/", "…"} {
+		if strings.Contains(footer, forbidden) {
+			t.Fatalf("footer contains implementation label or clipped fragment %q: %q", forbidden, footer)
+		}
 	}
 }
 
@@ -53,8 +78,9 @@ func TestFooterNarrowWidthsRetainScopeAndReadOnlyBeforeOptionalState(t *testing.
 				ModelName: "a-very-long-model-name", PrivacyMode: domain.PrivacyModeStandard,
 			})
 			footer := model.footerView()
-			if !strings.Contains(footer, "ctx/") || !strings.Contains(footer, "ns/") ||
-				(!strings.Contains(footer, "read-only") && !strings.Contains(footer, "RO")) {
+			if !strings.Contains(footer, "read-only") ||
+				width >= 24 && (!strings.Contains(footer, "Context") || !strings.Contains(footer, "Namespace")) ||
+				width < 24 && !strings.Contains(footer, " / ") {
 				t.Fatalf("required footer state was cropped at width %d: %q", width, footer)
 			}
 			lines := strings.Split(footer, "\n")

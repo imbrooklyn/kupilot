@@ -112,4 +112,24 @@ func TestEventBridgeDoesNotConsumeSequenceOrDeltaOnSinkFailure(t *testing.T) {
 	}
 }
 
+func TestCompletedToolStepDoesNotInventAnEmptySuccessSummary(t *testing.T) {
+	t.Parallel()
+	invocation := &domain.ToolInvocation{
+		ID:            "00000000-0000-7000-8000-000000000121",
+		Name:          domain.ToolNameListResources,
+		Status:        domain.ToolInvocationStatusSucceeded,
+		EvidenceCount: 9,
+	}
+	step, err := projectToolStep(agent.RunEvent{
+		Kind:           agent.RunEventToolCallCompleted,
+		ToolInvocation: invocation,
+	})
+	if err != nil {
+		t.Fatalf("projectToolStep() error = %v", err)
+	}
+	if step.Status != ToolStepSucceeded || step.EvidenceCount != 9 || step.Summary != "" {
+		t.Fatalf("completed Tool step = %#v", step)
+	}
+}
+
 func pointer[T any](value T) *T { return &value }

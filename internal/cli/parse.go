@@ -167,7 +167,7 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 	startup := new(startupFlags)
 	root := &cobra.Command{
 		Use:                "kupilot",
-		Short:              "Diagnose Kubernetes issues through bounded Evidence",
+		Short:              "Diagnose Kubernetes issues through bounded observations",
 		SilenceErrors:      true,
 		SilenceUsage:       true,
 		DisableSuggestions: true,

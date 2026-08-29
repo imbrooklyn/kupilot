@@ -163,6 +163,7 @@ func TestLoadParsesAdmittedTypedEnvironmentValues(t *testing.T) {
 		LookupEnv: lookupMap(map[string]string{
 			"KUPILOT_MODEL_ENDPOINT":                "https://model.example.test/v1",
 			"KUPILOT_MODEL":                         "diagnostic-model",
+			"KUPILOT_MODEL_REASONING_EFFORT":        "none",
 			"KUPILOT_MODEL_TEMPERATURE":             "0.2",
 			"KUPILOT_MODEL_MAX_OUTPUT_TOKENS":       "1024",
 			"KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS": "30",
@@ -172,7 +173,8 @@ func TestLoadParsesAdmittedTypedEnvironmentValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Model.Temperature != 0.2 || got.Model.MaxOutputTokens != 1024 || got.Model.RequestTimeoutSeconds != 30 {
+	if got.Model.ReasoningEffort != ModelReasoningEffortNone || got.Model.Temperature != 0.2 ||
+		got.Model.MaxOutputTokens != 1024 || got.Model.RequestTimeoutSeconds != 30 {
 		t.Errorf("typed model environment values = %#v", got.Model)
 	}
 	if got.Logging.Enabled {
@@ -197,6 +199,36 @@ func TestLoadAcceptsZeroModelTemperature(t *testing.T) {
 	}
 }
 
+func TestLoadSensitiveDiagnosticsIsExplicitAndWarned(t *testing.T) {
+	t.Parallel()
+
+	defaults, err := Load(context.Background(), LoadOptions{
+		Paths: testPaths(t.TempDir()), LookupEnv: lookupMap(nil),
+	})
+	if err != nil {
+		t.Fatalf("Load(defaults) error = %v", err)
+	}
+	if defaults.Logging.SensitiveDiagnostics {
+		t.Fatal("sensitive diagnostics defaulted to enabled")
+	}
+
+	root := t.TempDir()
+	path := filepath.Join(root, "config.yaml")
+	writePrivateFile(t, path, []byte("version: 1\nlogging:\n  sensitive_diagnostics: true\n"))
+	paths := testPaths(root)
+	paths.ConfigFile = path
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load(opt-in) error = %v", err)
+	}
+	if !loaded.Logging.SensitiveDiagnostics {
+		t.Fatal("sensitive diagnostics opt-in was not loaded")
+	}
+	if len(loaded.Warnings) != 1 || !strings.Contains(loaded.Warnings[0], "Sensitive model diagnostics") {
+		t.Fatalf("sensitive diagnostics warnings = %q", loaded.Warnings)
+	}
+}
+
 func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 	t.Parallel()
 
@@ -210,6 +242,8 @@ func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 		{name: "duplicate root field", content: "version: 1\nversion: 1\n"},
 		{name: "wrong root type", content: "version: \"1\"\n"},
 		{name: "wrong nested type", content: "version: 1\nlogging:\n  enabled: \"true\"\n"},
+		{name: "wrong reasoning effort type", content: "version: 1\nmodel:\n  reasoning_effort: true\n"},
+		{name: "wrong sensitive diagnostics type", content: "version: 1\nlogging:\n  sensitive_diagnostics: \"true\"\n"},
 		{name: "wrong integer type", content: "version: 1\nmodel:\n  max_output_tokens: 2048.0\n"},
 		{name: "null value", content: "version: 1\ncontext: null\n"},
 		{name: "alias value", content: "version: 1\ncontext: &context development\nnamespace: *context\n"},

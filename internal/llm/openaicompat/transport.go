@@ -20,9 +20,26 @@ const safeProviderErrorBody = `{"error":{"message":"The model endpoint rejected 
 type transportRequestStateKey struct{}
 
 type transportRequestState struct {
-	mu                sync.Mutex
-	providerRequestID string
-	responseBody      *boundedSSEBody
+	mu                         sync.Mutex
+	sensitiveDiagnostics       bool
+	enteredTransport           bool
+	providerRequestID          string
+	providerErrorBody          string
+	providerErrorBodyTruncated bool
+	httpStatus                 int
+	responseBody               *boundedSSEBody
+}
+
+func (state *transportRequestState) markTransportEntered() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.enteredTransport = true
+}
+
+func (state *transportRequestState) transportEntered() bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.enteredTransport
 }
 
 func (state *transportRequestState) setRequestID(value string) {
@@ -35,6 +52,37 @@ func (state *transportRequestState) requestID() string {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return state.providerRequestID
+}
+
+func (state *transportRequestState) setHTTPStatus(value int) {
+	if value < 100 || value > 599 {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.httpStatus = value
+}
+
+func (state *transportRequestState) status() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.httpStatus
+}
+
+func (state *transportRequestState) setProviderError(body []byte, truncated bool) {
+	if !state.sensitiveDiagnostics || len(body) == 0 {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.providerErrorBody = string(body)
+	state.providerErrorBodyTruncated = truncated
+}
+
+func (state *transportRequestState) providerError() (string, bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.providerErrorBody, state.providerErrorBodyTruncated
 }
 
 func (state *transportRequestState) setResponseBody(body *boundedSSEBody) {
@@ -60,7 +108,11 @@ type guardedRoundTripper struct {
 
 func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	state, ok := request.Context().Value(transportRequestStateKey{}).(*transportRequestState)
-	if !ok || !transport.validRequest(request) {
+	if !ok {
+		return nil, errTransportRequestInvalid
+	}
+	state.markTransportEntered()
+	if !transport.validRequest(request) {
 		return nil, errTransportRequestInvalid
 	}
 	if useError := transport.credential.Use(func(value string) {
@@ -70,6 +122,9 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	}
 	response, err := transport.base.RoundTrip(request)
 	request.Header.Set("Authorization", "Bearer "+einoCredentialPlaceholder)
+	if response != nil {
+		state.setHTTPStatus(response.StatusCode)
+	}
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
@@ -80,7 +135,7 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return nil, errTransportRequestInvalid
 	}
 	if response.StatusCode != http.StatusOK {
-		sanitizeProviderErrorResponse(response)
+		sanitizeProviderErrorResponse(response, state)
 		return response, nil
 	}
 	mediaType, _, mediaError := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -108,8 +163,20 @@ func (transport *guardedRoundTripper) validRequest(request *http.Request) bool {
 	return err == nil && contentType == "application/json"
 }
 
-func sanitizeProviderErrorResponse(response *http.Response) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, int64(domain.MaxModelErrorBodyBytes)))
+func sanitizeProviderErrorResponse(response *http.Response, state *transportRequestState) {
+	if state != nil && state.sensitiveDiagnostics {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, int64(domain.MaxModelErrorBodyBytes+1)))
+		truncated := len(body) > domain.MaxModelErrorBodyBytes
+		if truncated {
+			body = body[:domain.MaxModelErrorBodyBytes]
+		}
+		state.setProviderError(body, truncated)
+		for index := range body {
+			body[index] = 0
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, int64(domain.MaxModelErrorBodyBytes)))
+	}
 	_ = response.Body.Close()
 	body := []byte(safeProviderErrorBody)
 	response.Body = io.NopCloser(bytes.NewReader(body))

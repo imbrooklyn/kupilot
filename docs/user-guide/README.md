@@ -9,8 +9,8 @@ This guide describes the current, reachable `v0.3` behavior.
 - [Privacy and Local Data](privacy-and-local-data.md): cloud categories,
   consent, container output, SQLite, local logs, retention, per-Session
   deletion, redacted export, and cleanup.
-- [Evidence Details](evidence.md): bounded provenance fields, retained-detail
-  states, keyboard flow, and excluded raw data.
+- [Supporting Observation Details](evidence.md): bounded display fields,
+  retained-detail states, keyboard flow, and excluded internal or raw data.
 - [Configuration](../configuration.md): complete typed YAML, environment, CLI,
   endpoint, path, and logging schema.
 - [Diagnostic Capabilities](../diagnostic-capabilities.md): the eight supported

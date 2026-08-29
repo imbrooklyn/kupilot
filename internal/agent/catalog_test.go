@@ -41,8 +41,10 @@ func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
 	listDescription := specifications[1].Description
 	for _, required := range []string{
 		"Pod, Deployment, ReplicaSet, Job, or Service",
-		"Never use this Tool for Namespace discovery",
-		"Node inventory",
+		"A request for Pods in the current Namespace is supported",
+		"use health_filter=any when no health restriction was requested",
+		"Never use this Tool to list or discover Namespace objects",
+		"inspect Nodes",
 		"cluster-wide inventory",
 	} {
 		if !strings.Contains(listDescription, required) {

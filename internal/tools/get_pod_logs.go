@@ -395,7 +395,7 @@ func projectPodLog(
 	}
 	warnings := []domain.ToolResultWarning{}
 	if metadata.blocked {
-		warnings = appendWarning(warnings, logSensitiveWarningCode, "One projected log metadata field was blocked by the sensitive-output policy.")
+		warnings = appendWarning(warnings, logSensitiveWarningCode, "One log metadata field was hidden because it may contain sensitive data.")
 	}
 	if observation.Availability != PodLogAvailable {
 		code := string(observation.Availability)
@@ -521,7 +521,7 @@ func fitPodLogResult(
 		preview := previewEvidence(call, observed, templates)
 		currentWarnings := append([]domain.ToolResultWarning(nil), warnings...)
 		if outputTrimmed {
-			currentWarnings = appendWarning(currentWarnings, "output_limited", "The Tool returned a shorter log tail because the fixed output limit was reached.")
+			currentWarnings = appendWarning(currentWarnings, "output_limited", "The cluster read returned a shorter log tail because the fixed output limit was reached.")
 		}
 		raw, encodeErr := json.Marshal(data)
 		encoded := ""

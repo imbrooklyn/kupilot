@@ -386,7 +386,7 @@ func (manager *ScopeManager) BindRun(scope domain.ClusterScope, runID domain.Age
 			domain.SafeErrorClassInvalidInput,
 			"scope_run_binding_invalid",
 			"bind_run",
-			"The AgentRun scope binding was invalid.",
+			"The diagnostic run could not be bound to the active Kubernetes scope.",
 		)
 	}
 	manager.mu.Lock()
@@ -399,7 +399,7 @@ func (manager *ScopeManager) BindRun(scope domain.ClusterScope, runID domain.Age
 			domain.SafeErrorClassConflict,
 			"scope_run_already_active",
 			"bind_run",
-			"Another AgentRun is already active.",
+			"Another diagnostic run is already active.",
 		)
 	}
 	manager.activeRunID = runID
@@ -478,7 +478,7 @@ func (manager *ScopeManager) SelectedResource(scope domain.ClusterScope) (*domai
 			domain.SafeErrorClassInvalidInput,
 			"scope_invalid",
 			"selected_resource",
-			"The ClusterScope was invalid.",
+			"The active Kubernetes context and namespace were invalid.",
 		)
 	}
 	manager.mu.RLock()
@@ -780,7 +780,7 @@ func (manager *ScopeManager) checkExpectedGeneration(expected int64) error {
 			domain.SafeErrorClassInvalidInput,
 			"scope_generation_invalid",
 			"switch_scope",
-			"The expected scope generation was invalid.",
+			"The expected Kubernetes scope state was invalid.",
 		)
 	}
 	manager.mu.RLock()
@@ -839,7 +839,7 @@ func validateBoundRead(ctx context.Context, scope domain.ClusterScope, limit int
 			domain.SafeErrorClassInvalidInput,
 			"scope_invalid",
 			operation,
-			"The ClusterScope was invalid.",
+			"The active Kubernetes context and namespace were invalid.",
 		)
 	}
 	if limit < 1 || limit > domain.MaxResourceSummaries {

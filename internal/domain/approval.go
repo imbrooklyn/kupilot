@@ -548,7 +548,7 @@ func approvalErrorDefinition(code ApprovalErrorCode) (SafeErrorClass, string, bo
 	case ApprovalErrorCodeNonceMismatch:
 		return SafeErrorClassPolicyDenied, "The approval decision nonce does not match the request.", true
 	case ApprovalErrorCodeStaleScope:
-		return SafeErrorClassStaleScope, "The approval request no longer matches the active ClusterScope.", true
+		return SafeErrorClassStaleScope, "The approval request no longer matches the active Kubernetes context and namespace.", true
 	case ApprovalErrorCodeNotExpired:
 		return SafeErrorClassPolicyDenied, "The approval request has not reached its expiry.", true
 	case ApprovalErrorCodeExpired:

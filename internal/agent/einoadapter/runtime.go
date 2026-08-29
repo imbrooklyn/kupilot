@@ -247,7 +247,7 @@ func normalizeFailure(ctx context.Context, err error) *runtimeFailure {
 			return &runtimeFailure{
 				status:      domain.AgentRunStatusTimedOut,
 				class:       domain.SafeErrorClassTimeout,
-				safeMessage: "The Agent run reached its deadline.",
+				safeMessage: "The diagnostic run reached its time limit.",
 				stopReason:  agent.RunStopTimedOut,
 				cause:       err,
 			}
@@ -255,7 +255,7 @@ func normalizeFailure(ctx context.Context, err error) *runtimeFailure {
 			return &runtimeFailure{
 				status:      domain.AgentRunStatusCancelled,
 				class:       domain.SafeErrorClassCancelled,
-				safeMessage: "The Agent run was cancelled.",
+				safeMessage: "The diagnostic run was cancelled.",
 				stopReason:  agent.RunStopCancelled,
 				cause:       err,
 			}
@@ -311,7 +311,7 @@ func (state *runState) finishLocalDiagnosis(ctx context.Context, failure *runtim
 		MissingInformation: []domain.MissingInformation{{
 			Kind:   kind,
 			Detail: failure.safeMessage,
-			Impact: "The Diagnosis is limited to Evidence accepted before the runtime stopped.",
+			Impact: "The diagnosis is limited to observations accepted before the runtime stopped.",
 		}},
 	}
 	diagnosis, err := state.validateDiagnosis(draft, false)

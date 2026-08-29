@@ -92,8 +92,8 @@ func sessionExportConfirmationText(state sessionExportState) string {
 	builder.WriteString("- safe Session display metadata and timestamps\n")
 	builder.WriteString("- committed user and final assistant text after redaction and caps\n")
 	builder.WriteString("- the four structured Diagnosis sections after redaction and caps\n")
-	builder.WriteString("- referenced Evidence summaries or expired markers\n\n")
-	builder.WriteString("Excluded categories include raw Tool inputs and raw Tool results, raw logs, complete prompts and model payloads, credentials, Secrets, and approval nonce or digest authority.\n\n")
+	builder.WriteString("- referenced observation summaries or expired markers\n\n")
+	builder.WriteString("Excluded categories include raw cluster-read requests and results, raw logs, complete prompts and model payloads, credentials, Secrets, and approval nonce or digest authority.\n\n")
 	builder.WriteString("The export uses an owner-only file, will not overwrite an existing target, and is not encrypted. Deleting it does not guarantee forensic erasure.\n\nY confirms export. Esc or Enter cancels.")
 	return builder.String()
 }
@@ -259,9 +259,9 @@ func sessionDeleteConfirmationText(state sessionDeleteState) string {
 		fmt.Fprintf(&builder, "Session: %s\n", state.Title)
 	}
 	fmt.Fprintf(&builder, "Session ID: %s\n\n", state.SessionID)
-	builder.WriteString("This removes the Session-owned Messages, runs, model metadata, Tool details, Evidence, Diagnoses, approvals, decisions, and linked read/write audit in one transaction.\n\n")
+	builder.WriteString("This removes the Session's messages, runs, model metadata, cluster-read details, observations, diagnoses, approvals, decisions, and linked read/write audit in one transaction.\n\n")
 	if state.ExpectedCurrent {
-		builder.WriteString("An active AgentRun and any pending or approved-not-executed approval must be cancelled first.\n\n")
+		builder.WriteString("An active diagnostic run and any pending or approved-but-not-executed approval must be cancelled first.\n\n")
 	}
 	builder.WriteString("Logical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
 	return builder.String()
@@ -308,7 +308,7 @@ func (model *Model) beginLocalDeletion(kind localDeletionKind) {
 	}
 	model.localDeletion = &localDeletionState{Kind: kind}
 	if kind == clearLocalHistory {
-		model.showDialog("Clear all Session history?", "This removes every Session graph and all associated read/write audit in bounded transactions. Settings and valid model data-sharing consent remain. An active AgentRun and every pending or approved-not-executed approval must be cancelled first.\n\nLogical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
+		model.showDialog("Clear all Session history?", "This removes every Session graph and all associated read/write audit in bounded transactions. Settings and valid model data-sharing consent remain. An active diagnostic run and every pending or approved-but-not-executed approval must be cancelled first.\n\nLogical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
 		return
 	}
 	model.showDialog("Delete all local database state?", "This closes KuPilot local storage and removes only the validated database plus known SQLite journal, WAL, and shared-memory sidecars. Session history, settings, and model data-sharing consent are removed. Exported summaries, operational log files, backups, snapshots, swap, and storage media are outside this operation.\n\nKuPilot exits after storage closes, including after a partial file-removal failure. This does not guarantee forensic erasure.\n\nY confirms deletion and exit. Esc or Enter cancels.")
