@@ -48,6 +48,22 @@ func TestEventPublisherAssignsOrderAndAllowsExactlyOneTerminal(t *testing.T) {
 	}
 }
 
+func TestRunEventUsesTheExpandedFiniteSequenceCeiling(t *testing.T) {
+	clock := newFakeClock()
+	event := RunEvent{
+		RunID: testRunID, ScopeGeneration: 7, Sequence: MaxRunEvents,
+		OccurredAt: clock.Now(), Kind: RunEventRunCancelled,
+		TerminationReason: RunTerminationUserCancelled,
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate(at event ceiling) error = %v", err)
+	}
+	event.Sequence++
+	if err := event.Validate(); err == nil {
+		t.Fatal("Validate(over event ceiling) error = nil")
+	}
+}
+
 func TestRunEventRejectsMismatchedEvidenceBeforeSink(t *testing.T) {
 	clock := newFakeClock()
 	sinkCalls := 0

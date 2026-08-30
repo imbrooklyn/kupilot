@@ -3,10 +3,11 @@
 - Status: Accepted
 - Date: 2026-08-28
 - Supersedes: ADR-0021
+- Amended by: ADR-0042
 
 ## Context
 
-Before the first public release, KuPilot split configuration, SQLite state,
+Before the first public release, Kupilot split configuration, SQLite state,
 cache, and logs across platform-specific locations and required a complete model
 profile plus an environment-only API key before the TUI could open. That made a
 local single-user Agent difficult to discover, back up, inspect, reset, and
@@ -19,10 +20,10 @@ compatibility reader, legacy path discovery, or data migration.
 
 ## Decision
 
-KuPilot has one process-frozen Home. `KUPILOT_HOME` selects it; otherwise it is
+Kupilot has one process-frozen Home. `KUPILOT_HOME` selects it; otherwise it is
 `$HOME/.kupilot`. Resolution requires an absolute normalized path, resolves an
 existing Home symlink to one canonical target, and rejects roots that cannot be
-used safely. Every automatic KuPilot filesystem write is confined to these
+used safely. Every automatic Kupilot filesystem write is confined to these
 fixed children of the canonical Home:
 
 - `config.yaml`
@@ -35,7 +36,7 @@ Home. `--config` and `KUPILOT_CONFIG_FILE` remain read-only configuration
 sources; interactive setup never modifies them and writes only the fixed Home
 `config.yaml`.
 
-KuPilot creates a missing default or selected Home and its own missing
+Kupilot creates a missing default or selected Home and its own missing
 directories with mode `0700`, and creates its own missing regular files with
 mode `0600`, on supported Unix platforms. It does not chmod or chown an existing
 user-selected Home, directory, or regular file merely to enforce an exact mode.
@@ -86,7 +87,7 @@ Local state becomes predictable and first startup becomes interactive. Users
 can choose convenient local permissions and plaintext credential persistence
 with an explicit disclosure. Wider existing permissions and plaintext keys may
 be exposed to other local principals, backups, snapshots, or filesystem tools;
-KuPilot warns but does not claim encryption, secrecy from the host, or forensic
+Kupilot warns but does not claim encryption, secrecy from the host, or forensic
 erasure.
 
 The Home resolver, sensitive extractor, atomic writer, runtime replacement, and
@@ -144,3 +145,4 @@ Deterministic tests must cover:
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
 - [ADR-0026: Require Informed Consent Before Model Transfer](0026-require-informed-consent-before-model-transfer.md)
 - [ADR-0033: Use Cobra for Fixed CLI Routing and Viper for Configuration](0033-use-cobra-for-cli-and-viper-for-configuration.md)
+- [ADR-0042: Remember the Last Verified Kubernetes Context](0042-remember-the-last-verified-kubernetes-context.md)

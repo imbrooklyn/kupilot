@@ -62,6 +62,7 @@ type RunView struct {
 	RunID               domain.AgentRunID
 	ScopeGeneration     int64
 	LastSequence        int64
+	StartedAt           time.Time
 	Active              bool
 	Terminal            bool
 	PersistenceDegraded bool
@@ -71,20 +72,21 @@ type RunView struct {
 
 // Config supplies pure initial UI state; it contains no infrastructure client.
 type Config struct {
-	Width              int
-	Height             int
-	Theme              ThemeMode
-	DarkBackground     bool
-	NoColor            bool
-	StartIntent        application.UIStartIntent
-	Scope              ScopeView
-	Resource           ResourceView
-	ModelEndpoint      string
-	ModelName          string
-	ModelConfigured    bool
-	ModelConfiguredSet bool
-	PrivacyMode        domain.PrivacyMode
-	Now                func() time.Time
+	Width                   int
+	Height                  int
+	Theme                   ThemeMode
+	DarkBackground          bool
+	NoColor                 bool
+	StartIntent             application.UIStartIntent
+	Scope                   ScopeView
+	Resource                ResourceView
+	ModelEndpoint           string
+	ModelName               string
+	ModelConfigured         bool
+	ModelConfiguredSet      bool
+	ScopePreferenceDegraded bool
+	PrivacyMode             domain.PrivacyMode
+	Now                     func() time.Time
 }
 
 type resumeOrigin uint8
@@ -99,6 +101,7 @@ const (
 type Model struct {
 	width           int
 	height          int
+	theme           ThemeMode
 	focus           Focus
 	scope           ScopeView
 	resource        ResourceView
@@ -192,7 +195,7 @@ func NewModel(config Config) Model {
 		modelConfigured = config.ModelConfigured
 	}
 	model := Model{
-		width: width, height: height, focus: FocusComposer,
+		width: width, height: height, theme: theme, focus: FocusComposer,
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
 		modelName:       sanitizeExternalText(config.ModelName, 256),
 		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
@@ -213,6 +216,9 @@ func NewModel(config Config) Model {
 		styles:          styles, keymap: DefaultKeyMap(), terminalFocused: true,
 	}
 	model.configureStartup(config.StartIntent)
+	if config.ScopePreferenceDegraded {
+		model.transcript.AppendNotice("The previous Kubernetes Context preference could not be read. Kupilot used current kubeconfig state; a successful Context activation is stored when possible.")
+	}
 	if !model.modelConfigured && model.startup.Ready {
 		model.beginMissingModelSetup()
 	}
@@ -277,15 +283,37 @@ func (model *Model) configureStartup(intent application.UIStartIntent) {
 	}
 }
 
-// Init emits only the typed Application request selected during construction.
+// Init emits the typed Application request selected during construction and,
+// for an RGB color mode, one terminal background query. Neither performs
+// business I/O.
 func (model Model) Init() tea.Cmd {
+	commands := make([]tea.Cmd, 0, 2)
 	if model.initialQuery.RequestID != 0 {
-		return applicationQuery(model.initialQuery)
+		commands = append(commands, applicationQuery(model.initialQuery))
 	}
 	if model.initialResume.RequestID != 0 {
-		return applicationResume(model.initialResume)
+		commands = append(commands, applicationResume(model.initialResume))
 	}
-	return nil
+	if model.theme == ThemeAuto || model.theme == ThemeDark || model.theme == ThemeLight {
+		commands = append(commands, tea.RequestBackgroundColor)
+	}
+	return tea.Batch(commands...)
+}
+
+func (model *Model) applyStyleSet(styles styleSet) {
+	model.styles = styles
+	model.composer.SetStyles(styles.composer)
+	model.transcript.SetStyles(styles.transcript, styles.toolSteps)
+	model.slashMenu.SetStyles(styles.slashMenu)
+	model.contextPicker.SetStyles(styles.picker)
+	model.namespacePicker.SetStyles(styles.picker)
+	model.resourcePicker.SetStyles(styles.picker)
+	model.sessionPicker.SetStyles(styles.picker)
+	model.dialog.SetStyles(styles.dialog)
+	model.evidenceDialog.SetStyles(styles.evidence)
+	model.approvalDialog.SetStyles(styles.approval)
+	model.scopeConflict.SetStyles(styles.scopeConflict)
+	model.footer.SetStyles(styles.footer)
 }
 
 // EditorCount is the structural one-editor invariant.

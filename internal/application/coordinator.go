@@ -63,14 +63,16 @@ type CoordinatorConfig struct {
 // needed by CLI/TUI composition. Core run tests may omit it when no delivery
 // use case is exercised.
 type CoordinatorUIConfig struct {
-	Sessions       SessionResumeStore
-	Search         SessionSearchReader
-	Titles         SessionTitleStore
-	Startup        StartupMaintenance
-	Scopes         *ScopeManager
-	Approvals      *ApprovalCoordinator
-	EvidenceDetail EvidenceDetailReader
-	LocalState     LocalStateDeleter
+	Sessions         SessionResumeStore
+	Search           SessionSearchReader
+	Titles           SessionTitleStore
+	Startup          StartupMaintenance
+	Scopes           *ScopeManager
+	ScopePreferences ScopePreferenceStore
+	Approvals        *ApprovalCoordinator
+	RestartProposals RestartDeploymentProposalPreparer
+	EvidenceDetail   EvidenceDetailReader
+	LocalState       LocalStateDeleter
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -110,7 +112,9 @@ type Coordinator struct {
 	titles           SessionTitleStore
 	startup          StartupMaintenance
 	uiScopes         *ScopeManager
+	scopePreferences ScopePreferenceStore
 	approvals        *ApprovalCoordinator
+	restartProposals RestartDeploymentProposalPreparer
 	evidenceDetails  EvidenceDetailReader
 	localState       LocalStateDeleter
 	exports          SessionExportReader
@@ -123,18 +127,19 @@ type Coordinator struct {
 	startupResume    *startupResumeState
 	privacyChallenge *privacyChallenge
 
-	closed              bool
-	persistenceDegraded bool
-	starting            bool
-	startingCancel      context.CancelFunc
-	startingDone        chan struct{}
-	operations          int
-	operationsDone      chan struct{}
-	deletingSession     domain.SessionID
-	active              *activeRun
-	lastResult          *RunResult
-	lastDiagnosis       *domain.Diagnosis
-	lastEvidence        map[domain.EvidenceID]domain.Evidence
+	closed                  bool
+	persistenceDegraded     bool
+	scopePreferenceDegraded bool
+	starting                bool
+	startingCancel          context.CancelFunc
+	startingDone            chan struct{}
+	operations              int
+	operationsDone          chan struct{}
+	deletingSession         domain.SessionID
+	active                  *activeRun
+	lastResult              *RunResult
+	lastDiagnosis           *domain.Diagnosis
+	lastEvidence            map[domain.EvidenceID]domain.Evidence
 }
 
 type activeRun struct {
@@ -148,6 +153,8 @@ type activeRun struct {
 	diagnosis                *domain.Diagnosis
 	persistOperationalDetail bool
 	minimalPersistence       bool
+	toolResultBytes          int
+	logCalls                 int
 
 	lastAgentSequence int64
 	publishing        bool
@@ -208,8 +215,8 @@ type auditSpec struct {
 	sequence   *int
 }
 
-// NewCoordinator validates the complete read-only runtime composition without
-// performing persistence, model, Tool, Kubernetes, logging, or UI I/O.
+// NewCoordinator validates the complete operational runtime composition
+// without performing persistence, model, Tool, Kubernetes, logging, or UI I/O.
 func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	limits := config.BudgetLimits
 	if limits == (agent.RunBudgetLimits{}) {
@@ -242,6 +249,12 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.UI != nil && config.UI.Approvals != nil && config.UI.Scopes == nil {
 		return nil, ErrCoordinatorDependency
 	}
+	if config.UI != nil && (config.UI.Scopes == nil) != (config.UI.ScopePreferences == nil) {
+		return nil, ErrCoordinatorDependency
+	}
+	if config.UI != nil && (config.UI.Approvals == nil) != (config.UI.RestartProposals == nil) {
+		return nil, ErrCoordinatorDependency
+	}
 	exportDependencies := 0
 	if config.Exports != nil {
 		exportDependencies++
@@ -260,7 +273,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	var titles SessionTitleStore
 	var startup StartupMaintenance
 	var uiScopes *ScopeManager
+	var scopePreferences ScopePreferenceStore
 	var approvals *ApprovalCoordinator
+	var restartProposals RestartDeploymentProposalPreparer
 	var evidenceDetails EvidenceDetailReader
 	var localState LocalStateDeleter
 	if config.UI != nil {
@@ -269,7 +284,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		titles = config.UI.Titles
 		startup = config.UI.Startup
 		uiScopes = config.UI.Scopes
+		scopePreferences = config.UI.ScopePreferences
 		approvals = config.UI.Approvals
+		restartProposals = config.UI.RestartProposals
 		evidenceDetails = config.UI.EvidenceDetail
 		localState = config.UI.LocalState
 		if approvals != nil && uiScopes.BindApprovalInvalidationHook(approvals) != nil {
@@ -287,13 +304,15 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
-		uiScopes:        uiScopes,
-		approvals:       approvals,
-		evidenceDetails: evidenceDetails,
-		localState:      localState,
-		exports:         config.Exports,
-		exportFiles:     config.ExportFiles,
-		exportText:      config.ExportText,
+		uiScopes:         uiScopes,
+		scopePreferences: scopePreferences,
+		approvals:        approvals,
+		restartProposals: restartProposals,
+		evidenceDetails:  evidenceDetails,
+		localState:       localState,
+		exports:          config.Exports,
+		exportFiles:      config.ExportFiles,
+		exportText:       config.ExportText,
 	}, nil
 }
 
@@ -314,13 +333,21 @@ func (coordinator *Coordinator) StartUI(
 	}
 	result := UIStartResult{Intent: intent}
 	var currentCandidate *domain.ScopeCandidate
-	if intent.Kind != UIStartNew && !intent.ExplicitScope && coordinator.uiScopes != nil {
-		candidate, resolveErr := coordinator.resolveStartupScopeCandidate(ctx, intent)
+	if coordinator.uiScopes != nil {
+		candidate, preferenceDegraded, resolveErr := coordinator.resolveStartupScopeCandidate(ctx, intent)
+		result.ScopePreferenceDegraded = preferenceDegraded
+		if preferenceDegraded {
+			coordinator.setScopePreferenceDegraded(true)
+		}
 		if resolveErr == nil {
 			currentCandidate = &candidate
 			result.ScopeCandidate = cloneScopeCandidate(currentCandidate)
 		} else if contextErr := ctx.Err(); contextErr != nil {
 			return UIStartResult{}, contextErr
+		} else if intent.ConfiguredContext != "" ||
+			(intent.ConfiguredNamespace != "" && intent.ConfiguredNamespace != DefaultStartupNamespace) ||
+			intent.ExplicitScope {
+			return UIStartResult{}, ErrScopeUnavailable
 		}
 	}
 	coordinator.mu.Lock()
@@ -460,12 +487,31 @@ func (coordinator *Coordinator) stopRunForModelSetup(ctx context.Context) error 
 func (coordinator *Coordinator) resolveStartupScopeCandidate(
 	ctx context.Context,
 	intent UIStartIntent,
-) (domain.ScopeCandidate, error) {
+) (domain.ScopeCandidate, bool, error) {
+	contextName := intent.ConfiguredContext
+	remembered := false
+	preferenceDegraded := false
+	if contextName == "" {
+		var (
+			preference ScopePreference
+			found      bool
+		)
+		err := coordinator.persist(ctx, func(operationContext context.Context) error {
+			var loadErr error
+			preference, found, loadErr = coordinator.scopePreferences.LoadLastContext(operationContext)
+			return loadErr
+		})
+		if err != nil || found && preference.Validate() != nil {
+			preferenceDegraded = true
+		} else if found {
+			contextName = preference.Context
+			remembered = true
+		}
+	}
 	candidates, err := coordinator.uiScopes.ListContexts(ctx)
 	if err != nil {
-		return domain.ScopeCandidate{}, err
+		return domain.ScopeCandidate{}, preferenceDegraded, err
 	}
-	contextName := intent.ConfiguredContext
 	var selected *ContextCandidate
 	for index := range candidates {
 		candidate := candidates[index]
@@ -474,18 +520,26 @@ func (coordinator *Coordinator) resolveStartupScopeCandidate(
 			break
 		}
 	}
+	if selected == nil && remembered {
+		for index := range candidates {
+			if candidates[index].Current {
+				selected = &candidates[index]
+				break
+			}
+		}
+	}
 	if selected == nil {
-		return domain.ScopeCandidate{}, ErrScopeUnavailable
+		return domain.ScopeCandidate{}, preferenceDegraded, ErrScopeUnavailable
 	}
 	namespace := intent.ConfiguredNamespace
 	if namespace == "" {
-		namespace = selected.DefaultNamespace
+		namespace = DefaultStartupNamespace
 	}
 	result := domain.ScopeCandidate{Context: selected.Name, Namespace: namespace}
 	if result.Validate() != nil || !domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace) {
-		return domain.ScopeCandidate{}, ErrScopeUnavailable
+		return domain.ScopeCandidate{}, preferenceDegraded, ErrScopeUnavailable
 	}
-	return result, nil
+	return result, preferenceDegraded, nil
 }
 
 func (coordinator *Coordinator) prepareStartup(ctx context.Context) error {
@@ -1203,7 +1257,7 @@ func (coordinator *Coordinator) revalidateResumedResource(
 		return result
 	}
 	if savedScope == nil || savedScope.Context != scope.Context || savedScope.Namespace != scope.Namespace ||
-		reference.Namespace != scope.Namespace {
+		!domain.ReferenceMatchesWorkingNamespace(*reference, scope.Namespace) {
 		result.Cleared = false
 		result.Failure = UIQueryUnavailable
 		return result
@@ -1263,7 +1317,27 @@ func (coordinator *Coordinator) executeScopeCommand(ctx context.Context, command
 		current := coordinator.uiScopes.View()
 		return failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, current, uiFailureCode(err))
 	}
-	return successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, scope)
+	result := successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, scope)
+	if command.Kind != UICommandSelectNamespace && coordinator.saveScopePreference(ctx, scope.Context) != nil {
+		coordinator.setScopePreferenceDegraded(true)
+		result.ScopePreferenceDegraded = true
+	} else if command.Kind != UICommandSelectNamespace {
+		coordinator.setScopePreferenceDegraded(false)
+	}
+	return result
+}
+
+func (coordinator *Coordinator) saveScopePreference(ctx context.Context, contextName string) error {
+	preference := ScopePreference{
+		Context:   contextName,
+		UpdatedAt: coordinator.now().UTC().Truncate(time.Millisecond),
+	}
+	if preference.Validate() != nil {
+		return ErrPersistenceUnavailable
+	}
+	return coordinator.persist(ctx, func(operationContext context.Context) error {
+		return coordinator.scopePreferences.SaveLastContext(operationContext, preference)
+	})
 }
 
 func (coordinator *Coordinator) activateExactScope(
@@ -1278,16 +1352,7 @@ func (coordinator *Coordinator) activateExactScope(
 		}
 		return coordinator.uiScopes.SwitchNamespace(ctx, target.Namespace, expectedGeneration)
 	}
-	scope, err := coordinator.uiScopes.SwitchContext(ctx, target.Context, expectedGeneration)
-	if err != nil || scope.Namespace == target.Namespace {
-		return scope, err
-	}
-	result, namespaceErr := coordinator.uiScopes.SwitchNamespace(ctx, target.Namespace, scope.Generation)
-	if namespaceErr == nil {
-		return result, nil
-	}
-	_ = invalidatePartialUIScope(coordinator.uiScopes, scope.Generation)
-	return domain.ClusterScope{}, namespaceErr
+	return coordinator.uiScopes.ActivateScope(ctx, target, expectedGeneration)
 }
 
 func successfulUIScopeResult(requestID uint64, expectedGeneration int64, scope domain.ClusterScope) UIScopeResult {
@@ -1308,25 +1373,6 @@ func failedUIScopeResult(
 		RequestID: requestID, ExpectedGeneration: expectedGeneration,
 		ScopeGeneration: generation, Failure: failure,
 	}
-}
-
-func invalidatePartialUIScope(manager *ScopeManager, expectedGeneration int64) error {
-	manager.switchMu.Lock()
-	defer manager.switchMu.Unlock()
-	if err := manager.checkExpectedGeneration(expectedGeneration); err != nil {
-		return err
-	}
-	generation, client, cancel, err := manager.beginInvalidation()
-	if err != nil {
-		return err
-	}
-	manager.finishLocalInvalidation(generation, cancel)
-	hookErr := manager.invalidateHook(generation)
-	if client != nil {
-		client.Close()
-	}
-	manager.markUnavailable(generation)
-	return hookErr
 }
 
 func clearScopeResource(manager *ScopeManager, scope domain.ClusterScope) bool {
@@ -1409,20 +1455,49 @@ func (coordinator *Coordinator) executeRenameCommand(ctx context.Context, comman
 }
 
 func (coordinator *Coordinator) uiStatus() UIStatusResult {
-	result := UIStatusResult{Session: coordinator.CurrentUISession()}
+	limits := coordinator.budgetLimits
+	result := UIStatusResult{
+		Session: coordinator.CurrentUISession(), CapabilityCatalogVersion: agent.ToolCatalogVersion,
+		Budget: UIBudgetStatus{
+			Profile: limits.Profile, RunMilliseconds: limits.RunDuration.Milliseconds(),
+			RemainingMilliseconds: limits.RunDuration.Milliseconds(),
+			StepsMaximum:          limits.Steps, ToolCallsMaximum: limits.ToolCalls, ModelCallsMaximum: limits.ModelCalls,
+			ToolResultBytesMaximum: limits.RunToolResultBytes, LogCallsMaximum: limits.LogCalls,
+		},
+	}
 	if coordinator.uiScopes != nil {
 		view := coordinator.uiScopes.View()
 		result.ScopeGeneration = view.Generation
 		if view.State == ScopeStateActive && view.Scope != nil {
 			result.Context = view.Scope.Context
 			result.Namespace = view.Scope.Namespace
+			result.NamespaceAccess = view.Scope.NamespaceAccess
 			result.ReadOnly = true
 		}
 	}
 	coordinator.mu.Lock()
+	result.PersistenceDegraded = coordinator.persistenceDegraded || coordinator.scopePreferenceDegraded
 	if coordinator.active != nil && !coordinator.active.terminal {
-		result.RunID = coordinator.active.run.ID
+		state := coordinator.active
+		result.RunID = state.run.ID
 		result.RunActive = true
+		result.PersistenceDegraded = result.PersistenceDegraded || state.persistenceBad
+		result.Budget.StepsUsed = state.run.StepCount
+		result.Budget.ToolCallsUsed = state.run.ToolCallCount
+		result.Budget.ModelCallsUsed = state.run.ModelRequestCount
+		result.Budget.ToolResultBytesUsed = state.toolResultBytes
+		result.Budget.LogCallsUsed = state.logCalls
+		if state.run.StartedAt != nil {
+			elapsed := coordinator.now().Sub(*state.run.StartedAt)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			if elapsed > limits.RunDuration {
+				elapsed = limits.RunDuration
+			}
+			result.Budget.ElapsedMilliseconds = elapsed.Milliseconds()
+			result.Budget.RemainingMilliseconds = limits.RunDuration.Milliseconds() - result.Budget.ElapsedMilliseconds
+		}
 	}
 	coordinator.mu.Unlock()
 	return result
@@ -1740,7 +1815,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		return "", ErrQuestionRejected
 	}
 	scope, current := coordinator.scope.CurrentScope()
-	if !current || scope.Validate() != nil || command.Resource != nil && command.Resource.Namespace != scope.Namespace {
+	if !current || scope.Validate() != nil || command.Resource != nil && !domain.ReferenceMatchesWorkingNamespace(*command.Resource, scope.Namespace) {
 		return "", ErrScopeUnavailable
 	}
 	runID, runErr := coordinator.identifiers.NewAgentRunID()
@@ -1864,7 +1939,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 
 	bridgeFailed := false
-	if event.Terminal() && coordinator.approvals != nil {
+	if event.Terminal() && event.Kind != agent.RunEventRunCompleted && coordinator.approvals != nil {
 		approvalContext, cancelApproval := context.WithTimeout(ctx, coordinator.persistenceLimit)
 		approvalErr := coordinator.approvals.CancelRun(approvalContext, state.run.ID)
 		cancelApproval()
@@ -1893,6 +1968,12 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	if err := state.bridge.accept(ctx, event); err != nil {
 		bridgeFailed = true
+	} else if event.Kind == agent.RunEventDiagnosisReady {
+		// A model-proposed action is not authority. The trusted preparer first
+		// re-reads the exact Deployment and derives every digest-bound identity
+		// field locally; inability to prepare an action does not invalidate the
+		// otherwise valid answer.
+		_ = coordinator.prepareRestartProposal(ctx, state)
 	}
 	if event.Terminal() {
 		coordinator.observe(ctx, RunObservation{
@@ -1909,6 +1990,61 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		return agent.EventSinkDegraded
 	}
 	return agent.EventSinkAccepted
+}
+
+func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, state *activeRun) error {
+	if coordinator == nil || coordinator.approvals == nil || coordinator.restartProposals == nil ||
+		state == nil || state.diagnosis == nil || state.bridge == nil {
+		return nil
+	}
+	var proposed *domain.RecommendedAction
+	for index := range state.diagnosis.RecommendedActions {
+		action := &state.diagnosis.RecommendedActions[index]
+		if action.Operation != domain.ApprovalOperationRestartDeployment {
+			continue
+		}
+		if proposed != nil {
+			return ErrApprovalUnavailable
+		}
+		proposed = action
+	}
+	if proposed == nil {
+		return nil
+	}
+	if proposed.Target == nil || proposed.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
+		proposed.Target.Kind != domain.RestartDeploymentTargetKind ||
+		proposed.Target.Namespace != state.run.Scope.Namespace || proposed.Target.UID != "" ||
+		proposed.Target.ResourceVersion != "" {
+		return ErrApprovalUnavailable
+	}
+	intent, err := coordinator.restartProposals.PrepareRestartDeploymentProposal(
+		ctx,
+		state.run.Scope,
+		*proposed.Target,
+		proposed.Action,
+	)
+	if err != nil || intent.Validate() != nil || intent.Scope != state.run.Scope ||
+		intent.Operation != domain.ApprovalOperationRestartDeployment ||
+		intent.DeploymentName != proposed.Target.Name || intent.ReasonSummary != proposed.Action {
+		return ErrApprovalUnavailable
+	}
+	sequence := state.bridge.sequence + 1
+	request, err := coordinator.approvals.SubmitRestartDeploymentProposal(
+		ctx,
+		state.run.ID,
+		state.run.SessionID,
+		sequence,
+		intent,
+	)
+	if err != nil {
+		return err
+	}
+	if request.Validate() != nil || request.RunID != state.run.ID || request.SessionID != state.run.SessionID ||
+		request.Intent != intent || request.State != domain.ApprovalStatePending {
+		return ErrApprovalUnavailable
+	}
+	state.bridge.sequence = sequence
+	return nil
 }
 
 // CancelRun cancels only the exact active run and generation. Completion is
@@ -1938,8 +2074,9 @@ func (coordinator *Coordinator) CancelRun(ctx context.Context, command CancelRun
 	return nil
 }
 
-// SubmitRestartDeploymentProposal delegates the isolated v0.2 proposal bridge
-// to the optional approval coordinator. The v0.1 composition leaves it nil.
+// SubmitRestartDeploymentProposal delegates the supervised proposal bridge to
+// the optional approval coordinator. A composition without supervised actions
+// leaves it nil.
 func (coordinator *Coordinator) SubmitRestartDeploymentProposal(
 	ctx context.Context,
 	runID domain.AgentRunID,
@@ -2064,7 +2201,7 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 	case agent.RunEventModelStreamStarted:
 		state.run.ModelRequestCount++
 		state.run.StepCount++
-		if state.run.ModelRequestCount > domain.MaxAgentModelCalls || state.run.StepCount > domain.MaxAgentSteps {
+		if state.run.ModelRequestCount > state.input.BudgetLimits().ModelCalls || state.run.StepCount > state.input.BudgetLimits().Steps {
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		return persistenceAction{kind: appendAuditOnly, audit: auditSpec{
@@ -2081,8 +2218,14 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		state.run.ToolCallCount++
-		if state.run.ToolCallCount > domain.MaxAgentToolCalls {
+		if state.run.ToolCallCount > state.input.BudgetLimits().ToolCalls {
 			return persistenceAction{}, ErrInvalidAgentEvent
+		}
+		if event.ToolInvocation.Name == domain.ToolNameGetPodLogs || event.ToolInvocation.Name == domain.ToolNameGetPreviousPodLogs {
+			state.logCalls++
+			if state.logCalls > state.input.BudgetLimits().LogCalls {
+				return persistenceAction{}, ErrInvalidAgentEvent
+			}
 		}
 		invocation := cloneInvocation(*event.ToolInvocation)
 		state.tools[invocation.ID] = &pendingTool{current: invocation}
@@ -2107,6 +2250,10 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		terminal := cloneInvocation(*event.ToolInvocation)
+		if terminal.ReturnedBytes > state.input.BudgetLimits().RunToolResultBytes-state.toolResultBytes {
+			return persistenceAction{}, ErrInvalidAgentEvent
+		}
+		state.toolResultBytes += terminal.ReturnedBytes
 		pending.terminal = &terminal
 		pending.audit = toolTerminalAudit(event)
 		if terminal.EvidenceCount == 0 {
@@ -2119,7 +2266,8 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 	case agent.RunEventEvidenceCollected:
 		pending := state.tools[event.Evidence.InvocationID]
 		if event.Evidence.Scope != state.run.Scope || pending == nil || pending.terminal == nil || pending.persisted ||
-			len(pending.evidence) >= pending.terminal.EvidenceCount {
+			len(pending.evidence) >= pending.terminal.EvidenceCount ||
+			!state.input.Scope().AllowsReference(event.Evidence.Resource) {
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		for _, existing := range pending.evidence {
@@ -2326,6 +2474,12 @@ func (coordinator *Coordinator) markRunPersistenceDegraded(ctx context.Context, 
 func (coordinator *Coordinator) markGlobalPersistenceDegraded() {
 	coordinator.mu.Lock()
 	coordinator.persistenceDegraded = true
+	coordinator.mu.Unlock()
+}
+
+func (coordinator *Coordinator) setScopePreferenceDegraded(degraded bool) {
+	coordinator.mu.Lock()
+	coordinator.scopePreferenceDegraded = degraded
 	coordinator.mu.Unlock()
 }
 
@@ -2640,6 +2794,10 @@ func cloneDiagnosis(value domain.Diagnosis) domain.Diagnosis {
 	copy.RecommendedActions = append([]domain.RecommendedAction(nil), value.RecommendedActions...)
 	for index := range copy.RecommendedActions {
 		copy.RecommendedActions[index].Prerequisites = append([]string(nil), value.RecommendedActions[index].Prerequisites...)
+		if value.RecommendedActions[index].Target != nil {
+			target := *value.RecommendedActions[index].Target
+			copy.RecommendedActions[index].Target = &target
+		}
 	}
 	copy.ValidationWarnings = append([]string(nil), value.ValidationWarnings...)
 	if value.ObservedFrom != nil {

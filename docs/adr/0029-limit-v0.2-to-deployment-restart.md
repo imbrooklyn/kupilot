@@ -1,6 +1,6 @@
 # ADR-0029: Limit `v0.2` to Deployment Restart
 
-- Status: Accepted
+- Status: Superseded by ADR-0037
 - Date: 2026-08-08
 
 ## Context
@@ -20,9 +20,9 @@ approved.
 namespaced Deployment admitted by the current ClusterScope. There is no write
 operation in `v0.1`.
 
-The semantic operation is to change exactly one KuPilot-owned Pod-template
+The semantic operation is to change exactly one Kupilot-owned Pod-template
 annotation, `kupilot.io/restartedAt`, to a locally generated UTC value so the
-Deployment controller observes a new Pod template. KuPilot does not delete Pods,
+Deployment controller observes a new Pod template. Kupilot does not delete Pods,
 change replicas, image, strategy, selector, labels, environment, or any other
 Deployment field.
 
@@ -39,13 +39,13 @@ The proposal and digest bind:
 - A deterministic fingerprint of the projected current Pod template and the
   Deployment generation.
 - Canonical parameters, including a bounded reason summary, and the prior value
-  or absence of the KuPilot annotation.
+  or absence of the Kupilot annotation.
 - Policy version and 60-second expiry.
 
-ADR-0012 approval is mandatory. Immediately before the write KuPilot re-reads
+ADR-0012 approval is mandatory. Immediately before the write Kupilot re-reads
 the Deployment and revalidates active scope, name, UID, template fingerprint,
 generation, canonical parameters, and policy. A status-only resource-version
-change does not invalidate approval. KuPilot uses the fresh resource version as
+change does not invalidate approval. Kupilot uses the fresh resource version as
 the concurrency precondition, commits consumed approval and pre-write audit,
 performs a final scope check, and issues at most one mutation request. A conflict
 or ambiguous result is not retried automatically; a new proposal and approval
@@ -53,7 +53,7 @@ are required.
 
 Post-operation verification uses bounded read-only observations of
 `observedGeneration` and updated and available replica counts against the target.
-KuPilot reports request acceptance, observed rollout progress, timeout, failure,
+Kupilot reports request acceptance, observed rollout progress, timeout, failure,
 unavailable Evidence, and verified completion as separate states. It never
 equates an accepted API request with a completed rollout.
 
@@ -87,10 +87,10 @@ Positive consequences:
 
 Costs and constraints:
 
-- KuPilot cannot restart StatefulSets, DaemonSets, individual Pods, or multiple
+- Kupilot cannot restart StatefulSets, DaemonSets, individual Pods, or multiple
   Deployments.
 - A changed Deployment invalidates approval rather than merging or retrying.
-- The KuPilot-owned annotation becomes visible cluster metadata.
+- The Kupilot-owned annotation becomes visible cluster metadata.
 - Verification may time out or remain inconclusive even after the API accepted
   the request.
 
@@ -103,7 +103,7 @@ Costs and constraints:
 - Scaling down and up was rejected because it changes availability and desired
   replica state and requires multiple writes.
 - Reusing another tool's restart annotation without ownership was rejected
-  because KuPilot needs a stable, independently testable operation field.
+  because Kupilot needs a stable, independently testable operation field.
 - Automatically retrying conflicts or timeouts was rejected because the first
   request may have succeeded and the target may have changed.
 
@@ -124,7 +124,7 @@ conflict or any ambiguous failure is terminal for that approval and is never
 retried automatically.
 
 Deployment `apps/v1`, JSON Merge Patch, and metadata resource-version
-preconditions are stable within KuPilot's Kubernetes 1.34.x through 1.36.x
+preconditions are stable within Kupilot's Kubernetes 1.34.x through 1.36.x
 support matrix. The pinned module and server-version evidence remains defined
 by [Kubernetes Compatibility](../kubernetes-compatibility.md).
 

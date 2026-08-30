@@ -95,7 +95,7 @@ func (executor *fakeRestartExecutor) ConsumeWithAudit(
 func (executor *fakeRestartExecutor) CurrentScope() (domain.ClusterScope, bool) {
 	intent := testIntent()
 	return domain.ClusterScope{
-		Context: intent.Scope.Context, Namespace: intent.Scope.Namespace, Generation: intent.Scope.Generation,
+		Context: intent.Scope.Context, Namespace: intent.Scope.Namespace, NamespaceAccess: domain.NamespaceAccessCurrent, Generation: intent.Scope.Generation,
 		ActivatedAt: time.UnixMilli(1).UTC(),
 	}, true
 }

@@ -40,6 +40,9 @@ func NewSlashMenu(styles SlashMenuStyles) SlashMenu {
 	return SlashMenu{maxVisible: MaxSlashCandidates, width: 80, styles: styles}
 }
 
+// SetStyles updates presentation without changing candidates or selection.
+func (menu *SlashMenu) SetStyles(styles SlashMenuStyles) { menu.styles = styles }
+
 // SetCandidates opens the menu and defensively copies at most eight rows.
 func (menu *SlashMenu) SetCandidates(candidates []SlashCandidate) {
 	limit := min(len(candidates), MaxSlashCandidates, menu.maxVisible)

@@ -12,7 +12,7 @@ func ClearCache(ctx context.Context, paths Paths) error {
 	}
 	expected := pathsForHome(paths.HomeDir)
 	if !validHomePath(paths.HomeDir) || expected.CacheDir != paths.CacheDir {
-		return newSafeError(ClassConfigurationInvalid, "cache_path_invalid", "clear_cache", "KuPilot could not resolve its fixed cache directory safely.")
+		return newSafeError(ClassConfigurationInvalid, "cache_path_invalid", "clear_cache", "Kupilot could not resolve its fixed cache directory safely.")
 	}
 	return clearCacheContents(ctx, paths.CacheDir)
 }

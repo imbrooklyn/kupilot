@@ -1,7 +1,12 @@
 {
   "name": "service_without_ready_endpoint_sufficient",
   "question": "Why does example-service have no ready backend?",
-  "target": {"api_version": "v1", "kind": "Service", "namespace": "example-namespace", "name": "example-service"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Service",
+    "namespace": "example-namespace",
+    "name": "example-service"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,9 @@
             "fact": "Service example-service was observed; selector keys 1; service type ClusterIP.",
             "source_path": "projected.status",
             "severity": "info",
-            "supports": ["service_selector_present"]
+            "supports": [
+              "service_selector_present"
+            ]
           }
         ]
       }
@@ -38,7 +45,10 @@
             "fact": "Pod example-backend-pod was observed; phase Running; ready 0 of 1; reason ContainersNotReady.",
             "source_path": "projected.related.nodes.status",
             "severity": "warning",
-            "supports": ["service_pod_unready", "pod_readiness_blocks_backends_possible"]
+            "supports": [
+              "service_pod_unready",
+              "pod_readiness_blocks_backends_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001803",
@@ -46,7 +56,10 @@
             "fact": "Service example-service matched Pod example-backend-pod using one projected selector key.",
             "source_path": "projected.related.edges.selector_match",
             "severity": "info",
-            "supports": ["service_matching_pod_observed", "pod_readiness_blocks_backends_possible"]
+            "supports": [
+              "service_matching_pod_observed",
+              "pod_readiness_blocks_backends_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001804",
@@ -54,51 +67,84 @@
             "fact": "Service example-service has 0 ready and 2 not-ready EndpointSlice endpoint(s).",
             "source_path": "projected.related.edges.service_endpoints",
             "severity": "warning",
-            "supports": ["service_ready_endpoint_count_zero", "pod_readiness_blocks_backends_possible"]
+            "supports": [
+              "service_ready_endpoint_count_zero",
+              "pod_readiness_blocks_backends_possible"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Service has one selector key.", "evidence_ids": ["00000000-0000-7000-8000-000000001801"]},
-      {"statement": "The bounded relationship result contains a selector match to one Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001803"]},
-      {"statement": "The matching Pod has zero ready containers out of one desired container.", "evidence_ids": ["00000000-0000-7000-8000-000000001802"]},
-      {"statement": "The EndpointSlice projection reports zero ready and two not-ready endpoints.", "evidence_ids": ["00000000-0000-7000-8000-000000001804"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Service has one selector key.\n- The bounded relationship result contains a selector match to one Pod.\n- The matching Pod has zero ready containers out of one desired container.\n- The EndpointSlice projection reports zero ready and two not-ready endpoints.\n\nThe observed matching Pod readiness may explain why the Service has no ready endpoints. Confidence: medium. To verify: A fresh bounded relationship observation shows ready matching Pods while the ready endpoint count remains zero.\n\nNo Pod readiness condition, Event, or probe detail was collected. Impact: The counts do not identify why the matching Pod is unready.\n\nSuggested next step: Collect bounded readiness Evidence for the matching Pod and review its probe configuration outside Kupilot. Risk: Changing a probe outside Kupilot may alter traffic eligibility or replace Pods. Before acting: Keep Endpoint identities private and use only the projected readiness counts.",
+    "evidence_citations": [
       {
-        "statement": "The observed matching Pod readiness may explain why the Service has no ready endpoints.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001802", "00000000-0000-7000-8000-000000001803", "00000000-0000-7000-8000-000000001804"],
-        "confidence": "medium",
-        "falsifier": "A fresh bounded relationship observation shows ready matching Pods while the ready endpoint count remains zero."
+        "claim": "The projected Service has one selector key.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001801"
+        ]
+      },
+      {
+        "claim": "The bounded relationship result contains a selector match to one Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001803"
+        ]
+      },
+      {
+        "claim": "The matching Pod has zero ready containers out of one desired container.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001802"
+        ]
+      },
+      {
+        "claim": "The EndpointSlice projection reports zero ready and two not-ready endpoints.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001804"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "absent", "detail": "No Pod readiness condition, Event, or probe detail was collected.", "impact": "The counts do not identify why the matching Pod is unready."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Collect bounded readiness Evidence for the matching Pod and review its probe configuration outside KuPilot.",
-        "risk": "Changing a probe outside KuPilot may alter traffic eligibility or replace Pods.",
-        "prerequisites": ["Keep Endpoint identities private and use only the projected readiness counts."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "service_selector_present"},
-      {"index": 1, "assertion": "service_matching_pod_observed"},
-      {"index": 2, "assertion": "service_pod_unready"},
-      {"index": 3, "assertion": "service_ready_endpoint_count_zero"}
+      {
+        "index": 0,
+        "assertion": "service_selector_present"
+      },
+      {
+        "index": 1,
+        "assertion": "service_matching_pod_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "service_pod_unready"
+      },
+      {
+        "index": 3,
+        "assertion": "service_ready_endpoint_count_zero"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "pod_readiness_blocks_backends_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_matching_pod_readiness"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "pod_readiness_blocks_backends_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_matching_pod_readiness"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["service_selector_present", "service_matching_pod_observed", "service_pod_unready", "service_ready_endpoint_count_zero"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "service_selector_present",
+    "service_matching_pod_observed",
+    "service_pod_unready",
+    "service_ready_endpoint_count_zero"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

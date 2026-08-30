@@ -614,7 +614,7 @@ type integrationScope struct {
 
 func newIntegrationScope() *integrationScope {
 	return &integrationScope{scope: domain.ClusterScope{
-		Context: "test-context", Namespace: "team-a", Generation: 7,
+		Context: "test-context", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7,
 		ActivatedAt: time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC),
 	}}
 }
@@ -711,14 +711,15 @@ func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) 
 
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	return fmt.Sprintf(
-		`{"confirmed_facts":[{"statement":"The Pod is not Ready.","evidence_ids":[%q]}],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":"Review the readiness probe configuration.","risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
+		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"claim":"The Pod is not Ready.","evidence_ids":[%q]}],"proposed_actions":[]}`,
 		evidenceID,
 	)
 }
 
 func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
 	return fmt.Sprintf(
-		`{"confirmed_facts":[{"statement":%q,"evidence_ids":[%q]}],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":"Review the generated output.","risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
+		`{"answer_markdown":%q,"evidence_citations":[{"claim":%q,"evidence_ids":[%q]}],"proposed_actions":[]}`,
+		"The projected condition includes token="+canary,
 		"The projected condition includes token="+canary,
 		evidenceID,
 	)
@@ -726,7 +727,7 @@ func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary stri
 
 func integrationUnreferencedDiagnosisJSON(canary string) string {
 	return fmt.Sprintf(
-		`{"confirmed_facts":[],"hypotheses":[],"missing_information":[],"recommended_actions":[{"action":%q,"risk":"Read-only recommendation; not executed.","prerequisites":[],"executed":false}]}`,
+		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[]}`,
 		"Review the observation without claiming it; marker="+canary,
 	)
 }

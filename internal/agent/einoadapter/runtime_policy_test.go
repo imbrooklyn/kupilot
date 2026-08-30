@@ -78,7 +78,9 @@ func TestNoProgressStopsBeforeThirdNeutralModelCall(t *testing.T) {
 		return emptyToolResult(t, call, clock.Now())
 	}}
 	recorder := newEventRecorder()
-	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	limits := agent.DefaultRunBudgetLimits()
+	limits.NoProgressSteps = 2
+	input := testInput(t, clock, limits)
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {

@@ -1,7 +1,6 @@
 package components
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -20,6 +19,7 @@ type ToolStep struct {
 
 // ToolStepStyles maps semantic status to local presentation only.
 type ToolStepStyles struct {
+	Normal  lipgloss.Style
 	Muted   lipgloss.Style
 	Success lipgloss.Style
 	Warning lipgloss.Style
@@ -34,6 +34,9 @@ type ToolSteps struct {
 
 // NewToolSteps creates an empty inline list.
 func NewToolSteps(styles ToolStepStyles) ToolSteps { return ToolSteps{styles: styles} }
+
+// SetStyles updates presentation without changing invocation state.
+func (steps *ToolSteps) SetStyles(styles ToolStepStyles) { steps.styles = styles }
 
 // Reset removes steps when a new Agent turn starts.
 func (steps *ToolSteps) Reset() { steps.steps = nil }
@@ -64,25 +67,18 @@ func terminalToolStepStatus(status string) bool {
 // Items returns a defensive copy.
 func (steps ToolSteps) Items() []ToolStep { return append([]ToolStep(nil), steps.steps...) }
 
-// View renders compact Tool headers with optional details on separate lines.
+// View renders one compact Tool status row and, when useful, one detail row.
 func (steps ToolSteps) View() string {
-	lines := make([]string, 0, len(steps.steps)*3)
-	for index, step := range steps.steps {
-		branch := "├─"
-		if index == len(steps.steps)-1 {
-			branch = "└─"
-		}
-		symbol, label, style := steps.status(step.Status)
-		header := fmt.Sprintf("%s %s %s · %s", branch, symbol, toolStepDisplayName(step.Name), label)
+	lines := make([]string, 0, len(steps.steps)*2)
+	for _, step := range steps.steps {
+		label, style := steps.status(step.Status)
+		header := steps.styles.Normal.Render("• "+toolStepDisplayName(step.Name)+" · ") + style.Render(label)
 		if step.Truncated {
-			header += " · limited"
+			header += steps.styles.Warning.Render(" · limited")
 		}
-		lines = append(lines, steps.styles.Muted.Render(branch+" ")+style.Render(strings.TrimPrefix(header, branch+" ")))
-		if step.Purpose != "" {
-			lines = append(lines, steps.styles.Muted.Render("   Purpose: ")+style.Render(indentToolStepDetail(step.Purpose)))
-		}
-		if step.Summary != "" && step.Summary != step.Purpose {
-			lines = append(lines, steps.styles.Muted.Render("   Result: ")+style.Render(indentToolStepDetail(step.Summary)))
+		lines = append(lines, header)
+		if detail := toolStepDetail(step); detail != "" {
+			lines = append(lines, steps.styles.Muted.Render("    └ "+indentToolStepDetail(detail)))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -102,30 +98,43 @@ func toolStepDisplayName(name string) string {
 		return "Read previous logs"
 	case "get_related_resources":
 		return "Inspect related resources"
+	case "get_cluster_overview":
+		return "Inspect cluster overview"
 	default:
 		return "Cluster activity"
 	}
 }
 
-func indentToolStepDetail(value string) string {
-	return strings.ReplaceAll(value, "\n", "\n   ")
+func toolStepDetail(step ToolStep) string {
+	switch {
+	case step.Purpose != "" && step.Summary != "" && step.Purpose != step.Summary:
+		return step.Purpose + " → " + step.Summary
+	case step.Summary != "":
+		return step.Summary
+	default:
+		return step.Purpose
+	}
 }
 
-func (steps ToolSteps) status(status string) (string, string, lipgloss.Style) {
+func indentToolStepDetail(value string) string {
+	return strings.ReplaceAll(value, "\n", "\n      ")
+}
+
+func (steps ToolSteps) status(status string) (string, lipgloss.Style) {
 	switch status {
 	case "succeeded":
-		return "✓", "done", steps.styles.Success
+		return "done", steps.styles.Success
 	case "partial":
-		return "!", "partial", steps.styles.Warning
+		return "partial", steps.styles.Warning
 	case "denied":
-		return "×", "blocked", steps.styles.Danger
+		return "blocked", steps.styles.Danger
 	case "failed":
-		return "×", "failed", steps.styles.Danger
+		return "failed", steps.styles.Danger
 	case "cancelled":
-		return "×", "cancelled", steps.styles.Warning
+		return "cancelled", steps.styles.Warning
 	case "running":
-		return "◌", "reading", steps.styles.Muted
+		return "reading", steps.styles.Muted
 	default:
-		return "○", "queued", steps.styles.Muted
+		return "queued", steps.styles.Muted
 	}
 }

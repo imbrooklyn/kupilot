@@ -77,7 +77,7 @@ func (repository *SessionRepository) CreateWithAudit(
 			repository.db,
 			"session_create_failed",
 			"create_session_with_audit",
-			"KuPilot could not durably create the Session.",
+			"Kupilot could not durably create the Session.",
 			err,
 		)
 	}
@@ -99,7 +99,7 @@ func (repository *SessionRepository) LoadOperationalDetailRetention(ctx context.
 			repository.db,
 			"setting_read_failed",
 			"read_operational_detail_retention",
-			"KuPilot could not read the retention setting.",
+			"Kupilot could not read the retention setting.",
 			err,
 		)
 	}
@@ -109,7 +109,7 @@ func (repository *SessionRepository) LoadOperationalDetailRetention(ctx context.
 			repository.db,
 			"setting_row_invalid",
 			"read_operational_detail_retention",
-			"KuPilot could not read the retention setting safely.",
+			"Kupilot could not read the retention setting safely.",
 			err,
 		)
 	}
@@ -118,7 +118,7 @@ func (repository *SessionRepository) LoadOperationalDetailRetention(ctx context.
 			repository.db,
 			"setting_row_invalid",
 			"read_operational_detail_retention",
-			"KuPilot could not read the retention setting safely.",
+			"Kupilot could not read the retention setting safely.",
 			domain.ErrInvalidSetting,
 		)
 	}
@@ -194,7 +194,7 @@ func (repository *SessionRepository) TightenOperationalDetailRetention(
 			repository.db,
 			"retention_setting_failed",
 			"tighten_operational_detail_retention",
-			"KuPilot could not tighten the retention setting.",
+			"Kupilot could not tighten the retention setting.",
 			err,
 		)
 	}
@@ -226,7 +226,7 @@ func (repository *SessionRepository) ClearHistory(ctx context.Context) error {
 			repository.db,
 			"history_clear_failed",
 			"clear_history",
-			"KuPilot could not clear local Session history.",
+			"Kupilot could not clear local Session history.",
 			err,
 		)
 	}
@@ -278,7 +278,7 @@ func (repository *AgentRunRepository) BeginWithAudit(
 		err,
 		"agent_run_begin_failed",
 		"begin_agent_run_with_audit",
-		"KuPilot could not durably start the diagnostic run.",
+		"Kupilot could not durably start the diagnostic run.",
 	)
 }
 
@@ -306,7 +306,7 @@ func (repository *AgentRunRepository) FinishWithAudit(
 		err,
 		"agent_run_finish_failed",
 		"finish_agent_run_with_audit",
-		"KuPilot could not store the completed diagnostic run state.",
+		"Kupilot could not store the completed diagnostic run state.",
 	)
 }
 
@@ -364,7 +364,7 @@ func (repository *AgentRunRepository) CompleteWithAudit(
 		err,
 		"agent_run_finish_failed",
 		"complete_agent_run_with_audit",
-		"KuPilot could not store the final diagnosis.",
+		"Kupilot could not store the final diagnosis.",
 	)
 }
 
@@ -422,7 +422,7 @@ func (repository *ToolInvocationRepository) SaveWithAudit(
 			repository.db,
 			"tool_invocation_save_failed",
 			"save_tool_invocation_with_audit",
-			"KuPilot could not store safe tool-activity metadata.",
+			"Kupilot could not store safe tool-activity metadata.",
 			err,
 		)
 	}

@@ -83,7 +83,7 @@ func (sink *Sink) Close() error {
 		return nil
 	}
 	if err := sink.writer.Close(); err != nil {
-		return newSafeError(ClassInternal, "log_close_failed", "KuPilot could not close its local log safely.")
+		return newSafeError(ClassInternal, "log_close_failed", "Kupilot could not close its local log safely.")
 	}
 	return nil
 }

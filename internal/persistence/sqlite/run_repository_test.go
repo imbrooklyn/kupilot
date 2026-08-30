@@ -160,9 +160,9 @@ func TestAgentRunRepositoryFinishWithMessageIsAtomic(t *testing.T) {
 	outputTokens := int64(34)
 	terminal.InputTokens = &inputTokens
 	terminal.OutputTokens = &outputTokens
-	terminal.StepCount = 2
-	terminal.ToolCallCount = 1
-	terminal.ModelRequestCount = 2
+	terminal.StepCount = domain.MaxAgentSteps
+	terminal.ToolCallCount = domain.MaxAgentToolCalls
+	terminal.ModelRequestCount = domain.MaxAgentModelCalls
 	if err := repository.FinishWithMessage(context.Background(), assistant, terminal); err != nil {
 		t.Fatalf("FinishWithMessage() error = %v", err)
 	}

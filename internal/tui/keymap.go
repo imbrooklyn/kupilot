@@ -24,7 +24,7 @@ type KeyMap struct {
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Submit:         key.NewBinding(key.WithKeys("enter")),
-		Newline:        key.NewBinding(key.WithKeys("ctrl+j")),
+		Newline:        key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j")),
 		Complete:       key.NewBinding(key.WithKeys("tab")),
 		Previous:       key.NewBinding(key.WithKeys("up")),
 		Next:           key.NewBinding(key.WithKeys("down")),

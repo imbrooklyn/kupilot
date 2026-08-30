@@ -11,13 +11,13 @@ import (
 
 var (
 	// ErrInvalidReadOnlyToolCatalog reports incomplete dependencies for the
-	// exact six-handler v0.1 catalog.
+	// compile-time built-in catalog.
 	ErrInvalidReadOnlyToolCatalog = errors.New("the fixed read-only Tool catalog dependencies are invalid")
 )
 
-// ReadOnlyToolCatalogDependencies contain the active dependencies for exactly
-// the six admitted v0.1 handlers. They are concrete and cannot register a
-// dynamically named or seventh Tool.
+// ReadOnlyToolCatalogDependencies contain the active dependencies for the
+// built-in handlers. They are concrete and cannot register a dynamically named
+// Tool.
 type ReadOnlyToolCatalogDependencies struct {
 	Resources ResourceToolDependencies
 	Events    EventToolDependencies
@@ -52,9 +52,14 @@ func NewReadOnlyToolCatalog(dependencies ReadOnlyToolCatalogDependencies) (agent
 	if err != nil {
 		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
 	}
+	getClusterOverview, err := NewGetClusterOverviewTool(dependencies.Resources)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
 	handlers := agent.ToolHandlers{
 		GetResource: getResource, ListResources: listResources, GetEvents: getEvents,
 		GetPodLogs: getPodLogs, GetPreviousPodLogs: getPreviousPodLogs, GetRelatedResources: getRelatedResources,
+		GetClusterOverview: getClusterOverview,
 	}
 	if handlers.Validate() != nil {
 		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
@@ -66,6 +71,7 @@ type resourceArgument struct {
 	APIVersion string `json:"api_version"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
 }
 
 type getResourceArguments struct {
@@ -79,6 +85,7 @@ type listResourcesArguments struct {
 	Kind         string `json:"kind"`
 	Limit        int    `json:"limit"`
 	NameQuery    string `json:"name_query,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
 	Purpose      string `json:"purpose"`
 }
 
@@ -86,6 +93,7 @@ type relatedResourceArgument struct {
 	APIVersion string `json:"api_version"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
 	UID        string `json:"uid,omitempty"`
 }
 
@@ -109,7 +117,7 @@ func decodeGetResourceCall(call BoundToolCall) (getResourceArguments, ResourceRe
 		Reference: domain.ResourceRef{
 			APIVersion: arguments.Resource.APIVersion,
 			Kind:       arguments.Resource.Kind,
-			Namespace:  call.Scope().Namespace,
+			Namespace:  arguments.Resource.Namespace,
 			Name:       arguments.Resource.Name,
 		},
 		Detail: arguments.Detail,
@@ -131,7 +139,13 @@ func decodeListResourcesCall(call BoundToolCall) (listResourcesArguments, Resour
 		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
 	}
 	effectiveLimit := min(arguments.Limit, call.Ceilings().MaxResourceItems, domain.MaxResourceSummaries)
-	request := ResourceListRequest{Scope: call.Scope(), Kind: domain.ResourceKind(arguments.Kind), Limit: effectiveLimit}
+	request := ResourceListRequest{
+		Scope: call.Scope(), Kind: domain.ResourceKind(arguments.Kind), Namespace: arguments.Namespace,
+		AllNamespaces: arguments.Namespace == "*", Limit: effectiveLimit,
+	}
+	if request.AllNamespaces {
+		request.Namespace = ""
+	}
 	if request.Validate() != nil || arguments.Limit < 1 || arguments.Limit > domain.MaxResourceSummaries {
 		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
 	}
@@ -153,7 +167,7 @@ func decodeRelatedResourcesCall(call BoundToolCall) (getRelatedResourcesArgument
 		Reference: domain.ResourceRef{
 			APIVersion: arguments.Resource.APIVersion,
 			Kind:       arguments.Resource.Kind,
-			Namespace:  call.Scope().Namespace,
+			Namespace:  arguments.Resource.Namespace,
 			Name:       arguments.Resource.Name,
 			UID:        arguments.Resource.UID,
 		},

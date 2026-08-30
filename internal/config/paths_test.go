@@ -16,7 +16,7 @@ func TestResolvePathsUsesOneFixedHomeLayout(t *testing.T) {
 		root  string
 	}{
 		{name: "default", input: PathInput{HomeDir: "/home/alex"}, root: "/home/alex/.kupilot"},
-		{name: "override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: "/srv/alex-kupilot"}, root: "/srv/alex-kupilot"},
+		{name: "override", input: PathInput{HomeDir: "/home/alex", KupilotHome: "/srv/alex-kupilot"}, root: "/srv/alex-kupilot"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,8 +47,8 @@ func TestResolvePathsRejectsInvalidRoots(t *testing.T) {
 	}{
 		{name: "missing user home", input: PathInput{}, code: "home_directory_invalid"},
 		{name: "relative user home", input: PathInput{HomeDir: "relative"}, code: "home_directory_invalid"},
-		{name: "relative override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: "relative"}, code: "kupilot_home_invalid"},
-		{name: "root override", input: PathInput{HomeDir: "/home/alex", KuPilotHome: filepath.VolumeName(filepath.Clean(string(filepath.Separator))) + string(filepath.Separator)}, code: "kupilot_home_invalid"},
+		{name: "relative override", input: PathInput{HomeDir: "/home/alex", KupilotHome: "relative"}, code: "kupilot_home_invalid"},
+		{name: "root override", input: PathInput{HomeDir: "/home/alex", KupilotHome: filepath.VolumeName(filepath.Clean(string(filepath.Separator))) + string(filepath.Separator)}, code: "kupilot_home_invalid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

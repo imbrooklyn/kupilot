@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,85 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clienttesting "k8s.io/client-go/testing"
 )
+
+func TestDeploymentRestarterPreparesProposalFromFreshProjectionWithoutWrite(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 9, 10, 11, 0, time.UTC)
+	deployment := restartTestDeployment("17")
+	restarter, closeClient, fakeClient := newFakeDeploymentRestarter(t, now, deployment)
+	defer closeClient()
+	target := domain.ResourceRef{
+		APIVersion: domain.RestartDeploymentTargetAPIVersion,
+		Kind:       domain.RestartDeploymentTargetKind,
+		Namespace:  "team-a",
+		Name:       deployment.Name,
+	}
+
+	intent, err := restarter.PrepareRestartDeploymentProposal(
+		context.Background(),
+		domain.ScopeSnapshot{Context: "selected", Namespace: "team-a", Generation: 7},
+		target,
+		"Restart after the bounded diagnosis.",
+	)
+	if err != nil {
+		t.Fatalf("PrepareRestartDeploymentProposal() error = %v", err)
+	}
+	want := restartTestIntent(t, deployment)
+	if intent != want || intent.DeploymentUID != string(deployment.UID) ||
+		intent.DeploymentGeneration != deployment.Generation || intent.TemplateFingerprint == "" {
+		t.Fatalf("prepared intent = %#v, want %#v", intent, want)
+	}
+	if actions := fakeClient.Actions(); len(actions) != 1 {
+		t.Fatalf("Kubernetes actions = %d, want one GET: %#v", len(actions), actions)
+	} else {
+		assertRestartAction(t, actions[0], "get")
+	}
+	if writes := countRestartActions(fakeClient.Actions(), "patch"); writes != 0 {
+		t.Fatalf("PATCH actions = %d, want 0", writes)
+	}
+}
+
+func TestDeploymentRestarterRejectsUntrustedProposalAuthorityBeforeKubernetesIO(t *testing.T) {
+	deployment := restartTestDeployment("17")
+	tests := []struct {
+		name   string
+		mutate func(*domain.ResourceRef, *string)
+	}{
+		{name: "model supplied UID", mutate: func(target *domain.ResourceRef, _ *string) { target.UID = "untrusted-uid" }},
+		{name: "model supplied resource version", mutate: func(target *domain.ResourceRef, _ *string) { target.ResourceVersion = "99" }},
+		{name: "cross namespace", mutate: func(target *domain.ResourceRef, _ *string) { target.Namespace = "team-b" }},
+		{name: "empty reason", mutate: func(_ *domain.ResourceRef, reason *string) { *reason = "" }},
+		{name: "padded reason", mutate: func(_ *domain.ResourceRef, reason *string) { *reason = " padded" }},
+		{name: "oversized reason", mutate: func(_ *domain.ResourceRef, reason *string) {
+			*reason = strings.Repeat("r", domain.MaxApprovalReasonSummaryBytes+1)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			restarter, closeClient, fakeClient := newFakeDeploymentRestarter(
+				t, time.Date(2026, time.August, 12, 9, 10, 11, 0, time.UTC), deployment,
+			)
+			defer closeClient()
+			target := domain.ResourceRef{
+				APIVersion: domain.RestartDeploymentTargetAPIVersion,
+				Kind:       domain.RestartDeploymentTargetKind,
+				Namespace:  "team-a",
+				Name:       deployment.Name,
+			}
+			reason := "Restart after the bounded diagnosis."
+			test.mutate(&target, &reason)
+			_, err := restarter.PrepareRestartDeploymentProposal(
+				context.Background(),
+				domain.ScopeSnapshot{Context: "selected", Namespace: "team-a", Generation: 7},
+				target,
+				reason,
+			)
+			assertRestartSafeClass(t, err, domain.SafeErrorClassInvalidInput)
+			if actions := fakeClient.Actions(); len(actions) != 0 {
+				t.Fatalf("Kubernetes actions = %d, want 0: %#v", len(actions), actions)
+			}
+		})
+	}
+}
 
 func TestDeploymentRestarterUsesFreshResourceVersionAndFixedPatch(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 9, 10, 11, 123_456_789, time.FixedZone("fixture", 8*60*60))

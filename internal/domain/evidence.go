@@ -103,7 +103,6 @@ func (evidence Evidence) Validate() error {
 		!evidence.Category.Valid() || evidence.Scope.Validate() != nil ||
 		!ValidContextName(evidence.Scope.Context) || !ValidNamespaceName(evidence.Scope.Namespace) || evidence.Scope.Generation < 1 ||
 		ValidateLiveResourceRef(evidence.Resource) != nil ||
-		evidence.Resource.Namespace != evidence.Scope.Namespace ||
 		!validModelText(evidence.Fact, maxEvidenceFactBytes, false) ||
 		evidence.RedactionCount < 0 || !validSHA256Hex(evidence.Fingerprint) ||
 		!validPersistenceTime(evidence.ObservedAt) {

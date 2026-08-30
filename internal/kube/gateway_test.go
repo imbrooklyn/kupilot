@@ -112,10 +112,11 @@ func TestGatewayListResourcesSendsFixedHTTPPathAndLimit(t *testing.T) {
 	}
 	defer client.Close()
 	scope := domain.ClusterScope{
-		Context:     "selected",
-		Namespace:   "team-a",
-		Generation:  1,
-		ActivatedAt: testActivationTime(),
+		Context:         "selected",
+		Namespace:       "team-a",
+		NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation:      1,
+		ActivatedAt:     testActivationTime(),
 	}
 	list, err := gateway.ListResources(context.Background(), client, scope, domain.ResourceKindPod, 17)
 	if err != nil {

@@ -1,6 +1,55 @@
 # Changelog
 
-This file records notable user-visible changes to KuPilot.
+This file records notable user-visible changes to Kupilot.
+
+## Unreleased (`v0.4` candidate)
+
+### Changed
+
+- Reframed Kupilot as a conversational Kubernetes operations Agent while
+  retaining a local, single-process, single-user architecture and explicit
+  rejection of shell, kubectl, dashboard, generic API, and autonomous-control
+  behavior.
+- Expanded the typed operational catalog to seven structured Tools and stable
+  projections for Namespace, Node, common workloads and controllers, storage,
+  Ingress, autoscaling, and Pod disruption budgets.
+- Added immutable `current` and `all` namespace-access policies. The working
+  Namespace remains visible and the model cannot broaden the selected policy.
+- Replaced the fixed four-section Diagnosis renderer with bounded free-form
+  Markdown, independently validated Evidence citations, and typed proposed
+  actions.
+- Added `compact`, `balanced`, and `extended` immutable runtime budget profiles;
+  `balanced` is the default and `/status` exposes live usage.
+- Reworked the TUI toward the public Codex CLI interaction style: terminal
+  foreground for primary text, higher contrast, a borderless `›` composer,
+  compact inline activity, a minimal scope footer, and detailed local status
+  behind `/status`.
+- Added inert, width-aware GitHub-Flavored Markdown rendering. Tables use a
+  readable grid on wider terminals, fall back to key/value records on narrow
+  terminals, and conservatively repair an unambiguous compact one-line form.
+- Improved compatible model streaming by treating bounded empty deltas as
+  no-ops and allowing fragments for distinct bounded Tool indexes to
+  interleave while retaining per-index assembly and all completion gates.
+- Made the existing exact Deployment restart approval path reachable from a
+  typed model suggestion only after a fresh trusted Deployment read derives
+  all digest-bound identity and concurrency data locally.
+- Advanced explicit redacted Markdown export to
+  `kupilot.export-summary.v2` so it preserves escaped final answer Markdown and
+  descriptive proposed-action metadata without approval authority.
+
+### Security
+
+- Secret objects and data, ConfigMap values, environment values, kubeconfig
+  content, credentials, raw Kubernetes objects, arbitrary discovered APIs, and
+  unbounded logs remain prohibited even under the broader catalog.
+- Cross-Namespace calls require the frozen `all` policy and matching Kubernetes
+  RBAC. Every request still uses exact typed clients, bounded projection, scope
+  generation checks, and deterministic zero-call denial tests.
+- A model recommendation cannot supply a Deployment UID, resource version,
+  template fingerprint, generation, nonce, digest, patch, or timestamp. Proposal
+  preparation performs no Kubernetes write; execution still requires explicit
+  local approval, durable pre-write audit, revalidation, and one non-retried
+  PATCH attempt.
 
 ## 0.3.0 - 2026-08-16
 

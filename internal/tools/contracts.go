@@ -1,4 +1,4 @@
-// Package tools implements KuPilot's fixed read-only diagnostic Tool handlers
+// Package tools implements Kupilot's typed bounded operational read handlers
 // over consumer-owned, scope-bound Kubernetes read ports.
 package tools
 
@@ -78,8 +78,8 @@ func (detail ResourceDetail) valid() bool {
 	return detail == ResourceDetailSummary || detail == ResourceDetailDiagnostic
 }
 
-// ResourceReadRequest is one exact current-Namespace read. Scope and ceilings
-// are runtime-derived rather than model fields.
+// ResourceReadRequest is one exact policy-admitted read. Scope and ceilings are
+// runtime-derived rather than model fields.
 type ResourceReadRequest struct {
 	Scope     domain.ClusterScope
 	Reference domain.ResourceRef
@@ -90,22 +90,44 @@ type ResourceReadRequest struct {
 func (request ResourceReadRequest) Validate() error {
 	kind, allowed := domain.ResourceKindForReference(request.Reference)
 	if request.Scope.Validate() != nil || !allowed || !kind.Valid() || !request.Detail.valid() ||
-		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Namespace != request.Scope.Namespace {
+		domain.ValidateLiveResourceRef(request.Reference) != nil || !request.Scope.AllowsReference(request.Reference) {
 		return ErrInvalidResourceRead
 	}
 	return nil
 }
 
-// ResourceListRequest is one bounded selector-free namespaced list.
+// ResourceListRequest is one bounded selector-free list. AllNamespaces is an
+// explicit marker and is never inferred from an empty Namespace.
 type ResourceListRequest struct {
-	Scope domain.ClusterScope
-	Kind  domain.ResourceKind
-	Limit int
+	Scope         domain.ClusterScope
+	Kind          domain.ResourceKind
+	Namespace     string
+	AllNamespaces bool
+	Limit         int
 }
 
-// Validate rejects generic, all-Namespace, and expanding list requests.
+// Validate rejects generic, ambiguous, policy-expanding list requests.
 func (request ResourceListRequest) Validate() error {
 	if request.Scope.Validate() != nil || !request.Kind.Valid() || request.Limit < 1 || request.Limit > domain.MaxResourceSummaries {
+		return ErrInvalidResourceRead
+	}
+	if request.Kind.ClusterScoped() {
+		if request.Namespace != "" || request.AllNamespaces {
+			return ErrInvalidResourceRead
+		}
+		return nil
+	}
+	if request.AllNamespaces {
+		if request.Namespace != "" || !request.Scope.AllowsAllNamespaces(request.Kind) {
+			return ErrInvalidResourceRead
+		}
+		return nil
+	}
+	if !domain.ValidNamespaceName(request.Namespace) {
+		return ErrInvalidResourceRead
+	}
+	reference := domain.ResourceRef{APIVersion: request.Kind.APIVersion(), Kind: string(request.Kind), Namespace: request.Namespace, Name: "scope-check"}
+	if !request.Scope.AllowsReference(reference) {
 		return ErrInvalidResourceRead
 	}
 	return nil
@@ -319,7 +341,7 @@ type RelatedReadRequest struct {
 func (request RelatedReadRequest) Validate() error {
 	kind, allowed := domain.ResourceKindForReference(request.Reference)
 	if request.Scope.Validate() != nil || !allowed || domain.ValidateLiveResourceRef(request.Reference) != nil ||
-		request.Reference.Namespace != request.Scope.Namespace || request.Depth < 1 || request.Depth > 2 ||
+		!kind.Namespaced() || !request.Scope.AllowsReference(request.Reference) || request.Depth < 1 || request.Depth > 2 ||
 		request.MaxNodes < 1 || request.MaxNodes > 25 || request.MaxEdges < 1 || request.MaxEdges > 40 ||
 		len(request.Includes) == 0 || len(request.Includes) > 3 {
 		return ErrInvalidRelatedRead
@@ -348,17 +370,18 @@ type RelatedReference struct {
 }
 
 func (reference RelatedReference) valid(scope domain.ClusterScope) bool {
-	if reference.Namespace != scope.Namespace || !domain.ValidNamespaceName(reference.Namespace) ||
+	if !domain.ValidNamespaceName(reference.Namespace) ||
 		!domain.ValidResourceName(reference.Name) || !validRelatedAPIVersion(reference.APIVersion) ||
 		!validRelatedKind(reference.Kind) || !validRelatedOptionalIdentity(reference.UID, 256) ||
 		!validRelatedOptionalIdentity(reference.ResourceVersion, 256) {
 		return false
 	}
 	if reference.ReferenceOnly {
-		return reference.ResourceVersion == "" && !forbiddenRelatedReference(reference.APIVersion, reference.Kind)
+		return reference.ResourceVersion == "" && !forbiddenRelatedReference(reference.APIVersion, reference.Kind) &&
+			(scope.NamespaceAccess == domain.NamespaceAccessAll || reference.Namespace == scope.Namespace)
 	}
 	_, allowed := domain.ResourceKindForReference(reference.resourceRef())
-	return allowed
+	return allowed && scope.AllowsReference(reference.resourceRef())
 }
 
 func (reference RelatedReference) resourceRef() domain.ResourceRef {
@@ -382,7 +405,7 @@ type RelatedNodeObservation struct {
 }
 
 func (node RelatedNodeObservation) valid(request RelatedReadRequest) bool {
-	if node.Hop < 0 || node.Hop > request.Depth || !node.Reference.valid(request.Scope) {
+	if node.Hop < 0 || node.Hop > request.Depth || node.Reference.Namespace != request.Reference.Namespace || !node.Reference.valid(request.Scope) {
 		return false
 	}
 	if !node.Fetched {
@@ -410,6 +433,7 @@ type RelatedEdgeObservation struct {
 
 func (edge RelatedEdgeObservation) valid(request RelatedReadRequest) bool {
 	if !edge.Relation.valid() || edge.Hop < 1 || edge.Hop > request.Depth || !edge.From.valid(request.Scope) ||
+		edge.From.Namespace != request.Reference.Namespace || edge.ToPresent && edge.To.Namespace != request.Reference.Namespace ||
 		edge.ReadyEndpoints < 0 || edge.NotReadyEndpoints < 0 {
 		return false
 	}
@@ -442,7 +466,7 @@ type RelatedGapObservation struct {
 }
 
 func (gap RelatedGapObservation) valid(request RelatedReadRequest) bool {
-	if !gap.From.valid(request.Scope) || !gap.Relation.valid() || gap.Hop < 1 || gap.Hop > request.Depth {
+	if !gap.From.valid(request.Scope) || gap.From.Namespace != request.Reference.Namespace || !gap.Relation.valid() || gap.Hop < 1 || gap.Hop > request.Depth {
 		return false
 	}
 	switch gap.Class {
@@ -740,13 +764,17 @@ func (list ResourceObservationList) validate(request ResourceListRequest) error 
 	seenNames := make(map[string]struct{}, len(list.Items))
 	for _, item := range list.Items {
 		kind, allowed := domain.ResourceKindForReference(item.Summary.Reference)
-		if item.validate() != nil || !allowed || kind != request.Kind || item.Summary.Reference.Namespace != request.Scope.Namespace {
+		if item.validate() != nil || !allowed || kind != request.Kind ||
+			request.Kind.Namespaced() && !request.AllNamespaces && item.Summary.Reference.Namespace != request.Namespace ||
+			request.Kind.Namespaced() && request.AllNamespaces && !domain.ValidNamespaceName(item.Summary.Reference.Namespace) ||
+			request.Kind.ClusterScoped() && item.Summary.Reference.Namespace != "" {
 			return ErrInvalidResourceRead
 		}
-		if _, exists := seenNames[item.Summary.Reference.Name]; exists {
+		key := item.Summary.Reference.Namespace + "\x00" + item.Summary.Reference.Name
+		if _, exists := seenNames[key]; exists {
 			return ErrInvalidResourceRead
 		}
-		seenNames[item.Summary.Reference.Name] = struct{}{}
+		seenNames[key] = struct{}{}
 	}
 	return nil
 }
@@ -842,7 +870,7 @@ func safeFailureDefinition(class domain.SafeErrorClass) (string, bool) {
 	case domain.SafeErrorClassSensitiveOutputBlocked:
 		return "A Kubernetes field was hidden because it may contain sensitive data.", false
 	case domain.SafeErrorClassInvalidExternalResponse:
-		return "Kubernetes returned fields that KuPilot could not display safely.", false
+		return "Kubernetes returned fields that Kupilot could not display safely.", false
 	case domain.SafeErrorClassPersistenceUnavailable:
 		return "Required local persistence is unavailable.", false
 	case domain.SafeErrorClassInternal:

@@ -5,7 +5,7 @@
 
 ## Context
 
-KuPilot uses SQLite, but a Go SQLite driver affects cross-compilation, CGO
+Kupilot uses SQLite, but a Go SQLite driver affects cross-compilation, CGO
 requirements, binary distribution, cancellation, locking, journal files, error
 classification, time handling, filesystem permissions, and vulnerability
 response. These behaviors are architecture and security concerns rather than an
@@ -13,7 +13,7 @@ adapter convenience.
 
 ## Decision
 
-KuPilot will use exactly one pinned pure-Go SQLite driver through
+Kupilot will use exactly one pinned pure-Go SQLite driver through
 `database/sql`, confined to `internal/persistence/sqlite`.
 
 The selected driver is `modernc.org/sqlite`. The initial compatibility baseline
@@ -31,7 +31,7 @@ and libc upgrades are one compatibility change and must pass the complete
 storage contract together.
 
 sqlx's upstream module metadata lists several database drivers used by its own
-compatibility tests, so Go checksum metadata may include those modules. KuPilot
+compatibility tests, so Go checksum metadata may include those modules. Kupilot
 does not import, register, or link any of them. Dependency guards must prove
 that the package build and test closure contains `modernc.org/sqlite` and does
 not contain another SQLite driver or `runtime/cgo`.
@@ -72,7 +72,7 @@ Costs and constraints:
 - Shipping both pure-Go and CGO variants was rejected because it doubles
   behavior, migration, packaging, and test matrices.
 - Hiding selection behind a generic storage abstraction was rejected because
-  KuPilot requires SQLite semantics and a concrete validated implementation.
+  Kupilot requires SQLite semantics and a concrete validated implementation.
 
 ## Security and privacy impact
 

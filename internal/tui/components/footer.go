@@ -13,17 +13,13 @@ type FooterStyles struct {
 	Warning   lipgloss.Style
 }
 
-// FooterStatus is the complete bounded display input for the two-row footer.
+// FooterStatus is the bounded scope and action-state input for the footer.
 type FooterStatus struct {
 	Context        string
 	Namespace      string
 	ReadOnly       bool
 	ScopeSwitching bool
 	Approval       string
-	Resource       string
-	Run            string
-	Model          string
-	Privacy        string
 }
 
 // Footer renders scope-first status without owning application state.
@@ -34,7 +30,11 @@ type Footer struct {
 // NewFooter creates a scope-first footer renderer.
 func NewFooter(styles FooterStyles) Footer { return Footer{styles: styles} }
 
-// View renders at most two rows and drops optional fields from lowest priority.
+// SetStyles updates presentation without changing scope or action state.
+func (footer *Footer) SetStyles(styles FooterStyles) { footer.styles = styles }
+
+// View renders scope continuously and uses a second row only when width or an
+// active approval state requires it. Detailed runtime state belongs to /status.
 func (footer Footer) View(width int, status FooterStatus) string {
 	width = max(1, width)
 	contextName := status.Context
@@ -47,7 +47,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	}
 	access := "scope unverified"
 	if status.ReadOnly {
-		access = "read-only"
+		access = "supervised"
 	}
 	if status.ScopeSwitching {
 		access = "scope switching"
@@ -58,11 +58,12 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if accessOnSecond {
 		lineTwo = access
 	}
-	for _, value := range []string{status.Approval, status.Privacy, status.Resource, status.Run, status.Model} {
-		if value == "" {
-			continue
+	if status.Approval != "" {
+		if lineTwo == "" {
+			lineTwo = middleElideColumns(status.Approval, width)
+		} else if candidate := lineTwo + " · " + status.Approval; lipgloss.Width(candidate) <= width {
+			lineTwo = candidate
 		}
-		lineTwo = appendFooterSegment(lineTwo, value, width)
 	}
 
 	lines := []string{footer.styles.Primary.Render(lineOne)}
@@ -108,21 +109,6 @@ func requiredFooterLine(width int, contextName, namespace, access string) (strin
 			" · Namespace " + middleElideColumns(namespace, namespaceBudget) + " · " + access, false
 	}
 	return clipFooterColumns(withoutAccess, width), true
-}
-
-func appendFooterSegment(line, value string, width int) string {
-	if line == "" {
-		return middleElideColumns(value, width)
-	}
-	candidate := line + " · " + value
-	if lipgloss.Width(candidate) <= width {
-		return candidate
-	}
-	remaining := width - lipgloss.Width(line+" · ")
-	if remaining < 4 {
-		return line
-	}
-	return line
 }
 
 func middleElideColumns(value string, width int) string {

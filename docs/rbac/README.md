@@ -1,130 +1,130 @@
 # Least-Privilege Kubernetes RBAC
 
-KuPilot `v0.1` needs only read access. A `v0.2` composition adds one optional,
-exact namespaced Deployment restart rule. Do not grant `cluster-admin`, wildcard
-verbs, wildcard resources, Secret access, or an all-Namespace
-ClusterRoleBinding for convenience.
+Kupilot reads only the typed operational catalog and has one separately gated
+Deployment restart. Do not grant `cluster-admin`, wildcard verbs or resources,
+Secret access, generic write permissions, Pod writes, or discovery permissions
+for convenience.
 
-RBAC is attached to the Kubernetes identity selected by kubeconfig. KuPilot does
-not create a ServiceAccount, RoleBinding, or ClusterRoleBinding because the
-correct subject and administration workflow are cluster-specific. The YAML in
-this directory defines only the reusable permission rules. A cluster
-administrator must review the placeholders and bind the chosen rules to the
-actual user, group, or ServiceAccount.
+RBAC belongs to the kubeconfig identity. Kupilot does not create a
+ServiceAccount, RoleBinding, or ClusterRoleBinding because subjects and
+administration workflows are cluster-specific. The files here define reusable
+rules only; an administrator must review placeholders and create the binding.
 
-## Exact request surface
+## Choose a namespace policy first
+
+The runtime setting and RBAC should agree:
+
+- `kubernetes.namespace_access: current`: bind namespaced reads with
+  [role.yaml](role.yaml) in the working Namespace, or bind
+  [cluster-role.yaml](cluster-role.yaml) through a RoleBinding in each exact
+  admitted Namespace.
+- `kubernetes.namespace_access: all`: bind
+  [cluster-role.yaml](cluster-role.yaml) through an identity-specific
+  ClusterRoleBinding. This intentionally grants the catalog's namespaced reads
+  in all Namespaces; Kubernetes has no RoleBinding form for an arbitrary
+  runtime-selected Namespace set.
+
+The default application policy is `all`, but RBAC denial still wins. Set the
+application policy to `current` when cluster-wide namespaced visibility is not
+intended. Do not rely on RBAC alone to explain which policy is active; `/status`
+shows the immutable run policy.
+
+## Namespaced read surface
 
 <!-- markdownlint-disable MD013 -->
 
-| API group | Resource | Verbs | Scope | Why KuPilot uses it |
-| --- | --- | --- | --- | --- |
-| Core | `namespaces` | `get` | Cluster-scoped exact name | Verify the Namespace before activating a ClusterScope. |
-| Core | `namespaces` | `list` | Cluster-scoped, optional | Populate `/namespace`; the client requests at most 50 names. |
-| Core | `pods` | `get`, `list` | One Namespace | Direct reads, candidate listing, Event/log target verification, and fixed relationships. |
-| Core | `services` | `get`, `list` | One Namespace | Direct reads, candidate listing, and fixed Pod-to-Service relationships. |
-| Core | `events` | `list` | One Namespace | Read bounded Events using a code-constructed involved-object field selector. |
-| Core | `pods/log` | `get` | One Namespace | Read bounded current or previous Pod container output when the privacy category is enabled. |
-| `apps` | `deployments` | `get`, `list` | One Namespace | Direct reads, candidate listing, and fixed workload relationships. |
-| `apps` | `replicasets` | `get`, `list` | One Namespace | Direct reads, candidate listing, and fixed owner relationships. |
-| `batch` | `jobs` | `get`, `list` | One Namespace | Direct reads, candidate listing, and fixed owner relationships. |
-| `discovery.k8s.io` | `endpointslices` | `list` | One Namespace | Produce address-free ready and not-ready counts for one Service relationship. |
+| API group | Resources | Verbs | Purpose |
+| --- | --- | --- | --- |
+| Core | `pods`, `services`, `persistentvolumeclaims`, `configmaps` | `get`, `list` | Direct typed operational projections. ConfigMap values are removed locally. |
+| Core | `events` | `list` | Exact code-built involved-object queries. |
+| Core | `pods/log` | `get` | Bounded current or previous Pod output after privacy consent. |
+| `apps` | `deployments`, `replicasets`, `statefulsets`, `daemonsets` | `get`, `list` | Workload status and fixed relationships. |
+| `batch` | `jobs`, `cronjobs` | `get`, `list` | Batch status and fixed relationships. |
+| `networking.k8s.io` | `ingresses` | `get`, `list` | Identity and creation-time projection only. |
+| `autoscaling` | `horizontalpodautoscalers` | `get`, `list` | Bounded current/desired replica and failing-reason projection. |
+| `policy` | `poddisruptionbudgets` | `get`, `list` | Bounded disruption and health-count projection. |
+| `discovery.k8s.io` | `endpointslices` | `list` | Address-free ready/not-ready counts for the fixed Service relationship. |
 
 <!-- markdownlint-enable MD013 -->
 
-All `v0.1` Kubernetes HTTP operations are reads. Kubernetes client-go represents
-`list` and `pods/log` retrieval as HTTP `GET`; the RBAC verbs above are the
-authorization verbs evaluated by the API server.
+Kubernetes RBAC cannot restrict a ConfigMap GET to metadata fields or an
+EndpointSlice LIST to address-free fields. Kupilot's source allowlist and
+projection are independent mandatory controls.
 
-The `v0.1` composition has no request path for `create`, `update`, `patch`, `delete`,
-`deletecollection`, `watch`, `impersonate`, `bind`, `escalate`, or `approve`.
-It has no Secret, ConfigMap, Node, StatefulSet, custom-resource, discovery,
-SubjectAccessReview, TokenRequest, exec, attach, port-forward, or ephemeral-
-container permission.
+Neither namespaced fixture grants create, update, patch, delete,
+deletecollection, watch, exec, attach, port-forward, ephemeral containers,
+TokenRequest, SubjectAccessReview, or Secret access.
 
-## Choose the namespaced rule form
+## Cluster-scoped read surface
 
-[role.yaml](role.yaml) is the narrowest option for one Namespace. Replace
-`example-namespace`, create or review the identity-specific RoleBinding in that
-same Namespace, and repeat for each Namespace the user is allowed to diagnose.
+[cluster-observer-cluster-role.yaml](cluster-observer-cluster-role.yaml) grants
+`get` and `list` for Namespace, Node, and PersistentVolume. Bind it only when
+those catalog capabilities are intended. It is required for the complete
+cluster overview and cluster-scoped direct reads.
 
-[cluster-role.yaml](cluster-role.yaml) contains the same namespaced rules as a
-reusable ClusterRole. Bind it with a **RoleBinding in each exact Namespace**.
-Do not use a ClusterRoleBinding for this ClusterRole: that would grant the
-identity these reads in every Namespace and would exceed KuPilot's one-Namespace
-run boundary.
+The code projection excludes Node addresses, provider IDs, images, system info,
+taint values, capacity maps, and PersistentVolume source details. RBAC cannot
+express those field exclusions.
 
-A Role and the reusable ClusterRole are alternatives for namespaced resources;
-do not bind both unless another reviewed consumer needs both objects.
+If cluster observation is not needed, choose one Namespace helper instead:
 
-## Add the exact `v0.2` restart rule
+- [namespace-verifier-cluster-role.yaml](namespace-verifier-cluster-role.yaml)
+  grants exact-name Namespace `get` for configured scope verification.
+- [namespace-picker-cluster-role.yaml](namespace-picker-cluster-role.yaml)
+  grants Namespace `get` and `list` for `/namespace` completion.
 
-[restart-role.yaml](restart-role.yaml) is the only write-bearing RBAC fixture.
-It grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
-placeholder Namespace. Replace both placeholders and bind the Role only to the
-identity used by a `v0.2` composition. Create another reviewed Role rule for
-each additional Deployment; do not remove `resourceNames` merely for
-convenience.
+Namespace `list` exposes names available to that identity. The picker remains
+an input aid and does not create Evidence.
 
-The `get` verb supports mandatory fresh revalidation and bounded rollout
-observation. The `patch` verb supports the sole fixed restart request. The rule
-does not grant Deployment `list`, `watch`, `create`, `update`, or `delete`, and
-does not grant any Pod write. Kubernetes RBAC cannot restrict a permitted
-Deployment patch to one JSON field, so KuPilot's fixed executor, digest-bound
-approval, fresh resource-version precondition, and one-attempt tests remain
-independent controls.
+Cluster-scoped resource Events are implemented as an all-Namespace Event list
+with an exact involved-object selector. That observation therefore also needs
+cluster-wide `events` list permission, normally supplied when the namespaced
+ClusterRole is bound with a ClusterRoleBinding. Without it, Kupilot reports an
+explicit permission gap.
 
-Use this Role in addition to the required read and Namespace-verification rules.
-Never bind it with a ClusterRoleBinding. Do not grant it to a `v0.1`
-composition, whose write absence remains enforced by code and composition
-guards.
+## Add the exact Deployment restart
 
-## Choose Namespace verification or picker access
+[restart-role.yaml](restart-role.yaml) is the only write-bearing fixture. It
+grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
+placeholder Namespace. Replace both placeholders, use a RoleBinding in that
+Namespace, and create another reviewed resource-name rule for each additional
+Deployment.
 
-Namespace is a cluster-scoped resource, so a namespaced Role cannot authorize
-its verification.
+`get` supports proposal preparation, revalidation, and rollout observation.
+`patch` supports the one fixed restart request. The Role grants no Deployment
+list, watch, create, update, or delete and no Pod write.
 
-[namespace-verifier-cluster-role.yaml](namespace-verifier-cluster-role.yaml)
-allows `get` for the single placeholder `example-namespace`. Replace that value
-and bind the ClusterRole with an identity-specific ClusterRoleBinding. This is
-the least-privilege choice when Context and Namespace are supplied by
-configuration or CLI and the user does not need to browse Namespace names.
+RBAC cannot constrain a permitted PATCH to one field. Kupilot independently
+enforces the fixed annotation-only patch, local 60-second digest-bound approval,
+fresh UID/template/generation checks, resource-version precondition, durable
+pre-write audit, and one non-retried attempt. Never replace `resourceNames`
+with a wildcard or bind this Role cluster-wide.
 
-[namespace-picker-cluster-role.yaml](namespace-picker-cluster-role.yaml) allows
-both `get` and `list` for Namespace metadata. Use it only when `/namespace`
-completion is required. Kubernetes RBAC cannot limit an ordinary Namespace
-`list` to one `resourceNames` entry, so this option exposes Namespace names that
-the identity can list. It does not grant access to namespaced workload objects
-without a separate RoleBinding.
+## Partial permission behavior
 
-The two Namespace ClusterRoles are alternatives. Do not bind both.
+Kupilot never broadens a request after denial:
 
-## Partial permissions and Diagnosis gaps
+- Missing Namespace list disables completion, while exact verification can
+  still work with Namespace get.
+- Missing cluster-observer permissions makes Node, Namespace, PersistentVolume,
+  and cluster overview observations unavailable.
+- Missing Event, log, EndpointSlice, or a direct Kind permission leaves that
+  Evidence branch explicit and incomplete.
+- Missing restart get or patch permission prevents preparation, execution, or
+  verification at its exact stage; no broader credential or request is tried.
 
-KuPilot never compensates for an RBAC denial by broadening a request:
-
-- Without Namespace `list`, `/namespace` completion is unavailable, but an
-  explicitly named Namespace can still be verified when exact `get` is allowed.
-- Without Event `list`, Event-based conclusions remain missing information.
-- Without `pods/log` `get`, or while container output is disabled in privacy
-  settings, log-based conclusions remain missing information.
-- Without EndpointSlice `list`, a Service Diagnosis cannot confirm address-free
-  ready and not-ready endpoint counts.
-- Without the relevant direct resource `get` or `list`, that resource or
-  relationship branch is unavailable.
-
-Permission errors are translated to safe gaps. Raw Kubernetes denial messages
-are not copied into model content, local logs, SQLite, or the TUI.
+Raw API denial text is translated to a stable safe gap and is not copied into
+model content, ordinary logs, SQLite, audit, or the TUI.
 
 ## Defense in depth
 
-RBAC does not replace KuPilot's runtime controls. Even if the selected identity
-has broader permissions, KuPilot still binds every request to one verified
-Namespace, rejects unlisted Kinds and subresources, uses fixed selectors and
-limits, projects allowlisted fields, strips EndpointSlice addresses, and checks
-scope generation. The `v0.1` composition has no reachable write method; `v0.2`
-has only the digest-bound, fixed-field, single-attempt Deployment restart.
+Even when the selected identity has broader RBAC, Kupilot still enforces the
+code-owned Kind and API allowlist, immutable Context and namespace policy,
+strict model schemas, exact typed requests, generation gates, result
+projection, sensitive-data handling, finite budgets, and local write approval.
 
-Review [Security](../security.md), [Privacy](../privacy-overview.md), and
-[Diagnostic Capabilities](../diagnostic-capabilities.md) before changing these
-rules. Adding any verb, resource, subresource, or cluster scope is a security
-and product-contract change, not a documentation-only convenience.
+Adding a verb, resource, subresource, cluster scope, or write is a product,
+security, privacy, configuration, fixture, and test change. Review
+[Security](../security.md), [Privacy](../privacy-overview.md), and
+[Operational Capabilities](../diagnostic-capabilities.md) before changing these
+rules.

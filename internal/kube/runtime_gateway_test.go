@@ -35,7 +35,7 @@ func TestToolScopeBindingBindsAndInvalidatesToolReaderByGeneration(t *testing.T)
 	}
 	defer client.Close()
 	scope := domain.ClusterScope{
-		Context: "selected", Namespace: "team-a", Generation: 1,
+		Context: "selected", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 1,
 		ActivatedAt: time.UnixMilli(1_000).UTC(),
 	}
 	request := toolcontract.ResourceReadRequest{

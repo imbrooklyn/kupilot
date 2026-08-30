@@ -102,13 +102,24 @@ func TestSessionValidationRejectsIdentifierTextAndSizeViolations(t *testing.T) {
 	}
 }
 
-func TestResourceRefValidationUsesFixedDirectTargetAllowlist(t *testing.T) {
+func TestResourceRefValidationUsesOperationalTargetAllowlist(t *testing.T) {
 	allowed := []ResourceRef{
+		{APIVersion: "v1", Kind: "Namespace", Name: "sample-namespace"},
+		{APIVersion: "v1", Kind: "Node", Name: "sample-node"},
 		{APIVersion: "v1", Kind: "Pod", Namespace: "test-namespace", Name: "sample-pod"},
 		{APIVersion: "v1", Kind: "Service", Namespace: "test-namespace", Name: "sample-service"},
+		{APIVersion: "v1", Kind: "PersistentVolumeClaim", Namespace: "test-namespace", Name: "sample-pvc"},
+		{APIVersion: "v1", Kind: "PersistentVolume", Name: "sample-pv"},
+		{APIVersion: "v1", Kind: "ConfigMap", Namespace: "test-namespace", Name: "sample-config"},
 		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "test-namespace", Name: "sample-deployment"},
 		{APIVersion: "apps/v1", Kind: "ReplicaSet", Namespace: "test-namespace", Name: "sample-replicaset"},
+		{APIVersion: "apps/v1", Kind: "StatefulSet", Namespace: "test-namespace", Name: "sample-statefulset"},
+		{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "test-namespace", Name: "sample-daemonset"},
 		{APIVersion: "batch/v1", Kind: "Job", Namespace: "test-namespace", Name: "sample-job"},
+		{APIVersion: "batch/v1", Kind: "CronJob", Namespace: "test-namespace", Name: "sample-cronjob"},
+		{APIVersion: "networking.k8s.io/v1", Kind: "Ingress", Namespace: "test-namespace", Name: "sample-ingress"},
+		{APIVersion: "autoscaling/v2", Kind: "HorizontalPodAutoscaler", Namespace: "test-namespace", Name: "sample-hpa"},
+		{APIVersion: "policy/v1", Kind: "PodDisruptionBudget", Namespace: "test-namespace", Name: "sample-pdb"},
 	}
 	for _, value := range allowed {
 		if err := value.Validate(); err != nil {
@@ -118,8 +129,9 @@ func TestResourceRefValidationUsesFixedDirectTargetAllowlist(t *testing.T) {
 
 	denied := []ResourceRef{
 		{APIVersion: "v1", Kind: "Secret", Namespace: "test-namespace", Name: "sample-secret"},
-		{APIVersion: "apps/v1", Kind: "StatefulSet", Namespace: "test-namespace", Name: "sample-statefulset"},
 		{APIVersion: "v1", Kind: "Deployment", Namespace: "test-namespace", Name: "wrong-api-version"},
+		{APIVersion: "v1", Kind: "Node", Namespace: "test-namespace", Name: "namespaced-node"},
+		{APIVersion: "v1", Kind: "Pod", Name: "namespace-less-pod"},
 	}
 	for _, value := range denied {
 		if err := value.Validate(); err == nil {

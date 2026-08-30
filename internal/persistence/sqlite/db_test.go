@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/application"
 )
 
 const testApplicationVersion = "test-version"
@@ -74,6 +76,11 @@ func TestOpenCreatesPrivateStateAndDatabase(t *testing.T) {
 func TestDeleteAllLocalStateRemovesOnlyDatabaseFilesAndKeepsDirectory(t *testing.T) {
 	stateDir := filepath.Join(testRealTempDir(t), "delete-all-state")
 	database := openTestDB(t, context.Background(), stateDir, "delete-all")
+	if err := NewScopePreferenceRepository(database).SaveLastContext(context.Background(), application.ScopePreference{
+		Context: "development", UpdatedAt: time.UnixMilli(100).UTC(),
+	}); err != nil {
+		t.Fatalf("SaveLastContext(setup) error = %v", err)
+	}
 	databasePath := filepath.Join(stateDir, databaseFilename)
 	unrelatedPath := filepath.Join(stateDir, "keep.txt")
 	if err := os.WriteFile(unrelatedPath, []byte("unrelated"), 0o600); err != nil {

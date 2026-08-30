@@ -2,21 +2,22 @@
 
 ## Supported boundary
 
-Security reports are accepted for the current `v0.3` source boundary. KuPilot
-is a local, single-process, single-user, namespaced Kubernetes diagnostic
-Agent. The current `cmd/kupilot` composition is strictly read-only; the
-separately admitted `v0.2` Deployment restart workflow remains isolated and is
-not constructed by that composition. No published release is recorded in the
-[Changelog](CHANGELOG.md). This policy covers the current source boundary, not
-an unverified distribution artifact.
+Security reports are accepted for the current `v0.4` source candidate. Kupilot
+is a local, single-process, single-user Kubernetes operations Agent with a
+typed, bounded read catalog and one supervised Deployment-restart action. The
+restart path is composed, but remains behind fresh target preparation,
+digest-bound local approval, revalidation, durable pre-write audit, one PATCH
+attempt, and separate rollout verification. No published `v0.4` release is
+recorded in the [Changelog](CHANGELOG.md). This policy covers the current source
+boundary, not an unverified distribution artifact.
 
 The normative controls and residual risks are documented in the
-[Security Threat Model](docs/security.md) and
-[v0.1 Read-Only Composition Security Review](docs/security-review-v0.1.md). The
-review has no open Critical, High, Medium, or Low finding or assurance gap.
-Combined deterministic synthetic-canary matrices cover every documented
-Kubernetes credential source at the adapter boundary and the nested, wrapped,
-joined, and formatted safe-error paths through the prohibited sinks. This is
+[Security Threat Model](docs/security.md). The
+[v0.1 Read-Only Composition Security Review](docs/security-review-v0.1.md) is
+historical evidence for controls retained from the earlier boundary; it is not
+a complete review of the broader catalog or composed write path. Current
+deterministic tests cover typed request allowlists, scope gates, sensitive-data
+projections, approval denial paths, and exact external-action counts. This is
 not a claim about real production data, live RBAC, or third-party penetration
 testing.
 
@@ -57,7 +58,7 @@ tests that prevent regression.
 
 ## Operator security guidance
 
-- Use the [least-privilege RBAC](docs/rbac/README.md); do not grant KuPilot
+- Use the [least-privilege RBAC](docs/rbac/README.md); do not grant Kupilot
   `cluster-admin`.
 - Keep configuration, state, database sidecars, and local logs owner-only. Do
   not put the model API key in YAML, argv, history, or a project file.
@@ -68,11 +69,11 @@ tests that prevent regression.
 - Treat the local SQLite database and log as unencrypted local files. Use
   operating-system disk protection and manage backups and snapshots according
   to organizational policy.
-- Stop using KuPilot and report privately if a credential, cross-scope result,
-  terminal-control effect, unexpected network path, or Kubernetes write is
-  observed.
+- Stop using Kupilot and report privately if a credential, cross-scope result,
+  terminal-control effect, unexpected network path, or unapproved or
+  out-of-contract Kubernetes write is observed.
 
-KuPilot does not claim SQLite encryption, tamper resistance, forensic deletion,
+Kupilot does not claim SQLite encryption, tamper resistance, forensic deletion,
 protection from a local administrator, sandboxing of kubeconfig exec credential
 programs, live RBAC correctness, third-party penetration testing, or guaranteed
 model accuracy. See the [Privacy Overview](docs/privacy-overview.md) for the

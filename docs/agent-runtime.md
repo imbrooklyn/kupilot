@@ -1,317 +1,182 @@
-# Agent Runtime Contract
+# Agent Runtime
 
-This document defines the provider-neutral single-Agent policy used by KuPilot.
-It complements the [Architecture](architecture.md), the
-[Security Threat Model](security.md), and the accepted Agent, Tool, Evidence,
-budget, and language decisions. Prompt text is behavioral guidance; the runtime
-contracts in this document remain authoritative.
+Kupilot runs one supervised ReAct-style AgentRun at a time. Eino is confined to
+`internal/agent/einoadapter`; the rest of the system sees project-owned
+messages, events, Tool calls, Evidence, and safe errors.
 
-## Run ownership and lifecycle
+The current protocol versions are:
 
-One `AgentRunner` handles one immutable `RunInput`. The input contains only the
-run, Session, and request Message identities; the locally processed current user
-question; one verified `ClusterScope`; zero or one selected `ResourceRef`; and
-the frozen Prompt, Tool catalog, and budget versions. It contains no client,
-endpoint, credential, repository, callback, framework value, or mutable
-Application state. Pointer-bearing accessors return defensive copies.
+- System prompt: `kupilot-agent-policy-v4`
+- Capability catalog: `kupilot-operational-tools-v1`
 
-The runner blocks until one terminal `RunOutcome`, honors the owning Context,
-and publishes ordered neutral events through `EventSink`. Its state machine is:
+## Frozen run input
 
-```text
-queued -> running -> completed
-                  -> failed
-                  -> cancelled
-                  -> timed_out
-                  -> stale_scope
-                  -> interrupted
-```
+Application creates an immutable RunInput containing:
 
-Only `queued -> running` and `running -> terminal` are admitted. A terminal
-state has no outgoing transition. A completed outcome contains one locally
-validated Diagnosis for the same run and scope. Every other outcome contains
-only a stable safe error classification and message.
+- run, Session, and user-message identifiers;
+- normalized user question;
+- verified Context, working Namespace, namespace-access policy, generation, and
+  activation time;
+- optional selected ResourceRef;
+- exact prompt and capability-catalog versions;
+- model-transfer consent already checked by Application; and
+- one compact, balanced, or extended budget snapshot.
 
-The Eino runtime adapter is the sole framework translation boundary. It uses
-the existing neutral `Model` port and these policy contracts. It must not create
-another model component, HTTP transport, provider client, production Agent
-loop, dynamic Tool registry, or framework checkpoint and resume path.
+The model cannot supply or modify these values. A Context, working-Namespace,
+or policy change invalidates the generation, cancels the old run, clears
+resource/action state, and rejects late results.
 
-## Pinned Eino composition
+## Turn lifecycle
 
-The production adapter uses `github.com/cloudwego/eino` v0.9.13 and the
-dedicated `flow/agent/react.NewAgent` single-Agent path. Its model bridge
-implements the immutable `model.ToolCallingChatModel` contract: `WithTools`
-accepts only the exact fixed catalog, while `Generate` and `Stream` translate
-Eino messages into one neutral `ModelRequest`. Every admitted Eino model node
-invocation therefore makes exactly one call through the existing neutral
-`Model.Stream` port. The adapter creates no provider component, client, HTTP
-request, retry, or fallback.
+1. Application durably creates the run before model or Kubernetes I/O.
+2. Runtime atomically reserves one Agent step and one model call.
+3. The model receives the trusted policy, safe conversation projection,
+   current scope metadata, complete seven-capability catalog, and remaining
+   code-owned ceilings.
+4. A model turn streams bounded final-envelope fragments or finishes with one
+   or more structured Tool-call fragments. Candidate answer fragments remain
+   hidden until the complete free-form answer and its metadata validate. Mixed
+   answer content and Tool selection is rejected.
+5. Tool fragments are assembled by index, strictly decoded, canonicalized,
+   budget-reserved, scope-injected, and dispatched through the fixed table.
+6. The handler performs bounded typed I/O, projects and sanitizes locally, and
+   creates Evidence only after the post-I/O scope gate.
+7. Tool results return through a neutral envelope and the loop continues until
+   a final structured answer or a terminal policy outcome.
+8. The final answer is validated, persisted according to privacy mode, and
+   published to the transcript.
 
-The six fixed Tool specifications are mapped to run-local Eino
-`InvokableTool` values. The ReAct Tools node uses
-`ExecuteSequentially: true`, and the wrapper recovers the structured call ID
-through `compose.GetToolCallID`. A complete model-selected batch is validated
-and bound before any handler can run. Admitted calls then reserve budget and
-execute synchronously in model order; a failed reservation prevents that call
-and every subsequent model or Tool call. Because the framework visits each
-entry in a sequential batch even after one wrapper reports an error, the
-adapter also latches the first wrapper failure; later entries return that safe
-failure before scope reservation, budget reservation, or handler dispatch.
+Runtime performs no automatic model or Kubernetes retry. A retry is admitted
+only as another visible Agent decision, must remain within all budgets, and
+cannot repeat an identical non-retryable call indefinitely.
 
-Neutral model deltas are validated and published as KuPilot events while the
-neutral call is active. Only after the neutral stream has one valid completion
-does the bridge expose one complete Eino message chunk, so ReAct branching
-never interprets partial JSON or Tool-like prose. The adapter drains and closes
-every returned Eino stream. Its `MaxStep` is only a secondary graph failsafe;
-`RunBudget` remains the authoritative call and progress policy.
+## Capability binding
 
-The adapter replaces inherited Eino callback context and registers no global
-callback. It configures no memory, checkpoint, resume, tracing, retry,
-fallback, Tool-return-directly, middleware, or dynamic Tool option. Eino's ADK
-`ChatModelAgent` is not used because its session, checkpoint, resume, transfer,
-and asynchronous event surface exceeds the single-run contract. A direct
-`compose.Graph` is also not used because it would duplicate the maintained
-ReAct accumulation and branch loop without adding admitted behavior.
+The catalog contains exactly the seven capabilities documented in
+[Scope](scope.md). Every model schema is strict: all object properties are
+declared, every property is required, optional values use explicit `null`, and
+additional properties are rejected.
 
-## Versioned System Prompt and language
+Binding performs these checks before handler I/O:
 
-`kupilot-agent-policy-v2` is a deterministic English System Prompt. It defines
-the read-only diagnostic role, Evidence-first behavior, fixed four-part
-Diagnosis, unexecuted recommendation rule, Tool-result trust boundary, and
-language policy. A machine-generated JSON block contains only:
+- known name and exact catalog version;
+- one complete JSON object with no duplicate, unknown, wrong-type, or overlong
+  field;
+- code-defined Kind and API version;
+- explicit namespace semantics under the frozen policy;
+- no Context, endpoint, credential, raw selector, GVR, deadline, or hard-limit
+  authority;
+- canonical argument serialization and digest; and
+- atomic run and per-capability budget reservation.
 
-- The run identifier and policy versions.
-- The verified Context and Namespace display names, scope generation, and UTC
-  activation time.
-- The optional selected ResourceRef.
-- The frozen run-level ceilings.
+Malformed structured output, Tool-like prose, and unknown names cause zero
+handler calls.
 
-The current user question is a separate user message and is never interpolated
-into the System Prompt. Credentials, kubeconfig material, Kubernetes Secret or
-ConfigMap data, endpoint values, raw objects, and raw Tool output are not fields
-of the trusted block. All string values are validated and JSON encoded; a name
-that resembles an instruction remains data.
+## Evidence and answer validation
 
-Diagnostic statements follow only the language of the current user question.
-When that language cannot be determined reliably, the Agent falls back to
-English. Tool results, Kubernetes fields, Events, logs, resource names, history,
-and model output cannot change this choice. Project-owned structured field names
-and the four Diagnosis headings remain English. There is no language setting,
-locale negotiation, or probabilistic runtime language detector.
+Only accepted deterministic Tool results create Evidence. Every Evidence item
+binds the run, invocation, scope generation, exact ResourceRef, category,
+source path, observation time, safe fact, and partial/truncation/redaction
+state.
 
-Before selecting a Tool, the System Prompt requires the Agent to distinguish an
-admitted current-Namespace diagnostic request from an unsupported source request.
-Namespace discovery specifically means listing, discovering, or selecting
-Namespace objects; it does not include collecting a bounded list of an admitted
-Kind inside the already verified active Namespace. The latter is supported
-through `list_resources`, including when the user asks only for that bounded
-list. When an admitted Tool can directly obtain the requested fact, the Agent
-must select it in the current response rather than defer it as a recommendation
-or report its not-yet-collected Evidence as absent. An unqualified list request
-uses `health_filter=any`; `abnormal` remains for questions explicitly restricted
-to unhealthy resources. Node and Namespace objects, cluster-wide inventory, and
-every unlisted Kind remain unsupported. The Agent must not use an admitted Kind
-as a proxy for such a request. It returns a structured `unsupported` gap without
-a Tool call and may identify the active Namespace as trusted scope, not as
-Kubernetes Evidence. Namespace discovery remains available only through the
-fixed `/namespace` selector outside an AgentRun. For a homogeneous set of
-resource-status facts from `list_resources`, the runtime retains one local-only
-typed `ResourceSummary` beside each accepted Evidence item. Those summaries
-come from the already projected Tool result; they are excluded from the model
-envelope and are not persisted as a new field. The local renderer ignores model
-prose for table cells and emits a compact, non-interactive, kind-specific
-result:
+The final wire object contains:
 
-- Pod: `NAME`, `READY`, `STATUS`
-- Deployment: `NAME`, `READY`, `AVAILABLE`, `REASON`
-- ReplicaSet: `NAME`, `DESIRED`, `READY`, `AVAILABLE`, `REASON`
-- Job: `NAME`, `STATUS`, `COMPLETIONS`, `FAILED`, `REASON`
-- Service: `NAME`, `TYPE`
+- `answer_markdown`;
+- `evidence_citations`; and
+- `proposed_actions`.
 
-Mixed or non-list facts remain concise bullets. This is a bounded result
-presentation, not a primary inventory table, Picker, browser, Watch, or kubectl
-execution path. The Agent must still produce one concise confirmed fact per
-resource and must not build presentation markup or concatenate rows itself.
+`answer_markdown` is bounded to 128 KiB before the complete Diagnosis ceiling
+is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
+without mandatory headings. Citation IDs must exist in the same run; invalid
+or duplicate references are removed and produce visible validation warnings.
 
-Evidence IDs and citation aliases are not part of the default Diagnosis or Tool
-timeline. Exact typed references remain bound to the Diagnosis for validation,
-persistence, and explicit observation-detail lookup. `Ctrl+E` enters that
-non-editable inspection surface without exposing correlation IDs in the normal
-transcript or detail view.
+The runtime cannot prove that prose semantically follows Evidence. Evidence
+metadata improves traceability but does not turn model interpretation into a
+verified fact.
 
-## Fixed Tool contract
+## Proposed actions
 
-The `kupilot-read-tools-v2` catalog contains exactly these six structured,
-read-only Tools in fixed order:
+The final response may contain at most one typed `restart_deployment` proposal.
+It must target the exact `apps/v1` Deployment name in the working Namespace and
+must not contain UID or resource version.
 
-1. `get_resource`
-2. `list_resources`
-3. `get_events`
-4. `get_pod_logs`
-5. `get_previous_pod_logs`
-6. `get_related_resources`
+The proposal is not authority. Application asks a read-only trusted preparer to
+perform one fresh exact Deployment GET and derive UID, Pod-template
+fingerprint, and Deployment generation. Only that local intent may become a
+pending approval request. Preparation failure leaves the otherwise valid answer
+intact and performs no write.
 
-Each specification has a code-defined English description and strict JSON
-Schema with `additionalProperties: false`. Every property at each object level
-is listed in `required`; a field with a code-defined default is nullable in the
-model schema and its `null` value is normalized locally to that default. A
-structured selection is decoded strictly, normalized, and re-serialized
-canonically before its digest is calculated. Unknown Tools, extra or duplicate
-fields, wrong types, invalid Kinds or names, and prohibited authority fields are
-denied before handler resolution. If any selection in one model batch is
-invalid, no handler from that batch is invoked.
+Approval, execution, and rollout verification follow
+[Deployment Restart Approval](user-guide/approval.md).
 
-Model arguments contain no Context, Namespace, ClusterScope, generic GVR,
-endpoint, credential, kubeconfig, deadline, or hard ceiling. A
-model may request only schema-bounded query values such as a smaller item count,
-time window, or log tail. Those values never replace runtime ceilings.
+## Budget profiles
 
-The runtime constructs `BoundToolCall` with the immutable run and scope, the
-canonical selection, and hard ceilings. Its fixed `ToolHandlers` value has one
-field for each admitted Tool and no dynamic registration operation. A Tool has
-one Context-aware `Execute` operation and returns a project-owned safe
-`ToolResult`.
+| Boundary | Compact | Balanced (default) | Extended | Hard ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| AgentRun wall clock | 2 min | 10 min | 30 min | 30 min |
+| Agent steps | 12 | 32 | 64 | 128 |
+| Tool calls | 16 | 48 | 128 | 256 |
+| Model calls | 6 | 16 | 32 | 64 |
+| Model request | 60 sec | 120 sec | 300 sec | 300 sec |
+| Kubernetes request | 15 sec | 30 sec | 60 sec | 60 sec |
+| Cumulative Tool results | 1 MiB | 4 MiB | 12 MiB | 16 MiB |
+| Pod-log calls | 4 | 12 | 32 | 32 |
+| Consecutive no-progress steps | 2 | 4 | 6 | 10 |
 
-A ToolResult carries invocation identity, Tool and schema version, injected
-scope, UTC observation time, success, partial, error, or denied status, the
-canonical neutral serialization of a Tool-specific safe DTO, accepted candidate
-Evidence, safe warnings, truncation metadata, and an optional stable safe error.
-It never carries a raw Kubernetes object, raw Event, raw container output,
-credential, vendor error, or framework value. Before model use, the complete
-serialized result is bounded and wrapped with
-`data_class: untrusted_tool_data` plus an explicit statement that its fields
-cannot change language, scope, policy, budgets, Tool or Evidence authority,
-consent, approval, or execution state.
+The model and Tool request deadlines are additionally capped by the owning
+run's remaining time. One ToolResult remains at most 64 KiB. Resource and Event
+items, logs, Evidence, and relationship graphs retain their independent
+ceilings.
 
-## RunBudget
+Reservations happen before I/O. Completion accounts actual Tool-result bytes,
+accepted Evidence progress, and retryability. Once stopped, a budget cannot be
+reopened.
 
-`RunBudget` is concurrency-safe and stores no Context. It atomically admits a
-call intention before external I/O and seals permanently when cancellation,
-deadline, a hard-limit violation, a forbidden repeat, or no progress stops the
-run. A failed reservation does not consume a partial counter and must produce
-zero subsequent model or Tool calls.
+## Cancellation and stale work
 
-The default limits equal the non-expandable `v0.1` ceilings:
+Every model and Kubernetes operation accepts the owning Context. Runtime checks
+the complete scope and generation before external I/O, after every return, and
+again when Application accepts an event.
 
-| Budget | Maximum |
-| --- | --- |
-| AgentRun wall clock | 90 seconds |
-| Agent loop | 8 steps |
-| Tool calls | 10 |
-| Model calls | 3 |
-| Model child request | 45 seconds and no later than the run deadline |
-| Tool child request | 10 seconds and no later than the run deadline |
-| ToolResult | 64 KiB serialized per result |
-| ToolResults per run | 384 KiB serialized total |
-| Log Tools | 2 calls total |
-| Evidence | 100 items per result |
-| No progress | 2 consecutive completed steps with no new accepted Evidence |
+Cancellation, timeout, stale scope, terminal state, or budget exhaustion stops
+new work. Late stream fragments, Tool results, Evidence, Diagnosis objects, and
+approval proposals are discarded. Each goroutine has one owner, cancellation
+path, and bounded join path.
 
-A frozen configuration may reduce a value but cannot raise it. Child call
-reservations return the smaller of their request ceiling and remaining run
-time.
+## Event ordering and TUI
 
-When a length, call, byte, repeated-call, or no-progress policy stop occurs
-after a run has started, the runtime performs no further external call and may
-produce a local gap-only Diagnosis from Evidence already accepted. That result
-passes the same Diagnosis validator and cannot create a confirmed fact or an
-execution claim. Cancellation, deadline, stale scope, malformed external data,
-and internal failures remain non-completed terminal outcomes.
+Application accepts monotonic run events with exact run ID, generation,
+sequence, and terminal-state checks. The TUI receives project-owned UI events;
+Bubble Tea does no business I/O in `Update` or `View`.
 
-Repeated-call identity is the fixed Tool name, Tool version, and digest of all
-canonical model-supplied arguments. Scope is excluded because it is immutable
-for the run. The first call is admitted normally. One identical second call is
-admitted only after a stable retryable result or through the separate trusted
-runtime revalidation operation. A third call is always denied. Model text cannot
-request revalidation.
+The internal run stream is capped at 32,768 ordered events. This is large enough
+for the hard Tool, Evidence, and model budgets but remains independently finite;
+the TUI receives a smaller projection because model-start and individual
+Evidence-acceptance events are not rendered as transcript entries.
 
-## Evidence registry and Diagnosis validation
+The transcript shows one code-authored validation-progress message, compact
+Tool steps, safe warnings, the validated final Markdown answer, and typed
+approval state. `/status` is a local Application query exposing the catalog,
+namespace policy, budget profile and usage, run state, privacy mode, and storage
+health without model or Kubernetes activity.
 
-One runtime `EvidenceRegistry` is bound to one AgentRun and exact
-ClusterScope. Its only acceptance path requires both a valid `BoundToolCall` and
-its matching ToolResult. Acceptance verifies run, invocation, Tool version,
-scope, observation time, Evidence shape, and uniqueness atomically. Cross-run,
-cross-scope, duplicate, invalid, or post-finalization Evidence is rejected
-without adding any item. User text, model text, historic Evidence, and selected
-resources have no registration path.
+## Failure classes
 
-A model Diagnosis is an untrusted four-part draft:
+Vendor, transport, Kubernetes, parsing, and persistence failures are translated
+at their adapter boundary into stable project-owned classes. Safe UI and model
+messages contain no raw error, body, header, credential, kubeconfig path, raw
+object, or Tool result.
 
-- `confirmed_facts`
-- `hypotheses`
-- `missing_information`
-- `recommended_actions`
+A failed durable run start prevents model and Tool I/O. A later read-side
+persistence failure may finish the in-memory answer with visible degraded state
+and no false resume claim. Any approval or pre-write audit failure produces zero
+executor calls.
 
-The final model message must be one bare JSON object containing exactly these
-four fields. Unknown or duplicate keys, missing or null collections, trailing
-content, and malformed JSON are rejected. Parsing never recognizes a Tool call
-from text. The System Prompt states the exact item keys, allowed enum values,
-non-null collection rules, prohibition on Markdown fences or commentary, and a
-valid all-empty object for cases where no item can be populated safely.
+## References
 
-Final validation performs these deterministic operations:
-
-- A confirmed fact with no Evidence ID, a duplicate ID, or any ID absent from
-  the current registry is excluded and produces a validation warning and an
-  explicit missing-information entry.
-- Unsupported Evidence references are removed from hypotheses; confidence
-  remains model self-assessment and never promotes an inference to fact.
-- Every recommendation is forced to `executed=false`; a contrary draft creates
-  a warning.
-- The observed time window and complete or partial Evidence-detail state are
-  derived from registered Evidence. Truncation creates an explicit gap.
-- Final Markdown is rendered locally from only the validated collections, uses
-  the four stable English headings, keeps accepted Evidence references in the
-  typed Diagnosis instead of user-facing prose, shows a concise Context /
-  Namespace and observation time without the internal generation, renders
-  structured list results from typed local summaries, and marks every
-  recommendation `Not executed`.
-
-The registry is sealed only after the final Diagnosis passes the complete
-domain validation. A successful AgentRun means that this policy was followed;
-it does not mean that a root cause was found.
-
-## Ordered events
-
-Every `RunEvent` contains the run ID, scope generation, monotonically increasing
-sequence, and UTC occurrence time. The typed event catalog covers run start,
-model stream start, text delta, Tool request, start, completion, failure or
-denial, Evidence collection, Diagnosis readiness, and each run terminal state.
-Payloads contain only neutral project values.
-
-`EventPublisher` is the sole sequence and terminal owner. `RunStarted` is the
-first event. `RunCompleted` requires a preceding `DiagnosisReady`. Exactly one
-terminal event is admitted, and every later event is rejected before the sink.
-The synchronous EventSink reports `accepted`, `degraded`, or `rejected` so the
-Application can apply explicit backpressure and persistence policy. Text deltas
-may be coalesced outside this contract; structural and terminal events cannot be
-dropped.
-
-## Security and persistence boundaries
-
-The Agent policy package performs no Kubernetes, SQLite, terminal, or model
-transport I/O. It imports no Eino or provider type. Scope freshness checks,
-Application event acceptance, consent, source projection, redaction, and
-sensitive-value blocking remain independent mandatory boundaries around these
-contracts.
-
-The production adapter checks the exact immutable scope before reserving each
-external call, again immediately before the call, and after the return before
-accepting any output. The Application-owned EventSink remains the independent
-acceptance gate for every neutral event. A stale result cannot become Tool
-context, Evidence, Diagnosis input, or a later call.
-
-System Prompts, raw model traffic, streaming deltas, complete ToolResults, and
-invalid Diagnosis drafts are ephemeral and never persistence payloads. Durable
-code may store only the independently eligible derivatives defined by the
-[Data Retention Contract](data-retention.md): safe run metadata, sanitized
-ToolInvocation metadata, accepted Evidence, the validated Diagnosis, and final
-assistant content according to privacy mode.
-
-Deterministic conformance uses scripted neutral Model implementations, fake
-Tools, fake clocks, and in-memory EventSinks. It proves exact and one-over
-budgets, cancellation and deadline stops, retry and revalidation rules,
-no-progress termination, zero handler calls for policy denials, Prompt and
-Diagnosis snapshots, language isolation, same-run Evidence citations, and
-single terminal publication without a real model, cluster, database, or TUI.
+- [Architecture](architecture.md)
+- [Security Threat Model](security.md)
+- [Diagnostic Capabilities](diagnostic-capabilities.md)
+- [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0038](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
+- [ADR-0039](adr/0039-use-configurable-runtime-budget-profiles.md)

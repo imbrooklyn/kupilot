@@ -1,6 +1,6 @@
 # ADR-0009: Use Fixed Structured Tools
 
-- Status: Accepted
+- Status: Superseded by ADR-0037
 - Date: 2026-08-08
 
 ## Context
@@ -11,12 +11,12 @@ request, dynamic Tool registry, or prompt-parsed convention would let untrusted
 content influence resource type, scope, command construction, output size, or
 future writes.
 
-KuPilot also needs deterministic Evidence provenance: the runtime must know
+Kupilot also needs deterministic Evidence provenance: the runtime must know
 which bounded operation produced each observation.
 
 ## Decision
 
-KuPilot will expose exactly six versioned, structured, read-only model Tools in
+Kupilot will expose exactly six versioned, structured, read-only model Tools in
 `v0.1`:
 
 - `get_resource`

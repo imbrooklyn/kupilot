@@ -2,17 +2,18 @@
 
 ## Scope
 
-KuPilot measures six maintenance-sensitive surfaces: no-I/O CLI startup,
+Kupilot measures six maintenance-sensitive surfaces: no-I/O CLI startup,
 process memory, local SQLite migration and Session operations, the synthetic
 Diagnosis fixture matrix, bounded stream merge and rendering, and release
 binary size. These measurements protect admitted behavior from regression.
 They are not cross-machine service-level agreements, capacity claims, or a
 reason to add product complexity.
 
-The hard Agent, model, Kubernetes, Tool, byte, item, retention, traversal, and
-timeout ceilings remain security limits. Performance work cannot relax them or
-bypass scope checks, normalization, redaction, Evidence validation, audit,
-approval, cancellation, or persistence safety.
+The selectable compact, balanced, and extended run profiles and their hard
+Agent, model, Kubernetes, Tool, byte, item, retention, traversal, and timeout
+ceilings remain operating and security limits. Performance work cannot relax
+them or bypass scope checks, normalization, redaction, Evidence validation,
+audit, approval, cancellation, or persistence safety.
 
 ## Environment classes and comparison method
 

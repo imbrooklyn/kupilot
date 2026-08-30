@@ -1,11 +1,11 @@
 # ADR-0023: Use a Single-Screen Agent-Supervision TUI
 
-- Status: Accepted
+- Status: Superseded by ADR-0040
 - Date: 2026-08-08
 
 ## Context
 
-KuPilot is Agent-first, but a chat-only terminal can hide which cluster is
+Kupilot is Agent-first, but a chat-only terminal can hide which cluster is
 active, what the Agent is reading, whether output is partial, and why a result is
 missing. A resource-first TUI would create the opposite problem: browsing and
 direct manipulation would become a parallel Kubernetes interface outside the
@@ -16,7 +16,7 @@ owning use cases or authority.
 
 ## Decision
 
-KuPilot will provide one Bubble Tea v2 TUI organized around Agent supervision.
+Kupilot will provide one Bubble Tea v2 TUI organized around Agent supervision.
 It uses a low-chrome single screen with this fixed vertical order:
 
 1. A continuous scrollable transcript. Historic user input reuses the composer
@@ -65,7 +65,7 @@ run. `/model` opens that flow again. It reuses the one composer for endpoint,
 model identifier, and credential input; the credential step is masked and its
 value is excluded from transcript, draft history, completion requests,
 Application events, errors, and rendering. The user explicitly chooses either
-local plaintext persistence under the KuPilot Home or process-only use after
+local plaintext persistence under the Kupilot Home or process-only use after
 seeing that local storage is not encrypted. Model reconfiguration cancels and
 joins an active run before Application replaces the single runtime and
 re-evaluates origin-bound consent.

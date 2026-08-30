@@ -31,7 +31,7 @@ var (
 	ErrInvalidEventRead = errors.New("Event Tool read data is invalid")
 )
 
-// EventReadRequest is one exact, current-Namespace Event observation. The
+// EventReadRequest is one exact policy-admitted Event observation. The
 // target, cutoff, and limit are runtime-derived and contain no raw selector.
 type EventReadRequest struct {
 	Scope     domain.ClusterScope
@@ -45,7 +45,7 @@ type EventReadRequest struct {
 func (request EventReadRequest) Validate() error {
 	kind, allowed := domain.ResourceKindForReference(request.Reference)
 	if request.Scope.Validate() != nil || !allowed || !kind.Valid() ||
-		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Namespace != request.Scope.Namespace ||
+		domain.ValidateLiveResourceRef(request.Reference) != nil || !request.Scope.AllowsReference(request.Reference) ||
 		request.NotBefore.IsZero() || request.NotBefore.Location() != time.UTC || request.NotBefore.UnixMilli() < 0 ||
 		request.Limit < 1 || request.Limit > 50 {
 		return ErrInvalidEventRead
@@ -226,6 +226,7 @@ type eventResourceArgument struct {
 	APIVersion string `json:"api_version"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
 	UID        string `json:"uid,omitempty"`
 }
 
@@ -248,7 +249,7 @@ func decodeGetEventsCall(call BoundToolCall, observed time.Time) (getEventsArgum
 	reference := domain.ResourceRef{
 		APIVersion: arguments.Resource.APIVersion,
 		Kind:       arguments.Resource.Kind,
-		Namespace:  call.Scope().Namespace,
+		Namespace:  arguments.Resource.Namespace,
 		Name:       arguments.Resource.Name,
 		UID:        arguments.Resource.UID,
 	}

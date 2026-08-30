@@ -252,10 +252,11 @@ func testRunInput(t *testing.T, resultBytes int) agent.RunInput {
 		testMessageID,
 		"Inspect the selected Kubernetes resource.",
 		domain.ClusterScope{
-			Context:     "test-context",
-			Namespace:   "team-a",
-			Generation:  7,
-			ActivatedAt: testActivatedAt,
+			Context:         "test-context",
+			Namespace:       "team-a",
+			NamespaceAccess: domain.NamespaceAccessCurrent,
+			Generation:      7,
+			ActivatedAt:     testActivatedAt,
 		},
 		nil,
 		limits,
@@ -327,6 +328,19 @@ func boundRelatedCall(t *testing.T, input agent.RunInput, arguments string) agen
 	})
 	if err != nil {
 		t.Fatalf("agent.BindToolCall(get_related_resources) error = %v", err)
+	}
+	return call
+}
+
+func boundClusterOverviewCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
+	t.Helper()
+	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+		ID:            "call-cluster-overview-1",
+		Name:          domain.ToolNameGetClusterOverview,
+		ArgumentsJSON: arguments,
+	})
+	if err != nil {
+		t.Fatalf("agent.BindToolCall(get_cluster_overview) error = %v", err)
 	}
 	return call
 }

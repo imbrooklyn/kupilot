@@ -57,14 +57,14 @@ func (repository *PrivacyRepository) LoadPrivacy(ctx context.Context) (applicati
 	} else if err != nil {
 		return application.PrivacyRecord{}, false, repositoryFailure(
 			repository.db, "privacy_consent_read_failed", "load_privacy_consent",
-			"KuPilot could not read model-transfer consent.", err,
+			"Kupilot could not read model-transfer consent.", err,
 		)
 	}
 	var categories []application.ModelDataCategory
 	if err := json.Unmarshal([]byte(row.CategoriesJSON), &categories); err != nil {
 		return application.PrivacyRecord{}, false, repositoryFailure(
 			repository.db, "privacy_consent_row_invalid", "load_privacy_consent",
-			"KuPilot could not read model-transfer consent safely.", err,
+			"Kupilot could not read model-transfer consent safely.", err,
 		)
 	}
 	record := application.PrivacyRecord{
@@ -75,7 +75,7 @@ func (repository *PrivacyRepository) LoadPrivacy(ctx context.Context) (applicati
 	if record.Validate() != nil {
 		return application.PrivacyRecord{}, false, repositoryFailure(
 			repository.db, "privacy_consent_row_invalid", "load_privacy_consent",
-			"KuPilot could not read model-transfer consent safely.", application.ErrPrivacyRecord,
+			"Kupilot could not read model-transfer consent safely.", application.ErrPrivacyRecord,
 		)
 	}
 	return record, true, nil
@@ -99,14 +99,14 @@ func (repository *PrivacyRepository) SavePrivacy(ctx context.Context, record app
 	if err != nil {
 		return repositoryFailure(
 			repository.db, "privacy_consent_write_failed", "save_privacy_consent",
-			"KuPilot could not store model-transfer consent.", err,
+			"Kupilot could not store model-transfer consent.", err,
 		)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil || affected != 1 {
 		return repositoryFailure(
 			repository.db, "privacy_consent_write_failed", "save_privacy_consent",
-			"KuPilot could not store model-transfer consent.", err,
+			"Kupilot could not store model-transfer consent.", err,
 		)
 	}
 	return nil

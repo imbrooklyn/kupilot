@@ -1,6 +1,6 @@
 # ADR-0016: Freeze Runtime Budgets
 
-- Status: Accepted
+- Status: Superseded by ADR-0039
 - Date: 2026-08-08
 
 ## Context

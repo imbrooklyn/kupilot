@@ -2,13 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0042
 
 ## Context
 
 Automatically reopening history can disclose a previous conversation, confuse
 historic ClusterScope with live authority, or make process restart look like
 continuation of an AgentRun. Inferring a Session from the current working
-directory would also pull KuPilot toward a repository workspace model that the
+directory would also pull Kupilot toward a repository workspace model that the
 product explicitly rejects.
 
 Users still need a deliberate way to continue eligible local conversation
@@ -38,8 +39,10 @@ Resume reconstructs safe conversation history and candidates only. It never
 resumes an Agent loop, model stream, ToolInvocation, pending Tool selection,
 Kubernetes client, live ClusterScope generation, cancellation function,
 approval wait, or write. A durably running run is marked `interrupted` during
-startup recovery. The user must explicitly select and verify a current Context
-and Namespace before a new question.
+startup recovery. A current Context and Namespace must be freshly verified
+before a new question. ADR-0042 permits a remembered Context preference to
+propose that current scope, but it does not make historic Session scope live or
+resume any Kubernetes authority.
 
 Minimal-persistence Sessions are non-resumable through picker, exact identifier,
 and `--last`. Picker and `--last` exclude them. An exact identifier for a known
@@ -57,7 +60,7 @@ business database or initializing Kubernetes or model adapters.
 
 Positive consequences:
 
-- Starting KuPilot has predictable privacy and state behavior.
+- Starting Kupilot has predictable privacy and state behavior.
 - Historic scope and Evidence cannot become live authority through restart.
 - Resume is independent of source repositories and current directories.
 - Every resume path shares retention and eligibility checks.
@@ -65,7 +68,8 @@ Positive consequences:
 Costs and constraints:
 
 - Users must opt in to resume and may need to select a Session.
-- Bare startup cannot provide automatic continuity.
+- Bare startup cannot provide automatic Session continuity. ADR-0042 permits
+  only independent current-scope convenience.
 - Minimal-persistence intentionally provides no cross-process conversation
   continuity.
 - Safe picker metadata offers less context than message previews.
@@ -74,7 +78,7 @@ Costs and constraints:
 
 - Automatically reopening the last Session was rejected because it can disclose
   history and blur new versus resumed state.
-- Associating Sessions with a working directory was rejected because KuPilot is
+- Associating Sessions with a working directory was rejected because Kupilot is
   not a repository or IDE workflow and cluster diagnosis may have no repository.
 - Resuming an interrupted AgentRun was rejected because external state, scope,
   credentials, budgets, and streams cannot be reconstructed safely.
@@ -132,3 +136,4 @@ and the `help` and `version` short circuits.
 - [Data Retention Contract](../data-retention.md)
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0042: Remember the Last Verified Kubernetes Context](0042-remember-the-last-verified-kubernetes-context.md)

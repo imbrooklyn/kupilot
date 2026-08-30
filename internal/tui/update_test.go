@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/tui/components"
@@ -15,6 +16,37 @@ const (
 	testRunID        domain.AgentRunID       = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a10"
 	testInvocationID domain.ToolInvocationID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a11"
 )
+
+func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
+	status := application.UIStatusResult{
+		Session: &application.UISessionState{
+			ID: testSessionID, Title: "Operations", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessAll, ScopeGeneration: 7, ReadOnly: true,
+		RunID: testRunID, RunActive: true, CapabilityCatalogVersion: agent.ToolCatalogVersion,
+		Budget: application.UIBudgetStatus{
+			Profile: agent.BudgetProfileBalanced, RunMilliseconds: 600_000,
+			ElapsedMilliseconds: 90_000, RemainingMilliseconds: 510_000,
+			StepsUsed: 3, StepsMaximum: 32, ToolCallsUsed: 5, ToolCallsMaximum: 48,
+			ModelCallsUsed: 3, ModelCallsMaximum: 16,
+			ToolResultBytesUsed: 96 * 1024, ToolResultBytesMaximum: 4 * 1024 * 1024,
+			LogCallsUsed: 2, LogCallsMaximum: 12,
+		},
+	}
+	got := statusText(status, "diagnostic-model")
+	for _, required := range []string{
+		"Kupilot status", "Model: diagnostic-model", "Context: test-context", "Namespace: test-namespace",
+		"Scope generation: 7", "Budget: balanced",
+		"Access: namespace policy all",
+		"Actions: restart_deployment · local approval and Kubernetes RBAC required",
+		"elapsed 1m30s", "remaining 8m30s", "steps 3/32", "tools 5/48", "model 3/16",
+		"96.0 KiB/4.0 MiB", "log calls 2/12", "Privacy: standard", "local storage: healthy",
+	} {
+		if !strings.Contains(got, required) {
+			t.Fatalf("status text missing %q:\n%s", required, got)
+		}
+	}
+}
 
 func TestUpdateMaintainsOneEditorAcrossStates(t *testing.T) {
 	t.Parallel()
@@ -64,24 +96,44 @@ func TestUpdateSubmitsChatThroughDeferredTypedCommand(t *testing.T) {
 	}
 }
 
-func TestUpdateEnterAndCtrlJHaveDistinctBehavior(t *testing.T) {
+func TestUpdateEnterAndNewlineKeysHaveDistinctBehavior(t *testing.T) {
 	t.Parallel()
 
-	model := newTestModel()
-	model, _ = updateModel(t, model, keyText("a"))
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	if got := model.composer.Value(); got != "a\n" {
-		t.Fatalf("draft after Ctrl+J = %q", got)
+	newlineKeys := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "shift-enter", key: tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}},
+		{name: "alt-enter", key: tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}},
+		{name: "ctrl-j", key: tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}},
 	}
-	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if commandFromCmd(t, cmd).Text != "a\n" || model.composer.Value() != "" {
-		t.Fatal("Enter did not submit and clear the multiline draft")
+	for _, tt := range newlineKeys {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newTestModel()
+			model, _ = updateModel(t, model, keyText("a"))
+			model, _ = updateModel(t, model, tt.key)
+			if got := model.composer.Value(); got != "a\n" {
+				t.Fatalf("draft after %s = %q", tt.name, got)
+			}
+			model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if commandFromCmd(t, cmd).Text != "a\n" || model.composer.Value() != "" {
+				t.Fatal("plain Enter did not submit and clear the multiline draft")
+			}
+		})
 	}
 
+	model := newTestModel()
 	model, _ = updateModel(t, model, keyText("x"))
-	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyTab, Text: "\t"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyTab, Text: "\t"})
 	if cmd != nil || model.composer.Value() != "x" {
 		t.Fatal("Tab without a completion changed the draft or returned an action")
+	}
+
+	limited := newTestModel()
+	limited.composer.SetValue(strings.Repeat("x", application.MaxQuestionBytes))
+	limited, cmd = updateModel(t, limited, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	if cmd != nil || len(limited.composer.Value()) != application.MaxQuestionBytes || !limited.dialog.Open() {
+		t.Fatal("newline alias did not fail closed at the draft byte limit")
 	}
 }
 
@@ -104,15 +156,19 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("plain Up recalled input history: %q", got)
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "second" {
 		t.Fatalf("first history item = %q", got)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "one\ntwo\nthree\nfour\nfive" {
 		t.Fatalf("second history item = %q", got)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("history did not return to empty draft: %q", got)
 	}
@@ -123,6 +179,50 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	}
 	if model.composer.ScrollOffset() == 0 {
 		t.Fatal("composer did not scroll internally past eight rows")
+	}
+}
+
+func TestNativeMouseSelectionAndWheelEventsCannotRecallInputHistory(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.composer.RecordSubmission("first question")
+	model.composer.RecordSubmission("second question")
+	model.transcript.SetSize(40, 4)
+	for index := range 24 {
+		model.transcript.AppendNotice(strings.Repeat("x", index+1))
+	}
+	bottom := model.transcript.ScrollOffset()
+	if bottom == 0 {
+		t.Fatal("test transcript did not become scrollable")
+	}
+
+	view := model.View()
+	if view.MouseMode != tea.MouseModeNone {
+		t.Fatal("view enabled terminal mouse reporting and blocked native selection")
+	}
+	if view.OnMouse == nil {
+		t.Fatal("view lost its defensive wheel-event relay")
+	}
+	wheelCommand := view.OnMouse(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if wheelCommand == nil {
+		t.Fatal("mouse-wheel callback did not relay the wheel event")
+	}
+	model, cmd := updateModel(t, model, wheelCommand())
+	if cmd != nil || model.transcript.ScrollOffset() >= bottom {
+		t.Fatal("wheel up did not move the transcript")
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("wheel up recalled input history: %q", got)
+	}
+
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("plain Up recalled input history after a wheel event: %q", got)
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if got := model.composer.Value(); got != "second question" {
+		t.Fatalf("explicit keyboard history was not kept separate from wheel scrolling: %q", got)
 	}
 }
 
@@ -155,7 +255,7 @@ func TestUpdateEscapedSlashHistoryPreservesChatMeaning(t *testing.T) {
 	if intent := commandFromCmd(t, cmd); intent.Kind != application.UICommandSubmitQuestion || intent.Text != "/help" {
 		t.Fatalf("first escaped intent = %#v", intent)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if model.composer.Value() != "//help" {
 		t.Fatalf("escaped history draft = %q", model.composer.Value())
 	}
@@ -366,15 +466,16 @@ func TestUpdateBoundsCumulativeStreamText(t *testing.T) {
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2,
-		Text: strings.Repeat("x", application.MaxQuestionBytes-1),
+		Text: strings.Repeat("x", application.MaxQuestionBytes),
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 3, Text: "yz",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Text: strings.Repeat("y", application.MaxQuestionBytes),
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 4, Text: "overflow",
 	}})
-	if len(model.run.StreamedText) != application.MaxQuestionBytes || model.run.LastSequence != 4 {
+	if len(model.run.StreamedText) != application.MaxAnswerMarkdownBytes || model.run.LastSequence != 4 {
 		t.Fatalf("bounded stream state = bytes %d, sequence %d", len(model.run.StreamedText), model.run.LastSequence)
 	}
 }
@@ -402,7 +503,8 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 40, Height: 12})
 	view := model.View()
-	if model.width != 40 || model.height != 12 || model.EditorCount() != 1 || view.OnMouse != nil {
+	if model.width != 40 || model.height != 12 || model.EditorCount() != 1 ||
+		view.MouseMode != tea.MouseModeNone {
 		t.Fatalf("resize or mouse invariant failed: size=%dx%d editors=%d", model.width, model.height, model.EditorCount())
 	}
 }

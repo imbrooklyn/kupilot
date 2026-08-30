@@ -34,7 +34,6 @@ type responseDecoder struct {
 	usageSeen     bool
 	sawText       bool
 	sawTool       bool
-	lastToolIndex int
 	tools         map[int]*toolCallAssembly
 	rawFailure    error
 }
@@ -156,17 +155,28 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 		}
 	}
 	if message.Content == "" && len(message.ToolCalls) == 0 && finishReason == "" && usage == nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		// Some compatible endpoints emit a bounded assistant role or empty
+		// delta before content. It carries no authority and produces no neutral
+		// event; the raw transport still counts it against stream limits.
+		return nil
 	}
 	return nil
 }
 
 func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *domain.ModelError {
-	if fragment.Index == nil || *fragment.Index < decoder.lastToolIndex || fragment.Type != "" && fragment.Type != "function" {
+	if fragment.Index == nil || fragment.Type != "" && fragment.Type != "function" {
 		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
 	}
 	index := *fragment.Index
-	decoder.lastToolIndex = index
+	neutral := domain.ModelToolCallFragment{
+		Index:             index,
+		IDFragment:        fragment.ID,
+		NameFragment:      fragment.Function.Name,
+		ArgumentsFragment: fragment.Function.Arguments,
+	}
+	if neutral.Validate() != nil {
+		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+	}
 	decoder.sawTool = true
 	assembly := decoder.tools[index]
 	if assembly == nil {
@@ -184,15 +194,6 @@ func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *d
 		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
 	}
 
-	neutral := domain.ModelToolCallFragment{
-		Index:             index,
-		IDFragment:        fragment.ID,
-		NameFragment:      fragment.Function.Name,
-		ArgumentsFragment: fragment.Function.Arguments,
-	}
-	if neutral.Validate() != nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
-	}
 	return decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventToolCallFragment, ToolCallFragment: &neutral})
 }
 

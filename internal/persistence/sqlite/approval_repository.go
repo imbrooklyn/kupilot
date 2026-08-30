@@ -137,7 +137,7 @@ func (repository *ApprovalRepository) CreateWithAudit(
 		}
 		return insertAuditEvent(ctx, tx, audit)
 	})
-	return repository.translateError(err, "approval_request_create_failed", "create_approval_request", "KuPilot could not store the approval request.")
+	return repository.translateError(err, "approval_request_create_failed", "create_approval_request", "Kupilot could not store the approval request.")
 }
 
 // Get returns one request and its optional decision without a raw nonce.
@@ -155,35 +155,35 @@ func (repository *ApprovalRepository) Get(
 	if err := repository.db.handle.GetContext(ctx, &row, selectApprovalSQL, id); errors.Is(err, sql.ErrNoRows) {
 		return approvalcontract.StoredRequest{}, nil, approvalcontract.ErrStoredApprovalNotFound
 	} else if err != nil {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_request_read_failed", "get_approval_request", "KuPilot could not read the approval request.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_request_read_failed", "get_approval_request", "Kupilot could not read the approval request.")
 	}
 	request, err := row.storedRequest()
 	if err != nil {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_request_row_invalid", "get_approval_request", "KuPilot could not read the approval request safely.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_request_row_invalid", "get_approval_request", "Kupilot could not read the approval request safely.")
 	}
 	var decisionRow approvalDecisionRow
 	if err := repository.db.handle.GetContext(ctx, &decisionRow, selectApprovalDecisionSQL, id); errors.Is(err, sql.ErrNoRows) {
 		if request.State == domain.ApprovalStateApproved || request.State == domain.ApprovalStateRejected {
-			return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "KuPilot could not read the approval decision safely.")
+			return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "Kupilot could not read the approval decision safely.")
 		}
 		return request, nil, nil
 	} else if err != nil {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_decision_read_failed", "get_approval_request", "KuPilot could not read the approval decision.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(err, "approval_decision_read_failed", "get_approval_request", "Kupilot could not read the approval decision.")
 	}
 	decision, err := decisionRow.storedDecision()
 	if err != nil || decision.RequestID != request.ID || !decision.ShownDigest.Equal(request.Digest) || decision.NonceHash != request.NonceHash {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "KuPilot could not read the approval decision safely.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "Kupilot could not read the approval decision safely.")
 	}
 	if decision.DecidedAt.Before(request.RequestedAt) || !decision.DecidedAt.Before(request.ExpiresAt) ||
 		decision.DecidedAt.After(request.StateChangedAt) {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "KuPilot could not read the approval decision safely.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "Kupilot could not read the approval decision safely.")
 	}
 	if request.State == domain.ApprovalStatePending ||
 		request.State == domain.ApprovalStateApproved && decision.Choice != domain.ApprovalDecisionApprove ||
 		request.State == domain.ApprovalStateRejected && decision.Choice != domain.ApprovalDecisionReject ||
 		(request.State == domain.ApprovalStateApproved || request.State == domain.ApprovalStateRejected) &&
 			!decision.DecidedAt.Equal(request.StateChangedAt) {
-		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "KuPilot could not read the approval decision safely.")
+		return approvalcontract.StoredRequest{}, nil, repository.translateError(approvalcontract.ErrInvalidStoredApproval, "approval_decision_row_invalid", "get_approval_request", "Kupilot could not read the approval decision safely.")
 	}
 	return request, &decision, nil
 }
@@ -211,7 +211,7 @@ func (repository *ApprovalRepository) VerifyApproved(
 			err,
 			"approval_request_verify_failed",
 			"verify_approved_request",
-			"KuPilot could not verify the approved request.",
+			"Kupilot could not verify the approved request.",
 		)
 	}
 	if stored != request || storedDecision == nil || *storedDecision != decision {
@@ -259,7 +259,7 @@ func (repository *ApprovalRepository) ConsumeWithAudit(
 		}
 		return insertAuditEvent(ctx, tx, audit)
 	})
-	return repository.translateError(err, "approval_request_consume_failed", "consume_approved_request", "KuPilot could not store the pre-write approval intent.")
+	return repository.translateError(err, "approval_request_consume_failed", "consume_approved_request", "Kupilot could not store the pre-write approval intent.")
 }
 
 // ResolveWithAudit atomically stores one local approve or reject decision.
@@ -299,7 +299,7 @@ func (repository *ApprovalRepository) ResolveWithAudit(
 		}
 		return insertAuditEvent(ctx, tx, audit)
 	})
-	return repository.translateError(err, "approval_request_resolve_failed", "resolve_approval_request", "KuPilot could not store the approval decision.")
+	return repository.translateError(err, "approval_request_resolve_failed", "resolve_approval_request", "Kupilot could not store the approval decision.")
 }
 
 // CloseWithAudit atomically persists expiry, cancellation, or invalidation.
@@ -324,7 +324,7 @@ func (repository *ApprovalRepository) CloseWithAudit(
 		}
 		return insertAuditEvent(ctx, tx, audit)
 	})
-	return repository.translateError(err, "approval_request_close_failed", "close_approval_request", "KuPilot could not close the approval request.")
+	return repository.translateError(err, "approval_request_close_failed", "close_approval_request", "Kupilot could not close the approval request.")
 }
 
 // ListRecoverable returns a bounded oldest-first startup recovery batch.
@@ -337,23 +337,23 @@ func (repository *ApprovalRepository) ListRecoverable(ctx context.Context, limit
 	}
 	rows, err := repository.db.handle.QueryxContext(ctx, listRecoverableApprovalsSQL, limit)
 	if err != nil {
-		return nil, repository.translateError(err, "approval_recovery_list_failed", "list_recoverable_approvals", "KuPilot could not read recoverable approval requests.")
+		return nil, repository.translateError(err, "approval_recovery_list_failed", "list_recoverable_approvals", "Kupilot could not read recoverable approval requests.")
 	}
 	defer rows.Close()
 	result := make([]approvalcontract.StoredRequest, 0, limit)
 	for rows.Next() {
 		var row approvalRequestRow
 		if err := rows.StructScan(&row); err != nil {
-			return nil, repository.translateError(err, "approval_request_row_invalid", "list_recoverable_approvals", "KuPilot could not read approval requests safely.")
+			return nil, repository.translateError(err, "approval_request_row_invalid", "list_recoverable_approvals", "Kupilot could not read approval requests safely.")
 		}
 		request, err := row.storedRequest()
 		if err != nil {
-			return nil, repository.translateError(err, "approval_request_row_invalid", "list_recoverable_approvals", "KuPilot could not read approval requests safely.")
+			return nil, repository.translateError(err, "approval_request_row_invalid", "list_recoverable_approvals", "Kupilot could not read approval requests safely.")
 		}
 		result = append(result, request)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repository.translateError(err, "approval_recovery_list_failed", "list_recoverable_approvals", "KuPilot could not read recoverable approval requests.")
+		return nil, repository.translateError(err, "approval_recovery_list_failed", "list_recoverable_approvals", "Kupilot could not read recoverable approval requests.")
 	}
 	return result, nil
 }
@@ -387,7 +387,7 @@ func (repository *ApprovalRepository) RecoverWithAudits(ctx context.Context, tra
 		}
 		return nil
 	})
-	return repository.translateError(err, "approval_recovery_failed", "recover_approval_requests", "KuPilot could not invalidate recovered approval requests.")
+	return repository.translateError(err, "approval_recovery_failed", "recover_approval_requests", "Kupilot could not invalidate recovered approval requests.")
 }
 
 func insertApproval(ctx context.Context, tx *sqlx.Tx, request approvalcontract.StoredRequest) error {

@@ -69,7 +69,7 @@ func (input RunInput) Validate() error {
 		return ErrInvalidRunInput
 	}
 	if input.resource != nil &&
-		(domain.ValidateLiveResourceRef(*input.resource) != nil || input.resource.Namespace != input.scope.Namespace) {
+		(domain.ValidateLiveResourceRef(*input.resource) != nil || !domain.ReferenceMatchesWorkingNamespace(*input.resource, input.scope.Namespace)) {
 		return ErrInvalidRunInput
 	}
 	return nil

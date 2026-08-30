@@ -11,7 +11,7 @@ opaque runtime wrapper, origin binding, and sink exclusions remain applicable;
 the prohibition on a local configuration-file source and interactive TUI input
 does not.
 
-KuPilot needs one transport credential for the configured model endpoint.
+Kupilot needs one transport credential for the configured model endpoint.
 Accepting the value in a CLI flag exposes it to shell history and process
 arguments. Storing it in a project configuration file or SQLite turns those
 stores into credential stores, conflicts with the retention contract, and makes
@@ -38,15 +38,15 @@ wrapper is attached only by the model transport to the validated origin and is
 released with the adapter. Application, Domain, Agent messages, Tools, TUI,
 errors, audit, and repositories never receive it.
 
-KuPilot will not accept the key through:
+Kupilot will not accept the key through:
 
 - A value-bearing CLI argument, prompt, interactive chat message, or Tool
   argument.
-- A KuPilot configuration file, Session, SQLite row, ordinary log, or crash
+- A Kupilot configuration file, Session, SQLite row, ordinary log, or crash
   bundle.
 - A Kubernetes object, kubeconfig field, model response, or endpoint response.
 
-The source variable is unset in the KuPilot process and explicitly absent from
+The source variable is unset in the Kupilot process and explicitly absent from
 kubeconfig exec credential children and any other external child process.
 Sensitive headers are never forwarded to another origin.
 
@@ -76,7 +76,7 @@ Costs and constraints:
 
 - A CLI flag was rejected because process listings and shell history commonly
   retain arguments.
-- A plaintext configuration file was rejected because KuPilot would own
+- A plaintext configuration file was rejected because Kupilot would own
   permission, backup, parsing, example, and accidental-commit risks for a
   credential store.
 - SQLite storage was rejected because the database is explicitly not an

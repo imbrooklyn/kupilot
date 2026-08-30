@@ -222,7 +222,7 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		return err
 	})
 	if err != nil {
-		return auditcontract.CleanupResult{}, repositoryFailure(repository.db, "retention_cleanup_failed", "cleanup_retention", "KuPilot could not complete retention cleanup.", err)
+		return auditcontract.CleanupResult{}, repositoryFailure(repository.db, "retention_cleanup_failed", "cleanup_retention", "Kupilot could not complete retention cleanup.", err)
 	}
 	limit := int64(request.BatchSize)
 	committed.More = committed.EvidenceItems == limit ||

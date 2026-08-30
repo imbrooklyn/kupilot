@@ -1,6 +1,6 @@
 # Dependency Compatibility
 
-This document records KuPilot's reviewed dependency-maintenance baseline. It
+This document records Kupilot's reviewed dependency-maintenance baseline. It
 does not make an untested newer release, operating system, architecture, or
 dependency combination supported. Kubernetes API-server and model-protocol
 compatibility remain defined by their dedicated public contracts.

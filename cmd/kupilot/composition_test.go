@@ -131,7 +131,7 @@ func TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors(t *testing.T) {
 	}
 }
 
-func TestCompositionConstructsOneModelLifecycleAndNoWritePath(t *testing.T) {
+func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *testing.T) {
 	t.Parallel()
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -144,12 +144,19 @@ func TestCompositionConstructsOneModelLifecycleAndNoWritePath(t *testing.T) {
 	}
 	mainSource := string(mainContent)
 	if strings.Count(mainSource, "openaicompat.New(") != 1 || strings.Count(mainSource, "einoadapter.New(") != 1 ||
-		strings.Count(mainSource, "tools.NewReadOnlyToolCatalog(") != 1 {
-		t.Fatalf("composition constructor counts are model=%d agent=%d catalog=%d",
+		strings.Count(mainSource, "tools.NewReadOnlyToolCatalog(") != 1 ||
+		strings.Count(mainSource, "sqlite.NewScopePreferenceRepository(") != 1 ||
+		strings.Count(mainSource, "ScopePreferences: scopePreferenceRepository") != 1 ||
+		strings.Count(mainSource, "approval.NewService(") != 1 ||
+		strings.Count(mainSource, "application.NewApprovalCoordinator(") != 1 ||
+		strings.Count(mainSource, "kube.NewDeploymentRestarter(") != 1 ||
+		strings.Count(mainSource, "kube.NewDeploymentRolloutObserver(") != 1 {
+		t.Fatalf("composition constructor counts are model=%d agent=%d catalog=%d scope-preference=%d",
 			strings.Count(mainSource, "openaicompat.New("), strings.Count(mainSource, "einoadapter.New("),
-			strings.Count(mainSource, "tools.NewReadOnlyToolCatalog("))
+			strings.Count(mainSource, "tools.NewReadOnlyToolCatalog("),
+			strings.Count(mainSource, "sqlite.NewScopePreferenceRepository("))
 	}
-	for _, forbidden := range []string{"einoopenai", "net/http", "restart_deployment", "WriteExecutor", "ApprovalCoordinator"} {
+	for _, forbidden := range []string{"einoopenai", "net/http", "kubectl", "os/exec", "dynamic.Interface", "WriteExecutor"} {
 		if strings.Contains(mainSource, forbidden) {
 			t.Fatalf("composition contains forbidden capability %q", forbidden)
 		}

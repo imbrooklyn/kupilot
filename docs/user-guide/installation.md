@@ -1,6 +1,12 @@
 # Installing a Release Archive
 
-KuPilot release archives target macOS and Linux on `amd64` and `arm64`.
+> [!NOTE]
+> This page documents the historical `0.3.0` archive shape. There is no
+> documented current `v0.4` archive in this repository; build the current
+> candidate from reviewed source unless a separately verified release is
+> published.
+
+Kupilot release archives target macOS and Linux on `amd64` and `arm64`.
 Windows is experimental and has no `v0.3` release archive.
 
 Release archives are CGO-free and contain exactly two files:

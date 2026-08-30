@@ -32,7 +32,7 @@ type TextResult struct {
 // stateless and safe for concurrent use.
 type Redactor struct{}
 
-// NewRedactor returns the fixed v0.1 text processor.
+// NewRedactor returns the fixed text processor.
 func NewRedactor() *Redactor {
 	return &Redactor{}
 }

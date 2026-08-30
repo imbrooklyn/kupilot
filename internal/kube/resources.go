@@ -26,7 +26,7 @@ const (
 	maxRelatedSelectorKeys = 64
 )
 
-// GetResource performs one fixed typed GET in the bound Namespace and returns
+// GetResource performs one fixed typed GET in the bound Context and returns
 // only a project-owned safe summary.
 func (gateway *Gateway) GetResource(
 	ctx context.Context,
@@ -41,12 +41,12 @@ func (gateway *Gateway) GetResource(
 	if !allowed {
 		return domain.ResourceSummary{}, resourceKindDeniedError("get_resource")
 	}
-	if reference.Namespace != scope.Namespace {
+	if !scope.AllowsReference(reference) {
 		return domain.ResourceSummary{}, newKubeSafeError(
 			ClassPolicyDenied,
-			"kubernetes_cross_namespace_denied",
+			"kubernetes_namespace_access_denied",
 			"get_resource",
-			"Cross-Namespace Kubernetes reads are not allowed.",
+			"The Kubernetes resource is outside the configured namespace-access policy.",
 		)
 	}
 	if domain.ValidateLiveResourceRef(reference) != nil {
@@ -64,36 +64,102 @@ func (gateway *Gateway) GetResource(
 
 	var projected domain.ResourceSummary
 	switch kind {
+	case domain.ResourceKindNamespace:
+		object, rawErr := bundle.typed.CoreV1().Namespaces().Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectNamespace(object, reference.Name)
+	case domain.ResourceKindNode:
+		object, rawErr := bundle.typed.CoreV1().Nodes().Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectNode(object, reference.Name)
 	case domain.ResourceKindPod:
-		object, rawErr := bundle.typed.CoreV1().Pods(scope.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Pods(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
 			return domain.ResourceSummary{}, err
 		}
-		projected, err = projectPod(object, scope.Namespace, reference.Name)
-	case domain.ResourceKindDeployment:
-		object, rawErr := bundle.typed.AppsV1().Deployments(scope.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
-		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
-			return domain.ResourceSummary{}, err
-		}
-		projected, err = projectDeployment(object, scope.Namespace, reference.Name)
-	case domain.ResourceKindReplicaSet:
-		object, rawErr := bundle.typed.AppsV1().ReplicaSets(scope.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
-		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
-			return domain.ResourceSummary{}, err
-		}
-		projected, err = projectReplicaSet(object, scope.Namespace, reference.Name)
-	case domain.ResourceKindJob:
-		object, rawErr := bundle.typed.BatchV1().Jobs(scope.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
-		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
-			return domain.ResourceSummary{}, err
-		}
-		projected, err = projectJob(object, scope.Namespace, reference.Name)
+		projected, err = projectPod(object, reference.Namespace, reference.Name)
 	case domain.ResourceKindService:
-		object, rawErr := bundle.typed.CoreV1().Services(scope.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Services(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
 			return domain.ResourceSummary{}, err
 		}
-		projected, err = projectService(object, scope.Namespace, reference.Name)
+		projected, err = projectService(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindPersistentVolumeClaim:
+		object, rawErr := bundle.typed.CoreV1().PersistentVolumeClaims(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectPersistentVolumeClaim(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindPersistentVolume:
+		object, rawErr := bundle.typed.CoreV1().PersistentVolumes().Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectPersistentVolume(object, reference.Name)
+	case domain.ResourceKindConfigMap:
+		object, rawErr := bundle.typed.CoreV1().ConfigMaps(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectConfigMap(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindDeployment:
+		object, rawErr := bundle.typed.AppsV1().Deployments(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectDeployment(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindReplicaSet:
+		object, rawErr := bundle.typed.AppsV1().ReplicaSets(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectReplicaSet(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindStatefulSet:
+		object, rawErr := bundle.typed.AppsV1().StatefulSets(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectStatefulSet(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindDaemonSet:
+		object, rawErr := bundle.typed.AppsV1().DaemonSets(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectDaemonSet(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindJob:
+		object, rawErr := bundle.typed.BatchV1().Jobs(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectJob(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindCronJob:
+		object, rawErr := bundle.typed.BatchV1().CronJobs(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectCronJob(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindIngress:
+		object, rawErr := bundle.typed.NetworkingV1().Ingresses(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectIngress(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindHorizontalPodAutoscaler:
+		object, rawErr := bundle.typed.AutoscalingV2().HorizontalPodAutoscalers(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectHorizontalPodAutoscaler(object, reference.Namespace, reference.Name)
+	case domain.ResourceKindPodDisruptionBudget:
+		object, rawErr := bundle.typed.PolicyV1().PodDisruptionBudgets(reference.Namespace).Get(ctx, reference.Name, metav1.GetOptions{})
+		if err := resourceCallError(ctx, rawErr, "get_resource"); err != nil {
+			return domain.ResourceSummary{}, err
+		}
+		projected, err = projectPodDisruptionBudget(object, reference.Namespace, reference.Name)
 	default:
 		return domain.ResourceSummary{}, resourceKindDeniedError("get_resource")
 	}
@@ -103,9 +169,9 @@ func (gateway *Gateway) GetResource(
 	return projected, nil
 }
 
-// ListResources performs one fixed typed LIST with no selector, pagination
-// input, or all-Namespace fallback. Both the API request and local projection
-// enforce the requested limit of at most 50.
+// ListResources implements the Application-owned working-Namespace Picker
+// port. Cluster-scoped Kinds use their fixed cluster endpoint; namespaced Kinds
+// remain in the working Namespace.
 func (gateway *Gateway) ListResources(
 	ctx context.Context,
 	client application.ScopeClient,
@@ -113,11 +179,40 @@ func (gateway *Gateway) ListResources(
 	kind domain.ResourceKind,
 	limit int,
 ) (domain.ResourceList, error) {
+	namespace := ""
+	if kind.Namespaced() {
+		namespace = scope.Namespace
+	}
+	return gateway.listResourcesAt(ctx, client, scope, kind, namespace, false, limit)
+}
+
+// listResourcesAt performs one fixed typed LIST. allNamespaces is explicit and
+// can never be inferred from namespace == "".
+func (gateway *Gateway) listResourcesAt(
+	ctx context.Context,
+	client application.ScopeClient,
+	scope domain.ClusterScope,
+	kind domain.ResourceKind,
+	namespace string,
+	allNamespaces bool,
+	limit int,
+) (domain.ResourceList, error) {
 	if err := validateResourceContext(ctx, scope, "list_resources"); err != nil {
 		return domain.ResourceList{}, err
 	}
 	if !kind.Valid() {
 		return domain.ResourceList{}, resourceKindDeniedError("list_resources")
+	}
+	if kind.ClusterScoped() && (namespace != "" || allNamespaces) ||
+		kind.Namespaced() && allNamespaces && (namespace != "" || !scope.AllowsAllNamespaces(kind)) ||
+		kind.Namespaced() && !allNamespaces && (!domain.ValidNamespaceName(namespace) ||
+			!scope.AllowsReference(domain.ResourceRef{APIVersion: kind.APIVersion(), Kind: string(kind), Namespace: namespace, Name: "scope-check"})) {
+		return domain.ResourceList{}, newKubeSafeError(
+			ClassPolicyDenied,
+			"kubernetes_namespace_access_denied",
+			"list_resources",
+			"The Kubernetes resource list is outside the configured namespace-access policy.",
+		)
 	}
 	if limit < 1 || limit > domain.MaxResourceSummaries {
 		return domain.ResourceList{}, newKubeSafeError(
@@ -136,8 +231,40 @@ func (gateway *Gateway) ListResources(
 	truncated := false
 
 	switch kind {
+	case domain.ResourceKindNamespace:
+		list, rawErr := bundle.typed.CoreV1().Namespaces().List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectNamespace(&list.Items[index], "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindNode:
+		list, rawErr := bundle.typed.CoreV1().Nodes().List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectNode(&list.Items[index], "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
 	case domain.ResourceKindPod:
-		list, rawErr := bundle.typed.CoreV1().Pods(scope.Namespace).List(ctx, options)
+		list, rawErr := bundle.typed.CoreV1().Pods(namespace).List(ctx, options)
 		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
 			return domain.ResourceList{}, err
 		}
@@ -146,62 +273,14 @@ func (gateway *Gateway) ListResources(
 		}
 		truncated = list.Continue != "" || len(list.Items) > limit
 		for index := 0; index < min(len(list.Items), limit); index++ {
-			projected, projectErr := projectPod(&list.Items[index], scope.Namespace, "")
-			if projectErr != nil {
-				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-			}
-			items = append(items, projected)
-		}
-	case domain.ResourceKindDeployment:
-		list, rawErr := bundle.typed.AppsV1().Deployments(scope.Namespace).List(ctx, options)
-		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
-			return domain.ResourceList{}, err
-		}
-		if list == nil {
-			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-		}
-		truncated = list.Continue != "" || len(list.Items) > limit
-		for index := 0; index < min(len(list.Items), limit); index++ {
-			projected, projectErr := projectDeployment(&list.Items[index], scope.Namespace, "")
-			if projectErr != nil {
-				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-			}
-			items = append(items, projected)
-		}
-	case domain.ResourceKindReplicaSet:
-		list, rawErr := bundle.typed.AppsV1().ReplicaSets(scope.Namespace).List(ctx, options)
-		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
-			return domain.ResourceList{}, err
-		}
-		if list == nil {
-			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-		}
-		truncated = list.Continue != "" || len(list.Items) > limit
-		for index := 0; index < min(len(list.Items), limit); index++ {
-			projected, projectErr := projectReplicaSet(&list.Items[index], scope.Namespace, "")
-			if projectErr != nil {
-				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-			}
-			items = append(items, projected)
-		}
-	case domain.ResourceKindJob:
-		list, rawErr := bundle.typed.BatchV1().Jobs(scope.Namespace).List(ctx, options)
-		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
-			return domain.ResourceList{}, err
-		}
-		if list == nil {
-			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
-		}
-		truncated = list.Continue != "" || len(list.Items) > limit
-		for index := 0; index < min(len(list.Items), limit); index++ {
-			projected, projectErr := projectJob(&list.Items[index], scope.Namespace, "")
+			projected, projectErr := projectPod(&list.Items[index], list.Items[index].Namespace, "")
 			if projectErr != nil {
 				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
 			}
 			items = append(items, projected)
 		}
 	case domain.ResourceKindService:
-		list, rawErr := bundle.typed.CoreV1().Services(scope.Namespace).List(ctx, options)
+		list, rawErr := bundle.typed.CoreV1().Services(namespace).List(ctx, options)
 		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
 			return domain.ResourceList{}, err
 		}
@@ -210,7 +289,199 @@ func (gateway *Gateway) ListResources(
 		}
 		truncated = list.Continue != "" || len(list.Items) > limit
 		for index := 0; index < min(len(list.Items), limit); index++ {
-			projected, projectErr := projectService(&list.Items[index], scope.Namespace, "")
+			projected, projectErr := projectService(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindPersistentVolumeClaim:
+		list, rawErr := bundle.typed.CoreV1().PersistentVolumeClaims(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectPersistentVolumeClaim(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindPersistentVolume:
+		list, rawErr := bundle.typed.CoreV1().PersistentVolumes().List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectPersistentVolume(&list.Items[index], "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindConfigMap:
+		list, rawErr := bundle.typed.CoreV1().ConfigMaps(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectConfigMap(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindDeployment:
+		list, rawErr := bundle.typed.AppsV1().Deployments(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectDeployment(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindReplicaSet:
+		list, rawErr := bundle.typed.AppsV1().ReplicaSets(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectReplicaSet(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindStatefulSet:
+		list, rawErr := bundle.typed.AppsV1().StatefulSets(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectStatefulSet(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindDaemonSet:
+		list, rawErr := bundle.typed.AppsV1().DaemonSets(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectDaemonSet(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindJob:
+		list, rawErr := bundle.typed.BatchV1().Jobs(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectJob(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindCronJob:
+		list, rawErr := bundle.typed.BatchV1().CronJobs(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectCronJob(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindIngress:
+		list, rawErr := bundle.typed.NetworkingV1().Ingresses(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectIngress(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindHorizontalPodAutoscaler:
+		list, rawErr := bundle.typed.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectHorizontalPodAutoscaler(&list.Items[index], list.Items[index].Namespace, "")
+			if projectErr != nil {
+				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+			}
+			items = append(items, projected)
+		}
+	case domain.ResourceKindPodDisruptionBudget:
+		list, rawErr := bundle.typed.PolicyV1().PodDisruptionBudgets(namespace).List(ctx, options)
+		if err := resourceCallError(ctx, rawErr, "list_resources"); err != nil {
+			return domain.ResourceList{}, err
+		}
+		if list == nil {
+			return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
+		}
+		truncated = list.Continue != "" || len(list.Items) > limit
+		for index := 0; index < min(len(list.Items), limit); index++ {
+			projected, projectErr := projectPodDisruptionBudget(&list.Items[index], list.Items[index].Namespace, "")
 			if projectErr != nil {
 				return domain.ResourceList{}, invalidKubernetesProjectionError("list_resources")
 			}
@@ -221,7 +492,9 @@ func (gateway *Gateway) ListResources(
 	}
 
 	sort.Slice(items, func(left, right int) bool {
-		return items[left].Reference.Name < items[right].Reference.Name
+		leftKey := items[left].Reference.Namespace + "\x00" + items[left].Reference.Name
+		rightKey := items[right].Reference.Namespace + "\x00" + items[right].Reference.Name
+		return leftKey < rightKey
 	})
 	if len(items) > limit {
 		items = items[:limit]
@@ -401,12 +674,12 @@ func (reader *ToolResourceReader) ReadResource(
 	if !allowed {
 		return toolcontract.ResourceObservation{}, resourceKindDeniedError("tool_get_resource")
 	}
-	if request.Reference.Namespace != request.Scope.Namespace {
+	if !request.Scope.AllowsReference(request.Reference) {
 		return toolcontract.ResourceObservation{}, newKubeSafeError(
 			ClassPolicyDenied,
-			"kubernetes_cross_namespace_denied",
+			"kubernetes_namespace_access_denied",
 			"tool_get_resource",
-			"Cross-Namespace Kubernetes reads are not allowed.",
+			"The Kubernetes resource is outside the configured namespace-access policy.",
 		)
 	}
 	if request.Validate() != nil {
@@ -424,35 +697,51 @@ func (reader *ToolResourceReader) ReadResource(
 	var observation toolcontract.ResourceObservation
 	switch kind {
 	case domain.ResourceKindPod:
-		object, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Pods(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
 			return toolcontract.ResourceObservation{}, err
 		}
-		observation, err = projectToolPod(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+		observation, err = projectToolPod(object, request.Reference.Namespace, request.Reference.Name, request.Detail)
 	case domain.ResourceKindDeployment:
-		object, rawErr := bundle.typed.AppsV1().Deployments(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.AppsV1().Deployments(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
 			return toolcontract.ResourceObservation{}, err
 		}
-		observation, err = projectToolDeployment(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+		observation, err = projectToolDeployment(object, request.Reference.Namespace, request.Reference.Name, request.Detail)
 	case domain.ResourceKindReplicaSet:
-		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
 			return toolcontract.ResourceObservation{}, err
 		}
-		observation, err = projectToolReplicaSet(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+		observation, err = projectToolReplicaSet(object, request.Reference.Namespace, request.Reference.Name, request.Detail)
 	case domain.ResourceKindJob:
-		object, rawErr := bundle.typed.BatchV1().Jobs(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.BatchV1().Jobs(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
 			return toolcontract.ResourceObservation{}, err
 		}
-		observation, err = projectToolJob(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+		observation, err = projectToolJob(object, request.Reference.Namespace, request.Reference.Name, request.Detail)
 	case domain.ResourceKindService:
-		object, rawErr := bundle.typed.CoreV1().Services(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Services(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, "tool_get_resource"); err != nil {
 			return toolcontract.ResourceObservation{}, err
 		}
-		observation, err = projectToolService(object, request.Scope.Namespace, request.Reference.Name, request.Detail)
+		observation, err = projectToolService(object, request.Reference.Namespace, request.Reference.Name, request.Detail)
+	case domain.ResourceKindNamespace,
+		domain.ResourceKindNode,
+		domain.ResourceKindPersistentVolumeClaim,
+		domain.ResourceKindPersistentVolume,
+		domain.ResourceKindConfigMap,
+		domain.ResourceKindStatefulSet,
+		domain.ResourceKindDaemonSet,
+		domain.ResourceKindCronJob,
+		domain.ResourceKindIngress,
+		domain.ResourceKindHorizontalPodAutoscaler,
+		domain.ResourceKindPodDisruptionBudget:
+		summary, readErr := reader.gateway.GetResource(ctx, reader.client, request.Scope, request.Reference)
+		if readErr != nil {
+			return toolcontract.ResourceObservation{}, readErr
+		}
+		observation = toolcontract.ResourceObservation{Summary: summary}
 	default:
 		return toolcontract.ResourceObservation{}, resourceKindDeniedError("tool_get_resource")
 	}
@@ -482,7 +771,9 @@ func (reader *ToolResourceReader) ListResources(
 			"The Kubernetes resource-list request is invalid.",
 		)
 	}
-	list, err := reader.gateway.ListResources(ctx, reader.client, request.Scope, request.Kind, request.Limit)
+	list, err := reader.gateway.listResourcesAt(
+		ctx, reader.client, request.Scope, request.Kind, request.Namespace, request.AllNamespaces, request.Limit,
+	)
 	if err != nil {
 		return toolcontract.ResourceObservationList{}, err
 	}
@@ -513,12 +804,12 @@ func (reader *ToolResourceReader) ReadEvents(
 	if _, allowed := domain.ResourceKindForReference(request.Reference); !allowed {
 		return toolcontract.EventObservationList{}, resourceKindDeniedError(operation)
 	}
-	if request.Reference.Namespace != request.Scope.Namespace {
+	if !request.Scope.AllowsReference(request.Reference) {
 		return toolcontract.EventObservationList{}, newKubeSafeError(
 			ClassPolicyDenied,
-			"kubernetes_cross_namespace_denied",
+			"kubernetes_namespace_access_denied",
 			operation,
-			"Cross-Namespace Kubernetes reads are not allowed.",
+			"The Kubernetes Event target is outside the configured namespace-access policy.",
 		)
 	}
 	if request.Validate() != nil {
@@ -558,7 +849,11 @@ func (reader *ToolResourceReader) ReadEvents(
 		selectorTerms = append(selectorTerms, fields.OneTermEqualSelector("involvedObject.uid", verified.UID))
 	}
 	selector := fields.AndSelectors(selectorTerms...).String()
-	list, rawErr := bundle.typed.CoreV1().Events(request.Scope.Namespace).List(ctx, metav1.ListOptions{
+	eventNamespace := verified.Namespace
+	if eventNamespace == "" {
+		eventNamespace = metav1.NamespaceAll
+	}
+	list, rawErr := bundle.typed.CoreV1().Events(eventNamespace).List(ctx, metav1.ListOptions{
 		FieldSelector: selector,
 		Limit:         int64(request.Limit),
 	})
@@ -629,11 +924,11 @@ func (reader *ToolResourceReader) readPodLog(
 	if err != nil {
 		return toolcontract.PodLogObservation{}, err
 	}
-	pod, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.PodName, metav1.GetOptions{})
+	pod, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).Get(ctx, request.PodName, metav1.GetOptions{})
 	if err := resourceCallError(ctx, rawErr, operation); err != nil {
 		return toolcontract.PodLogObservation{}, err
 	}
-	projectedPod, projectErr := projectPod(pod, request.Scope.Namespace, request.PodName)
+	projectedPod, projectErr := projectPod(pod, request.Namespace, request.PodName)
 	if projectErr != nil {
 		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
 	}
@@ -667,7 +962,7 @@ func (reader *ToolResourceReader) readPodLog(
 	tailLines := int64(request.TailLines)
 	sinceSeconds := int64(request.SinceSeconds)
 	limitBytes := int64(request.LimitBytes)
-	stream, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).GetLogs(request.PodName, &corev1.PodLogOptions{
+	stream, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).GetLogs(request.PodName, &corev1.PodLogOptions{
 		Container:    selection.name,
 		Previous:     request.Previous,
 		TailLines:    &tailLines,
@@ -867,12 +1162,12 @@ func (reader *ToolResourceReader) ReadRelatedResources(
 	if _, allowed := domain.ResourceKindForReference(request.Reference); !allowed {
 		return toolcontract.RelatedObservationGraph{}, resourceKindDeniedError(operation)
 	}
-	if request.Reference.Namespace != request.Scope.Namespace {
+	if !request.Scope.AllowsReference(request.Reference) {
 		return toolcontract.RelatedObservationGraph{}, newKubeSafeError(
 			ClassPolicyDenied,
-			"kubernetes_cross_namespace_denied",
+			"kubernetes_namespace_access_denied",
 			operation,
-			"Cross-Namespace Kubernetes reads are not allowed.",
+			"The Kubernetes relationship target is outside the configured namespace-access policy.",
 		)
 	}
 	if request.Validate() != nil {
@@ -942,39 +1237,39 @@ func readRelatedRoot(
 	kind, _ := domain.ResourceKindForReference(request.Reference)
 	switch kind {
 	case domain.ResourceKindDeployment:
-		object, rawErr := bundle.typed.AppsV1().Deployments(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.AppsV1().Deployments(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, operation); err != nil {
 			return relatedRootObject{}, err
 		}
-		observation, err := projectToolDeployment(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		observation, err := projectToolDeployment(object, request.Reference.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
 		return relatedRootObject{observation: observation, deployment: object}, projectionOrError(err, observation, operation)
 	case domain.ResourceKindReplicaSet:
-		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.AppsV1().ReplicaSets(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, operation); err != nil {
 			return relatedRootObject{}, err
 		}
-		observation, err := projectToolReplicaSet(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		observation, err := projectToolReplicaSet(object, request.Reference.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
 		return relatedRootObject{observation: observation, replicaSet: object}, projectionOrError(err, observation, operation)
 	case domain.ResourceKindPod:
-		object, rawErr := bundle.typed.CoreV1().Pods(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Pods(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, operation); err != nil {
 			return relatedRootObject{}, err
 		}
-		observation, err := projectToolPod(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		observation, err := projectToolPod(object, request.Reference.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
 		return relatedRootObject{observation: observation, pod: object}, projectionOrError(err, observation, operation)
 	case domain.ResourceKindJob:
-		object, rawErr := bundle.typed.BatchV1().Jobs(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.BatchV1().Jobs(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, operation); err != nil {
 			return relatedRootObject{}, err
 		}
-		observation, err := projectToolJob(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		observation, err := projectToolJob(object, request.Reference.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
 		return relatedRootObject{observation: observation, job: object}, projectionOrError(err, observation, operation)
 	case domain.ResourceKindService:
-		object, rawErr := bundle.typed.CoreV1().Services(request.Scope.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
+		object, rawErr := bundle.typed.CoreV1().Services(request.Reference.Namespace).Get(ctx, request.Reference.Name, metav1.GetOptions{})
 		if err := resourceCallError(ctx, rawErr, operation); err != nil {
 			return relatedRootObject{}, err
 		}
-		observation, err := projectToolService(object, request.Scope.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
+		observation, err := projectToolService(object, request.Reference.Namespace, request.Reference.Name, toolcontract.ResourceDetailSummary)
 		return relatedRootObject{observation: observation, service: object}, projectionOrError(err, observation, operation)
 	default:
 		return relatedRootObject{}, resourceKindDeniedError(operation)
@@ -997,6 +1292,10 @@ type relatedGraphBuilder struct {
 }
 
 func newRelatedGraphBuilder(request toolcontract.RelatedReadRequest, root toolcontract.ResourceObservation) *relatedGraphBuilder {
+	// Relationship expansion is intentionally pinned to the root Namespace.
+	// This copied scope is never used as freshness authority; the outer reader
+	// has already validated the original immutable scope and policy.
+	request.Scope.Namespace = request.Reference.Namespace
 	reference := relatedReferenceFromResource(root.Summary.Reference, false)
 	return &relatedGraphBuilder{
 		request: request,

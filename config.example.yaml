@@ -1,10 +1,14 @@
-# KuPilot accepts this typed version 1 schema. Interactive setup may add a
+# Kupilot accepts this typed version 1 schema. Interactive setup may add a
 # plaintext model.api_key to the local KUPILOT_HOME/config.yaml file.
 version: 1
 
 context: development
 namespace: default
 no_color: false
+
+runtime:
+  # compact, balanced, or extended
+  budget_profile: balanced
 
 model:
   provider_kind: openai_compatible
@@ -13,12 +17,15 @@ model:
   # reasoning_effort: none
   temperature: 0.1
   max_output_tokens: 2048
-  request_timeout_seconds: 45
+  request_timeout_seconds: 300
   streaming: true
   tool_calling_required: true
 
 kubernetes:
   exec_credentials: allow
+  # all permits explicit cross-Namespace and all-Namespace reads when RBAC
+  # allows them; current pins namespaced reads to the working Namespace.
+  namespace_access: all
 
 logging:
   enabled: true

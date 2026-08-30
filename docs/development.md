@@ -1,6 +1,6 @@
 # Development and CI Gates
 
-KuPilot's local and hosted gates use the repository `Makefile` as their single
+Kupilot's local and hosted gates use the repository `Makefile` as their single
 command source. The hosted workflow invokes the same targets contributors run
 locally; it does not duplicate test selection or security policy in workflow
 steps.
@@ -48,7 +48,7 @@ Security-denial behavior remains asserted in repository tests, including zero
 external action or sink counts. The security target selects the documented
 redactor, scope, Slash, endpoint, SQLite/WAL, terminal, model-text, and
 Diagnosis-persistence controls. The dependency guard runs the static import and
-read-only composition tests before verifying module checksums.
+single-supervised-write composition tests before verifying module checksums.
 
 ## Hosted CI
 
@@ -111,7 +111,7 @@ failure for that work item and cannot use this separation.
 
 The platform policy is defined by
 [ADR-0028](adr/0028-support-macos-and-linux-with-experimental-windows.md).
-Security and privacy
-requirements remain normative in the [Security Threat Model](security.md),
-[Security Review](security-review-v0.1.md), and
-[Privacy Overview](privacy-overview.md).
+Security and privacy requirements remain normative in the
+[Security Threat Model](security.md) and [Privacy Overview](privacy-overview.md).
+The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
+a current release requires a fresh review of the `v0.4` reachable composition.

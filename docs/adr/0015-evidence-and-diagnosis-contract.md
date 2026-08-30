@@ -1,13 +1,13 @@
 # ADR-0015: Require the Evidence and Diagnosis Contract
 
-- Status: Accepted
+- Status: Superseded by ADR-0038
 - Date: 2026-08-05
 
 ## Context
 
 A fluent model response can blur observed facts, inference, missing data, and
 advice. Kubernetes data is also a time-bounded snapshot: permissions, output
-limits, races, and object changes can make an observation incomplete. KuPilot
+limits, races, and object changes can make an observation incomplete. Kupilot
 must not present model confidence as proof or imply that it found a guaranteed
 root cause.
 
@@ -16,7 +16,7 @@ prompt wording or prose conventions.
 
 ## Decision
 
-KuPilot will represent observation and interpretation as separate project-owned
+Kupilot will represent observation and interpretation as separate project-owned
 models: Evidence and Diagnosis.
 
 Only deterministic local Tool handling creates Evidence. Each accepted Evidence
@@ -49,7 +49,7 @@ adapter validates its structure and references against the runtime Evidence
 set. An unsupported confirmed fact is removed or demoted to a hypothesis and
 produces a warning.
 
-A successful AgentRun means that KuPilot followed the safety and Evidence
+A successful AgentRun means that Kupilot followed the safety and Evidence
 contract. It does not mean that a root cause was found.
 
 ## Consequences

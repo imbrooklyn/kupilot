@@ -22,6 +22,7 @@ func NewContextPicker(styles PickerStyles) ContextPicker {
 }
 
 func (picker *ContextPicker) SetLoading()                             { picker.list.setLoading() }
+func (picker *ContextPicker) SetStyles(styles PickerStyles)           { picker.list.setStyles(styles) }
 func (picker *ContextPicker) SetFailed()                              { picker.list.setFailed() }
 func (picker *ContextPicker) SetCandidates(values []ContextCandidate) { picker.list.setItems(values) }
 func (picker *ContextPicker) SetMaxVisible(limit int)                 { picker.list.setMaxVisible(limit) }

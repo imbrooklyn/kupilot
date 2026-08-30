@@ -1,7 +1,7 @@
 # Model Compatibility Contract
 
-This document defines the single model protocol profile accepted by KuPilot
-`v0.1`. The profile is intentionally narrower than the broad and inconsistent
+This document defines the single model protocol profile accepted by Kupilot
+`v0.4`. The profile is intentionally narrower than the broad and inconsistent
 use of the term "OpenAI-compatible." Compatibility means passing this contract;
 it does not follow from a product label or provider claim.
 
@@ -41,14 +41,14 @@ The production model transport uses
 HTTP, SSE, and transport error types do not cross the neutral `Model` port.
 
 The component owns Chat Completions request integration and stream decoding.
-KuPilot supplies a fixed request-payload modifier so the serialized body remains
-the exact six-Tool contract, and wraps the response body before the component
+Kupilot supplies a fixed request-payload modifier so the serialized body remains
+the exact seven-capability contract, and wraps the response body before the component
 can read it to enforce raw wire-byte, data-record, and record-size limits. A
 component scaffold leaves optional sampling and output fields unset so SDK
 model-name heuristics cannot reject the project-owned payload before HTTP. A
 response-chunk modifier rejects ambiguous choice envelopes, while the adapter
 maps decoded text, indexed Tool-call fragments, finish reasons, and usage into
-project-owned events. KuPilot does not maintain a second SSE or provider JSON
+project-owned events. Kupilot does not maintain a second SSE or provider JSON
 decoder.
 
 Construction validates the effective profile and credential locally, clones an
@@ -59,7 +59,7 @@ swapping, and then closes the prior adapter. Close rejects new requests,
 releases idle connections, and destroys the owned credential. There is no
 package-global client or credential.
 
-KuPilot installs no Eino global callbacks. Each model call replaces any
+Kupilot installs no Eino global callbacks. Each model call replaces any
 caller-provided callback context before giving data to the component. The
 component performs no application retry, fallback, tracing, or persistence.
 Every returned Eino stream and its tracked HTTP response body are closed on all
@@ -76,14 +76,15 @@ values:
 - The fixed `runtime` credential-source marker, never the selected source or
   key value.
 - Temperature from 0 through 0.2, a hard output-token limit from 1 through
-  8,192, and a request timeout no greater than 45 seconds.
+  8,192, and a configured request timeout no greater than 300 seconds. The
+  immutable run profile and remaining run time may impose a shorter deadline.
 - Required streaming and structured Tool-calling capability flags.
 - The fixed transport policy: normally verified HTTPS, HTTP only on an explicit
   loopback host, and same-origin redirects only.
 
 The model request contains no endpoint, origin, credential, Context, Namespace,
 deadline, redirect setting, arbitrary Tool, or hard-limit override. Every model
-request carries the complete frozen catalog of exactly six strict `v0.1` Tool
+request carries the complete frozen catalog of exactly seven strict `v0.4` Tool
 specifications.
 
 ## Chat Completions wire profile
@@ -95,7 +96,7 @@ POST {configured-endpoint}/chat/completions
 ```
 
 The request uses JSON and asks for one streamed choice. Its supported fields are
-the configured `model`, neutral `messages`, six strict function `tools`,
+the configured `model`, neutral `messages`, seven strict function `tools`,
 `stream: true`, `stream_options.include_usage: true`, the bounded
 `temperature`, and `max_tokens`. When the typed configuration explicitly sets
 `model.reasoning_effort: none`, the request also includes
@@ -116,15 +117,23 @@ chunk may provide:
 
 - Choice index zero with `delta.content` text.
 - Choice index zero with indexed `delta.tool_calls` fragments. The only
-  supported Tool-call type is `function`.
+  supported Tool-call type is `function`. Fragments for different bounded
+  indexes may interleave; arrival order within each index is preserved.
 - One supported `finish_reason`: `stop`, `tool_calls`, or `length`.
 - An optional final usage chunk with empty `choices`.
+
+A choice-index-zero assistant role marker or otherwise empty delta before the
+finish reason is a bounded no-op. It emits no neutral event and cannot authorize
+a Tool. Every Tool index must remain in range, the completed index set must be
+contiguous from zero, and every per-index assembly must validate as one complete
+fixed-catalog Tool call before the `tool_calls` finish state is accepted.
 
 `data: [DONE]` is accepted after a supported finish reason. EOF is also accepted
 after a supported finish reason, so usage and `[DONE]` are optional. EOF before
 a finish reason, data after a finish reason other than one optional usage chunk,
 duplicate usage, duplicate terminal state, mixed text and Tool selection,
-reordered Tool indexes, a nonzero choice index, or malformed JSON is rejected.
+an invalid or non-contiguous Tool index, a nonzero choice index, or malformed
+JSON is rejected.
 
 The response header `X-Request-ID` is optional. When present, its value is
 validated and bounded before becoming neutral metadata. Other response headers
@@ -143,7 +152,7 @@ speculative capability probe. After Application has admitted the transfer, the
 first bounded `Model.Stream` request validates the complete required wire
 profile. An incompatible media type, stream shape, Tool-call behavior, or finish
 state returns a stable `unsupported` or `invalid_external_response` failure.
-KuPilot does not retry that failure automatically, downgrade to non-streaming or
+Kupilot does not retry that failure automatically, downgrade to non-streaming or
 prose-parsed Tools, route to another origin, or retain partial output as a
 successful result.
 
@@ -157,7 +166,7 @@ successful result.
 | SSE streaming | Required |
 | Structured function Tool calls | Required |
 | Strict JSON object Tool schemas | Required |
-| Indexed, fragmented Tool arguments | Required |
+| Indexed, fragmented Tool arguments | Required; distinct indexes may interleave |
 | Usage chunk | Optional |
 | `X-Request-ID` response header | Optional |
 | `[DONE]` after a finish reason | Optional; terminal EOF is accepted |
@@ -185,9 +194,10 @@ configuration may tighten but cannot increase them.
 | Boundary | Maximum |
 | --- | ---: |
 | Serialized JSON request body | 256 KiB |
-| Messages per request | 32 |
-| Content in one neutral message | 64 KiB |
-| Tool specifications per request | Exactly 6 |
+| Messages per request | 322, derived from two initial messages plus the 64-model-call and 256-Tool-call hard ceilings |
+| System, user, or Tool content in one neutral input message | 64 KiB |
+| One assembled neutral assistant response | 128 KiB |
+| Tool specifications per request | Exactly 7 |
 | One strict Tool input schema | 16 KiB |
 | One assembled Tool argument object | 8 KiB |
 | One Tool-call identifier | 256 bytes |
@@ -196,7 +206,7 @@ configuration may tighten but cannot increase them.
 | Data-bearing transport or emitted neutral events | 1,024, whichever is reached first |
 | Discarded HTTP error-body read | 4 KiB |
 | Configured output tokens | 8,192 |
-| One model request | 45 seconds and no later than the owning AgentRun deadline |
+| One model request | At most 300 seconds, further capped by the selected profile and owning AgentRun deadline |
 
 <!-- markdownlint-enable MD013 -->
 

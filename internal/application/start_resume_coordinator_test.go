@@ -57,6 +57,246 @@ func TestCoordinatorStartUIKeepsHistoryBehindExplicitResumeActions(t *testing.T)
 	}
 }
 
+func TestCoordinatorResolvesStartupScopeWithoutSessionHistory(t *testing.T) {
+	t.Parallel()
+
+	preferenceTime := time.Date(2026, 8, 9, 23, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name              string
+		intent            UIStartIntent
+		preference        ScopePreference
+		preferenceFound   bool
+		preferenceError   error
+		missingRemembered bool
+		want              domain.ScopeCandidate
+		wantLoadCalls     int
+		wantDegraded      bool
+	}{
+		{
+			name:       "configured Context wins without inheriting its kubeconfig Namespace",
+			intent:     UIStartIntent{Kind: UIStartNew, ConfiguredContext: "saved-context"},
+			preference: ScopePreference{Context: "current-context", UpdatedAt: preferenceTime}, preferenceFound: true,
+			want: domain.ScopeCandidate{Context: "saved-context", Namespace: DefaultStartupNamespace},
+		},
+		{
+			name:       "remembered Context precedes kubeconfig current Context",
+			intent:     UIStartIntent{Kind: UIStartNew},
+			preference: ScopePreference{Context: "saved-context", UpdatedAt: preferenceTime}, preferenceFound: true,
+			want: domain.ScopeCandidate{Context: "saved-context", Namespace: DefaultStartupNamespace}, wantLoadCalls: 1,
+		},
+		{
+			name:   "kubeconfig current Context is the empty preference fallback",
+			intent: UIStartIntent{Kind: UIStartNew},
+			want:   domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace}, wantLoadCalls: 1,
+		},
+		{
+			name:       "missing remembered Context falls back to kubeconfig current Context",
+			intent:     UIStartIntent{Kind: UIStartNew},
+			preference: ScopePreference{Context: "saved-context", UpdatedAt: preferenceTime}, preferenceFound: true,
+			missingRemembered: true,
+			want:              domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace}, wantLoadCalls: 1,
+		},
+		{
+			name:       "configured Namespace wins with remembered Context",
+			intent:     UIStartIntent{Kind: UIStartNew, ConfiguredNamespace: "payments"},
+			preference: ScopePreference{Context: "saved-context", UpdatedAt: preferenceTime}, preferenceFound: true,
+			want: domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"}, wantLoadCalls: 1,
+		},
+		{
+			name:   "unavailable preference is visible and falls back",
+			intent: UIStartIntent{Kind: UIStartNew}, preferenceError: errors.New("preference unavailable"),
+			want:          domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace},
+			wantLoadCalls: 1, wantDegraded: true,
+		},
+		{
+			name:       "invalid preference is visible and falls back",
+			intent:     UIStartIntent{Kind: UIStartNew},
+			preference: ScopePreference{Context: "", UpdatedAt: preferenceTime}, preferenceFound: true,
+			want:          domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace},
+			wantLoadCalls: 1, wantDegraded: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			recorder := newUIScopeActionRecorder()
+			recorder.missingContext = test.missingRemembered
+			manager := newCoordinatorUIScopeManager(t, recorder, nil)
+			preferences := &recordingScopePreferenceStore{
+				preference: test.preference, found: test.preferenceFound, loadErr: test.preferenceError,
+			}
+			history := newRecordingSessionResumeStore()
+			coordinator := newUIScopeCoordinatorHarnessWithPreferences(t, manager, history, preferences)
+
+			result, err := coordinator.StartUI(context.Background(), test.intent, domain.PrivacyModeStandard)
+			if err != nil {
+				t.Fatalf("StartUI() error = %v", err)
+			}
+			if result.Validate() != nil || result.Session == nil || result.ScopeCandidate == nil ||
+				*result.ScopeCandidate != test.want || result.ScopePreferenceDegraded != test.wantDegraded {
+				t.Fatalf("StartUI() = %#v, want scope %#v degraded %v", result, test.want, test.wantDegraded)
+			}
+			if preferences.loadCalls != test.wantLoadCalls {
+				t.Fatalf("preference load calls = %d, want %d", preferences.loadCalls, test.wantLoadCalls)
+			}
+			if history.searchCalls != 0 || history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
+				t.Fatalf("startup queried Session history: %#v", history)
+			}
+			if recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 {
+				t.Fatalf("startup candidate actions = %#v", recorder.snapshot())
+			}
+			if status := coordinator.uiStatus(); status.PersistenceDegraded != test.wantDegraded {
+				t.Fatalf("status persistence degraded = %v, want %v", status.PersistenceDegraded, test.wantDegraded)
+			}
+		})
+	}
+}
+
+func TestCoordinatorKeepsBareSessionStartupAvailableWithoutKubeconfigContexts(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	recorder.contextsError = errors.New("kubeconfig unavailable")
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	history := newRecordingSessionResumeStore()
+	coordinator := newUIScopeCoordinatorHarness(t, manager, history)
+	result, err := coordinator.StartUI(context.Background(), UIStartIntent{
+		Kind: UIStartNew, ConfiguredNamespace: DefaultStartupNamespace,
+	}, domain.PrivacyModeStandard)
+	if err != nil || result.Session == nil || result.ScopeCandidate != nil || result.Validate() != nil {
+		t.Fatalf("StartUI(without kubeconfig Contexts) = %#v, %v", result, err)
+	}
+	if recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 ||
+		history.searchCalls != 0 || history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
+		t.Fatalf("bare unavailable-scope startup actions = %#v, history %#v", recorder.snapshot(), history)
+	}
+}
+
+func TestCoordinatorStoresOnlySuccessfullyActivatedContexts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful exact activation stores Context after default Namespace verification", func(t *testing.T) {
+		t.Parallel()
+		recorder := newUIScopeActionRecorder()
+		manager := newCoordinatorUIScopeManager(t, recorder, nil)
+		preferences := new(recordingScopePreferenceStore)
+		coordinator := newUIScopeCoordinatorHarnessWithPreferences(t, manager, newRecordingSessionResumeStore(), preferences)
+		if _, err := coordinator.StartUI(context.Background(), UIStartIntent{Kind: UIStartResumePicker}, domain.PrivacyModeStandard); err != nil {
+			t.Fatalf("StartUI() error = %v", err)
+		}
+		outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+			Kind: UICommandActivateScope, RequestID: 1,
+			Scope: &domain.ScopeCandidate{Context: "saved-context", Namespace: DefaultStartupNamespace},
+		})
+		if err != nil || outcome.Scope == nil || outcome.Scope.Failure != "" || outcome.Scope.Namespace != DefaultStartupNamespace ||
+			outcome.Scope.ScopePreferenceDegraded {
+			t.Fatalf("ActivateScope() = %#v, %v", outcome, err)
+		}
+		if len(preferences.saves) != 1 || preferences.saves[0].Context != "saved-context" ||
+			preferences.saves[0].Validate() != nil {
+			t.Fatalf("saved preferences = %#v", preferences.saves)
+		}
+		if recorder.count("create") != 1 || recorder.count("verify") != 1 {
+			t.Fatalf("exact activation actions = %#v, want only the exact default Namespace verification", recorder.snapshot())
+		}
+	})
+
+	for _, test := range []struct {
+		name      string
+		configure func(*uiScopeActionRecorder)
+		command   func() UICommand
+		cancel    bool
+	}{
+		{
+			name: "Namespace verification failure",
+			configure: func(recorder *uiScopeActionRecorder) {
+				recorder.verifyError[DefaultStartupNamespace] = errors.New("forbidden")
+			},
+			command: func() UICommand {
+				return UICommand{Kind: UICommandActivateScope, RequestID: 2,
+					Scope: &domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace}}
+			},
+		},
+		{
+			name: "stale generation",
+			command: func() UICommand {
+				return UICommand{Kind: UICommandActivateScope, RequestID: 3, ExpectedScopeGeneration: 9,
+					Scope: &domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace}}
+			},
+		},
+		{
+			name: "cancelled command",
+			command: func() UICommand {
+				return UICommand{Kind: UICommandActivateScope, RequestID: 4,
+					Scope: &domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace}}
+			},
+			cancel: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			recorder := newUIScopeActionRecorder()
+			if test.configure != nil {
+				test.configure(recorder)
+			}
+			manager := newCoordinatorUIScopeManager(t, recorder, nil)
+			preferences := new(recordingScopePreferenceStore)
+			coordinator := newUIScopeCoordinatorHarnessWithPreferences(t, manager, newRecordingSessionResumeStore(), preferences)
+			if _, err := coordinator.StartUI(context.Background(), UIStartIntent{Kind: UIStartResumePicker}, domain.PrivacyModeStandard); err != nil {
+				t.Fatalf("StartUI() error = %v", err)
+			}
+			recorder.reset()
+			ctx := context.Background()
+			if test.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			outcome, err := coordinator.ExecuteUICommand(ctx, test.command())
+			if test.cancel {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("ExecuteUICommand(cancelled) error = %v", err)
+				}
+			} else if err != nil || outcome.Scope == nil || outcome.Scope.Failure == "" {
+				t.Fatalf("failed ActivateScope() = %#v, %v", outcome, err)
+			}
+			if len(preferences.saves) != 0 {
+				t.Fatalf("failed activation stored preferences %#v", preferences.saves)
+			}
+			if test.cancel && len(recorder.snapshot()) != 0 {
+				t.Fatalf("cancelled activation actions = %#v, want zero", recorder.snapshot())
+			}
+		})
+	}
+}
+
+func TestCoordinatorKeepsVerifiedScopeWhenPreferenceWriteFails(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	preferences := &recordingScopePreferenceStore{saveErr: errors.New("write unavailable")}
+	coordinator := newUIScopeCoordinatorHarnessWithPreferences(t, manager, newRecordingSessionResumeStore(), preferences)
+	if _, err := coordinator.StartUI(context.Background(), UIStartIntent{Kind: UIStartResumePicker}, domain.PrivacyModeStandard); err != nil {
+		t.Fatalf("StartUI() error = %v", err)
+	}
+	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandActivateScope, RequestID: 1,
+		Scope: &domain.ScopeCandidate{Context: "current-context", Namespace: DefaultStartupNamespace},
+	})
+	if err != nil || outcome.Scope == nil || outcome.Scope.Failure != "" || !outcome.Scope.ReadOnly ||
+		!outcome.Scope.ScopePreferenceDegraded {
+		t.Fatalf("ActivateScope(write failure) = %#v, %v", outcome, err)
+	}
+	if live, ok := manager.CurrentScope(); !ok || live.Context != "current-context" || live.Namespace != DefaultStartupNamespace {
+		t.Fatalf("verified scope after preference failure = %#v, %v", live, ok)
+	}
+	if status := coordinator.uiStatus(); !status.PersistenceDegraded {
+		t.Fatal("preference write failure was absent from status")
+	}
+}
+
 func TestCoordinatorSessionPickerAndResumeStayReadOnlyUntilAcceptance(t *testing.T) {
 	t.Parallel()
 
@@ -458,6 +698,10 @@ func TestCoordinatorExplicitStartupScopeCannotBeReplacedBySavedCandidate(t *test
 	}, domain.PrivacyModeStandard); err != nil {
 		t.Fatalf("StartUI() error = %v", err)
 	}
+	if recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 {
+		t.Fatalf("explicit startup candidate actions = %#v", recorder.snapshot())
+	}
+	recorder.reset()
 	request := UIResumeRequest{RequestID: 11, Mode: UIResumeExact, SessionID: resumedID}
 	if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
 		t.Fatalf("ResumeUI() = %#v, %v", result, err)
@@ -613,12 +857,13 @@ type uiScopeActionRecorder struct {
 	mu             sync.Mutex
 	actions        []string
 	missingContext bool
+	contextsError  error
 	verifyError    map[string]error
 	actualUID      string
 }
 
 func newUIScopeActionRecorder() *uiScopeActionRecorder {
-	return &uiScopeActionRecorder{actualUID: "current-uid"}
+	return &uiScopeActionRecorder{verifyError: make(map[string]error), actualUID: "current-uid"}
 }
 
 func (recorder *uiScopeActionRecorder) add(action string) {
@@ -661,6 +906,9 @@ type uiScopeFactory struct{ recorder *uiScopeActionRecorder }
 
 func (factory *uiScopeFactory) Contexts(context.Context) ([]ContextCandidate, error) {
 	factory.recorder.add("contexts")
+	if factory.recorder.contextsError != nil {
+		return nil, factory.recorder.contextsError
+	}
 	result := []ContextCandidate{{Name: "current-context", DefaultNamespace: "default", Current: true}}
 	if !factory.recorder.missingContext {
 		result = append(result, ContextCandidate{Name: "saved-context", DefaultNamespace: "payments"})
@@ -733,6 +981,41 @@ func (hook *uiScopeInvalidationHook) InvalidateScope(int64) error {
 	return nil
 }
 
+type recordingScopePreferenceStore struct {
+	mu         sync.Mutex
+	preference ScopePreference
+	found      bool
+	loadErr    error
+	saveErr    error
+	loadCalls  int
+	saves      []ScopePreference
+}
+
+func (store *recordingScopePreferenceStore) LoadLastContext(ctx context.Context) (ScopePreference, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ScopePreference{}, false, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.loadCalls++
+	return store.preference, store.found, store.loadErr
+}
+
+func (store *recordingScopePreferenceStore) SaveLastContext(ctx context.Context, preference ScopePreference) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.saveErr != nil {
+		return store.saveErr
+	}
+	store.saves = append(store.saves, preference)
+	store.preference = preference
+	store.found = true
+	return nil
+}
+
 func newCoordinatorUIScopeManager(t *testing.T, recorder *uiScopeActionRecorder, now func() time.Time) *ScopeManager {
 	t.Helper()
 	if now == nil {
@@ -752,6 +1035,15 @@ func newCoordinatorUIScopeManager(t *testing.T, recorder *uiScopeActionRecorder,
 }
 
 func newUIScopeCoordinatorHarness(t *testing.T, manager *ScopeManager, history *recordingSessionResumeStore) *Coordinator {
+	return newUIScopeCoordinatorHarnessWithPreferences(t, manager, history, new(recordingScopePreferenceStore))
+}
+
+func newUIScopeCoordinatorHarnessWithPreferences(
+	t *testing.T,
+	manager *ScopeManager,
+	history *recordingSessionResumeStore,
+	preferences *recordingScopePreferenceStore,
+) *Coordinator {
 	t.Helper()
 	clock := newCoordinatorClock()
 	factory, ok := manager.factory.(*uiScopeFactory)
@@ -771,6 +1063,7 @@ func newUIScopeCoordinatorHarness(t *testing.T, manager *ScopeManager, history *
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{
 			Sessions: history, Search: history, Titles: history, Startup: new(recordingStartupMaintenance), Scopes: manager,
+			ScopePreferences: preferences,
 		},
 	})
 	if err != nil {
@@ -801,7 +1094,7 @@ func newUICoordinatorHarness(
 	})
 	persistence := new(memoryCoordinatorPersistence)
 	scope := &coordinatorScope{scope: domain.ClusterScope{
-		Context: "test-context", Namespace: "team-a", Generation: 7,
+		Context: "test-context", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7,
 		ActivatedAt: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
 	}}
 	identifiers := new(coordinatorIDs)

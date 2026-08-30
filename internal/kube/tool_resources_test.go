@@ -214,9 +214,10 @@ func TestToolResourceReaderListUsesFixedKindNamespaceLimitAndNoSelectors(t *test
 		t.Fatalf("NewToolResourceReader() error = %v", err)
 	}
 	result, err := reader.ListResources(context.Background(), toolcontract.ResourceListRequest{
-		Scope: scope,
-		Kind:  domain.ResourceKindPod,
-		Limit: 17,
+		Scope:     scope,
+		Kind:      domain.ResourceKindPod,
+		Namespace: "team-a",
+		Limit:     17,
 	})
 	if err != nil {
 		t.Fatalf("ListResources() error = %v", err)
@@ -231,6 +232,60 @@ func TestToolResourceReaderListUsesFixedKindNamespaceLimitAndNoSelectors(t *test
 	}
 	if len(result.Items) != 2 || result.Items[0].Summary.Reference.Name != "sample-a" || result.Items[1].Summary.Reference.Name != "sample-b" {
 		t.Fatalf("ListResources() = %#v", result)
+	}
+}
+
+func TestToolResourceReaderAllowsExactCrossNamespaceReadOnlyUnderAllPolicy(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "sample-pod", Namespace: "team-b"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	gateway, client, fakeClient := newFakeGateway(t, "team-a", pod)
+	defer client.Close()
+	scope := liveScope("team-a")
+	scope.NamespaceAccess = domain.NamespaceAccessAll
+	reader, err := NewToolResourceReader(gateway, client, scope)
+	if err != nil {
+		t.Fatalf("NewToolResourceReader() error = %v", err)
+	}
+	observation, err := reader.ReadResource(context.Background(), toolcontract.ResourceReadRequest{
+		Scope: scope,
+		Reference: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "team-b", Name: "sample-pod",
+		},
+		Detail: toolcontract.ResourceDetailDiagnostic,
+	})
+	if err != nil {
+		t.Fatalf("ReadResource(cross namespace) error = %v", err)
+	}
+	assertSingleClientAction(t, fakeClient.Actions(), "get", "", "v1", "pods", "team-b")
+	if observation.Validate() != nil || observation.Summary.Reference.Namespace != "team-b" {
+		t.Fatalf("cross-Namespace observation = %#v", observation)
+	}
+}
+
+func TestToolResourceReaderAllNamespaceListIsExplicitAndSortedByNamespaceThenName(t *testing.T) {
+	podTeamB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "sample-a", Namespace: "team-b"}, Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	podTeamA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "sample-z", Namespace: "team-a"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	gateway, client, fakeClient := newFakeGateway(t, "team-a", podTeamB, podTeamA)
+	defer client.Close()
+	scope := liveScope("team-a")
+	scope.NamespaceAccess = domain.NamespaceAccessAll
+	reader, err := NewToolResourceReader(gateway, client, scope)
+	if err != nil {
+		t.Fatalf("NewToolResourceReader() error = %v", err)
+	}
+	result, err := reader.ListResources(context.Background(), toolcontract.ResourceListRequest{
+		Scope: scope, Kind: domain.ResourceKindPod, AllNamespaces: true, Limit: 17,
+	})
+	if err != nil {
+		t.Fatalf("ListResources(all namespaces) error = %v", err)
+	}
+	assertSingleClientAction(t, fakeClient.Actions(), "list", "", "v1", "pods", "")
+	if len(result.Items) != 2 || result.Items[0].Summary.Reference.Namespace != "team-a" ||
+		result.Items[0].Summary.Reference.Name != "sample-z" ||
+		result.Items[1].Summary.Reference.Namespace != "team-b" || result.Items[1].Summary.Reference.Name != "sample-a" {
+		t.Fatalf("all-Namespace ListResources() = %#v", result)
 	}
 }
 

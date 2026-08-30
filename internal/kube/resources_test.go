@@ -9,9 +9,12 @@ import (
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -175,10 +178,158 @@ func TestResourceServiceUsesOnlyFixedTypedGetAndListActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatefulSet owner Pod GetResource() error = %v", err)
 	}
-	if len(pod.Owners) != 1 || pod.Owners[0].Kind != "StatefulSet" || !pod.Owners[0].ReferenceOnly {
+	if len(pod.Owners) != 1 || pod.Owners[0].Kind != "StatefulSet" || pod.Owners[0].ReferenceOnly {
 		t.Fatalf("Pod owner projection = %#v", pod.Owners)
 	}
 	assertSingleClientAction(t, fakeClient.Actions(), "get", "", "v1", "pods", scope.Namespace)
+}
+
+func TestExpandedOperationalKindsUseFixedTypedReadsAndSafeProjections(t *testing.T) {
+	canary := strings.Repeat("prohibited-source-", 3)
+	suspended := true
+	ingressClass := canary
+	storageClass := canary
+	objects := []runtime.Object{
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "team-b", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec:       corev1.NodeSpec{ProviderID: canary, Taints: []corev1.Taint{{Key: "generated.invalid/value", Value: canary}}},
+			Status: corev1.NodeStatus{
+				Addresses:  []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: canary}},
+				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			},
+		},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-claim", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				StorageClassName: &storageClass, VolumeName: canary, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			},
+			Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+		},
+		&corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-volume", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: corev1.PersistentVolumeSpec{
+				StorageClassName: canary,
+				PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{
+					Driver: canary, VolumeHandle: canary, VolumeAttributes: map[string]string{"generated.invalid/value": canary},
+				}},
+			},
+			Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeBound},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-config", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Data:       map[string]string{"generated.invalid/value": canary},
+			BinaryData: map[string][]byte{"generated.invalid/binary": []byte(canary)},
+		},
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-statefulset", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: appsv1.StatefulSetSpec{
+				Replicas: int32Pointer(3),
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name: "app", Env: []corev1.EnvVar{{Name: "GENERATED_VALUE", Value: canary}},
+				}}}},
+			},
+			Status: appsv1.StatefulSetStatus{CurrentReplicas: 2, ReadyReplicas: 2, AvailableReplicas: 2},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-daemonset", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name: "agent", Env: []corev1.EnvVar{{Name: "GENERATED_VALUE", Value: canary}},
+			}}}}},
+			Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, NumberReady: 2, NumberAvailable: 2},
+		},
+		&batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-cronjob", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: batchv1.CronJobSpec{
+				Schedule: canary, Suspend: &suspended,
+				JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "job", Env: []corev1.EnvVar{{Name: "GENERATED_VALUE", Value: canary}}}},
+				}}}},
+			},
+			Status: batchv1.CronJobStatus{Active: []corev1.ObjectReference{{Name: canary}}},
+		},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-ingress", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: networkingv1.IngressSpec{
+				IngressClassName: &ingressClass,
+				TLS:              []networkingv1.IngressTLS{{SecretName: canary}},
+				Rules:            []networkingv1.IngressRule{{Host: canary}},
+			},
+			Status: networkingv1.IngressStatus{LoadBalancer: networkingv1.IngressLoadBalancerStatus{
+				Ingress: []networkingv1.IngressLoadBalancerIngress{{IP: canary, Hostname: canary}},
+			}},
+		},
+		&autoscalingv2.HorizontalPodAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-hpa", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: canary,
+			}},
+			Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 2, DesiredReplicas: 3},
+		},
+		&policyv1.PodDisruptionBudget{
+			ObjectMeta: metav1.ObjectMeta{Name: "sample-pdb", Namespace: "team-a", Annotations: map[string]string{"generated.invalid/value": canary}},
+			Spec: policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"generated.invalid/value": canary,
+			}}},
+			Status: policyv1.PodDisruptionBudgetStatus{DesiredHealthy: 3, CurrentHealthy: 2, DisruptionsAllowed: 1},
+		},
+	}
+	gateway, client, fakeClient := newFakeGateway(t, "team-a", objects...)
+	defer client.Close()
+	scope := liveScope("team-a")
+
+	tests := []struct {
+		kind      domain.ResourceKind
+		name      string
+		namespace string
+		group     string
+		version   string
+		resource  string
+		status    domain.ResourceStatus
+	}{
+		{domain.ResourceKindNamespace, "team-b", "", "", "v1", "namespaces", domain.ResourceStatus{Phase: "Active"}},
+		{domain.ResourceKindNode, "worker-a", "", "", "v1", "nodes", domain.ResourceStatus{Phase: "Ready", Ready: domain.Count(1), Desired: domain.Count(1)}},
+		{domain.ResourceKindPersistentVolumeClaim, "sample-claim", "team-a", "", "v1", "persistentvolumeclaims", domain.ResourceStatus{Phase: "Bound"}},
+		{domain.ResourceKindPersistentVolume, "sample-volume", "", "", "v1", "persistentvolumes", domain.ResourceStatus{Phase: "Bound"}},
+		{domain.ResourceKindConfigMap, "sample-config", "team-a", "", "v1", "configmaps", domain.ResourceStatus{}},
+		{domain.ResourceKindStatefulSet, "sample-statefulset", "team-a", "apps", "v1", "statefulsets", domain.ResourceStatus{Desired: domain.Count(3), Ready: domain.Count(2), Available: domain.Count(2), Succeeded: domain.Count(2)}},
+		{domain.ResourceKindDaemonSet, "sample-daemonset", "team-a", "apps", "v1", "daemonsets", domain.ResourceStatus{Desired: domain.Count(3), Ready: domain.Count(2), Available: domain.Count(2)}},
+		{domain.ResourceKindCronJob, "sample-cronjob", "team-a", "batch", "v1", "cronjobs", domain.ResourceStatus{Phase: "Suspended", Active: domain.Count(1)}},
+		{domain.ResourceKindIngress, "sample-ingress", "team-a", "networking.k8s.io", "v1", "ingresses", domain.ResourceStatus{}},
+		{domain.ResourceKindHorizontalPodAutoscaler, "sample-hpa", "team-a", "autoscaling", "v2", "horizontalpodautoscalers", domain.ResourceStatus{Desired: domain.Count(3), Ready: domain.Count(2)}},
+		{domain.ResourceKindPodDisruptionBudget, "sample-pdb", "team-a", "policy", "v1", "poddisruptionbudgets", domain.ResourceStatus{Desired: domain.Count(3), Ready: domain.Count(2), Available: domain.Count(1)}},
+	}
+	for _, test := range tests {
+		t.Run(string(test.kind), func(t *testing.T) {
+			fakeClient.ClearActions()
+			reference := domain.ResourceRef{
+				APIVersion: test.kind.APIVersion(), Kind: string(test.kind), Namespace: test.namespace, Name: test.name,
+			}
+			summary, err := gateway.GetResource(context.Background(), client, scope, reference)
+			if err != nil || summary.Validate() != nil {
+				t.Fatalf("GetResource() summary/error = %#v/%v, validation = %v", summary, err, summary.Validate())
+			}
+			assertSingleClientAction(t, fakeClient.Actions(), "get", test.group, test.version, test.resource, test.namespace)
+			if summary.Status != test.status {
+				t.Fatalf("GetResource() status = %#v, want %#v", summary.Status, test.status)
+			}
+			assertNoCanary(t, summary, canary)
+
+			fakeClient.ClearActions()
+			list, err := gateway.ListResources(context.Background(), client, scope, test.kind, 17)
+			if err != nil || list.Validate() != nil {
+				t.Fatalf("ListResources() list/error = %#v/%v, validation = %v", list, err, list.Validate())
+			}
+			assertSingleClientAction(t, fakeClient.Actions(), "list", test.group, test.version, test.resource, test.namespace)
+			if len(list.Items) != 1 || list.Items[0].Reference != summary.Reference || list.Items[0].Status != test.status {
+				t.Fatalf("ListResources() = %#v, want one matching summary", list)
+			}
+			assertNoCanary(t, list, canary)
+		})
+	}
 }
 
 func TestResourceServiceDeniesSecretUnknownCrossNamespaceAndAllNamespaceBeforeAction(t *testing.T) {
@@ -222,15 +373,6 @@ func TestResourceServiceDeniesSecretUnknownCrossNamespaceAndAllNamespaceBeforeAc
 			code:  "kubernetes_resource_kind_denied",
 		},
 		{
-			name: "StatefulSet direct list",
-			operation: func() error {
-				_, err := gateway.ListResources(context.Background(), client, validScope, domain.ResourceKind("StatefulSet"), 20)
-				return err
-			},
-			class: ClassPolicyDenied,
-			code:  "kubernetes_resource_kind_denied",
-		},
-		{
 			name: "cross-Namespace get",
 			operation: func() error {
 				_, err := gateway.GetResource(context.Background(), client, validScope, domain.ResourceRef{
@@ -239,7 +381,7 @@ func TestResourceServiceDeniesSecretUnknownCrossNamespaceAndAllNamespaceBeforeAc
 				return err
 			},
 			class: ClassPolicyDenied,
-			code:  "kubernetes_cross_namespace_denied",
+			code:  "kubernetes_namespace_access_denied",
 		},
 		{
 			name: "cross-Context list",
@@ -353,10 +495,11 @@ func TestEndpointSliceCountsRemainInternalAddressFreeAndSelectorBound(t *testing
 
 func liveScope(namespace string) domain.ClusterScope {
 	return domain.ClusterScope{
-		Context:     "selected",
-		Namespace:   namespace,
-		Generation:  1,
-		ActivatedAt: time.UnixMilli(1).UTC(),
+		Context:         "selected",
+		Namespace:       namespace,
+		NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation:      1,
+		ActivatedAt:     time.UnixMilli(1).UTC(),
 	}
 }
 

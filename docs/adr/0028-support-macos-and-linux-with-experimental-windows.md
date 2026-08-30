@@ -12,7 +12,7 @@ all vary by operating system and architecture. Claiming every Go target as
 supported without running those behaviors would create a false compatibility and
 security promise.
 
-KuPilot needs a small, explicit platform matrix that a small team can
+Kupilot needs a small, explicit platform matrix that a small team can
 build and test.
 
 ## Decision
@@ -21,7 +21,7 @@ The supported platform families are macOS and Linux on `amd64` and
 `arm64`, running as a local interactive user in a UTF-8-capable terminal.
 
 Windows is experimental and is not part of the formal `v0.1` support or release
-gate. BSD variants, mobile systems, browser terminals, remote KuPilot servers,
+gate. BSD variants, mobile systems, browser terminals, remote Kupilot servers,
 and cluster-resident or container-only operation are unsupported.
 
 Support means more than compilation. Each platform/architecture combination
@@ -29,7 +29,7 @@ must satisfy:
 
 - TUI input, resize, paste, signal/cancellation, alternate-screen, and terminal
   restoration behavior.
-- One per-user KuPilot Home selected independently from a repository or working
+- One per-user Kupilot Home selected independently from a repository or working
   directory.
 - Owner-only creation modes for new Home, SQLite, and sidecar paths, with
   existing user-managed modes respected.
@@ -76,7 +76,7 @@ Costs and constraints:
 - Making Windows a formal first-release target was rejected because permissions,
   signals, PTY, process environment, path, and SQLite behavior require a
   separate validation effort.
-- Shipping only a container image was rejected because KuPilot needs the user's
+- Shipping only a container image was rejected because Kupilot needs the user's
   terminal, kubeconfig, and local Session store and is not a cluster-side Agent.
 
 ## Security and privacy impact
@@ -87,7 +87,7 @@ local user's responsibility and are not an availability gate. A target that
 cannot satisfy the create-time guarantee is unsupported until a reviewed
 equivalent control exists.
 
-KuPilot still relies on operating-system account isolation and disk protection.
+Kupilot still relies on operating-system account isolation and disk protection.
 Platform support does not imply SQLite encryption, sandboxing of a kubeconfig
 exec credential program, or protection from a local administrator.
 
@@ -116,7 +116,7 @@ The release support statement must not include a platform without this record.
   security controls.
 - A mandatory dependency removes support for one accepted architecture.
 - A CGO requirement or platform-specific credential store changes packaging.
-- KuPilot changes from a local terminal process to another topology.
+- Kupilot changes from a local terminal process to another topology.
 
 ## References
 

@@ -1,5 +1,5 @@
 // Package openaicompat implements the single bounded model transport admitted
-// by the v0.1 compatibility contract.
+// by the current compatibility contract.
 package openaicompat
 
 import (
@@ -281,7 +281,7 @@ func (adapter *Adapter) Stream(
 	defer cancel()
 	state := &transportRequestState{sensitiveDiagnostics: adapter.diagnostics.Sensitive}
 	requestContext = context.WithValue(requestContext, transportRequestStateKey{}, state)
-	// KuPilot does not install Eino global callbacks. Reinitializing the local
+	// Kupilot does not install Eino global callbacks. Reinitializing the local
 	// callback context prevents caller-owned handlers from observing model data.
 	requestContext = einocallbacks.InitCallbacks(requestContext, nil)
 
@@ -313,13 +313,12 @@ func (adapter *Adapter) Stream(
 	}()
 
 	decoder := responseDecoder{
-		ctx:           requestContext,
-		requestID:     request.ID,
-		consume:       consume,
-		credential:    adapter.credential,
-		textScanner:   credentialScanner{credential: adapter.credential},
-		lastToolIndex: -1,
-		tools:         make(map[int]*toolCallAssembly),
+		ctx:         requestContext,
+		requestID:   request.ID,
+		consume:     consume,
+		credential:  adapter.credential,
+		textScanner: credentialScanner{credential: adapter.credential},
+		tools:       make(map[int]*toolCallAssembly),
 	}
 	if providerRequestID := state.requestID(); providerRequestID != "" {
 		metadata := domain.ModelResponseMetadata{ProviderRequestID: providerRequestID}

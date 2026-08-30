@@ -10,12 +10,12 @@ examples must use consistent terminology for review and testing. Maintaining
 several authored-language variants before a localization system exists would
 allow security warnings and product contracts to drift.
 
-KuPilot still encounters user questions and Kubernetes or model data containing
+Kupilot still encounters user questions and Kubernetes or model data containing
 arbitrary Unicode. Project language and untrusted data are different concerns.
 
 ## Decision
 
-English is the only authored public project language for `v0.1`.
+English is the only authored public project language.
 The following must be written in English:
 
 - README files, public documentation, ADRs, examples, project-authored issue,
@@ -44,7 +44,7 @@ safety controls. Public credential, kubeconfig, Secret, and raw-output examples
 remain prohibited regardless of language.
 
 There is no localization framework, locale negotiation, translated warning,
-machine-translation fallback, or per-Session language setting in `v0.1`.
+machine-translation fallback, or per-Session language setting.
 
 ## Consequences
 

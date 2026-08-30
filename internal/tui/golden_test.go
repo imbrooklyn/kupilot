@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -57,13 +60,16 @@ func TestGoldenStructureAfterANSIRemoval(t *testing.T) {
 		questionAt := strings.Index(content, "Why is payment-api unavailable?")
 		agentAt := strings.Index(content, "The Deployment has no available replicas.")
 		toolAt := strings.Index(content, "Inspect resource · done")
+		separatorAt := strings.Index(content, "────────")
+		timingAt := strings.Index(content, "Worked for 20s")
 		composerAt := strings.Index(content, "/resource pay")
 		candidateAt := strings.Index(content, "Deployment/payment-api")
 		footerAt := strings.Index(content, "Context development")
-		if !(questionAt >= 0 && questionAt < agentAt && agentAt < toolAt && toolAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
+		if !(questionAt >= 0 && questionAt < toolAt && toolAt < separatorAt && separatorAt < agentAt &&
+			agentAt < timingAt && timingAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
 			t.Fatalf("theme %v has invalid structural order", mode)
 		}
-		if strings.Contains(content, "You:") || strings.Contains(content, "KuPilot:") ||
+		if strings.Contains(content, "You:") || strings.Contains(content, "Kupilot:") ||
 			strings.Contains(content, "Context Picker") || strings.Contains(content, "Search resources") {
 			t.Fatalf("theme %v added a role, Picker title, or second prompt", mode)
 		}
@@ -82,8 +88,81 @@ func TestNoColorConfigOverridesColoredTheme(t *testing.T) {
 	}
 }
 
+func TestAutoThemeUsesTerminalDefaultsUntilBackgroundResponse(t *testing.T) {
+	model := NewModel(Config{
+		Width: 72, Height: 22, Theme: ThemeAuto,
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true},
+	})
+	model.composer.SetValue("preserved draft")
+	model.transcript.AppendUser("preserved history")
+	if !isDefaultColor(model.styles.palette.Surface) {
+		t.Fatalf("unresolved automatic surface = %s, want terminal default", goldenColor(model.styles.palette.Surface, true))
+	}
+	requestType := fmt.Sprintf("%T", tea.RequestBackgroundColor())
+	foundRequest := false
+	for _, message := range messagesFromCmd(t, model.Init()) {
+		if fmt.Sprintf("%T", message) == requestType {
+			foundRequest = true
+		}
+	}
+	if !foundRequest {
+		t.Fatal("automatic theme did not request the terminal background color")
+	}
+
+	dark, _ := updateModel(t, model, tea.BackgroundColorMsg{Color: color.Black})
+	if got := goldenColor(dark.styles.palette.Surface, true); got != "#1e1e1e" {
+		t.Fatalf("dark terminal surface = %s", got)
+	}
+	if dark.composer.Value() != "preserved draft" || !strings.Contains(dark.View().Content, "preserved history") {
+		t.Fatal("terminal palette update replaced conversation or composer state")
+	}
+
+	light, _ := updateModel(t, model, tea.BackgroundColorMsg{Color: color.White})
+	if got := goldenColor(light.styles.palette.Surface, true); got != "#f4f4f4" {
+		t.Fatalf("light terminal surface = %s", got)
+	}
+
+	terminalBackground := color.RGBA{R: 40, G: 44, B: 52, A: 255}
+	customDark, _ := updateModel(t, model, tea.BackgroundColorMsg{Color: terminalBackground})
+	if got := goldenColor(customDark.styles.palette.Surface, true); got != "#41454c" {
+		t.Fatalf("custom dark terminal surface = %s", got)
+	}
+	surfaceRed, surfaceGreen, surfaceBlue, _ := customDark.styles.palette.Surface.RGBA()
+	backgroundRed, backgroundGreen, backgroundBlue, _ := terminalBackground.RGBA()
+	if surfaceRed <= backgroundRed || surfaceGreen <= backgroundGreen || surfaceBlue <= backgroundBlue {
+		t.Fatal("dark user surface is not lighter than the terminal background")
+	}
+}
+
+func TestFixedRGBThemesAlsoAdaptTheirSurfaceToTheTerminalBackground(t *testing.T) {
+	t.Parallel()
+
+	requestType := fmt.Sprintf("%T", tea.RequestBackgroundColor())
+	for _, mode := range []ThemeMode{ThemeDark, ThemeLight} {
+		model := NewModel(Config{Theme: mode})
+		foundRequest := false
+		for _, message := range messagesFromCmd(t, model.Init()) {
+			if fmt.Sprintf("%T", message) == requestType {
+				foundRequest = true
+			}
+		}
+		if !foundRequest {
+			t.Fatalf("fixed RGB theme %v did not request the terminal background", mode)
+		}
+	}
+
+	model := NewModel(Config{Theme: ThemeDark})
+	adapted, _ := updateModel(t, model, tea.BackgroundColorMsg{
+		Color: color.RGBA{R: 40, G: 44, B: 52, A: 255},
+	})
+	if got := goldenColor(adapted.styles.palette.Surface, true); got != "#41454c" {
+		t.Fatalf("fixed dark theme did not adapt to terminal background: %s", got)
+	}
+}
+
 func goldenModel(t *testing.T, mode ThemeMode) Model {
 	t.Helper()
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	model := NewModel(Config{
 		Width: 72, Height: 22, Theme: mode, DarkBackground: mode != ThemeLight,
 		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
@@ -91,6 +170,9 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "payments", Name: "payment-api",
 		},
 		ModelName: "diagnostic-model", PrivacyMode: domain.PrivacyModeStandard,
+		Now: func() time.Time {
+			return now
+		},
 	})
 	model.transcript.AppendUser("Why is payment-api unavailable?")
 	model.acceptApplicationEvent(runStartedEvent(1))
@@ -106,6 +188,7 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 			Summary: "No available replicas.", EvidenceCount: 2,
 		},
 	})
+	now = now.Add(20 * time.Second)
 	model.acceptApplicationEvent(application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 4, Text: "The Deployment has no available replicas.",
@@ -170,6 +253,9 @@ func compressGoldenBlankRows(lines []string) []string {
 func goldenColor(value color.Color, enabled bool) string {
 	if !enabled {
 		return "none"
+	}
+	if isDefaultColor(value) {
+		return "default"
 	}
 	red, green, blue, _ := value.RGBA()
 	return fmt.Sprintf("#%02x%02x%02x", red>>8, green>>8, blue>>8)

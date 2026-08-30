@@ -26,7 +26,7 @@
   "forbidden_confirmed_assertions": [
     {"id": "failed_count_proves_application_error", "meaning": "A non-zero failed count proves an application defect."},
     {"id": "unobserved_exit_cause", "meaning": "An unobserved exit reason, signal, or log message is confirmed."},
-    {"id": "action_executed", "meaning": "KuPilot reran, deleted, or changed the Job or Pod."}
+    {"id": "action_executed", "meaning": "Kupilot reran, deleted, or changed the Job or Pod."}
   ],
   "recommended_actions": [
     {"id": "inspect_failed_pod_evidence", "meaning": "Collect bounded resource, Event, and permitted log Evidence for the failed Pod attempt."},

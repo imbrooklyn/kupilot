@@ -15,7 +15,7 @@ func TestApprovalDialogDefaultsToRejectAndRendersBoundSummary(t *testing.T) {
 		Operation: "Restart Deployment", Scope: "test-context / test-namespace · scope revision 7",
 		Resource: "Deployment test-namespace/sample-deployment · API apps/v1",
 		Current:  "Deployment generation 8 with Pod template fingerprint " + strings.Repeat("a", 64) + ".",
-		Proposed: "Update only the KuPilot-owned restart annotation to create a new Pod template revision.",
+		Proposed: "Update only the Kupilot-owned restart annotation to create a new Pod template revision.",
 		Reason:   "Restart after diagnosis.", Risk: "Pods may be replaced.",
 		Digest: strings.Repeat("b", 64), ExpiresAt: deadline,
 	}, deadline.Add(-17*time.Second))

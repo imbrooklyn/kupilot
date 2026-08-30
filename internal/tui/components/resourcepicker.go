@@ -28,6 +28,7 @@ func NewResourcePicker(styles PickerStyles) ResourcePicker {
 }
 
 func (picker *ResourcePicker) SetLoading()                              { picker.list.setLoading() }
+func (picker *ResourcePicker) SetStyles(styles PickerStyles)            { picker.list.setStyles(styles) }
 func (picker *ResourcePicker) SetFailed()                               { picker.list.setFailed() }
 func (picker *ResourcePicker) SetCandidates(values []ResourceCandidate) { picker.list.setItems(values) }
 func (picker *ResourcePicker) SetMaxVisible(limit int)                  { picker.list.setMaxVisible(limit) }

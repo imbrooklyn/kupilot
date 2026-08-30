@@ -20,6 +20,7 @@ type writableConfig struct {
 	Context    string              `yaml:"context,omitempty"`
 	Namespace  string              `yaml:"namespace,omitempty"`
 	NoColor    bool                `yaml:"no_color"`
+	Runtime    RuntimeConfig       `yaml:"runtime"`
 	Model      writableModelConfig `yaml:"model"`
 	Kubernetes KubernetesConfig    `yaml:"kubernetes"`
 	Logging    LoggingConfig       `yaml:"logging"`
@@ -45,7 +46,7 @@ func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile Mod
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
 	}
 	if pathsForHome(paths.HomeDir).ConfigFile != paths.ConfigFile || !validHomePath(paths.HomeDir) || secret == nil || !secret.IsSet() {
-		return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "KuPilot could not prepare the local configuration update.")
+		return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not prepare the local configuration update.")
 	}
 	base.Model.Endpoint = profile.Endpoint
 	base.Model.Model = profile.Model
@@ -53,7 +54,7 @@ func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile Mod
 		return err
 	}
 	document := writableConfig{
-		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor,
+		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor, Runtime: base.Runtime,
 		Model: writableModelConfig{
 			ProviderKind: base.Model.ProviderKind, Endpoint: base.Model.Endpoint, Model: base.Model.Model,
 			ReasoningEffort: base.Model.ReasoningEffort,
@@ -70,7 +71,7 @@ func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile Mod
 	document.Model.APIKey = ""
 	if err != nil || len(content) > MaxConfigFileBytes {
 		zeroBytes(content)
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not encode the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not encode the local configuration safely.")
 	}
 	defer zeroBytes(content)
 	return publishConfiguration(ctx, paths, content)
@@ -90,7 +91,7 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 	}
 	temporary, err := os.CreateTemp(paths.HomeDir, ".config.yaml.tmp-")
 	if err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not create the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not create the local configuration safely.")
 	}
 	temporaryName := temporary.Name()
 	published := false
@@ -101,13 +102,13 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not protect the new local configuration file.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not protect the new local configuration file.")
 	}
 	if _, err := temporary.Write(content); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not write the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not write the local configuration safely.")
 	}
 	if err := temporary.Sync(); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not synchronize the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not synchronize the local configuration safely.")
 	}
 	if err := ctx.Err(); err != nil {
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
@@ -120,7 +121,7 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 		return err
 	}
 	if configTargetChanged(initialTarget, currentTarget) {
-		return newSafeError(ClassConfigurationInvalid, "config_file_changed", "write_configuration", "The Home configuration changed while KuPilot was preparing its update.")
+		return newSafeError(ClassConfigurationInvalid, "config_file_changed", "write_configuration", "The Home configuration changed while Kupilot was preparing its update.")
 	}
 	if err := ctx.Err(); err != nil {
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
@@ -130,17 +131,17 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 		mode = currentTarget.Mode().Perm()
 	}
 	if err := temporary.Chmod(mode); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not preserve the local configuration permissions safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not preserve the local configuration permissions safely.")
 	}
 	openedTemporary, err := temporary.Stat()
 	if err != nil || !openedTemporary.Mode().IsRegular() {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not verify the local configuration temporary file.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not verify the local configuration temporary file.")
 	}
 	if err := temporary.Sync(); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not synchronize the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not synchronize the local configuration safely.")
 	}
 	if err := temporary.Close(); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not close the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not close the local configuration safely.")
 	}
 	pathTemporary, err := os.Lstat(temporaryName)
 	if err != nil || pathTemporary.Mode()&os.ModeSymlink != 0 || !pathTemporary.Mode().IsRegular() ||
@@ -148,7 +149,7 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 		return newSafeError(ClassConfigurationInvalid, "config_file_changed", "write_configuration", "The Home configuration temporary file changed before publication.")
 	}
 	if err := os.Rename(temporaryName, paths.ConfigFile); err != nil {
-		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "KuPilot could not publish the local configuration safely.")
+		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not publish the local configuration safely.")
 	}
 	published = true
 	if directory, err := os.Open(paths.HomeDir); err == nil {
@@ -158,11 +159,11 @@ func publishConfigurationWithHook(ctx context.Context, paths Paths, content []by
 	return nil
 }
 
-// EnsureHome creates only a missing process-frozen KuPilot Home. Existing
+// EnsureHome creates only a missing process-frozen Kupilot Home. Existing
 // user-managed permissions are left unchanged.
 func EnsureHome(ctx context.Context, paths Paths) error {
 	if ctx == nil || ctx.Err() != nil {
-		return newSafeError(ClassCancelled, "home_initialization_cancelled", "initialize_home", "KuPilot Home initialization was cancelled.")
+		return newSafeError(ClassCancelled, "home_initialization_cancelled", "initialize_home", "Kupilot Home initialization was cancelled.")
 	}
 	if !validHomePath(paths.HomeDir) || pathsForHome(paths.HomeDir) != pathsWithoutRuntimeMetadata(paths) {
 		return newSafeError(ClassConfigurationInvalid, "kupilot_home_unsafe", "initialize_home", "KUPILOT_HOME could not be initialized safely.")
@@ -175,7 +176,7 @@ func ensureHomeDirectory(home, operation string) error {
 	created := false
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(home, 0o700); err != nil {
-			return newSafeError(ClassInternal, "kupilot_home_unavailable", operation, "KuPilot could not create KUPILOT_HOME.")
+			return newSafeError(ClassInternal, "kupilot_home_unavailable", operation, "Kupilot could not create KUPILOT_HOME.")
 		}
 		created = true
 		info, err = os.Lstat(home)
@@ -185,7 +186,7 @@ func ensureHomeDirectory(home, operation string) error {
 	}
 	if created {
 		if err := os.Chmod(home, 0o700); err != nil {
-			return newSafeError(ClassInternal, "kupilot_home_unavailable", operation, "KuPilot could not protect the new KUPILOT_HOME directory.")
+			return newSafeError(ClassInternal, "kupilot_home_unavailable", operation, "Kupilot could not protect the new KUPILOT_HOME directory.")
 		}
 	}
 	return nil

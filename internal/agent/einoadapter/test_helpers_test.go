@@ -185,6 +185,7 @@ func fixedHandlers(tool agent.Tool) agent.ToolHandlers {
 		GetPodLogs:          tool,
 		GetPreviousPodLogs:  tool,
 		GetRelatedResources: tool,
+		GetClusterOverview:  tool,
 	}
 }
 
@@ -219,10 +220,11 @@ func testInput(t *testing.T, clock *testClock, limits agent.RunBudgetLimits) age
 		testMessageID,
 		"Why is the selected Pod not Ready?",
 		domain.ClusterScope{
-			Context:     "test-context",
-			Namespace:   "test-namespace",
-			Generation:  7,
-			ActivatedAt: clock.Now(),
+			Context:         "test-context",
+			Namespace:       "test-namespace",
+			NamespaceAccess: domain.NamespaceAccessCurrent,
+			Generation:      7,
+			ActivatedAt:     clock.Now(),
 		},
 		&domain.ResourceRef{
 			APIVersion: "v1",

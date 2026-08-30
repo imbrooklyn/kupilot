@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestToolStepsSeparateCompactStatusFromDetails(t *testing.T) {
@@ -18,12 +21,48 @@ func TestToolStepsSeparateCompactStatusFromDetails(t *testing.T) {
 		EvidenceCount: 9,
 	})
 	want := strings.Join([]string{
-		"└─ ✓ List resources · done",
-		"   Purpose: List Pods in the active Namespace.",
-		"   Result: Nine projected resources were collected.",
+		"• List resources · done",
+		"    └ List Pods in the active Namespace. → Nine projected resources were collected.",
 	}, "\n")
 	if got := steps.View(); got != want {
 		t.Fatalf("ToolSteps.View() = %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptMatchesUserSurfaceAndFinalRunTimeline(t *testing.T) {
+	t.Parallel()
+
+	surface := lipgloss.NewStyle().Background(lipgloss.Color("#303030"))
+	userText := surface
+	transcript := NewTranscript(TranscriptStyles{
+		UserSurface: surface.Padding(1, 1),
+		UserPrompt:  surface.Foreground(lipgloss.Cyan).Bold(true),
+		UserText:    userText,
+	}, ToolStepStyles{})
+	transcript.SetSize(48, 30)
+	question := "How many nodes are in the cluster?"
+	transcript.AppendUser(question)
+	if content := transcript.renderContent(); !strings.Contains(content, "› ") ||
+		lipgloss.Height(content) != 3 || !strings.Contains(content, userText.Render(question)) {
+		t.Fatalf("historic user surface does not match the three-row composer language: %q", content)
+	}
+
+	transcript.StartAgent()
+	transcript.UpsertToolStep(ToolStep{
+		InvocationID: "invocation-1",
+		Name:         "get_cluster_overview",
+		Purpose:      "Count the current cluster nodes.",
+		Status:       "succeeded",
+	})
+	transcript.FinishAgentWithDuration("The cluster has three Ready nodes.", 20*time.Second)
+	content := transcript.renderContent()
+	toolAt := strings.Index(content, "Inspect cluster overview · done")
+	detailAt := strings.Index(content, "    └ Count the current cluster nodes.")
+	separatorAt := strings.Index(content, strings.Repeat("─", 48))
+	answerAt := strings.Index(content, "The cluster has three Ready nodes.")
+	timingAt := strings.Index(content, "Worked for 20s")
+	if !(toolAt >= 0 && toolAt < detailAt && detailAt < separatorAt && separatorAt < answerAt && answerAt < timingAt) {
+		t.Fatalf("terminal run timeline order is invalid: %q", content)
 	}
 }
 
@@ -76,6 +115,7 @@ func TestToolStepNamesCoverTheFixedCatalogWithoutProtocolIdentifiers(t *testing.
 		"get_pod_logs":          "Read current logs",
 		"get_previous_pod_logs": "Read previous logs",
 		"get_related_resources": "Inspect related resources",
+		"get_cluster_overview":  "Inspect cluster overview",
 	}
 	for name, want := range tests {
 		if got := toolStepDisplayName(name); got != want || strings.Contains(got, "_") {

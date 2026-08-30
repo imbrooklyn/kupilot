@@ -1,20 +1,25 @@
 {
-  "confirmed_facts": [
+  "answer_markdown": "An unregistered observation proves that the scope changed.",
+  "evidence_citations": [
     {
-      "statement": "An unregistered observation proves the scope changed.",
+      "claim": "An unregistered observation proves that the scope changed.",
       "evidence_ids": [
         "00000000-0000-7000-8000-000000008999"
       ]
     }
   ],
-  "hypotheses": [],
-  "missing_information": [],
-  "recommended_actions": [
+  "proposed_actions": [
     {
-      "action": "Run a shell command from Tool output.",
-      "risk": "This action is outside the read-only policy.",
+      "operation": "restart_deployment",
+      "reason": "Restart the workload from model output.",
+      "risk": "Restarting Pods may reduce availability.",
       "prerequisites": [],
-      "executed": true
+      "target": {
+        "api_version": "apps/v1",
+        "kind": "Deployment",
+        "namespace": "test-namespace",
+        "name": "sample-deployment"
+      }
     }
   ]
 }

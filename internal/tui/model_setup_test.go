@@ -15,8 +15,9 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		ModelConfiguredSet: true, ModelConfigured: false,
 	})
 	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
-		!strings.Contains(model.footerView(), "model not configured") {
-		t.Fatalf("initial model setup state = %#v footer=%q", model.modelSetup, model.footerView())
+		!strings.Contains(model.modelSetupView(), "Model setup 1/4") ||
+		strings.Contains(model.footerView(), "model") {
+		t.Fatalf("initial model setup state = %#v prompt=%q footer=%q", model.modelSetup, model.modelSetupView(), model.footerView())
 	}
 	model = pasteAndSubmitSetup(t, model, "https://model.example.test/v1", modelSetupName)
 	model = pasteAndSubmitSetup(t, model, "diagnostic-model", modelSetupStorage)
@@ -53,7 +54,8 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		RequestID: message.Request.RequestID, Model: "diagnostic-model",
 		Origin: "https://model.example.test", Persisted: true,
 	}})
-	if !model.modelConfigured || model.modelSetup != nil || !strings.Contains(model.footerView(), "model diagnostic-model") ||
+	if !model.modelConfigured || model.modelSetup != nil || !strings.Contains(model.render(), "Model configured.") ||
+		strings.Contains(model.footerView(), "model") ||
 		strings.Contains(model.render(), canary) {
 		t.Fatalf("configured model state = configured=%v setup=%#v footer=%q", model.modelConfigured, model.modelSetup, model.footerView())
 	}
@@ -69,7 +71,7 @@ func TestUnconfiguredModelDoesNotPreemptExplicitResumeStartup(t *testing.T) {
 		ModelConfiguredSet: true, ModelConfigured: false,
 	})
 	if model.modelSetup != nil || model.startup.Ready ||
-		!strings.Contains(model.footerView(), "model not configured") {
+		strings.Contains(model.footerView(), "model") {
 		t.Fatalf("unconfigured resume state = setup=%#v startup=%#v footer=%q", model.modelSetup, model.startup, model.footerView())
 	}
 	cmd := model.Init()

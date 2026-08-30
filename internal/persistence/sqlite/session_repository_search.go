@@ -64,7 +64,7 @@ func (repository *SessionRepository) SearchResumable(
 	}
 	rows, err := repository.db.handle.QueryxContext(ctx, searchResumableSessionsSQL, request.Filter, request.Limit)
 	if err != nil {
-		return nil, repositoryFailure(repository.db, "session_search_failed", "search_resumable_sessions", "KuPilot could not search resumable Sessions.", err)
+		return nil, repositoryFailure(repository.db, "session_search_failed", "search_resumable_sessions", "Kupilot could not search resumable Sessions.", err)
 	}
 	defer rows.Close()
 
@@ -72,14 +72,14 @@ func (repository *SessionRepository) SearchResumable(
 	for rows.Next() {
 		var row sessionSearchRow
 		if err := rows.StructScan(&row); err != nil {
-			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "KuPilot could not read resumable Session metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", err)
 		}
 		if row.MatchRank < 0 || row.MatchRank > 4 {
-			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "KuPilot could not read resumable Session metadata safely.", domain.ErrInvalidSession)
+			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", domain.ErrInvalidSession)
 		}
 		candidate, err := row.resumeCandidateRow.resumeCandidate()
 		if err != nil {
-			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "KuPilot could not read resumable Session metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", err)
 		}
 		result = append(result, application.ResumeSessionRecord{
 			ID: candidate.ID, Title: candidate.Title, UpdatedAt: candidate.UpdatedAt.UTC().Truncate(time.Millisecond),
@@ -87,7 +87,7 @@ func (repository *SessionRepository) SearchResumable(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repositoryFailure(repository.db, "session_search_failed", "search_resumable_sessions", "KuPilot could not search resumable Sessions.", err)
+		return nil, repositoryFailure(repository.db, "session_search_failed", "search_resumable_sessions", "Kupilot could not search resumable Sessions.", err)
 	}
 	return result, nil
 }

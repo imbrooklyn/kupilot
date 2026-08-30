@@ -142,7 +142,7 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "audit_event_append_failed", "append_audit_event", "KuPilot could not store the AuditEvent.", err)
+		return repositoryFailure(repository.db, "audit_event_append_failed", "append_audit_event", "Kupilot could not store the AuditEvent.", err)
 	}
 	return nil
 }
@@ -175,7 +175,7 @@ func (repository *AuditRepository) AppendWriteResult(ctx context.Context, event 
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "write_result_audit_append_failed", "append_write_result_audit", "KuPilot could not store the write result AuditEvent.", err)
+		return repositoryFailure(repository.db, "write_result_audit_append_failed", "append_write_result_audit", "Kupilot could not store the write result AuditEvent.", err)
 	}
 	return nil
 }
@@ -260,14 +260,14 @@ func (repository *AuditRepository) GetByID(ctx context.Context, id domain.AuditE
 	if err := repository.db.handle.GetContext(ctx, &row, getAuditEventByIDSQL, id); errors.Is(err, sql.ErrNoRows) {
 		return domain.AuditEvent{}, auditcontract.ErrAuditEventNotFound
 	} else if err != nil {
-		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_read_failed", "get_audit_event", "KuPilot could not read the AuditEvent.", err)
+		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_read_failed", "get_audit_event", "Kupilot could not read the AuditEvent.", err)
 	}
 	event, err := row.domainAuditEvent()
 	if err != nil {
-		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_row_invalid", "get_audit_event", "KuPilot could not read the AuditEvent safely.", err)
+		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_row_invalid", "get_audit_event", "Kupilot could not read the AuditEvent safely.", err)
 	}
 	if err := validateAuditRelationships(ctx, repository.db.handle, event, true); err != nil {
-		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_row_invalid", "get_audit_event", "KuPilot could not read the AuditEvent safely.", err)
+		return domain.AuditEvent{}, repositoryFailure(repository.db, "audit_event_row_invalid", "get_audit_event", "Kupilot could not read the AuditEvent safely.", err)
 	}
 	return event, nil
 }
@@ -301,7 +301,7 @@ func (repository *AuditRepository) ListBySession(ctx context.Context, request au
 		)
 	}
 	if err != nil {
-		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "KuPilot could not list AuditEvents.", err)
+		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "Kupilot could not list AuditEvents.", err)
 	}
 	defer rows.Close()
 
@@ -309,23 +309,23 @@ func (repository *AuditRepository) ListBySession(ctx context.Context, request au
 	for rows.Next() {
 		var row auditEventRow
 		if err := rows.StructScan(&row); err != nil {
-			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "KuPilot could not read AuditEvents safely.", err)
+			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "Kupilot could not read AuditEvents safely.", err)
 		}
 		event, err := row.domainAuditEvent()
 		if err != nil || event.SessionID != nil && *event.SessionID != request.SessionID {
-			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "KuPilot could not read AuditEvents safely.", err)
+			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "Kupilot could not read AuditEvents safely.", err)
 		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
-		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "KuPilot could not list AuditEvents.", err)
+		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "Kupilot could not list AuditEvents.", err)
 	}
 	if err := rows.Close(); err != nil {
-		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "KuPilot could not list AuditEvents.", err)
+		return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_list_failed", "list_session_audit_events", "Kupilot could not list AuditEvents.", err)
 	}
 	for _, event := range events {
 		if err := validateAuditRelationships(ctx, repository.db.handle, event, true); err != nil {
-			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "KuPilot could not read AuditEvents safely.", err)
+			return auditcontract.Page{}, repositoryFailure(repository.db, "audit_event_row_invalid", "list_session_audit_events", "Kupilot could not read AuditEvents safely.", err)
 		}
 	}
 	page := auditcontract.Page{Events: events}

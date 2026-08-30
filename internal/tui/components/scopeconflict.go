@@ -29,6 +29,9 @@ func NewScopeConflictDialog(styles ScopeConflictStyles) ScopeConflictDialog {
 	return ScopeConflictDialog{styles: styles}
 }
 
+// SetStyles updates presentation without changing the safe default selection.
+func (dialog *ScopeConflictDialog) SetStyles(styles ScopeConflictStyles) { dialog.styles = styles }
+
 // Show opens with "Keep current scope" selected by default.
 func (dialog *ScopeConflictDialog) Show(current, saved string) {
 	dialog.open = true

@@ -33,6 +33,7 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 			{Role: domain.MessageRoleAssistant, Content: "The projected answer is bounded.", CreatedAt: createdAt.Add(2 * time.Second)},
 		},
 		Diagnoses: []ExportDiagnosisRecord{{
+			AnswerMarkdown: "The bounded answer includes " + credentialCanary,
 			CreatedAt:      createdAt.Add(3 * time.Second),
 			ConfirmedFacts: []domain.ConfirmedFact{{Statement: "A safe fact " + credentialCanary, EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID}}},
 			Hypotheses: []domain.Hypothesis{{
@@ -58,7 +59,7 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 	if err != nil {
 		t.Fatalf("RenderExportSummary() error = %v", err)
 	}
-	if summary.SchemaVersion != ExportSummarySchemaVersion || !bytes.HasPrefix(content, []byte("# KuPilot Session Summary\n")) {
+	if summary.SchemaVersion != ExportSummarySchemaVersion || !bytes.HasPrefix(content, []byte("# Kupilot Session Summary\n")) {
 		t.Fatalf("versioned export = %#v\n%s", summary, content)
 	}
 	if !bytes.Contains(content, []byte("REDACTED")) || bytes.Contains(content, []byte(credentialCanary)) {
@@ -83,6 +84,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 			Role: domain.MessageRoleUser, Content: "<script>unsafe</script>\n# not a heading", CreatedAt: createdAt,
 		}},
 		Diagnoses: []ExportDiagnosisRecord{{
+			AnswerMarkdown: "# forged answer\n<script>answer</script>",
 			CreatedAt:      createdAt,
 			ConfirmedFacts: []domain.ConfirmedFact{{Statement: "Historic fact\n# forged diagnosis", EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID}}},
 		}},
@@ -96,7 +98,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderExportSummary() error = %v", err)
 	}
-	for _, want := range []string{"Schema: `kupilot.export-summary.v1`", "State: expired", `\# forged heading`, `\<script\>`} {
+	for _, want := range []string{"Schema: `kupilot.export-summary.v2`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
 		if !bytes.Contains(content, []byte(want)) {
 			t.Fatalf("export missing %q:\n%s", want, content)
 		}
@@ -119,7 +121,8 @@ func TestExportSummaryRejectsUnsafeEvidenceResourceProjection(t *testing.T) {
 			Role: domain.MessageRoleUser, Content: "Inspect the workload.", CreatedAt: createdAt,
 		}},
 		Diagnoses: []ExportDiagnosisRecord{{
-			CreatedAt: createdAt,
+			AnswerMarkdown: "The workload is unavailable.",
+			CreatedAt:      createdAt,
 			ConfirmedFacts: []domain.ConfirmedFact{{
 				Statement: "The workload is unavailable.", EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID},
 			}},
@@ -170,6 +173,26 @@ func TestExportSummaryEnforcesSourceAndAggregateLimits(t *testing.T) {
 	}
 }
 
+func TestExportSummaryPreservesAnswerAboveQuestionLimit(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.UnixMilli(1_775_000_000_000).UTC()
+	answer := strings.Repeat("a", MaxQuestionBytes+1)
+	summary, err := ProjectExportSummary(SessionExportSnapshot{
+		Session: ExportSessionRecord{
+			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Diagnoses: []ExportDiagnosisRecord{{AnswerMarkdown: answer, CreatedAt: createdAt}},
+	}, createdAt.Add(time.Second), security.NewRedactor())
+	if err != nil {
+		t.Fatalf("ProjectExportSummary() error = %v", err)
+	}
+	if summary.Truncated || len(summary.Diagnoses) != 1 || summary.Diagnoses[0].AnswerMarkdown != answer {
+		t.Fatalf("answer projection truncated=%t diagnoses=%d answer-bytes=%d", summary.Truncated, len(summary.Diagnoses), len(summary.Diagnoses[0].AnswerMarkdown))
+	}
+}
+
 func TestExportSummaryRejectsAnUnboundedEvidenceSource(t *testing.T) {
 	t.Parallel()
 	createdAt := time.UnixMilli(1_775_000_000_000).UTC()
@@ -209,7 +232,8 @@ func TestExportSummaryMarksEvidencePartialWhenExportFieldIsTruncated(t *testing.
 			Role: domain.MessageRoleUser, Content: "Inspect the workload.", CreatedAt: createdAt,
 		}},
 		Diagnoses: []ExportDiagnosisRecord{{
-			CreatedAt: createdAt,
+			AnswerMarkdown: "The workload is unavailable.",
+			CreatedAt:      createdAt,
 			ConfirmedFacts: []domain.ConfirmedFact{{
 				Statement: "The workload is unavailable.", EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID},
 			}},

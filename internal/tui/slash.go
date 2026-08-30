@@ -42,7 +42,7 @@ var fixedSlashCommands = [...]SlashCommand{
 	{Name: "rename", Usage: "[title]", Summary: "Rename the current Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandRenameSession},
 	{Name: "privacy", Summary: "Show privacy, retention, and Session controls", action: slashApplication, commandKind: application.UICommandShowPrivacy},
 	{Name: "cancel", Summary: "Cancel the active diagnostic run", action: slashApplication, commandKind: application.UICommandCancelRun},
-	{Name: "quit", Aliases: []string{"exit"}, Summary: "Exit KuPilot", action: slashQuit},
+	{Name: "quit", Aliases: []string{"exit"}, Summary: "Exit Kupilot", action: slashQuit},
 }
 
 // SlashCommands returns a defensive copy of the compile-time registry.

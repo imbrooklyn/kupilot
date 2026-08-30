@@ -1,7 +1,12 @@
 {
   "name": "crashloop_sufficient",
   "question": "Why does example-pod keep restarting?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,9 @@
             "fact": "Container example-container is waiting, ready=false, restarts=6, reason CrashLoopBackOff; previous state terminated, reason Error, exit_code=1.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_crashloop_waiting"]
+            "supports": [
+              "container_crashloop_waiting"
+            ]
           }
         ]
       }
@@ -38,7 +45,9 @@
             "fact": "Warning Event BackOff for Pod example-pod was observed 4 times.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["restart_backoff_observed"]
+            "supports": [
+              "restart_backoff_observed"
+            ]
           }
         ]
       }
@@ -58,7 +67,10 @@
             "fact": "A bounded previous log excerpt was returned for container example-container.",
             "source_path": "projected.log_excerpt",
             "severity": "warning",
-            "supports": ["previous_log_excerpt_available", "application_startup_failure_possible"]
+            "supports": [
+              "previous_log_excerpt_available",
+              "application_startup_failure_possible"
+            ]
           }
         ]
       }
@@ -78,49 +90,72 @@
             "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
             "source_path": "projected.metadata.controller_owner",
             "severity": "info",
-            "supports": ["pod_owner_observed"]
+            "supports": [
+              "pod_owner_observed"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The container is waiting in CrashLoopBackOff after six recorded restarts.", "evidence_ids": ["00000000-0000-7000-8000-000000001101"]},
-      {"statement": "A recent BackOff Event was observed for the Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001102"]},
-      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001104"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The container is waiting in CrashLoopBackOff after six recorded restarts.\n- A recent BackOff Event was observed for the Pod.\n- The Pod has a projected ReplicaSet owner relationship.\n\nThe application may exit before startup completes. Confidence: medium. To verify: A later bounded run shows successful startup without another restart.\n\nThe workload configuration was not collected. Impact: The observations do not establish why the process exits.\n\nSuggested next step: Review the previous log evidence and the owning workload startup configuration. Risk: Changing startup configuration may replace Pods. Before acting: Confirm the active Context and Namespace before making an external change.",
+    "evidence_citations": [
       {
-        "statement": "The application may exit before startup completes.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001101", "00000000-0000-7000-8000-000000001103"],
-        "confidence": "medium",
-        "falsifier": "A later bounded run shows successful startup without another restart."
+        "claim": "The container is waiting in CrashLoopBackOff after six recorded restarts.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001101"
+        ]
+      },
+      {
+        "claim": "A recent BackOff Event was observed for the Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001102"
+        ]
+      },
+      {
+        "claim": "The Pod has a projected ReplicaSet owner relationship.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001104"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "absent", "detail": "The workload configuration was not collected.", "impact": "The observations do not establish why the process exits."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Review the previous log evidence and the owning workload startup configuration.",
-        "risk": "Changing startup configuration may replace Pods.",
-        "prerequisites": ["Confirm the active Context and Namespace before making an external change."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "container_crashloop_waiting"},
-      {"index": 1, "assertion": "restart_backoff_observed"},
-      {"index": 2, "assertion": "pod_owner_observed"}
+      {
+        "index": 0,
+        "assertion": "container_crashloop_waiting"
+      },
+      {
+        "index": 1,
+        "assertion": "restart_backoff_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "pod_owner_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "application_startup_failure_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_startup_and_previous_logs"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "application_startup_failure_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_startup_and_previous_logs"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["container_crashloop_waiting", "restart_backoff_observed", "pod_owner_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "container_crashloop_waiting",
+    "restart_backoff_observed",
+    "pod_owner_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

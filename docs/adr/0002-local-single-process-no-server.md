@@ -1,14 +1,14 @@
-# ADR-0002: Use a Local Single Process with No KuPilot Server
+# ADR-0002: Use a Local Single Process with No Kupilot Server
 
 - Status: Accepted
 - Date: 2026-08-05
 
 ## Context
 
-KuPilot serves one terminal user, uses that user's kubeconfig, stores limited
+Kupilot serves one terminal user, uses that user's kubeconfig, stores limited
 history locally, and calls a user-configured cloud model endpoint. The product
 does not require accounts, team coordination, remote scheduling, a cluster-side
-controller, or a KuPilot-operated control plane.
+controller, or a Kupilot-operated control plane.
 
 Adding a server would create a second credential and data boundary, an
 operational service, identity and authorization requirements, telemetry and
@@ -17,7 +17,7 @@ provide MVP diagnostic value.
 
 ## Decision
 
-KuPilot will be a local, single-process application with one local user and one
+Kupilot will be a local, single-process application with one local user and one
 active AgentRun at a time in `v0.1`.
 
 The process will:
@@ -28,7 +28,7 @@ The process will:
 - Store the permitted local history and audit data in a local SQLite database.
 - Render the TUI and own all run, stream, cancellation, and scope state.
 
-KuPilot will not operate a server, account system, remote control plane,
+Kupilot will not operate a server, account system, remote control plane,
 cluster-side Agent, analytics endpoint, or crash-reporting backend. The local
 `v0.2` approval workflow does not change this topology.
 
@@ -36,7 +36,7 @@ cluster-side Agent, analytics endpoint, or crash-reporting backend. The local
 
 Positive consequences:
 
-- Kubernetes and model credentials do not need to pass through a KuPilot
+- Kubernetes and model credentials do not need to pass through a Kupilot
   service.
 - There is no server deployment, account lifecycle, remote database, or
   multi-tenant authorization system to operate.
@@ -57,7 +57,7 @@ Costs and constraints:
 
 ## Alternatives considered
 
-- A hosted KuPilot service was rejected because it would centralize cluster data
+- A hosted Kupilot service was rejected because it would centralize cluster data
   and credentials and require accounts, tenancy, operations, and a new trust
   boundary.
 - A cluster-resident controller was rejected because continuous cluster access
@@ -87,7 +87,7 @@ The system-context and runtime diagrams in
 storage boundary. The public [Privacy Overview](../privacy-overview.md) states
 which data may cross the model boundary and which data is excluded.
 
-Automated startup and network tests must assert that KuPilot creates no
+Automated startup and network tests must assert that Kupilot creates no
 undisclosed listener or product telemetry path.
 
 ## Revisit triggers

@@ -6,7 +6,7 @@
 
 ## Context
 
-KuPilot needs bounded local Session history, run lifecycle recovery, Evidence
+Kupilot needs bounded local Session history, run lifecycle recovery, Evidence
 provenance, retention cleanup, and future approval audit. The product is a local
 single process and does not require a database server, shared tenancy, remote
 synchronization, or high-availability storage.
@@ -17,8 +17,8 @@ confidentiality and retention boundary that must be explicit.
 
 ## Decision
 
-KuPilot will use one local SQLite database at the fixed `state/kupilot.db`
-descendant of the resolved KuPilot Home. `internal/persistence/sqlite` owns the
+Kupilot will use one local SQLite database at the fixed `state/kupilot.db`
+descendant of the resolved Kupilot Home. `internal/persistence/sqlite` owns the
 database handle, SQL, migrations, row mappings, transaction mechanics, and
 driver-specific behavior. Application owns transaction intent through focused
 consumer ports.
@@ -40,7 +40,7 @@ The SQLite adapter will:
 - Persist only the fields admitted by the
   [Data Retention Contract](../data-retention.md).
 
-KuPilot will not claim SQLite encryption or tamper resistance. It will not store
+Kupilot will not claim SQLite encryption or tamper resistance. It will not store
 credentials, raw transport bodies, raw Kubernetes objects, raw container
 output, assembled prompts, stream deltas, or framework values. Unknown or
 corrupt storage is not silently deleted or replaced.
@@ -57,7 +57,7 @@ Positive consequences:
 - Startup recovery and future approval audit can be durable and testable.
 - Repository ports can remain use-case-specific while storage mapping stays in
   one adapter.
-- Users can remove all KuPilot durable data locally.
+- Users can remove all Kupilot durable data locally.
 
 Costs and constraints:
 
@@ -125,7 +125,7 @@ requirements.
 - [Architecture](../architecture.md)
 - [Data Retention Contract](../data-retention.md)
 - [Security Threat Model](../security.md)
-- [ADR-0002: Use a Local Single Process with No KuPilot Server](0002-local-single-process-no-server.md)
+- [ADR-0002: Use a Local Single Process with No Kupilot Server](0002-local-single-process-no-server.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](0030-use-sqlx-inside-the-sqlite-adapter.md)

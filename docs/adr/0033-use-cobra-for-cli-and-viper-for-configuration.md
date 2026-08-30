@@ -5,18 +5,18 @@
 
 ## Context
 
-KuPilot needs a small fixed command parser and typed configuration loading.
+Kupilot needs a small fixed command parser and typed configuration loading.
 Cobra provides maintained command routing, while Viper provides configuration
-source handling. Their broad feature sets must remain narrower than KuPilot's
+source handling. Their broad feature sets must remain narrower than Kupilot's
 accepted CLI and configuration contracts.
 
 Using these libraries must not change the accepted product contract. A framework
-feature is not an admitted KuPilot feature, and vendor state or values must not
+feature is not an admitted Kupilot feature, and vendor state or values must not
 become Application contracts.
 
 ## Decision
 
-KuPilot uses `github.com/spf13/cobra v1.10.2` inside `internal/cli` for the fixed
+Kupilot uses `github.com/spf13/cobra v1.10.2` inside `internal/cli` for the fixed
 command tree. Cobra does not supersede the fixed command, flag, Session,
 privacy, or composition boundaries.
 
@@ -27,16 +27,16 @@ are disabled.
 Framework errors are translated to bounded project-owned errors and stable exit
 codes. Cobra does not initialize configuration, storage, Kubernetes, a model,
 or the TUI, and Cobra types do not cross the CLI delivery boundary. `cache
-clear` resolves only the canonical KuPilot Home and removes only entries below
+clear` resolves only the canonical Kupilot Home and removes only entries below
 its fixed `cache` child before any ordinary startup dependency is constructed.
 
-KuPilot uses `github.com/spf13/viper v1.21.0` for typed configuration. Each
+Kupilot uses `github.com/spf13/viper v1.21.0` for typed configuration. Each
 configuration load constructs and injects an independent Viper instance rather
 than using package-level singleton state, then decodes and validates a concrete
 project-owned schema before values cross a boundary.
 
 Viper use is limited to the accepted CLI, environment, file, and default
-precedence for non-sensitive configuration. KuPilot will not use remote
+precedence for non-sensitive configuration. Kupilot will not use remote
 configuration providers, live watch or hot reload, or a generic `map[string]any`
 configuration boundary. A dedicated loader extracts `model.api_key` before
 Viper receives sanitized key-free bytes. A dedicated atomic writer may update
@@ -53,7 +53,7 @@ Positive consequences:
 - The fixed CLI grammar uses a maintained parser with deterministic typed output.
 - The product has one explicit configuration library and no competing loader.
 - Fresh framework instances avoid hidden cross-test and cross-command state.
-- Framework features remain narrower than KuPilot's public command and config
+- Framework features remain narrower than Kupilot's public command and config
   contracts.
 
 Costs and constraints:
@@ -95,7 +95,7 @@ configuration performs no model, Kubernetes, or database I/O.
 Cobra v1.10.2 declares Go 1.15 and uses Apache-2.0. Its required pflag v1.0.9
 uses BSD-3-Clause, and mousetrap v1.1.0 uses Apache-2.0. Viper v1.21.0 declares
 Go 1.23.0, uses MIT, and provides independent instances. These requirements are
-compatible with KuPilot's Go 1.25.0 and Apache-2.0 baselines.
+compatible with Kupilot's Go 1.25.0 and Apache-2.0 baselines.
 
 Tests must cover the fixed command catalog, completion absence, typed intents,
 safe errors, short circuits, exit codes, and sensitive-value rejection. Viper

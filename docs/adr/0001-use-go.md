@@ -5,7 +5,7 @@
 
 ## Context
 
-KuPilot is a local terminal application that must coordinate Kubernetes reads,
+Kupilot is a local terminal application that must coordinate Kubernetes reads,
 streamed model responses, cancellation, bounded concurrent I/O, local SQLite
 persistence, and cross-platform distribution. The implementation language must
 support the Kubernetes client ecosystem, explicit context propagation,
@@ -14,7 +14,7 @@ small project.
 
 ## Decision
 
-KuPilot will be implemented in Go and distributed as a local command-line
+Kupilot will be implemented in Go and distributed as a local command-line
 binary.
 
 The implementation will use Go's explicit package dependencies and
@@ -51,7 +51,7 @@ Costs and constraints:
 
 - Goroutine, channel, and stream ownership must be designed explicitly to avoid
   leaks and races.
-- Go interfaces are structural and easy to overproduce; KuPilot will define
+- Go interfaces are structural and easy to overproduce; Kupilot will define
   small interfaces at the consumer and prefer concrete types otherwise.
 - Cross-platform behavior still requires validation for terminal, filesystem,
   Kubernetes authentication, and SQLite dependencies.
@@ -68,7 +68,7 @@ Costs and constraints:
 
 ## Security and privacy impact
 
-Go does not itself provide KuPilot's security boundary. Runtime scope checks,
+Go does not itself provide Kupilot's security boundary. Runtime scope checks,
 fixed Tool schemas, safe projection, redaction, output limits, and credential
 isolation remain application requirements. Context cancellation also does not
 replace the post-result generation check.

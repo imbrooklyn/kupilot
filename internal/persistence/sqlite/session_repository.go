@@ -189,11 +189,11 @@ func (repository *SessionRepository) Create(ctx context.Context, value domain.Se
 		value.UpdatedAt.UTC().UnixMilli(),
 	)
 	if err != nil {
-		return repositoryFailure(repository.db, "session_create_failed", "create_session", "KuPilot could not create the Session.", err)
+		return repositoryFailure(repository.db, "session_create_failed", "create_session", "Kupilot could not create the Session.", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return repositoryFailure(repository.db, "session_create_failed", "create_session", "KuPilot could not create the Session.", err)
+		return repositoryFailure(repository.db, "session_create_failed", "create_session", "Kupilot could not create the Session.", err)
 	}
 	if affected != 1 {
 		return sessioncontract.ErrSessionConflict
@@ -214,7 +214,7 @@ func (repository *SessionRepository) GetByID(ctx context.Context, id domain.Sess
 		return domain.Session{}, sessioncontract.ErrSessionNotFound
 	}
 	if err != nil {
-		return domain.Session{}, repositoryFailure(repository.db, "session_row_invalid", "get_session", "KuPilot could not read the Session safely.", err)
+		return domain.Session{}, repositoryFailure(repository.db, "session_row_invalid", "get_session", "Kupilot could not read the Session safely.", err)
 	}
 	return value, nil
 }
@@ -263,7 +263,7 @@ func (repository *SessionRepository) Rename(ctx context.Context, command session
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "session_rename_failed", "rename_session", "KuPilot could not rename the Session.", err)
+		return repositoryFailure(repository.db, "session_rename_failed", "rename_session", "Kupilot could not rename the Session.", err)
 	}
 	return nil
 }
@@ -294,7 +294,7 @@ func (repository *SessionRepository) Delete(ctx context.Context, id domain.Sessi
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "session_delete_failed", "delete_session", "KuPilot could not delete the Session.", err)
+		return repositoryFailure(repository.db, "session_delete_failed", "delete_session", "Kupilot could not delete the Session.", err)
 	}
 	return nil
 }
@@ -326,7 +326,7 @@ func (repository *SessionRepository) ListResumable(ctx context.Context, request 
 		)
 	}
 	if err != nil {
-		return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_list_failed", "list_resumable_sessions", "KuPilot could not list resumable Sessions.", err)
+		return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_list_failed", "list_resumable_sessions", "Kupilot could not list resumable Sessions.", err)
 	}
 	defer rows.Close()
 
@@ -334,16 +334,16 @@ func (repository *SessionRepository) ListResumable(ctx context.Context, request 
 	for rows.Next() {
 		var row resumeCandidateRow
 		if err := rows.StructScan(&row); err != nil {
-			return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_row_invalid", "list_resumable_sessions", "KuPilot could not read resumable Session metadata safely.", err)
+			return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_row_invalid", "list_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", err)
 		}
 		value, err := row.resumeCandidate()
 		if err != nil {
-			return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_row_invalid", "list_resumable_sessions", "KuPilot could not read resumable Session metadata safely.", err)
+			return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_row_invalid", "list_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", err)
 		}
 		values = append(values, value)
 	}
 	if err := rows.Err(); err != nil {
-		return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_list_failed", "list_resumable_sessions", "KuPilot could not list resumable Sessions.", err)
+		return sessioncontract.ResumePage{}, repositoryFailure(repository.db, "session_list_failed", "list_resumable_sessions", "Kupilot could not list resumable Sessions.", err)
 	}
 
 	page := sessioncontract.ResumePage{Sessions: values}
@@ -364,11 +364,11 @@ func (repository *SessionRepository) GetLatestResumable(ctx context.Context) (se
 	if err := repository.db.handle.GetContext(ctx, &row, getLatestResumableSessionSQL); errors.Is(err, sql.ErrNoRows) {
 		return sessioncontract.ResumeCandidate{}, sessioncontract.ErrNoResumableSession
 	} else if err != nil {
-		return sessioncontract.ResumeCandidate{}, repositoryFailure(repository.db, "session_latest_failed", "get_latest_resumable_session", "KuPilot could not find the latest resumable Session.", err)
+		return sessioncontract.ResumeCandidate{}, repositoryFailure(repository.db, "session_latest_failed", "get_latest_resumable_session", "Kupilot could not find the latest resumable Session.", err)
 	}
 	value, err := row.resumeCandidate()
 	if err != nil {
-		return sessioncontract.ResumeCandidate{}, repositoryFailure(repository.db, "session_row_invalid", "get_latest_resumable_session", "KuPilot could not read resumable Session metadata safely.", err)
+		return sessioncontract.ResumeCandidate{}, repositoryFailure(repository.db, "session_row_invalid", "get_latest_resumable_session", "Kupilot could not read resumable Session metadata safely.", err)
 	}
 	return value, nil
 }
@@ -642,7 +642,7 @@ func repositoryContext(ctx context.Context, db *DB, operation string) error {
 			ClassPersistenceUnavailable,
 			"storage_unavailable",
 			operation,
-			"KuPilot local storage is unavailable.",
+			"Kupilot local storage is unavailable.",
 			correlationID,
 			nil,
 		)

@@ -13,13 +13,14 @@ import (
 
 // UIScopeResult is one request-bound scope activation projection.
 type UIScopeResult struct {
-	RequestID          uint64
-	ExpectedGeneration int64
-	ScopeGeneration    int64
-	Context            string
-	Namespace          string
-	ReadOnly           bool
-	Failure            UIQueryFailureCode
+	RequestID               uint64
+	ExpectedGeneration      int64
+	ScopeGeneration         int64
+	Context                 string
+	Namespace               string
+	ReadOnly                bool
+	ScopePreferenceDegraded bool
+	Failure                 UIQueryFailureCode
 }
 
 // Validate checks success and fail-closed scope result shapes.
@@ -28,7 +29,8 @@ func (result UIScopeResult) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	if result.Failure != "" {
-		if !result.Failure.validOperational() || result.Context != "" || result.Namespace != "" || result.ReadOnly {
+		if !result.Failure.validOperational() || result.Context != "" || result.Namespace != "" || result.ReadOnly ||
+			result.ScopePreferenceDegraded {
 			return ErrInvalidUIEvent
 		}
 		return nil
@@ -43,13 +45,36 @@ func (result UIScopeResult) Validate() error {
 // UIStatusResult is the current safe in-memory status projection. Historic
 // scope metadata and pending resume candidates are intentionally excluded.
 type UIStatusResult struct {
-	Session         *UISessionState
-	Context         string
-	Namespace       string
-	ScopeGeneration int64
-	ReadOnly        bool
-	RunID           domain.AgentRunID
-	RunActive       bool
+	Session                  *UISessionState
+	Context                  string
+	Namespace                string
+	NamespaceAccess          domain.NamespaceAccessPolicy
+	ScopeGeneration          int64
+	ReadOnly                 bool
+	RunID                    domain.AgentRunID
+	RunActive                bool
+	CapabilityCatalogVersion string
+	PersistenceDegraded      bool
+	Budget                   UIBudgetStatus
+}
+
+// UIBudgetStatus is the safe local projection shown by /status. Durations are
+// integer milliseconds so delivery does not receive a clock or live budget.
+type UIBudgetStatus struct {
+	Profile                agent.BudgetProfile
+	RunMilliseconds        int64
+	ElapsedMilliseconds    int64
+	RemainingMilliseconds  int64
+	StepsUsed              int
+	StepsMaximum           int
+	ToolCallsUsed          int
+	ToolCallsMaximum       int
+	ModelCallsUsed         int
+	ModelCallsMaximum      int
+	ToolResultBytesUsed    int
+	ToolResultBytesMaximum int
+	LogCallsUsed           int
+	LogCallsMaximum        int
 }
 
 // UICommandOutcome contains only the typed result shapes used by delivery.
@@ -300,11 +325,31 @@ func (result UICommandOutcome) Validate() error {
 func (result UIStatusResult) valid() bool {
 	if result.Session != nil && !result.Session.validate() || result.ScopeGeneration < 0 ||
 		(result.Context == "") != (result.Namespace == "") || result.ReadOnly != (result.Context != "") ||
+		result.Context == "" && result.NamespaceAccess != "" || result.Context != "" && !result.NamespaceAccess.Valid() ||
 		result.Context != "" && (!domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace)) ||
-		result.RunActive != result.RunID.Valid() {
+		result.RunActive != result.RunID.Valid() || result.CapabilityCatalogVersion != agent.ToolCatalogVersion ||
+		!result.Budget.valid() {
 		return false
 	}
 	return true
+}
+
+func (status UIBudgetStatus) valid() bool {
+	if !status.Profile.Valid() || status.RunMilliseconds <= 0 || status.ElapsedMilliseconds < 0 ||
+		status.RemainingMilliseconds < 0 || status.ElapsedMilliseconds > status.RunMilliseconds ||
+		status.RemainingMilliseconds > status.RunMilliseconds ||
+		status.ElapsedMilliseconds+status.RemainingMilliseconds != status.RunMilliseconds {
+		return false
+	}
+	return validBudgetCounter(status.StepsUsed, status.StepsMaximum) &&
+		validBudgetCounter(status.ToolCallsUsed, status.ToolCallsMaximum) &&
+		validBudgetCounter(status.ModelCallsUsed, status.ModelCallsMaximum) &&
+		validBudgetCounter(status.ToolResultBytesUsed, status.ToolResultBytesMaximum) &&
+		validBudgetCounter(status.LogCallsUsed, status.LogCallsMaximum)
+}
+
+func validBudgetCounter(used, maximum int) bool {
+	return used >= 0 && maximum > 0 && used <= maximum
 }
 
 // UIResourceSelectionResult accepts or rejects one request-bound ResourceRef.
@@ -343,12 +388,13 @@ var ErrInvalidUIEvent = errors.New("UI event data is invalid")
 type UIEventKind string
 
 const (
-	UIEventRunStarted   UIEventKind = "run_started"
-	UIEventTextDelta    UIEventKind = "text_delta"
-	UIEventToolStep     UIEventKind = "tool_step"
-	UIEventRunCompleted UIEventKind = "run_completed"
-	UIEventRunFailed    UIEventKind = "run_failed"
-	UIEventRunCancelled UIEventKind = "run_cancelled"
+	UIEventRunStarted        UIEventKind = "run_started"
+	UIEventTextDelta         UIEventKind = "text_delta"
+	UIEventToolStep          UIEventKind = "tool_step"
+	UIEventRunCompleted      UIEventKind = "run_completed"
+	UIEventRunFailed         UIEventKind = "run_failed"
+	UIEventRunCancelled      UIEventKind = "run_cancelled"
+	UIEventValidationWarning UIEventKind = "answer_validation_warning"
 	// UIEventPersistenceDegraded is a visible nonterminal warning. It never
 	// claims that incomplete data is resumable.
 	UIEventPersistenceDegraded UIEventKind = "persistence_degraded"
@@ -356,6 +402,12 @@ const (
 	UIEventApprovalClosed      UIEventKind = "approval_closed"
 	UIEventRestartExecution    UIEventKind = "restart_execution"
 )
+
+// MaxAnswerMarkdownBytes is the delivery ceiling for a validated final answer.
+// It is intentionally distinct from the user-question ceiling.
+const MaxAnswerMarkdownBytes = agent.MaxAnswerMarkdownBytes
+
+const answerValidationWarningText = "Kupilot removed unsupported final-answer metadata. Review the remaining Evidence and proposed-action state before relying on affected claims."
 
 // ToolStepStatus is the delivery-safe state of one inline Tool step.
 type ToolStepStatus string
@@ -411,7 +463,7 @@ func (event UIEvent) Validate() error {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRunCompleted:
-		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 		for _, reference := range event.EvidenceReferences {
@@ -420,7 +472,11 @@ func (event UIEvent) Validate() error {
 				return ErrInvalidUIEvent
 			}
 		}
-	case UIEventTextDelta, UIEventRunFailed, UIEventRunCancelled, UIEventPersistenceDegraded:
+	case UIEventTextDelta:
+		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+			return ErrInvalidUIEvent
+		}
+	case UIEventRunFailed, UIEventRunCancelled, UIEventValidationWarning, UIEventPersistenceDegraded:
 		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
@@ -453,7 +509,7 @@ func (event UIEvent) Validate() error {
 	return nil
 }
 
-const approvalProposedSummary = "Update only the KuPilot-owned restart annotation to create a new Pod template revision."
+const approvalProposedSummary = "Update only the Kupilot-owned restart annotation to create a new Pod template revision."
 
 // UIApprovalRequest is the complete safe dialog projection. The opaque nonce
 // is memory-only decision authority whose type cannot render or marshal bytes.
@@ -650,7 +706,7 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		if !bridge.started {
 			return ErrInvalidUIEvent
 		}
-		if len(bridge.pendingDelta)+len(event.TextDelta) > MaxQuestionBytes {
+		if len(bridge.pendingDelta)+len(event.TextDelta) > MaxAnswerMarkdownBytes {
 			if err := bridge.flushDelta(ctx); err != nil {
 				return err
 			}
@@ -676,6 +732,9 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 	case agent.RunEventDiagnosisReady:
 		diagnosis := cloneDiagnosis(*event.Diagnosis)
 		bridge.diagnosis = &diagnosis
+		if len(diagnosis.ValidationWarnings) != 0 {
+			return bridge.emit(ctx, UIEvent{Kind: UIEventValidationWarning, Text: answerValidationWarningText})
+		}
 		return nil
 	case agent.RunEventToolCallRequested, agent.RunEventToolCallStarted,
 		agent.RunEventToolCallCompleted, agent.RunEventToolCallFailed, agent.RunEventToolCallDenied:

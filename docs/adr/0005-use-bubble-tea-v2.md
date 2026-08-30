@@ -5,18 +5,18 @@
 
 ## Context
 
-KuPilot needs a terminal event loop for streaming Agent output, keyboard input,
+Kupilot needs a terminal event loop for streaming Agent output, keyboard input,
 window changes, cancellation, modal supervision, and orderly shutdown. The TUI
 must remain a delivery adapter: it cannot become a second use-case layer or run
 Kubernetes, model, or SQLite I/O from rendering code.
 
 Bubble Tea has the required message-and-command model, but framework types and
-lifecycle behavior are vendor contracts that must not leak into KuPilot's
+lifecycle behavior are vendor contracts that must not leak into Kupilot's
 Application or Domain packages.
 
 ## Decision
 
-KuPilot will use Bubble Tea v2 as the TUI runtime. Bubble Tea types are confined
+Kupilot will use Bubble Tea v2 as the TUI runtime. Bubble Tea types are confined
 to `internal/tui` and construction in `cmd/kupilot`.
 
 The TUI will:
@@ -57,7 +57,7 @@ Costs and constraints:
 - Framework upgrades require lifecycle, rendering, and terminal-restoration
   regression tests.
 - Accessibility, focus, paste behavior, narrow terminals, and control-character
-  safety remain KuPilot responsibilities.
+  safety remain Kupilot responsibilities.
 
 ## Alternatives considered
 

@@ -7,18 +7,18 @@ import (
 
 const (
 	// MaxAgentRunDuration is the non-expandable wall-clock ceiling for one run.
-	MaxAgentRunDuration = 90 * time.Second
+	MaxAgentRunDuration = 30 * time.Minute
 	// MaxAgentSteps is the non-expandable single-Agent loop ceiling.
-	MaxAgentSteps = 8
+	MaxAgentSteps = 128
 	// MaxAgentToolCalls is the non-expandable Tool-call ceiling for one run.
-	MaxAgentToolCalls = 10
+	MaxAgentToolCalls = 256
 	// MaxAgentModelCalls is the non-expandable model-call ceiling for one run.
-	MaxAgentModelCalls = 3
+	MaxAgentModelCalls = 64
 	// MaxAgentRunToolResultBytes is the non-expandable cumulative ToolResult ceiling.
-	MaxAgentRunToolResultBytes = 384 * 1024
+	MaxAgentRunToolResultBytes = 16 * 1024 * 1024
 	// MaxAgentNoProgressSteps stops collection after this many consecutive steps
 	// add no accepted Evidence.
-	MaxAgentNoProgressSteps = 2
+	MaxAgentNoProgressSteps = 10
 
 	maxPromptVersionBytes      = 128
 	maxToolCatalogVersionBytes = 128
@@ -135,7 +135,7 @@ func (run AgentRun) Validate() error {
 		return ErrInvalidAgentRun
 	}
 	if run.Resource != nil &&
-		(run.Resource.Namespace != run.Scope.Namespace || run.Resource.Validate() != nil) {
+		(!ReferenceMatchesWorkingNamespace(*run.Resource, run.Scope.Namespace) || run.Resource.Validate() != nil) {
 		return ErrInvalidAgentRun
 	}
 	if run.TerminationReason != nil && !validBoundedText(*run.TerminationReason, 1, maxTerminationReasonBytes) {

@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	// DefaultUserAgent is the fixed v0.1 Kubernetes transport identity.
-	DefaultUserAgent = "kupilot/0.1"
+	// DefaultUserAgent is the fixed Kubernetes transport identity.
+	DefaultUserAgent = "kupilot/0.4"
 
 	// DefaultClientQPS and DefaultClientBurst are the non-expandable client
 	// rate defaults.
@@ -39,6 +39,9 @@ const (
 	// DefaultRequestTimeout is the hard ceiling for one Kubernetes request,
 	// including an exec credential refresh required by that request.
 	DefaultRequestTimeout = 10 * time.Second
+	// MaxRequestTimeout is the largest profile-selected Kubernetes request
+	// timeout. A caller may tighten it but cannot expand it beyond this bound.
+	MaxRequestTimeout = 60 * time.Second
 
 	maxExecOutputBytes = 64 * 1024
 	maxExecErrorBytes  = 8 * 1024
@@ -74,7 +77,7 @@ type ClientFactory struct {
 }
 
 // NewClientFactory validates immutable Kubernetes client construction policy.
-func NewClientFactory(loader *ConfigLoader, policy ExecCredentialPolicy) (*ClientFactory, error) {
+func NewClientFactory(loader *ConfigLoader, policy ExecCredentialPolicy, requestTimeout ...time.Duration) (*ClientFactory, error) {
 	if loader == nil {
 		return nil, newKubeSafeError(
 			ClassConfigurationInvalid,
@@ -91,10 +94,23 @@ func NewClientFactory(loader *ConfigLoader, policy ExecCredentialPolicy) (*Clien
 			"Kubernetes exec credential policy must be allow or deny.",
 		)
 	}
+	timeout := DefaultRequestTimeout
+	if len(requestTimeout) > 1 || len(requestTimeout) == 1 &&
+		(requestTimeout[0] <= 0 || requestTimeout[0] > MaxRequestTimeout) {
+		return nil, newKubeSafeError(
+			ClassConfigurationInvalid,
+			"kubernetes_request_timeout_invalid",
+			"create_kubernetes_client_factory",
+			"The Kubernetes request timeout is invalid.",
+		)
+	}
+	if len(requestTimeout) == 1 {
+		timeout = requestTimeout[0]
+	}
 	return &ClientFactory{
 		loader:         loader,
 		execPolicy:     policy,
-		requestTimeout: DefaultRequestTimeout,
+		requestTimeout: timeout,
 		environment:    os.Environ,
 		commandContext: exec.CommandContext,
 		newTypedClient: func(config *rest.Config, client *http.Client) (kubernetes.Interface, error) {
@@ -398,7 +414,7 @@ func validateExecConfig(config clientcmdapi.ExecConfig) error {
 			ClassUnsupported,
 			"kubernetes_exec_interactive_unsupported",
 			"create_exec_credential_transport",
-			"The selected Context requires interactive exec credentials, which KuPilot does not support.",
+			"The selected Context requires interactive exec credentials, which Kupilot does not support.",
 		)
 	}
 	if config.InteractiveMode != clientcmdapi.NeverExecInteractiveMode && config.InteractiveMode != clientcmdapi.IfAvailableExecInteractiveMode {

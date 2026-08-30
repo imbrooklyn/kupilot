@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0035
+- Amended by: ADR-0035 and ADR-0041
 
 ## Context
 
@@ -14,7 +14,7 @@ also have one meaning across Application, SQLite, CLI, and TUI.
 
 ## Decision
 
-KuPilot adopts the normative
+Kupilot adopts the normative
 [Data Retention Contract](../data-retention.md) with these accepted defaults:
 
 - Session metadata, sanitized user Messages, final validated assistant Messages,
@@ -22,8 +22,8 @@ KuPilot adopts the normative
 - Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata
   remain for 30 days. The public control may only shorten the current value,
   including to zero days, without making any prohibited raw category eligible.
-- Ordinary `v0.1` read and lifecycle AuditEvents remain for 90 days.
-- Terminal `v0.2` approval and decision records, and approval, write-intent,
+- Ordinary run and lifecycle AuditEvents remain for 90 days.
+- Terminal approval and decision records, and approval, write-intent,
   write-attempt, and verification AuditEvents remain for 180 days. Retention
   cleanup never removes pending or approved authority; startup recovery first
   makes those requests terminal.
@@ -33,7 +33,7 @@ KuPilot adopts the normative
   plaintext model-key save to the fixed Home configuration, outside Session
   retention.
 
-The future 60-second approval execution TTL is independent of the 180-day audit
+The 60-second approval execution TTL is independent of the 180-day audit
 default.
 
 If 30-day detail expires while the Session and Diagnosis remain, the historic
@@ -41,7 +41,7 @@ Diagnosis says that its supporting detail was removed by policy. Historic text
 does not become current Evidence for another AgentRun.
 
 Minimal-persistence stores only a necessary non-resumable Session shell, minimum
-run lifecycle and audit fields, the consent tuple, and future approval/write
+run lifecycle and audit fields, the consent tuple, and required approval/write
 audit. It stores no user or assistant Message content, final answer, Diagnosis,
 Tool detail, Evidence, or model-request detail. A minimal Session never appears
 in a picker or `--last`; exact-ID resume returns `session_not_resumable`.
@@ -53,7 +53,7 @@ effective 30/90/180-day category periods, and minimal mode's non-resumable
 effect. Its retention command is an atomic compare-and-tighten operation and
 cannot increase the current value. Its mode command starts a new Session rather
 than changing an existing Session's frozen mode. The current Session and a
-resume-picker selection are the only per-Session deletion targets; KuPilot adds
+resume-picker selection are the only per-Session deletion targets; Kupilot adds
 no Session-management page or second composer.
 
 Automatic purge runs at validated startup and during bounded idle batches. It
@@ -65,7 +65,7 @@ ADR-0018's driver requirements.
 
 Deleting one Session cascades through Messages, runs, model metadata,
 ToolInvocations, Evidence, Diagnoses, approval records, and linked read/write
-audit. This deletion may occur before 90 or 180 days because KuPilot is not a
+audit. This deletion may occur before 90 or 180 days because Kupilot is not a
 compliance ledger. Clear-history removes every Session graph. Delete-all local
 state additionally removes settings and consent from the validated database
 paths. Home configuration, cache, logs, exports, and backups are separate and
@@ -85,16 +85,16 @@ Storage failure behavior remains asymmetric:
 
 - A BeginRun transaction failure stops before model or Tool I/O, preserving the
   durable-start invariant.
-- A later persistence failure may let the already-started read-only Diagnosis
+- A later persistence failure may let the already-started in-memory answer
   finish in memory with prominent `persistence_degraded` state and no false
   resume claim.
-- A `v0.2` approval or pre-write intent-audit failure produces zero writes. A
+- An approval or pre-write intent-audit failure produces zero writes. A
   result-audit failure never triggers an automatic write retry.
 
 Logical deletion and file removal are not described as forensic erasure from
 SQLite free pages, WAL, backups, snapshots, swap, or storage media.
 
-ADR-0034 separately admits one explicitly confirmed versioned redacted Markdown
+ADR-0041 separately admits one explicitly confirmed versioned redacted Markdown
 summary outside SQLite. That user-controlled file does not change SQLite
 eligibility or retention, is never available for minimal Sessions, and is not
 removed when its source Session is later deleted.
@@ -166,7 +166,7 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 ## Revisit triggers
 
 - A default lifetime changes or a new durable category is proposed.
-- The summary export expands beyond ADR-0034, or backup, synchronization,
+- The summary export expands beyond ADR-0041, or backup, synchronization,
   telemetry, crash reporting, shared state, or encrypted storage is proposed.
 - Minimal-persistence becomes resumable or a no-database mode is proposed.
 - A compliance requirement would prevent user cascade deletion of write audit.
@@ -179,5 +179,5 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 - [ADR-0008: Use SQLite for Local Persistence](0008-use-sqlite-for-local-persistence.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
-- [ADR-0034: Export Only Versioned Redacted Session Summaries](0034-export-only-versioned-redacted-session-summaries.md)
+- [ADR-0041: Export Free-Form Session Summaries](0041-export-free-form-session-summaries.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)

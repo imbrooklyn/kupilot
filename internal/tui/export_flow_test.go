@@ -39,7 +39,7 @@ func TestPrivacyExportUsesOnlyTheRootComposerAndExplicitConfirmation(t *testing.
 		target,
 		application.ExportSummarySchemaVersion,
 		"committed user and final assistant text",
-		"four structured Diagnosis sections",
+		"final Markdown answer",
 		"referenced observation summaries",
 		"will not overwrite",
 	} {

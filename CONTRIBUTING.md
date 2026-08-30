@@ -1,8 +1,9 @@
-# Contributing to KuPilot
+# Contributing to Kupilot
 
-Thank you for helping improve KuPilot. Contributions must preserve its narrow,
-evidence-first, read-only `v0.1` boundary and the safety properties that make
-that boundary reviewable.
+Thank you for helping improve Kupilot. Contributions must preserve its
+Agent-first `v0.4` product contract and the typed authority, Evidence,
+projection, approval, and data-safety properties that make the broader
+operational boundary reviewable.
 
 ## Start with the public contracts
 
@@ -20,12 +21,14 @@ The root [AGENTS.md](AGENTS.md) contains repository-wide implementation and
 review constraints. Accepted public decisions remain authoritative until an
 explicit documentation and ADR change replaces them.
 
-For `v0.1`, do not propose a Kubernetes write, shell or kubectl execution,
-Secret read, all-Namespace access, generic Kubernetes gateway, dynamic Tool,
-plugin system, web service, telemetry path, or autonomous remediation as an
-ordinary implementation change. A feature proposal must name a supported
-diagnostic need and explain how it helps the Agent gather bounded Evidence or
-helps the user supervise that work.
+The current boundary admits the built-in typed read catalog, `current` and
+`all` namespace policies, and one supervised `restart_deployment` action. Do
+not introduce shell or kubectl execution, Secret reads, a generic Kubernetes
+gateway, dynamic Tools, plugins, a web service, telemetry, or autonomous
+remediation as an ordinary implementation change. A new source or action must
+name an operational need and document its exact API, authority, projection,
+privacy, budget, Evidence or action-state mapping, RBAC impact, and zero-call
+denial tests before implementation.
 
 ## Report security issues privately
 
@@ -36,7 +39,7 @@ an issue or pull request.
 
 ## Development environment
 
-KuPilot requires Go 1.25.0 or newer. The reproducible repository gates pin Go
+Kupilot requires Go 1.25.0 or newer. The reproducible repository gates pin Go
 1.25.13 and versioned development tools. Build the current platform binary with:
 
 ```sh

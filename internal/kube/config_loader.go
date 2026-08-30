@@ -44,7 +44,7 @@ type ConfigLoader struct {
 
 // NewConfigLoader creates an independent loader using KUBECONFIG when present
 // and the standard per-user kubeconfig location otherwise. Legacy migration is
-// disabled because KuPilot never writes a user's kubeconfig.
+// disabled because Kupilot never writes a user's kubeconfig.
 func NewConfigLoader() *ConfigLoader {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.MigrationRules = nil

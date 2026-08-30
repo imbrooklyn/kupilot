@@ -1,66 +1,78 @@
-# KuPilot Glossary
+# Kupilot Glossary
 
-These terms are the canonical product language. Product documentation and future
-implementation work should use them consistently rather than introducing near
-synonyms.
+These terms are canonical public product language.
 
 ## AgentRun
 
-One bounded execution created when a user submits one diagnostic question. An
-AgentRun has a beginning and terminal state, allows only one active execution at
-a time in `v0.1`, and is bound to an immutable ClusterScope. Cancelling or
-changing scope terminates the active AgentRun; it is not silently resumed.
+One bounded execution created for an operational question. Only one AgentRun is
+active at a time. It is bound to an immutable ClusterScope, capability catalog,
+consent tuple, and budget profile and is never silently resumed.
 
 ## ClusterScope
 
-The verified Kubernetes Context and Namespace boundary, together with the scope
-generation used to reject stale work. Every AgentRun receives an immutable
-ClusterScope. A ClusterScope never means all Namespaces, and the model cannot
-change it through a ToolInvocation.
+One verified Kubernetes Context, one visible working Namespace, one immutable
+`current` or `all` namespace-access policy, activation time, and generation.
+The model cannot change it. `all` permits explicit cross-Namespace reads in the
+same Context; it never means another cluster.
+
+## Working Namespace
+
+The Namespace used for default namespaced intent, resource selection, action
+targets, and persistent footer display. It is not an implicit all-Namespace
+marker and does not falsely label cluster-scoped or explicit cross-Namespace
+Evidence.
 
 ## Diagnosis
 
-The structured result of an AgentRun. A Diagnosis separates confirmed facts,
-hypotheses, missing information, and recommended actions, and identifies the
-ClusterScope and observation time. A Diagnosis is not a guaranteed root cause and
-is not proof that a recommended action was executed.
+The durable compatibility name for a validated terminal answer and its safe
+metadata. The visible answer is free-form Markdown. Citation-backed facts,
+gaps, warnings, and typed proposed actions remain separately bounded. A
+Diagnosis is not guaranteed causal truth and does not prove an action ran.
 
 ## Evidence
 
-A safe, bounded observation produced from a ToolInvocation and traceable to its
-source ResourceRef, ClusterScope, and observation time. Evidence records what was
-observed; it is not model inference. Only Evidence from the current AgentRun can
-support its confirmed facts.
+A safe bounded observation produced by deterministic Tool handling and bound to
+one run, invocation, scope generation, exact ResourceRef, source, and time.
+Evidence records what was observed; model prose is interpretation.
 
 ## ResourceRef
 
-A bounded reference to a Kubernetes resource, using its kind and name within the
-active ClusterScope and stronger identity information when safely available. A
-user-selected ResourceRef is a requested target, not proof that the resource
-exists; a read-only Tool must verify it. Direct `v0.1` targets are limited to Pod,
-Deployment, ReplicaSet, Job, and Service.
+A bounded reference to an allowlisted Kubernetes resource with API version,
+Kind, exact name, and real Namespace semantics. A selected reference is an
+input candidate, not proof of existence; a run capability must verify it.
 
 ## Session
 
-The local conversation container that can hold messages and multiple completed
-AgentRuns across application launches. A Session is not a ClusterScope. Starting
-KuPilot without an explicit resume action creates a new Session; resuming history
-does not replay an AgentRun or make old Evidence current.
+The local conversation container for messages and completed AgentRuns across
+launches. A Session is not live Kubernetes authority. Bare startup creates a
+new Session; explicit resume restores safe history and unverified candidates
+only.
 
 ## ToolInvocation
 
-One audited use of one fixed, structured Tool during an AgentRun. A
-ToolInvocation inherits the AgentRun ClusterScope, operates under local policy
-and hard budgets, and produces a safe result that may become Evidence. It is not
-a shell command, kubectl invocation, generic Kubernetes request, or write action
-in `v0.1`.
+One audited use of one code-owned structured read capability. It inherits the
+AgentRun scope and ceilings, uses strict canonical arguments, and may create
+Evidence. It is not a shell command, kubectl invocation, generic API request,
+or mutation.
+
+## Proposed action
+
+Descriptive typed output from the Agent. It carries no nonce, digest, target
+fingerprint, or executor authority. The current catalog admits only an exact
+Deployment restart proposal in the working Namespace.
+
+## Approval
+
+A local, default-reject, 60-second, single-use request created only after fresh
+trusted target preparation. It binds the operation and target state through a
+versioned digest. Model or TUI prose cannot create it.
 
 ## Agent-first
 
-The product principle that the user's diagnostic intent and the Agent's bounded
-Evidence collection remain the primary interaction. Interface features should
-help the Agent or help the user supervise it, not replace it with resource
-browsing or direct cluster management.
+The principle that conversational operational intent and visible bounded Agent
+work remain the primary interface. Features help the Agent gather Evidence or
+help the user supervise it; they do not create a parallel resource browser,
+shell, dashboard, or controller.
 
-See the [Product Contract](./product.md), [Scope](./scope.md), and
-[Privacy Overview](./privacy-overview.md) for the complete public baseline.
+See [Product Contract](product.md), [Scope](scope.md), and
+[Privacy Overview](privacy-overview.md).

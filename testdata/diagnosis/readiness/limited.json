@@ -1,7 +1,12 @@
 {
   "name": "readiness_logs_truncated",
   "question": "Why is example-pod not Ready?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Condition Ready is False with reason ContainersNotReady.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["pod_not_ready", "application_health_issue_possible"]
+            "supports": [
+              "pod_not_ready",
+              "application_health_issue_possible"
+            ]
           }
         ]
       }
@@ -51,44 +59,53 @@
             "source_path": "projected.log_excerpt",
             "severity": "warning",
             "truncated": true,
-            "supports": ["current_log_excerpt_available", "application_health_issue_possible"]
+            "supports": [
+              "current_log_excerpt_available",
+              "application_health_issue_possible"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
+    "answer_markdown": "The projected Pod Ready condition is False.\n\nAn application health issue remains possible, but the available observations are incomplete. Confidence: high. To verify: A complete bounded observation shows the application healthy or identifies a different readiness cause.\n\nNo readiness probe Event was returned. Impact: Readiness state alone does not confirm a probe failure.\n\nThe current log result was truncated by the fixed line limit. Impact: Unreturned log content cannot support a definite cause.\n\nSuggested next step: Collect a new bounded readiness observation and review probe configuration outside Kupilot. Risk: Changing the probe may alter traffic eligibility or replace Pods. Before acting: Do not infer content beyond the fixed log limit.",
+    "evidence_citations": [
+      {
+        "claim": "The projected Pod Ready condition is False.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001511"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
     "confirmed_facts": [
-      {"statement": "The projected Pod Ready condition is False.", "evidence_ids": ["00000000-0000-7000-8000-000000001511"]}
+      {
+        "index": 0,
+        "assertion": "pod_not_ready"
+      }
     ],
     "hypotheses": [
       {
-        "statement": "An application health issue remains possible, but the available observations are incomplete.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001511", "00000000-0000-7000-8000-000000001513", "00000000-0000-7000-8000-000000009905"],
-        "confidence": "high",
-        "falsifier": "A complete bounded observation shows the application healthy or identifies a different readiness cause."
+        "index": 0,
+        "assertion": "application_health_issue_possible"
       }
-    ],
-    "missing_information": [
-      {"kind": "absent", "detail": "No readiness probe Event was returned.", "impact": "Readiness state alone does not confirm a probe failure."},
-      {"kind": "truncated", "detail": "The current log result was truncated by the fixed line limit.", "impact": "Unreturned log content cannot support a definite cause."}
     ],
     "recommended_actions": [
       {
-        "action": "Collect a new bounded readiness observation and review probe configuration outside KuPilot.",
-        "risk": "Changing the probe may alter traffic eligibility or replace Pods.",
-        "prerequisites": ["Do not infer content beyond the fixed log limit."],
-        "executed": false
+        "index": 0,
+        "assertion": "collect_complete_bounded_observation"
       }
     ]
   },
-  "annotations": {
-    "confirmed_facts": [{"index": 0, "assertion": "pod_not_ready"}],
-    "hypotheses": [{"index": 0, "assertion": "application_health_issue_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "collect_complete_bounded_observation"}]
-  },
-  "required_confirmed_assertions": ["pod_not_ready"],
-  "required_missing_kinds": ["absent", "truncated", "unsupported"],
+  "required_confirmed_assertions": [
+    "pod_not_ready"
+  ],
+  "required_missing_kinds": [
+    "truncated"
+  ],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "partial"
 }

@@ -21,6 +21,9 @@ type ErrorDialog struct {
 // NewErrorDialog creates one closed non-editable modal.
 func NewErrorDialog(styles DialogStyles) ErrorDialog { return ErrorDialog{styles: styles} }
 
+// SetStyles updates presentation without changing modal state.
+func (dialog *ErrorDialog) SetStyles(styles DialogStyles) { dialog.styles = styles }
+
 // Show opens the modal with already-safe bounded copy.
 func (dialog *ErrorDialog) Show(title, body string) {
 	dialog.open = true

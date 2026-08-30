@@ -17,8 +17,9 @@ func NewNamespacePicker(styles PickerStyles) NamespacePicker {
 	}, styles)}
 }
 
-func (picker *NamespacePicker) SetLoading() { picker.list.setLoading() }
-func (picker *NamespacePicker) SetFailed()  { picker.list.setFailed() }
+func (picker *NamespacePicker) SetLoading()                   { picker.list.setLoading() }
+func (picker *NamespacePicker) SetStyles(styles PickerStyles) { picker.list.setStyles(styles) }
+func (picker *NamespacePicker) SetFailed()                    { picker.list.setFailed() }
 func (picker *NamespacePicker) SetCandidates(values []NamespaceCandidate) {
 	picker.list.setItems(values)
 }

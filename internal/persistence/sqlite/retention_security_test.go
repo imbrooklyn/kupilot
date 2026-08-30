@@ -157,17 +157,18 @@ func TestSQLXImportRemainsInsideSQLiteAdapter(t *testing.T) {
 	}
 }
 
-func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
+func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join(currentSQLiteDirectory(t), "..", "..", ".."))
 	for _, relative := range []string{filepath.Join("internal", "executor")} {
 		if _, err := os.Stat(filepath.Join(repositoryRoot, relative)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("prohibited v0.1 production directory exists: %s", relative)
+			t.Errorf("prohibited generic executor directory exists: %s", relative)
 		}
 	}
 	approvalPrefix := filepath.Join(repositoryRoot, "internal", "approval") + string(filepath.Separator)
 	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
 	applicationPrefix := filepath.Join(repositoryRoot, "internal", "application") + string(filepath.Separator)
-	proposalBridge := filepath.Join(repositoryRoot, "internal", "tools", "restart_deployment.go")
+	agentPrompt := filepath.Join(repositoryRoot, "internal", "agent", "prompt.go")
+	tuiStatus := filepath.Join(repositoryRoot, "internal", "tui", "update.go")
 	restartAdapter := filepath.Join(repositoryRoot, "internal", "kube", "restart_deployment.go")
 	rolloutAdapter := filepath.Join(repositoryRoot, "internal", "kube", "rollout.go")
 	kubePrefix := filepath.Join(repositoryRoot, "internal", "kube") + string(filepath.Separator)
@@ -196,10 +197,10 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		}
 		for _, symbol := range forbiddenEverywhere {
 			if bytes.Contains(content, []byte(symbol)) {
-				t.Errorf("%s contains prohibited v0.1 symbol %q", path, symbol)
+				t.Errorf("%s contains prohibited generic write symbol %q", path, symbol)
 			}
 		}
-		if !strings.HasPrefix(path, approvalPrefix) && filepath.Clean(path) != restartAdapter {
+		if !strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) && filepath.Clean(path) != restartAdapter {
 			for _, symbol := range approvalOnly {
 				if bytes.Contains(content, []byte(symbol)) {
 					t.Errorf("%s exposes approval authority outside the isolated package: %q", path, symbol)
@@ -209,11 +210,9 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		if bytes.Contains(content, []byte("ApprovalCoordinator")) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("ApprovalCoordinator escaped the Application package: %s", path)
 		}
-		if strings.HasPrefix(path, applicationPrefix) && bytes.Contains(content, []byte("ResourceVersion")) {
-			t.Errorf("Kubernetes resource-version metadata escaped into Application production code: %s", path)
-		}
 		if bytes.Contains(content, []byte("restart_deployment")) &&
-			filepath.Clean(path) != domainApproval && filepath.Clean(path) != proposalBridge &&
+			filepath.Clean(path) != domainApproval && filepath.Clean(path) != agentPrompt &&
+			filepath.Clean(path) != tuiStatus &&
 			filepath.Clean(path) != restartAdapter && filepath.Clean(path) != rolloutAdapter &&
 			!strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) {
 			t.Errorf("restart_deployment escaped the isolated domain or approval packages: %s", path)
@@ -276,6 +275,12 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		t.Fatalf("production restart executor occurrences = %d, want contract, caller, and adapter only", executeOccurrences)
 	}
 	commandRoot := filepath.Join(repositoryRoot, "cmd", "kupilot")
+	constructorCounts := map[string]int{
+		"approval.NewService(":                0,
+		"application.NewApprovalCoordinator(": 0,
+		"kube.NewDeploymentRestarter(":        0,
+		"kube.NewDeploymentRolloutObserver(":  0,
+	}
 	err = filepath.WalkDir(commandRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -287,18 +292,26 @@ func TestV01ProductionHasNoApprovalServiceOrWriteExecutor(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		for constructor := range constructorCounts {
+			constructorCounts[constructor] += bytes.Count(content, []byte(constructor))
+		}
 		for _, symbol := range []string{
-			"ApprovalCoordinator", "RestartDeploymentProposal", "RestartDeploymentExecutor",
-			"RestartDeploymentExecution", "DeploymentRestarter", "ExecuteApprovedRestart(", "restart_deployment",
+			"RestartDeploymentProposalBridge", "RestartDeploymentExecutor",
+			"RestartDeploymentExecution", "ExecuteApprovedRestart(", ".Patch(",
 		} {
 			if bytes.Contains(content, []byte(symbol)) {
-				t.Errorf("v0.1 composition contains prohibited approval capability %q in %s", symbol, path)
+				t.Errorf("composition bypasses the closed approval service with %q in %s", symbol, path)
 			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("WalkDir(cmd/kupilot) error = %v", err)
+	}
+	for constructor, count := range constructorCounts {
+		if count != 1 {
+			t.Errorf("composition constructor %q count = %d, want 1", constructor, count)
+		}
 	}
 }
 

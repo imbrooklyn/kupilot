@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
@@ -92,6 +93,7 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
 	})
 	request := resumeRequestFromCmd(t, model.Init())
+	historicAnswer := strings.Repeat("a", application.MaxQuestionBytes+1)
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
@@ -101,7 +103,7 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 		SavedScope: &domain.ScopeCandidate{Context: "current", Namespace: "default"},
 		History: []application.UIHistoryMessage{
 			{Role: domain.MessageRoleUser, Format: domain.MessageFormatPlain, Content: "Historic question."},
-			{Role: domain.MessageRoleAssistant, Format: domain.MessageFormatMarkdown, Content: "Historic answer [E-OLD]."},
+			{Role: domain.MessageRoleAssistant, Format: domain.MessageFormatMarkdown, Content: historicAnswer},
 		},
 	}
 	model, cmd := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
@@ -126,6 +128,9 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 	if !model.startup.Ready || !model.session.Resumed || len(entries) != 3 ||
 		!strings.Contains(entries[2].Text, "display-only") || len(entries[1].ToolSteps) != 0 {
 		t.Fatalf("accepted resume entries = %#v", entries)
+	}
+	if entries[1].Text != historicAnswer {
+		t.Fatalf("historic answer bytes = %d, want %d", len(entries[1].Text), len(historicAnswer))
 	}
 }
 
@@ -178,6 +183,13 @@ func (fake *dispatchApplication) ExecuteUICommand(
 	fake.commandCalls++
 	return application.UICommandOutcome{
 		Command: application.UICommandShowStatus,
-		Status:  &application.UIStatusResult{},
+		Status: &application.UIStatusResult{
+			CapabilityCatalogVersion: agent.ToolCatalogVersion,
+			Budget: application.UIBudgetStatus{
+				Profile: agent.BudgetProfileBalanced, RunMilliseconds: 600_000, RemainingMilliseconds: 600_000,
+				StepsMaximum: 32, ToolCallsMaximum: 48, ModelCallsMaximum: 16,
+				ToolResultBytesMaximum: 4 * 1024 * 1024, LogCallsMaximum: 12,
+			},
+		},
 	}, nil
 }

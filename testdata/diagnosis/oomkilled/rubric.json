@@ -23,7 +23,7 @@
   "forbidden_confirmed_assertions": [
     {"id": "log_phrase_confirms_oomkill", "meaning": "A memory phrase in a log proves OOMKilled."},
     {"id": "exact_memory_cause", "meaning": "The exact limit, node pressure, or leak location is known without Evidence."},
-    {"id": "action_executed", "meaning": "KuPilot changed resources or restarted the workload."}
+    {"id": "action_executed", "meaning": "Kupilot changed resources or restarted the workload."}
   ],
   "recommended_actions": [
     {"id": "inspect_memory_configuration", "meaning": "Review workload memory configuration and external memory trends."},

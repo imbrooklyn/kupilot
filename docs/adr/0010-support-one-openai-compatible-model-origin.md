@@ -6,7 +6,7 @@
 
 ## Context
 
-KuPilot needs one cloud model for streamed Diagnosis generation and structured
+Kupilot needs one cloud model for streamed Diagnosis generation and structured
 Tool selection. Supporting several provider protocols, automatic failover, or a
 broad compatibility matrix would multiply credential handling, capability
 detection, error mapping, consent, testing, and data-transfer behavior before
@@ -14,11 +14,11 @@ the core product is validated.
 
 The phrase "OpenAI-compatible" is not a precise standard. Endpoints differ in
 streaming, Tool schemas, usage reporting, errors, model identifiers, and partial
-protocol behavior. KuPilot must not claim compatibility based on a label alone.
+protocol behavior. Kupilot must not claim compatibility based on a label alone.
 
 ## Decision
 
-`v0.1` will support one configured model provider kind,
+Kupilot supports one configured model provider kind,
 `openai_compatible`, and one canonical endpoint origin at a time. There is no
 provider auto-detection, fallback, routing, load balancing, or simultaneous
 multi-provider conversation.
@@ -46,7 +46,7 @@ An endpoint is supported only after it passes the model contract in ADR-0022.
 "OpenAI-compatible" describes the one adapter profile; it is not a promise that
 every endpoint using that description works.
 
-The user must configure a model identifier; KuPilot does not hard-code a cloud
+The user must configure a model identifier; Kupilot does not hard-code a cloud
 provider default. The precise wire paths, payload fields, streaming event types,
 and concrete client API remain behind the adapter and must satisfy the
 validation requirements below.
@@ -63,14 +63,14 @@ Positive consequences:
 Costs and constraints:
 
 - Users whose endpoint fails the required structured Tool or stream contract
-  cannot use it in `v0.1` even if basic chat requests work.
+  cannot use it even if basic chat requests work.
 - There is no automatic provider fallback during an outage.
 - Endpoint-specific differences require adapter validation and safe errors.
 - Non-loopback plaintext endpoints remain outside the supported product path.
 
 ## Alternatives considered
 
-- Supporting multiple provider SDKs in `v0.1` was rejected because each adds a
+- Supporting multiple provider SDKs was rejected because each adds a
   distinct data, credential, stream, and compatibility boundary.
 - Automatic protocol detection was rejected because sending probes or content
   to guessed paths can disclose data and produces ambiguous behavior.
@@ -81,7 +81,7 @@ Costs and constraints:
 
 ## Security and privacy impact
 
-The endpoint is a user-selected external trust boundary. KuPilot binds informed
+The endpoint is a user-selected external trust boundary. Kupilot binds informed
 consent to its canonical origin and eligible categories, rejects cross-origin
 redirects, and never lets model, Kubernetes, Session, or Tool content change it.
 The API key is transport-only after extraction and is governed by ADR-0035.

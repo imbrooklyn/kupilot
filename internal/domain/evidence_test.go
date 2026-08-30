@@ -40,13 +40,18 @@ func TestEvidenceValidationAndDetailState(t *testing.T) {
 	if got := truncated.DetailState(); got != EvidenceDetailPartial {
 		t.Fatalf("truncated DetailState() = %q, want %q", got, EvidenceDetailPartial)
 	}
+	crossNamespace := evidence
+	crossNamespace.Resource.Namespace = "other-namespace"
+	if err := crossNamespace.Validate(); err != nil {
+		t.Fatalf("cross-Namespace Evidence validation = %v", err)
+	}
 
 	tests := []struct {
 		name   string
 		mutate func(*Evidence)
 	}{
 		{name: "unknown category", mutate: func(value *Evidence) { value.Category = "raw_object" }},
-		{name: "scope mismatch", mutate: func(value *Evidence) { value.Resource.Namespace = "other-namespace" }},
+		{name: "prohibited resource", mutate: func(value *Evidence) { value.Resource.Kind = "Secret" }},
 		{name: "oversized fact", mutate: func(value *Evidence) { value.Fact = strings.Repeat("f", maxEvidenceFactBytes+1) }},
 		{name: "oversized source path", mutate: func(value *Evidence) {
 			text := strings.Repeat("p", maxEvidenceSourcePathBytes+1)

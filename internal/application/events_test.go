@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,73 @@ func TestEventBridgeDoesNotConsumeSequenceOrDeltaOnSinkFailure(t *testing.T) {
 		accepted[1].Kind != UIEventTextDelta || accepted[1].Text != "retained delta" ||
 		accepted[2].Kind != UIEventPersistenceDegraded {
 		t.Fatalf("accepted UI events after retry = %#v", accepted)
+	}
+}
+
+func TestEventBridgePublishesValidationWarningBeforeFinalAnswer(t *testing.T) {
+	t.Parallel()
+	const runID domain.AgentRunID = "00000000-0000-7000-8000-000000000131"
+	now := time.UnixMilli(3_000).UTC()
+	var events []UIEvent
+	bridge, err := newEventBridge(runID, 7, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+		events = append(events, event)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("newEventBridge() error = %v", err)
+	}
+	diagnosis := domain.Diagnosis{
+		ID: "00000000-0000-7000-8000-000000000132", RunID: runID,
+		Scope:              domain.ScopeSnapshot{Context: "test-context", Namespace: "team-a", Generation: 7},
+		AnswerMarkdown:     "The supported answer remains available.",
+		ValidationWarnings: []string{"An invalid Evidence reference was removed."},
+		CreatedAt:          now,
+	}
+	inputs := []agent.RunEvent{
+		{RunID: runID, ScopeGeneration: 7, Sequence: 1, OccurredAt: now, Kind: agent.RunEventRunStarted},
+		{RunID: runID, ScopeGeneration: 7, Sequence: 2, OccurredAt: now, Kind: agent.RunEventDiagnosisReady, Diagnosis: &diagnosis},
+		{RunID: runID, ScopeGeneration: 7, Sequence: 3, OccurredAt: now, Kind: agent.RunEventRunCompleted},
+	}
+	for _, event := range inputs {
+		if err := bridge.accept(context.Background(), event); err != nil {
+			t.Fatalf("accept(%s) error = %v", event.Kind, err)
+		}
+	}
+	wantKinds := []UIEventKind{UIEventRunStarted, UIEventValidationWarning, UIEventRunCompleted}
+	if len(events) != len(wantKinds) {
+		t.Fatalf("UI event count = %d, want %d: %#v", len(events), len(wantKinds), events)
+	}
+	for index, event := range events {
+		if event.Kind != wantKinds[index] || event.Sequence != int64(index+1) || event.Validate() != nil {
+			t.Fatalf("UI event[%d] = %#v", index, event)
+		}
+	}
+	if !strings.Contains(events[1].Text, "unsupported final-answer metadata") || events[2].Text != diagnosis.AnswerMarkdown {
+		t.Fatalf("warning/final events = %#v", events)
+	}
+}
+
+func TestCompletedUIEventAcceptsAnswerAboveQuestionLimit(t *testing.T) {
+	t.Parallel()
+	answer := strings.Repeat("a", MaxQuestionBytes+1)
+	event := UIEvent{
+		Kind: UIEventRunCompleted, RunID: "00000000-0000-7000-8000-000000000141",
+		ScopeGeneration: 7, Sequence: 2, Text: answer,
+	}
+	if len(answer) > MaxAnswerMarkdownBytes || event.Validate() != nil {
+		t.Fatalf("validated final answer length = %d; event error = %v", len(answer), event.Validate())
+	}
+}
+
+func TestTextDeltaUIEventAcceptsContentAboveQuestionLimit(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", MaxQuestionBytes+1)
+	event := UIEvent{
+		Kind: UIEventTextDelta, RunID: "00000000-0000-7000-8000-000000000141",
+		ScopeGeneration: 7, Sequence: 2, Text: text,
+	}
+	if len(text) > MaxAnswerMarkdownBytes || event.Validate() != nil {
+		t.Fatalf("validated streamed answer length = %d; event error = %v", len(text), event.Validate())
 	}
 }
 

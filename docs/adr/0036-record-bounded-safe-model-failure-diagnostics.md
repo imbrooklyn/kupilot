@@ -7,7 +7,7 @@
 ## Context
 
 The TUI must keep model failures concise and safe, but a generic SDK error can
-erase the HTTP status already observed by KuPilot's guarded transport. That can
+erase the HTTP status already observed by Kupilot's guarded transport. That can
 misclassify an unsupported streaming-plus-Tools request as endpoint
 unavailability. The previous operational-log allowlist also dropped every
 model-adapter lifecycle record, leaving no durable, safe evidence for local
@@ -22,7 +22,7 @@ SDK failure that the stable projection cannot explain.
 ## Decision
 
 The Eino request scaffold leaves optional sampling and output fields unset;
-KuPilot's fixed payload modifier remains the sole owner of their actual wire
+Kupilot's fixed payload modifier remains the sole owner of their actual wire
 values. This prevents SDK model-name heuristics from rejecting an otherwise
 valid OpenAI-compatible request before HTTP. An optional reasoning-effort value
 comes only from typed configuration and is never inferred from a model name or
@@ -49,7 +49,7 @@ diagnostic projection is limited to:
 - Stable safe error class and code, code-defined retryability, and one fixed
   cause category.
 - The observed HTTP status when available.
-- A sink-generated, function-name-only KuPilot call chain, with an explicit
+- A sink-generated, function-name-only Kupilot call chain, with an explicit
   truncation flag.
 
 The call chain contains at most 32 project function symbols and 512 bytes. It
@@ -76,7 +76,7 @@ failure-only projection to the same local rotating log. It may contain:
 The adapter removes every exact occurrence of its opaque model credential,
 normalizes external text, removes unsafe terminal controls, and applies the
 fixed sensitive-value block or redaction policy before submitting sensitive
-fields to the log handler. KuPilot never deliberately attaches Authorization or
+fields to the log handler. Kupilot never deliberately attaches Authorization or
 other headers, request bodies, successful responses, SSE chunks, prompts, Tool
 data, Kubernetes content, environment snapshots, SQL, or credentials to this
 record. The untrusted provider error and error chain may still echo user or
@@ -92,7 +92,7 @@ Startup emits a visible warning while the mode is enabled.
 An unsupported gateway, SDK preflight, or model profile is reported accurately
 even when the SDK loses its typed error wrapper. In the default mode, local
 users can correlate a TUI failure with the request, HTTP class, safe causal
-stage, and KuPilot function path without exposing the provider payload or local
+stage, and Kupilot function path without exposing the provider payload or local
 source paths.
 
 The symbol-only chain is intentionally less detailed than a Go stack dump. It

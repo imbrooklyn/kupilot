@@ -19,8 +19,8 @@ type NonceSource interface {
 	NewNonce(context.Context) (domain.ApprovalNonce, error)
 }
 
-// ApprovalService is the narrow lifecycle port intended for later Application
-// orchestration. It is not wired into the v0.1 composition.
+// ApprovalService is the narrow lifecycle port used by Application
+// orchestration. It exposes no generic mutation operation.
 type ApprovalService interface {
 	Request(context.Context, RequestCommand) (domain.ApprovalRequest, error)
 	Decide(context.Context, DecisionCommand) (domain.ApprovalRequest, domain.ApprovalDecision, error)

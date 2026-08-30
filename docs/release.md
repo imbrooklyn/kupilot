@@ -1,13 +1,19 @@
 # Release Process
 
-KuPilot releases are built locally from the repository `Makefile`. The release
+> [!NOTE]
+> This runbook describes the historical `v0.3.0` artifact matrix. It has not
+> been requalified for the current `v0.4` candidate and does not authorize a
+> release or publication. A `v0.4` release requires an updated matrix and fresh
+> security, compatibility, migration, RBAC, and artifact evidence.
+
+Kupilot releases are built locally from the repository `Makefile`. The release
 configuration produces versioned, CGO-free archives for the four supported
 macOS and Linux targets. Publishing is a separate, explicitly authorized
 maintainer action: the repository has no automated publishing workflow, and
 GoReleaser publishing is disabled.
 
 This process must not use a production kubeconfig, model credential, cluster,
-local KuPilot database, operational log, or user configuration. See the
+local Kupilot database, operational log, or user configuration. See the
 [Security Threat Model](security.md), [Privacy Overview](privacy-overview.md),
 and [Development and CI Gates](development.md) before preparing a candidate.
 
@@ -77,21 +83,21 @@ environment variables cannot override build metadata.
 
 ## Database upgrade and application rollback
 
-KuPilot storage uses four immutable, checksummed, forward-only migrations. A
+Kupilot storage uses four immutable, checksummed, forward-only migrations. A
 released `v0.1` database contains migrations 1 and 2, `v0.2` adds migration 3,
 and `v0.3` adds migration 4. Opening a valid older database with `v0.3` applies
 only the missing migrations in order. An unknown, corrupt, checksum-mismatched,
-or newer schema fails closed; KuPilot never deletes, replaces, or recreates it
+or newer schema fails closed; Kupilot never deletes, replaces, or recreates it
 silently.
 
-Before the first `v0.3` open, stop every KuPilot process and make an
+Before the first `v0.3` open, stop every Kupilot process and make an
 owner-protected backup of the exact database and any existing `-journal`,
 `-wal`, and `-shm` sidecars under the operator's backup policy. Do not copy a
-live database as an application rollback mechanism. KuPilot has no down
+live database as an application rollback mechanism. Kupilot has no down
 migrations, and an older binary must not open a database after a newer migration
 has committed.
 
-To roll back the application, stop KuPilot and restore the complete matching
+To roll back the application, stop Kupilot and restore the complete matching
 pre-upgrade backup before starting the older binary. Never edit a migration,
 its checksum ledger, or the upgraded database to imitate a downgrade. Any
 pending or approved-but-not-executed restart approval becomes terminal and
@@ -242,7 +248,7 @@ Kubernetes, contacting a model endpoint, or entering the TUI.
 
 For the safe startup-error check, point `KUPILOT_HOME` at a nonexistent child of
 an empty temporary tree; set `KUBECONFIG` to an empty test file; leave
-`KUPILOT_MODEL_API_KEY` absent; and invoke KuPilot with an absolute path to a
+`KUPILOT_MODEL_API_KEY` absent; and invoke Kupilot with an absolute path to a
 nonexistent configuration file. The command must return a safe
 `config_file_unavailable` error, must not echo an environment value, and must
 not create Home, a database, WAL/SHM sidecar, or log.
@@ -288,5 +294,5 @@ tag. If an artifact is incorrect or unsafe:
 6. Account for downstream mirrors and caches: withdrawing the repository-host
    assets cannot guarantee deletion of copies already downloaded.
 
-KuPilot has no automatic release rollback, background updater, or mechanism to
+Kupilot has no automatic release rollback, background updater, or mechanism to
 remove a binary from a user's machine.

@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// ToolCatalogVersion versions the complete fixed v0.1 model-visible catalog.
-	ToolCatalogVersion = "kupilot-read-tools-v2"
+	// ToolCatalogVersion versions the complete built-in model-visible catalog.
+	ToolCatalogVersion = "kupilot-operational-tools-v1"
 
 	maxToolPurposeBytes = 1024
 	maxNameQueryBytes   = 128
@@ -40,22 +40,24 @@ var (
 )
 
 const (
-	getResourceSchema         = `{"additionalProperties":false,"properties":{"detail":{"enum":["summary","diagnostic",null],"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"}},"required":["api_version","kind","name"],"type":"object"}},"required":["detail","purpose","resource"],"type":"object"}`
-	listResourcesSchema       = `{"additionalProperties":false,"properties":{"health_filter":{"enum":["any","abnormal",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"name_query":{"maxLength":128,"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["health_filter","kind","limit","name_query","purpose"],"type":"object"}`
-	getEventsSchema           = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","uid"],"type":"object"},"since_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["limit","purpose","resource","since_seconds"],"type":"object"}`
-	getPodLogsSchema          = `{"additionalProperties":false,"properties":{"container":{"maxLength":253,"minLength":1,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"since_seconds":{"maximum":3600,"minimum":60,"type":["integer","null"]},"tail_lines":{"maximum":200,"minimum":1,"type":["integer","null"]}},"required":["container","pod_name","purpose","since_seconds","tail_lines"],"type":"object"}`
-	getRelatedResourcesSchema = `{"additionalProperties":false,"properties":{"include":{"items":{"enum":["owners","pods","replica_sets","service_endpoints","services"],"type":"string"},"maxItems":3,"minItems":1,"type":["array","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"relation_depth":{"maximum":2,"minimum":1,"type":["integer","null"]},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","uid"],"type":"object"}},"required":["include","purpose","relation_depth","resource"],"type":"object"}`
+	getResourceSchema         = `{"additionalProperties":false,"properties":{"detail":{"enum":["summary","diagnostic",null],"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1","networking.k8s.io/v1","autoscaling/v2","policy/v1",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]}},"required":["api_version","kind","name","namespace"],"type":"object"}},"required":["detail","purpose","resource"],"type":"object"}`
+	listResourcesSchema       = `{"additionalProperties":false,"properties":{"health_filter":{"enum":["any","abnormal",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"name_query":{"maxLength":128,"type":["string","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["health_filter","kind","limit","name_query","namespace","purpose"],"type":"object"}`
+	getEventsSchema           = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1","networking.k8s.io/v1","autoscaling/v2","policy/v1",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"},"since_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["limit","purpose","resource","since_seconds"],"type":"object"}`
+	getPodLogsSchema          = `{"additionalProperties":false,"properties":{"container":{"maxLength":253,"minLength":1,"type":["string","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"since_seconds":{"maximum":3600,"minimum":60,"type":["integer","null"]},"tail_lines":{"maximum":200,"minimum":1,"type":["integer","null"]}},"required":["container","namespace","pod_name","purpose","since_seconds","tail_lines"],"type":"object"}`
+	getRelatedResourcesSchema = `{"additionalProperties":false,"properties":{"include":{"items":{"enum":["owners","pods","replica_sets","service_endpoints","services"],"type":"string"},"maxItems":3,"minItems":1,"type":["array","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"relation_depth":{"maximum":2,"minimum":1,"type":["integer","null"]},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"}},"required":["include","purpose","relation_depth","resource"],"type":"object"}`
+	getClusterOverviewSchema  = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":2,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["limit","purpose"],"type":"object"}`
 )
 
 // ToolSpecifications returns a defensive copy of the exact ordered catalog.
 func ToolSpecifications() []domain.ModelToolSpecification {
 	return []domain.ModelToolSpecification{
-		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one allowlisted resource's bounded diagnostic projection in the active Namespace.", InputSchemaJSON: getResourceSchema},
-		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one selected allowlisted Kind (Pod, Deployment, ReplicaSet, Job, or Service) in the active Namespace for bounded Evidence. A request for Pods in the current Namespace is supported; use health_filter=any when no health restriction was requested. Never use this Tool to list or discover Namespace objects, inspect Nodes, or perform cluster-wide inventory.", InputSchemaJSON: listResourcesSchema},
-		{Name: domain.ToolNameGetEvents, Version: ToolCatalogVersion, Description: "Read bounded, normalized recent Kubernetes Events related to one allowlisted resource in the active Namespace.", InputSchemaJSON: getEventsSchema},
+		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one code-allowlisted Kubernetes resource through a bounded safe projection. Namespaced targets default to the working Namespace and may use an explicit Namespace only when the frozen access policy allows it.", InputSchemaJSON: getResourceSchema},
+		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one code-allowlisted Kubernetes Kind with bounded local filtering. Use namespace=* only for an explicit all-Namespace list; the runtime enforces the frozen namespace-access policy.", InputSchemaJSON: listResourcesSchema},
+		{Name: domain.ToolNameGetEvents, Version: ToolCatalogVersion, Description: "Read bounded, normalized recent Kubernetes Events related to one exact allowlisted resource.", InputSchemaJSON: getEventsSchema},
 		{Name: domain.ToolNameGetPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized current Pod container log tail without follow mode.", InputSchemaJSON: getPodLogsSchema},
 		{Name: domain.ToolNameGetPreviousPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized previous Pod container log tail when a previous instance exists.", InputSchemaJSON: getPodLogsSchema},
-		{Name: domain.ToolNameGetRelatedResources, Version: ToolCatalogVersion, Description: "Follow only code-defined, bounded diagnostic relationships from one allowlisted resource.", InputSchemaJSON: getRelatedResourcesSchema},
+		{Name: domain.ToolNameGetRelatedResources, Version: ToolCatalogVersion, Description: "Follow only code-defined, bounded same-Namespace relationships from one allowlisted resource.", InputSchemaJSON: getRelatedResourcesSchema},
+		{Name: domain.ToolNameGetClusterOverview, Version: ToolCatalogVersion, Description: "Read bounded Namespace and Node health projections for a concise cluster overview; it never performs discovery or returns addresses, provider identifiers, images, system information, or capacity maps.", InputSchemaJSON: getClusterOverviewSchema},
 	}
 }
 
@@ -66,7 +68,7 @@ type Tool interface {
 }
 
 // ToolHandlers is the compile-time fixed dispatch table. It cannot register a
-// seventh or dynamically named handler.
+// dynamically named handler.
 type ToolHandlers struct {
 	GetResource         Tool
 	ListResources       Tool
@@ -74,12 +76,16 @@ type ToolHandlers struct {
 	GetPodLogs          Tool
 	GetPreviousPodLogs  Tool
 	GetRelatedResources Tool
+	GetClusterOverview  Tool
 }
 
 // Validate checks that every admitted Tool has exactly one injected handler.
 func (handlers ToolHandlers) Validate() error {
 	if handlers.GetResource == nil || handlers.ListResources == nil || handlers.GetEvents == nil ||
 		handlers.GetPodLogs == nil || handlers.GetPreviousPodLogs == nil || handlers.GetRelatedResources == nil {
+		return ErrInvalidToolHandlers
+	}
+	if handlers.GetClusterOverview == nil {
 		return ErrInvalidToolHandlers
 	}
 	return nil
@@ -103,6 +109,8 @@ func (handlers ToolHandlers) Resolve(name domain.ToolName) (Tool, error) {
 		return handlers.GetPreviousPodLogs, nil
 	case domain.ToolNameGetRelatedResources:
 		return handlers.GetRelatedResources, nil
+	case domain.ToolNameGetClusterOverview:
+		return handlers.GetClusterOverview, nil
 	default:
 		return nil, ErrToolPolicyDenied
 	}
@@ -188,6 +196,7 @@ type resourceArgument struct {
 	APIVersion string `json:"api_version,omitempty"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	Namespace  string `json:"namespace,omitempty"`
 	UID        string `json:"uid,omitempty"`
 }
 
@@ -199,17 +208,49 @@ func normalizeResource(scope domain.ClusterScope, argument resourceArgument) (re
 	if argument.APIVersion == "" {
 		argument.APIVersion = kind.APIVersion()
 	}
+	if kind.ClusterScoped() && argument.Namespace != "" {
+		return resourceArgument{}, ErrToolPolicyDenied
+	}
+	if kind.Namespaced() && argument.Namespace == "" {
+		argument.Namespace = scope.Namespace
+	}
 	reference := domain.ResourceRef{
 		APIVersion: argument.APIVersion,
 		Kind:       argument.Kind,
-		Namespace:  scope.Namespace,
+		Namespace:  argument.Namespace,
 		Name:       argument.Name,
 		UID:        argument.UID,
 	}
-	if domain.ValidateLiveResourceRef(reference) != nil || reference.APIVersion != kind.APIVersion() {
+	if domain.ValidateLiveResourceRef(reference) != nil || reference.APIVersion != kind.APIVersion() || !scope.AllowsReference(reference) {
 		return resourceArgument{}, ErrToolPolicyDenied
 	}
 	return argument, nil
+}
+
+func normalizeListNamespace(scope domain.ClusterScope, kind domain.ResourceKind, namespace string) (string, error) {
+	if kind.ClusterScoped() {
+		if namespace != "" {
+			return "", ErrToolPolicyDenied
+		}
+		return "", nil
+	}
+	if namespace == "" {
+		return scope.Namespace, nil
+	}
+	if namespace == "*" {
+		if !scope.AllowsAllNamespaces(kind) {
+			return "", ErrToolPolicyDenied
+		}
+		return namespace, nil
+	}
+	if !domain.ValidNamespaceName(namespace) {
+		return "", ErrToolPolicyDenied
+	}
+	reference := domain.ResourceRef{APIVersion: kind.APIVersion(), Kind: string(kind), Namespace: namespace, Name: "scope-check"}
+	if !scope.AllowsReference(reference) {
+		return "", ErrToolPolicyDenied
+	}
+	return namespace, nil
 }
 
 type getResourceArguments struct {
@@ -223,6 +264,7 @@ type listResourcesArguments struct {
 	Kind         string `json:"kind"`
 	Limit        int    `json:"limit"`
 	NameQuery    string `json:"name_query,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
 	Purpose      string `json:"purpose"`
 }
 
@@ -235,10 +277,16 @@ type getEventsArguments struct {
 
 type getPodLogsArguments struct {
 	Container    string `json:"container,omitempty"`
+	Namespace    string `json:"namespace"`
 	PodName      string `json:"pod_name"`
 	Purpose      string `json:"purpose"`
 	SinceSeconds int    `json:"since_seconds"`
 	TailLines    int    `json:"tail_lines"`
+}
+
+type getClusterOverviewArguments struct {
+	Limit   int    `json:"limit"`
+	Purpose string `json:"purpose"`
 }
 
 type getRelatedResourcesArguments struct {
@@ -321,6 +369,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Kind         string `json:"kind"`
 			Limit        *int   `json:"limit"`
 			NameQuery    string `json:"name_query"`
+			Namespace    string `json:"namespace"`
 			Purpose      string `json:"purpose"`
 		}
 		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !domain.ResourceKind(wire.Kind).Valid() {
@@ -348,7 +397,11 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if limit < 1 || limit > 50 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(listResourcesArguments{HealthFilter: health, Kind: wire.Kind, Limit: limit, NameQuery: nameQuery, Purpose: purpose}, purpose)
+		namespace, err := normalizeListNamespace(scope, domain.ResourceKind(wire.Kind), wire.Namespace)
+		if err != nil {
+			return "", "", err
+		}
+		return marshalCanonical(listResourcesArguments{HealthFilter: health, Kind: wire.Kind, Limit: limit, NameQuery: nameQuery, Namespace: namespace, Purpose: purpose}, purpose)
 	case domain.ToolNameGetEvents:
 		var wire struct {
 			Limit        *int             `json:"limit"`
@@ -381,6 +434,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 	case domain.ToolNameGetPodLogs, domain.ToolNameGetPreviousPodLogs:
 		var wire struct {
 			Container    string `json:"container"`
+			Namespace    string `json:"namespace"`
 			PodName      string `json:"pod_name"`
 			Purpose      string `json:"purpose"`
 			SinceSeconds *int   `json:"since_seconds"`
@@ -394,8 +448,12 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if err != nil {
 			return "", "", err
 		}
-		pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: scope.Namespace, Name: wire.PodName}
-		if domain.ValidateLiveResourceRef(pod) != nil {
+		namespace, err := normalizeListNamespace(scope, domain.ResourceKindPod, wire.Namespace)
+		if err != nil || namespace == "*" {
+			return "", "", ErrToolPolicyDenied
+		}
+		pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: namespace, Name: wire.PodName}
+		if domain.ValidateLiveResourceRef(pod) != nil || !scope.AllowsReference(pod) {
 			return "", "", ErrToolPolicyDenied
 		}
 		tail, since := 200, 900
@@ -408,7 +466,7 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 		if tail < 1 || tail > maxRequestedLogs || since < 60 || since > 3600 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getPodLogsArguments{Container: wire.Container, PodName: wire.PodName, Purpose: purpose, SinceSeconds: since, TailLines: tail}, purpose)
+		return marshalCanonical(getPodLogsArguments{Container: wire.Container, Namespace: namespace, PodName: wire.PodName, Purpose: purpose, SinceSeconds: since, TailLines: tail}, purpose)
 	case domain.ToolNameGetRelatedResources:
 		var wire struct {
 			Include       []string         `json:"include"`
@@ -439,6 +497,26 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			return "", "", err
 		}
 		return marshalCanonical(getRelatedResourcesArguments{Include: include, Purpose: purpose, RelationDepth: depth, Resource: resource}, purpose)
+	case domain.ToolNameGetClusterOverview:
+		var wire struct {
+			Limit   *int   `json:"limit"`
+			Purpose string `json:"purpose"`
+		}
+		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
+			return "", "", ErrToolPolicyDenied
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
+		}
+		limit := 20
+		if wire.Limit != nil {
+			limit = *wire.Limit
+		}
+		if limit < 2 || limit > 50 {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(getClusterOverviewArguments{Limit: limit, Purpose: purpose}, purpose)
 	default:
 		return "", "", ErrToolPolicyDenied
 	}

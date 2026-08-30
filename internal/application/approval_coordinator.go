@@ -398,8 +398,8 @@ func (coordinator *ApprovalCoordinator) CancelRun(ctx context.Context, runID dom
 	}, domain.ApprovalReasonRunCancelled)
 }
 
-// InvalidateScope implements the scope invalidation hook for a v0.2
-// composition. The caller has already advanced the generation.
+// InvalidateScope implements the supervised-action scope invalidation hook.
+// The caller has already advanced the generation.
 func (coordinator *ApprovalCoordinator) InvalidateScope(generation int64) error {
 	if coordinator == nil || generation < 1 {
 		return ErrApprovalUnavailable

@@ -1,4 +1,4 @@
-// Package application owns KuPilot use-case orchestration and consumer ports.
+// Package application owns Kupilot use-case orchestration and consumer ports.
 package application
 
 import (
@@ -97,6 +97,7 @@ type ScopeManager struct {
 	hook         ScopeInvalidationHook
 	approvalHook ScopeInvalidationHook
 	now          func() time.Time
+	access       domain.NamespaceAccessPolicy
 
 	state      ScopeState
 	generation int64
@@ -147,6 +148,7 @@ func NewScopeManager(
 	resources ResourceService,
 	hook ScopeInvalidationHook,
 	now func() time.Time,
+	configuredAccess ...domain.NamespaceAccessPolicy,
 ) (*ScopeManager, error) {
 	if factory == nil || namespaces == nil || resources == nil || hook == nil || now == nil {
 		return nil, newScopeError(
@@ -156,12 +158,33 @@ func NewScopeManager(
 			"Scope management dependencies are unavailable.",
 		)
 	}
+	access := domain.NamespaceAccessCurrent
+	if len(configuredAccess) > 1 {
+		return nil, newScopeError(
+			domain.SafeErrorClassConfigurationInvalid,
+			"scope_namespace_access_invalid",
+			"create_scope_manager",
+			"The Kubernetes namespace-access policy is invalid.",
+		)
+	}
+	if len(configuredAccess) == 1 {
+		access = configuredAccess[0]
+	}
+	if !access.Valid() {
+		return nil, newScopeError(
+			domain.SafeErrorClassConfigurationInvalid,
+			"scope_namespace_access_invalid",
+			"create_scope_manager",
+			"The Kubernetes namespace-access policy is invalid.",
+		)
+	}
 	return &ScopeManager{
 		factory:        factory,
 		namespaces:     namespaces,
 		resources:      resources,
 		hook:           hook,
 		now:            now,
+		access:         access,
 		state:          ScopeStateUnavailable,
 		namespaceCache: make(map[namespaceCacheKey]domain.NamespaceList),
 		resourceCache:  make(map[resourceCacheKey]domain.ResourceList),
@@ -227,6 +250,33 @@ func (manager *ScopeManager) ListContexts(ctx context.Context) ([]ContextCandida
 // SwitchContext commits invalidation before disposing the old client and
 // constructing and verifying the selected target.
 func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, expectedGeneration int64) (domain.ClusterScope, error) {
+	return manager.switchContext(ctx, target, "", expectedGeneration)
+}
+
+// ActivateScope commits one exact Context and Namespace pair without first
+// inheriting or verifying the kubeconfig Context's default Namespace.
+func (manager *ScopeManager) ActivateScope(
+	ctx context.Context,
+	target domain.ScopeCandidate,
+	expectedGeneration int64,
+) (domain.ClusterScope, error) {
+	if target.Validate() != nil {
+		return domain.ClusterScope{}, newScopeError(
+			domain.SafeErrorClassInvalidInput,
+			"scope_candidate_invalid",
+			"activate_scope",
+			"A valid Kubernetes Context and Namespace must be selected.",
+		)
+	}
+	return manager.switchContext(ctx, target.Context, target.Namespace, expectedGeneration)
+}
+
+func (manager *ScopeManager) switchContext(
+	ctx context.Context,
+	targetContext string,
+	targetNamespace string,
+	expectedGeneration int64,
+) (domain.ClusterScope, error) {
 	if manager == nil {
 		return domain.ClusterScope{}, scopeUnavailableError("switch_context")
 	}
@@ -238,7 +288,7 @@ func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, e
 	if err := manager.checkExpectedGeneration(expectedGeneration); err != nil {
 		return domain.ClusterScope{}, err
 	}
-	if !domain.ValidContextName(target) {
+	if !domain.ValidContextName(targetContext) {
 		return domain.ClusterScope{}, newScopeError(
 			domain.SafeErrorClassInvalidInput,
 			"scope_context_invalid",
@@ -252,7 +302,7 @@ func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, e
 	}
 	found := false
 	for _, candidate := range candidates {
-		if candidate.Name == target {
+		if candidate.Name == targetContext {
 			found = true
 			break
 		}
@@ -280,7 +330,7 @@ func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, e
 		return domain.ClusterScope{}, hookErr
 	}
 
-	client, rawErr := manager.factory.Create(ctx, target)
+	client, rawErr := manager.factory.Create(ctx, targetContext)
 	if err := contextResultError(ctx, rawErr, "switch_context"); err != nil {
 		if client != nil {
 			client.Close()
@@ -298,7 +348,7 @@ func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, e
 		)
 	}
 	clientContext := client.Context()
-	if !clientContext.valid() || clientContext.Name != target {
+	if !clientContext.valid() || clientContext.Name != targetContext {
 		client.Close()
 		manager.markUnavailable(generation)
 		return domain.ClusterScope{}, newScopeError(
@@ -308,13 +358,17 @@ func (manager *ScopeManager) SwitchContext(ctx context.Context, target string, e
 			"The selected Kubernetes Context returned invalid scope metadata.",
 		)
 	}
-	rawErr = manager.namespaces.VerifyNamespace(ctx, client, clientContext.DefaultNamespace)
+	namespace := clientContext.DefaultNamespace
+	if targetNamespace != "" {
+		namespace = targetNamespace
+	}
+	rawErr = manager.namespaces.VerifyNamespace(ctx, client, namespace)
 	if err := contextResultError(ctx, rawErr, "verify_namespace"); err != nil {
 		client.Close()
 		manager.markUnavailable(generation)
 		return domain.ClusterScope{}, err
 	}
-	return manager.publishActive(client, clientContext.Name, clientContext.DefaultNamespace, generation)
+	return manager.publishActive(client, clientContext.Name, namespace, generation)
 }
 
 // SwitchNamespace verifies a candidate before the generation commit. A failed
@@ -450,7 +504,7 @@ func (manager *ScopeManager) SelectResource(scope domain.ClusterScope, reference
 			"The selected ResourceRef was invalid.",
 		)
 	}
-	if reference.Namespace != scope.Namespace {
+	if !domain.ReferenceMatchesWorkingNamespace(reference, scope.Namespace) {
 		return newScopeError(
 			domain.SafeErrorClassPolicyDenied,
 			"scope_resource_namespace_denied",
@@ -567,7 +621,7 @@ func (manager *ScopeManager) GetResource(ctx context.Context, scope domain.Clust
 			"The resource request was invalid.",
 		)
 	}
-	if reference.Namespace != scope.Namespace {
+	if !domain.ReferenceMatchesWorkingNamespace(reference, scope.Namespace) {
 		return domain.ResourceSummary{}, newScopeError(
 			domain.SafeErrorClassPolicyDenied,
 			"scope_resource_namespace_denied",
@@ -735,10 +789,11 @@ func (manager *ScopeManager) invalidateHook(generation int64) error {
 func (manager *ScopeManager) publishActive(client ScopeClient, contextName, namespace string, generation int64) (domain.ClusterScope, error) {
 	activatedAt := manager.now().UTC()
 	scope := domain.ClusterScope{
-		Context:     contextName,
-		Namespace:   namespace,
-		Generation:  generation,
-		ActivatedAt: activatedAt,
+		Context:         contextName,
+		Namespace:       namespace,
+		NamespaceAccess: manager.access,
+		Generation:      generation,
+		ActivatedAt:     activatedAt,
 	}
 	if scope.Validate() != nil {
 		client.Close()
@@ -855,7 +910,7 @@ func validateBoundRead(ctx context.Context, scope domain.ClusterScope, limit int
 
 func resourceListMatches(list domain.ResourceList, namespace string, kind domain.ResourceKind) bool {
 	for _, item := range list.Items {
-		if item.Reference.Namespace != namespace || item.Reference.Kind != string(kind) || item.Reference.APIVersion != kind.APIVersion() {
+		if !domain.ReferenceMatchesWorkingNamespace(item.Reference, namespace) || item.Reference.Kind != string(kind) || item.Reference.APIVersion != kind.APIVersion() {
 			return false
 		}
 	}

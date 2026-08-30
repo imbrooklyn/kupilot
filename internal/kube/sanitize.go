@@ -9,8 +9,11 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -144,7 +147,8 @@ func projectJob(object *batchv1.Job, namespace, expectedName string) (domain.Res
 	if result.Status.Phase == "" && object.Status.Active > 0 {
 		result.Status.Phase = "Active"
 	}
-	if result.Validate() != nil {
+	result.Owners, err = projectControllerOwner(object.OwnerReferences, domain.ResourceKindJob)
+	if err != nil || result.Validate() != nil {
 		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
 	}
 	return result, nil
@@ -165,8 +169,200 @@ func projectService(object *corev1.Service, namespace, expectedName string) (dom
 	return result, nil
 }
 
+func projectNamespace(object *corev1.Namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, "", expectedName, domain.ResourceKindNamespace)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Phase = sanitizeSummaryText(string(object.Status.Phase), maxProjectedStatusBytes)
+	for _, condition := range object.Status.Conditions {
+		if condition.Status == corev1.ConditionTrue && condition.Reason != "" {
+			result.Status.Reason = sanitizeSummaryText(condition.Reason, maxProjectedStatusBytes)
+			break
+		}
+	}
+	return validatedSummary(result)
+}
+
+func projectNode(object *corev1.Node, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, "", expectedName, domain.ResourceKindNode)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Ready = domain.Count(0)
+	result.Status.Desired = domain.Count(1)
+	for _, condition := range object.Status.Conditions {
+		switch {
+		case condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue:
+			result.Status.Phase = "Ready"
+			result.Status.Ready = domain.Count(1)
+		case condition.Type == corev1.NodeReady && condition.Status != corev1.ConditionTrue:
+			result.Status.Phase = "NotReady"
+			if condition.Reason != "" {
+				result.Status.Reason = sanitizeSummaryText(condition.Reason, maxProjectedStatusBytes)
+			}
+		case condition.Type != corev1.NodeReady && condition.Status == corev1.ConditionTrue && result.Status.Reason == "":
+			result.Status.Reason = sanitizeSummaryText(string(condition.Type), maxProjectedStatusBytes)
+		}
+	}
+	if result.Status.Phase == "" {
+		result.Status.Phase = "Unknown"
+	}
+	return validatedSummary(result)
+}
+
+func projectPersistentVolumeClaim(object *corev1.PersistentVolumeClaim, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindPersistentVolumeClaim)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Phase = sanitizeSummaryText(string(object.Status.Phase), maxProjectedStatusBytes)
+	return validatedSummary(result)
+}
+
+func projectPersistentVolume(object *corev1.PersistentVolume, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, "", expectedName, domain.ResourceKindPersistentVolume)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Phase = sanitizeSummaryText(string(object.Status.Phase), maxProjectedStatusBytes)
+	result.Status.Reason = sanitizeSummaryText(object.Status.Reason, maxProjectedStatusBytes)
+	return validatedSummary(result)
+}
+
+func projectConfigMap(object *corev1.ConfigMap, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindConfigMap)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	return validatedSummary(result)
+}
+
+func projectStatefulSet(object *appsv1.StatefulSet, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindStatefulSet)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	if object.Spec.Replicas != nil {
+		result.Status.Desired = domain.Count(*object.Spec.Replicas)
+	}
+	result.Status.Ready = domain.Count(object.Status.ReadyReplicas)
+	result.Status.Available = domain.Count(object.Status.AvailableReplicas)
+	result.Status.Succeeded = domain.Count(object.Status.CurrentReplicas)
+	return validatedSummary(result)
+}
+
+func projectDaemonSet(object *appsv1.DaemonSet, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindDaemonSet)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Desired = domain.Count(object.Status.DesiredNumberScheduled)
+	result.Status.Ready = domain.Count(object.Status.NumberReady)
+	result.Status.Available = domain.Count(object.Status.NumberAvailable)
+	return validatedSummary(result)
+}
+
+func projectCronJob(object *batchv1.CronJob, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindCronJob)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Active = domain.Count(int32(len(object.Status.Active)))
+	if object.Spec.Suspend != nil && *object.Spec.Suspend {
+		result.Status.Phase = "Suspended"
+	} else if len(object.Status.Active) > 0 {
+		result.Status.Phase = "Active"
+	} else {
+		result.Status.Phase = "Idle"
+	}
+	return validatedSummary(result)
+}
+
+func projectIngress(object *networkingv1.Ingress, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindIngress)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	return validatedSummary(result)
+}
+
+func projectHorizontalPodAutoscaler(object *autoscalingv2.HorizontalPodAutoscaler, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindHorizontalPodAutoscaler)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Desired = domain.Count(object.Status.DesiredReplicas)
+	result.Status.Ready = domain.Count(object.Status.CurrentReplicas)
+	for _, condition := range object.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue && condition.Reason != "" {
+			result.Status.Reason = sanitizeSummaryText(condition.Reason, maxProjectedStatusBytes)
+			break
+		}
+	}
+	return validatedSummary(result)
+}
+
+func projectPodDisruptionBudget(object *policyv1.PodDisruptionBudget, namespace, expectedName string) (domain.ResourceSummary, error) {
+	if object == nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	result, err := projectMetadata(object.ObjectMeta, namespace, expectedName, domain.ResourceKindPodDisruptionBudget)
+	if err != nil {
+		return domain.ResourceSummary{}, err
+	}
+	result.Status.Desired = domain.Count(object.Status.DesiredHealthy)
+	result.Status.Ready = domain.Count(object.Status.CurrentHealthy)
+	result.Status.Available = domain.Count(object.Status.DisruptionsAllowed)
+	for _, condition := range object.Status.Conditions {
+		if condition.Status != metav1.ConditionTrue && condition.Reason != "" {
+			result.Status.Reason = sanitizeSummaryText(condition.Reason, maxProjectedStatusBytes)
+			break
+		}
+	}
+	return validatedSummary(result)
+}
+
+func validatedSummary(result domain.ResourceSummary) (domain.ResourceSummary, error) {
+	if result.Validate() != nil {
+		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
+	}
+	return result, nil
+}
+
 func projectMetadata(metadata metav1.ObjectMeta, namespace, expectedName string, kind domain.ResourceKind) (domain.ResourceSummary, error) {
-	if !kind.Valid() || metadata.Namespace != namespace || !domain.ValidNamespaceName(metadata.Namespace) ||
+	if !kind.Valid() || kind.Namespaced() && (metadata.Namespace != namespace || !domain.ValidNamespaceName(metadata.Namespace)) ||
+		kind.ClusterScoped() && (namespace != "" || metadata.Namespace != "") ||
 		!domain.ValidResourceName(metadata.Name) || expectedName != "" && metadata.Name != expectedName ||
 		!safeIdentityText(string(metadata.UID)) || !safeIdentityText(metadata.ResourceVersion) {
 		return domain.ResourceSummary{}, errUnsafeKubernetesProjection
@@ -202,12 +398,13 @@ func projectControllerOwner(references []metav1.OwnerReference, child domain.Res
 				allowed = true
 			case reference.APIVersion == "batch/v1" && reference.Kind == "Job":
 				allowed = true
-			case reference.APIVersion == "apps/v1" && reference.Kind == "StatefulSet":
+			case reference.APIVersion == "apps/v1" && (reference.Kind == "StatefulSet" || reference.Kind == "DaemonSet"):
 				allowed = true
-				referenceOnly = true
 			}
 		case domain.ResourceKindReplicaSet:
 			allowed = reference.APIVersion == "apps/v1" && reference.Kind == "Deployment"
+		case domain.ResourceKindJob:
+			allowed = reference.APIVersion == "batch/v1" && reference.Kind == "CronJob"
 		}
 		if !allowed {
 			continue

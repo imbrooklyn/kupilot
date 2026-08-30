@@ -3,11 +3,11 @@
 - Status: Accepted
 - Date: 2026-08-08
 - Amended: 2026-08-10
-- Amended by: ADR-0036
+- Amended by: ADR-0036 and ADR-0037
 
 ## Context
 
-KuPilot needs a bounded Agent loop with streamed model responses and structured
+Kupilot needs a bounded Agent loop with streamed model responses and structured
 Tool selections. Eino provides both Agent-runtime primitives and a maintained
 OpenAI Chat Completions component. The accepted model contract still requires
 exact control over request serialization, raw stream byte accounting,
@@ -21,7 +21,7 @@ and Tool types must remain inside their respective adapters.
 
 ## Decision
 
-KuPilot pins `github.com/cloudwego/eino` v0.9.13 and
+Kupilot pins `github.com/cloudwego/eino` v0.9.13 and
 `github.com/cloudwego/eino-ext/components/model/openai` v0.1.13. The OpenAI
 component is used only inside `internal/llm/openaicompat` to implement the
 Agent-owned neutral `Model` port. A project-owned `net/http` wrapper remains the
@@ -29,7 +29,7 @@ transport security boundary.
 
 The model component owns Chat Completions integration, provider JSON decoding,
 and decoded text, indexed Tool-call fragments, finish reasons, and usage.
-KuPilot supplies the exact fixed JSON body through the component's
+Kupilot supplies the exact fixed JSON body through the component's
 request-payload modifier and validates raw choice envelopes through its response
 modifier. The project transport exclusively owns:
 
@@ -45,7 +45,7 @@ modifier. The project transport exclusively owns:
 The component receives a fixed non-secret API-key placeholder. The real
 credential exists only while the guarded RoundTripper performs an admitted
 request, and the placeholder is restored before redirect handling. The adapter
-replaces caller callback contexts, and KuPilot registers no Eino global
+replaces caller callback contexts, and Kupilot registers no Eino global
 callbacks. It performs no automatic retry, fallback, tracing, or persistence
 and closes both the returned Eino stream and its tracked HTTP response body.
 
@@ -58,12 +58,12 @@ is `flow/agent/react.NewAgent` with a project-owned bridge implementing
 the fixed catalog; each `Generate` or `Stream` operation maps to exactly one
 neutral `Model.Stream` call.
 
-The six fixed specifications are exposed to ReAct as run-local
+The seven admitted specifications are exposed to ReAct as run-local
 `InvokableTool` values. `compose.ToolsNodeConfig.ExecuteSequentially` is true,
 and each wrapper uses `compose.GetToolCallID` to recover the structured call
 identity. The complete selected batch is validated and bound before handler
-execution. KuPilot reserves and accounts for every Tool call immediately
-before synchronous dispatch. Neutral deltas are emitted through the KuPilot
+execution. Kupilot reserves and accounts for every Tool call immediately
+before synchronous dispatch. Neutral deltas are emitted through the Kupilot
 EventSink while the model call is active; the bridge returns one complete Eino
 message chunk only after the neutral completion is valid. Every Eino output
 stream is drained and closed. The adapter latches the first Tool-wrapper error
@@ -75,23 +75,23 @@ The Agent adapter uses Eino for:
 - Bounded single-Agent runtime composition over project-owned Model and Tool
   ports.
 - Translation between Eino runtime values and project-owned run events.
-- Mapping the fixed KuPilot Tool specifications into the isolated runtime.
+- Mapping the fixed Kupilot Tool specifications into the isolated runtime.
 - Propagating cancellation and terminal state without owning model transport
   policy.
 
-The ReAct `MaxStep` setting is a secondary failsafe only. KuPilot budgets,
+The ReAct `MaxStep` setting is a secondary failsafe only. Kupilot budgets,
 repeat and no-progress state, scope checks, and terminal ownership remain
 authoritative. The adapter clears inherited Eino callback context and installs
 no handler. It enables no process-global callback, model retry, fallback,
 memory, checkpoint, resume, tracing, Tool-return-directly behavior, or dynamic
 Tool option.
 
-KuPilot, not Eino, owns Agent-loop limits, Tool authorization, scope-generation
+Kupilot, not Eino, owns Agent-loop limits, Tool authorization, scope-generation
 checks, Tool dispatch, Evidence creation, Diagnosis validation, persistence
 intent, and Application event acceptance. Eino types do not cross either
-adapter. KuPilot will not expose a general graph workflow or adopt RAG,
+adapter. Kupilot will not expose a general graph workflow or adopt RAG,
 retrievers, Multi-Agent orchestration, dynamic Tool registration, memory
-persistence, or a framework checkpoint/resume mechanism in `v0.1`.
+persistence, or a framework checkpoint/resume mechanism.
 
 An AgentRun is never resumed as an Eino execution after process restart. Safe
 Session history is reconstructed into neutral input for a new run.
@@ -114,7 +114,7 @@ Costs and constraints:
   project-owned mapping.
 - The model adapter must guard against duplicate, malformed, out-of-order, and
   oversized provider events before they reach the Agent runtime.
-- KuPilot cannot rely on framework memory, retry, callback, or orchestration
+- Kupilot cannot rely on framework memory, retry, callback, or orchestration
   defaults unless each behavior is explicitly admitted by runtime policy.
 - Core and component versions must be validated together when either pin
   changes.
@@ -128,7 +128,7 @@ Costs and constraints:
   only a fixed placeholder, while the project transport injects the secret and
   bounds the raw response body before component decoding.
 - Allowing the component's default request serializer to define the contract
-  was rejected because KuPilot requires an exact six-Tool payload, strict
+was rejected because Kupilot requires an exact code-owned catalog payload, strict
   schemas, deterministic request bytes, and a pre-I/O request-size check.
 - A generic direct HTTP or provider abstraction was rejected. The admitted
   transport is a single code-defined Chat Completions profile with no dynamic
@@ -136,7 +136,7 @@ Costs and constraints:
 - Exposing Eino message and Tool types throughout the codebase was rejected
   because vendor contracts would leak into Application, Domain, Tools, and TUI.
 - Using Eino to own the whole Agent loop was rejected because budgets, scope,
-  Evidence, persistence, and policy must remain deterministic KuPilot controls.
+  Evidence, persistence, and policy must remain deterministic Kupilot controls.
 - Eino ADK `ChatModelAgent` was rejected because its session, checkpoint,
   resume, transfer, and asynchronous event surface exceeds the admitted
   single-run contract.
@@ -155,7 +155,7 @@ The model adapter must close response streams and bodies, bound buffers,
 discard provider error bodies in default logging mode, and prevent model
 requests or responses from entering SQLite or default operational logs.
 ADR-0036 permits only an explicitly enabled bounded failed-response prefix in
-the local model-failure log. KuPilot must not install Eino global
+the local model-failure log. Kupilot must not install Eino global
 callbacks; caller-provided callbacks are removed before model data enters the
 component. Framework callbacks cannot receive model credentials, raw HTTP
 values, or a Kubernetes client.

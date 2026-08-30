@@ -17,7 +17,7 @@ func TestExportWriterPublishesOwnerOnlyFileWithoutOverwrite(t *testing.T) {
 	directory := privateExportDirectory(t)
 	target := filepath.Join(directory, "session-summary.md")
 	writer := NewExportWriter()
-	content := []byte("# KuPilot Session Summary\n\nSafe content.\n")
+	content := []byte("# Kupilot Session Summary\n\nSafe content.\n")
 
 	if err := writer.WriteSummary(context.Background(), application.ExportFile{TargetPath: target, Content: content}); err != nil {
 		t.Fatalf("WriteSummary() error = %v", err)

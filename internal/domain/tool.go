@@ -48,7 +48,7 @@ func (id ToolInvocationID) Valid() bool {
 	return validUUIDv7(string(id))
 }
 
-// ToolName is one fixed model-visible v0.1 Tool name.
+// ToolName is one fixed model-visible built-in capability name.
 type ToolName string
 
 const (
@@ -58,9 +58,10 @@ const (
 	ToolNameGetPodLogs          ToolName = "get_pod_logs"
 	ToolNameGetPreviousPodLogs  ToolName = "get_previous_pod_logs"
 	ToolNameGetRelatedResources ToolName = "get_related_resources"
+	ToolNameGetClusterOverview  ToolName = "get_cluster_overview"
 )
 
-// Valid reports whether the Tool belongs to the complete v0.1 catalog.
+// Valid reports whether the Tool belongs to the complete current catalog.
 func (name ToolName) Valid() bool {
 	switch name {
 	case ToolNameGetResource,
@@ -68,7 +69,8 @@ func (name ToolName) Valid() bool {
 		ToolNameGetEvents,
 		ToolNameGetPodLogs,
 		ToolNameGetPreviousPodLogs,
-		ToolNameGetRelatedResources:
+		ToolNameGetRelatedResources,
+		ToolNameGetClusterOverview:
 		return true
 	default:
 		return false
@@ -308,13 +310,14 @@ func validToolResultResourceSummaries(result ToolResult) bool {
 	if len(result.ResourceSummaries) == 0 {
 		return true
 	}
-	if result.Name != ToolNameListResources || len(result.ResourceSummaries) != len(result.Evidence) ||
+	if result.Name != ToolNameListResources && result.Name != ToolNameGetClusterOverview ||
+		len(result.ResourceSummaries) != len(result.Evidence) ||
 		len(result.ResourceSummaries) > MaxResourceSummaries {
 		return false
 	}
 	seen := make(map[ResourceRef]struct{}, len(result.ResourceSummaries))
 	for index, summary := range result.ResourceSummaries {
-		if summary.Validate() != nil || summary.Reference.Namespace != result.Scope.Namespace ||
+		if summary.Validate() != nil ||
 			result.Evidence[index].Category != EvidenceCategoryResourceStatus ||
 			result.Evidence[index].Resource != summary.Reference {
 			return false
@@ -383,7 +386,7 @@ func (id ModelRequestID) Valid() bool {
 	return validUUIDv7(string(id))
 }
 
-// ModelProviderKind is the fixed v0.1 model-provider contract.
+// ModelProviderKind is the fixed model-provider contract.
 type ModelProviderKind string
 
 const ModelProviderOpenAICompatible ModelProviderKind = "openai_compatible"
@@ -534,7 +537,7 @@ func containsToolAuthorityField(value any) bool {
 	case map[string]any:
 		for name, item := range typed {
 			switch strings.ToLower(name) {
-			case "context", "namespace", "scope", "endpoint", "credential", "credentials",
+			case "context", "scope", "endpoint", "credential", "credentials",
 				"api_key", "token", "kubeconfig", "deadline", "timeout", "gvr",
 				"group_version_resource", "raw_selector", "max_bytes", "max_items",
 				"max_result_bytes", "max_evidence_items":

@@ -15,14 +15,14 @@ func clearCacheContents(ctx context.Context, path string) error {
 		return nil
 	}
 	if err != nil {
-		return newSafeError(ClassInternal, "cache_clear_failed", "clear_cache", "KuPilot could not inspect its local cache.")
+		return newSafeError(ClassInternal, "cache_clear_failed", "clear_cache", "Kupilot could not inspect its local cache.")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return newSafeError(ClassConfigurationInvalid, "cache_path_unsafe", "clear_cache", "The KuPilot cache path must be a directory and must not be a symbolic link.")
+		return newSafeError(ClassConfigurationInvalid, "cache_path_unsafe", "clear_cache", "The Kupilot cache path must be a directory and must not be a symbolic link.")
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return newSafeError(ClassInternal, "cache_clear_failed", "clear_cache", "KuPilot could not read its local cache.")
+		return newSafeError(ClassInternal, "cache_clear_failed", "clear_cache", "Kupilot could not read its local cache.")
 	}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {

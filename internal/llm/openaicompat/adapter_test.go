@@ -20,6 +20,7 @@ import (
 
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/schema"
 
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -140,6 +141,46 @@ func newFixtureCredential(t *testing.T, apiKey string) *config.SecretValue {
 		t.Fatalf("read fixture credential: %v", err)
 	}
 	return &credential
+}
+
+func TestResponseDecoderRejectsNonContiguousToolIndexesBeforeCompletion(t *testing.T) {
+	t.Parallel()
+
+	credential := newFixtureCredential(t, strings.Repeat("i", 41)+"-generated")
+	defer credential.Destroy()
+	var events []domain.ModelStreamEvent
+	decoder := responseDecoder{
+		ctx:        context.Background(),
+		requestID:  fixtureModelRequest().ID,
+		consume:    func(event domain.ModelStreamEvent) { events = append(events, event) },
+		credential: credential,
+		textScanner: credentialScanner{
+			credential: credential,
+		},
+		tools: make(map[int]*toolCallAssembly),
+	}
+	index := 1
+	fragment := schema.ToolCall{
+		Index: &index,
+		ID:    "call-gap",
+		Type:  "function",
+		Function: schema.FunctionCall{
+			Name:      "get_resource",
+			Arguments: `{"kind":"Pod","name":"sample-pod"}`,
+		},
+	}
+	if modelError := decoder.consumeToolFragment(fragment); modelError != nil {
+		t.Fatalf("bounded fragment error = %v", modelError)
+	}
+	finish := domain.ModelFinishReasonToolCalls
+	decoder.pendingFinish = &finish
+	modelError := decoder.complete()
+	if modelError == nil || modelError.Code() != domain.ModelErrorCodeMalformedStream {
+		t.Fatalf("non-contiguous completion error = %#v, want malformed stream", modelError)
+	}
+	if len(events) != 1 || events[0].Kind != domain.ModelStreamEventToolCallFragment || events[0].Terminal() {
+		t.Fatalf("non-contiguous stream events = %#v, want one nonterminal fragment", events)
+	}
 }
 
 func TestAdapterConstructionIsLocalAndCloseOwnsCredential(t *testing.T) {

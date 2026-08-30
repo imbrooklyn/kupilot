@@ -334,7 +334,7 @@ func testUIApprovalRequest(t *testing.T, requestedAt time.Time, sequence int64) 
 		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
 		ReasonSummary: intent.ReasonSummary, RiskSummary: domain.RestartDeploymentRiskSummary,
 		CurrentSummary:  "Deployment generation 8 with Pod template fingerprint " + intent.TemplateFingerprint + ".",
-		ProposedSummary: "Update only the KuPilot-owned restart annotation to create a new Pod template revision.",
+		ProposedSummary: "Update only the Kupilot-owned restart annotation to create a new Pod template revision.",
 		Digest:          domainRequest.Digest, Nonce: nonce, RequestedAt: requestedAt, ExpiresAt: domainRequest.ExpiresAt,
 	}
 }

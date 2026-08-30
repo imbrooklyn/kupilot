@@ -142,7 +142,7 @@ func TestToolResourceReaderUnknownTargetsStopBeforeSecondaryActions(t *testing.T
 
 	fakeClient.ClearActions()
 	_, err = reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PodName: "missing-pod", Container: "app",
+		Scope: liveScope("team-a"), Namespace: "team-a", PodName: "missing-pod", Container: "app",
 		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	})
 	assertKubeErrorClass(t, err, ClassNotFound)
@@ -226,7 +226,7 @@ func TestToolResourceReaderRecordsExactCurrentPreviousAndInitLogRequests(t *test
 			reader, closeReader := newHTTPToolResourceReader(t, server)
 			defer closeReader()
 			result, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-				Scope: liveScope("team-a"), PodName: "sample-pod", Container: test.container, Previous: test.previous,
+				Scope: liveScope("team-a"), Namespace: "team-a", PodName: "sample-pod", Container: test.container, Previous: test.previous,
 				TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 			})
 			if err != nil || result.Availability != toolcontract.PodLogAvailable || result.Previous != test.previous ||
@@ -255,7 +255,7 @@ func TestToolResourceReaderSelectsContainersAndNeverFallsBackFromPrevious(t *tes
 	defer client.Close()
 	reader, _ := NewToolResourceReader(gateway, client, liveScope("team-a"))
 	base := toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PodName: "sample-pod", TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
+		Scope: liveScope("team-a"), Namespace: "team-a", PodName: "sample-pod", TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	}
 
 	_, err := reader.ReadPodLog(context.Background(), base)
@@ -308,7 +308,7 @@ func TestToolResourceReaderLocallyBoundsOversizedLogResponse(t *testing.T) {
 	reader, closeReader := newHTTPToolResourceReader(t, server)
 	defer closeReader()
 	result, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PodName: "sample-pod", Container: "app",
+		Scope: liveScope("team-a"), Namespace: "team-a", PodName: "sample-pod", Container: "app",
 		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	})
 	if err != nil || result.Content.Len() != 4096 || !result.Truncated {
@@ -334,7 +334,7 @@ func TestToolResourceReaderMapsLogSubresourceRBACWithoutRawError(t *testing.T) {
 	reader, closeReader := newHTTPToolResourceReader(t, server)
 	defer closeReader()
 	_, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PodName: "sample-pod", Container: "app",
+		Scope: liveScope("team-a"), Namespace: "team-a", PodName: "sample-pod", Container: "app",
 		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	})
 	assertKubeErrorClass(t, err, ClassPermissionDenied)

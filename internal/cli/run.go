@@ -19,7 +19,7 @@ const (
 	ExitInterrupted = 130
 )
 
-const rootHelp = `KuPilot is a local Kubernetes diagnostic Agent.
+const rootHelp = `Kupilot is a local Kubernetes diagnostic Agent.
 
 Usage:
   kupilot
@@ -32,7 +32,7 @@ Running kupilot without a subcommand starts a new Session.
 
 Commands:
   resume   Resume by picker, exact Session ID, or --last.
-  cache    Manage the local KuPilot cache.
+  cache    Manage the local Kupilot cache.
   version  Print non-sensitive build information.
   help     Show help for a command.
 
@@ -110,7 +110,7 @@ func Run(
 	start StartFunc,
 ) int {
 	if ctx == nil {
-		writeSafe(stderr, "KuPilot could not start.\n")
+		writeSafe(stderr, "Kupilot could not start.\n")
 		return ExitFailure
 	}
 	if err := ctx.Err(); err != nil {
@@ -138,7 +138,7 @@ func Run(
 	}
 
 	if start == nil {
-		writeSafe(stderr, "KuPilot could not start.\n")
+		writeSafe(stderr, "Kupilot could not start.\n")
 		return ExitFailure
 	}
 	if err := start(ctx, intent); err != nil {
@@ -166,7 +166,7 @@ func Run(
 			}
 		}
 
-		writeSafe(stderr, "KuPilot could not start.\n")
+		writeSafe(stderr, "Kupilot could not start.\n")
 		return ExitFailure
 	}
 
@@ -198,7 +198,7 @@ func writeFailure(stderr io.Writer, err error) int {
 		writeSafe(stderr, "Interrupted.\n")
 		return ExitInterrupted
 	}
-	writeSafe(stderr, "KuPilot could not write output.\n")
+	writeSafe(stderr, "Kupilot could not write output.\n")
 	return ExitFailure
 }
 

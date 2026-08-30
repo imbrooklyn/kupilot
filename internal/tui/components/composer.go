@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	MinComposerRows    = 3
+	MinComposerRows    = 1
 	MaxComposerRows    = 8
 	maxContentRows     = 65_536
 	defaultPlaceholder = "Ask a question, or type / for commands"
@@ -40,10 +40,10 @@ type Composer struct {
 	secretMode  bool
 }
 
-// NewComposer creates a focused three-to-eight-row multiline editor.
+// NewComposer creates a focused one-to-eight-row multiline editor.
 func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	input := textarea.New()
-	input.Prompt = ""
+	input.Prompt = "› "
 	input.Placeholder = defaultPlaceholder
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
@@ -52,7 +52,10 @@ func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	input.MinHeight = MinComposerRows
 	input.MaxHeight = MaxComposerRows
 	input.MaxContentHeight = maxContentRows
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("ctrl+j", "newline"))
+	input.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("shift+enter", "alt+enter", "ctrl+j"),
+		key.WithHelp("shift+enter", "newline"),
+	)
 	input.KeyMap.Paste = key.Binding{}
 	input.SetStyles(styles.Textarea)
 	input.SetHeight(MinComposerRows)
@@ -67,6 +70,13 @@ func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	}
 }
 
+// SetStyles updates presentation without replacing the sole editor or any
+// draft, cursor, history, focus, or secret-mode state.
+func (composer *Composer) SetStyles(styles ComposerStyles) {
+	composer.styles = styles
+	composer.input.SetStyles(styles.Textarea)
+}
+
 // Update applies one already-sanitized input message without exceeding maxBytes.
 func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 	original := composer.input.Value()
@@ -75,9 +85,10 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 	case tea.PasteMsg:
 		additional = len(value.Content)
 	case tea.KeyPressMsg:
-		additional = len(value.Text)
-		if value.Keystroke() == "ctrl+j" {
+		if key.Matches(value, composer.input.KeyMap.InsertNewline) {
 			additional = 1
+		} else {
+			additional = len(value.Text)
 		}
 	}
 	if additional > 0 && composer.maxBytes > 0 && len(composer.input.Value())+additional > composer.maxBytes {
@@ -97,16 +108,16 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 	return composer, cmd, nil
 }
 
-// SetWidth updates the editable content width while preserving the border frame.
+// SetWidth updates the editable content width inside the quiet surface padding.
 func (composer *Composer) SetWidth(width int) {
 	if width < 8 {
 		width = 8
 	}
 	composer.width = width
-	composer.input.SetWidth(max(1, width-4))
+	composer.input.SetWidth(max(1, width-2))
 }
 
-// SetMaxRows tightens the editor for a small terminal while preserving 3-8 rows.
+// SetMaxRows tightens the editor for a small terminal while preserving 1-8 rows.
 func (composer *Composer) SetMaxRows(rows int) {
 	rows = max(MinComposerRows, min(rows, MaxComposerRows))
 	composer.input.MaxHeight = rows
@@ -199,7 +210,8 @@ func (composer *Composer) NextHistory() bool {
 	return true
 }
 
-// HistoryEligible reports whether Up/Down should recall history instead of moving a cursor.
+// HistoryEligible reports whether an explicit history shortcut may recall a
+// submitted draft without exposing secret-mode input.
 func (composer Composer) HistoryEligible() bool {
 	return !composer.secretMode && (composer.historyOpen || composer.input.Value() == "" && composer.input.LineCount() == 1)
 }
@@ -212,7 +224,7 @@ func (composer *Composer) closeHistory() {
 // Height returns the current visible editable-row count.
 func (composer Composer) Height() int { return composer.input.Height() }
 
-// FrameHeight includes the surface border around the editable rows.
+// FrameHeight includes the quiet blank row above and below the editable rows.
 func (composer Composer) FrameHeight() int { return composer.input.Height() + 2 }
 
 // ScrollOffset reports the textarea's internal vertical scroll position.
@@ -238,5 +250,5 @@ func (composer Composer) View() string {
 		input.SetValue(strings.Repeat("•", utf8.RuneCountInString(input.Value())))
 		input.MoveToEnd()
 	}
-	return style.Width(max(1, composer.width-4)).Render(input.View())
+	return style.Width(max(1, composer.width-2)).Render(input.View())
 }

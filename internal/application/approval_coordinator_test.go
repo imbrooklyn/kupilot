@@ -264,7 +264,7 @@ func TestCoordinatorProposalBridgeRequiresExactActiveRunBinding(t *testing.T) {
 	if _, err := outer.SubmitRestartDeploymentProposal(
 		context.Background(), fixture.runID, fixture.sessionID, 2, fixture.intent,
 	); !errors.Is(err, ErrApprovalUnavailable) {
-		t.Fatalf("v0.1 proposal error = %v", err)
+		t.Fatalf("disabled proposal error = %v", err)
 	}
 	outer.approvals = fixture.coordinator
 	if _, err := outer.SubmitRestartDeploymentProposal(
@@ -314,6 +314,55 @@ func TestCoordinatorProposalBridgeRequiresExactActiveRunBinding(t *testing.T) {
 	if err != nil || request.State != domain.ApprovalStatePending || fixture.persistence.creates != 1 ||
 		fixture.executor.calls != 0 || bridge.sequence != 2 {
 		t.Fatalf("bound proposal request/error/create/executor/sequence = %#v/%v/%d/%d/%d", request, err, fixture.persistence.creates, fixture.executor.calls, bridge.sequence)
+	}
+}
+
+func TestCoordinatorTurnsTypedSuggestionIntoApprovalOnlyAfterTrustedPreparation(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	outer, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), runnerFunc(func(
+		context.Context,
+		agent.RunInput,
+		agent.EventSink,
+	) agent.RunOutcome {
+		return agent.RunOutcome{}
+	}))
+	preparer := &fakeRestartProposalPreparer{intent: fixture.intent}
+	outer.approvals = fixture.coordinator
+	outer.restartProposals = preparer
+	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.ui)
+	if err != nil {
+		t.Fatalf("newEventBridge() error = %v", err)
+	}
+	bridge.started = true
+	bridge.sequence = 8
+	diagnosis := domain.Diagnosis{RecommendedActions: []domain.RecommendedAction{{
+		Operation: domain.ApprovalOperationRestartDeployment,
+		Target: &domain.ResourceRef{
+			APIVersion: domain.RestartDeploymentTargetAPIVersion,
+			Kind:       domain.RestartDeploymentTargetKind,
+			Namespace:  fixture.intent.Scope.Namespace,
+			Name:       fixture.intent.DeploymentName,
+		},
+		Action: fixture.intent.ReasonSummary,
+		Risk:   domain.RestartDeploymentRiskSummary,
+	}}}
+	state := &activeRun{
+		run: domain.AgentRun{
+			ID: fixture.runID, SessionID: fixture.sessionID, Scope: fixture.intent.Scope,
+		},
+		bridge: bridge, diagnosis: &diagnosis,
+	}
+	if err := outer.prepareRestartProposal(context.Background(), state); err != nil {
+		t.Fatalf("prepareRestartProposal() error = %v", err)
+	}
+	if preparer.calls != 1 || preparer.target.UID != "" || preparer.target.ResourceVersion != "" ||
+		preparer.scope != fixture.intent.Scope || preparer.reason != fixture.intent.ReasonSummary {
+		t.Fatalf("trusted preparer calls/input = %d/%#v/%#v/%q", preparer.calls, preparer.scope, preparer.target, preparer.reason)
+	}
+	if fixture.persistence.creates != 1 || len(fixture.ui.events) != 1 ||
+		fixture.ui.events[0].Kind != UIEventApprovalRequested || bridge.sequence != 9 || fixture.executor.calls != 0 {
+		t.Fatalf("creates/events/sequence/writes = %d/%#v/%d/%d, want 1/approval/9/0",
+			fixture.persistence.creates, fixture.ui.events, bridge.sequence, fixture.executor.calls)
 	}
 }
 
@@ -554,12 +603,34 @@ type approvalCoordinatorFixture struct {
 	intent      domain.OperationIntent
 }
 
+type fakeRestartProposalPreparer struct {
+	calls  int
+	scope  domain.ScopeSnapshot
+	target domain.ResourceRef
+	reason string
+	intent domain.OperationIntent
+	err    error
+}
+
+func (preparer *fakeRestartProposalPreparer) PrepareRestartDeploymentProposal(
+	_ context.Context,
+	scope domain.ScopeSnapshot,
+	target domain.ResourceRef,
+	reason string,
+) (domain.OperationIntent, error) {
+	preparer.calls++
+	preparer.scope = scope
+	preparer.target = target
+	preparer.reason = reason
+	return preparer.intent, preparer.err
+}
+
 func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	t.Helper()
 	clock := &approvalCoordinatorClock{now: time.UnixMilli(1_700_000_500_000).UTC()}
 	executor := &fakeApprovalExecutor{}
 	scope := &fakeApprovalCurrentScope{scope: domain.ClusterScope{
-		Context: "test-context", Namespace: "test-namespace", Generation: 7,
+		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7,
 		ActivatedAt: clock.now,
 	}}
 	persistence := &fakeApprovalPersistence{}

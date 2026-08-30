@@ -5,7 +5,7 @@
 
 ## Context
 
-KuPilot's SQLite adapter needs explicit row scanning, named fields, short
+Kupilot's SQLite adapter needs explicit row scanning, named fields, short
 transactions, and fixed queries. Plain `database/sql` can implement all of this,
 but repetitive manual scanning can obscure mappings and make omission tests
 harder. A full ORM would introduce implicit schema, relationship, query, and
@@ -17,7 +17,7 @@ validation requirements below.
 
 ## Decision
 
-KuPilot will use sqlx as a thin mapping and transaction helper only inside
+Kupilot will use sqlx as a thin mapping and transaction helper only inside
 `internal/persistence/sqlite`, on top of `database/sql` and the single selected
 SQLite driver.
 

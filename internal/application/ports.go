@@ -131,6 +131,26 @@ func (generator *IdentifierGenerator) NewApprovalID() (domain.ApprovalID, error)
 	return domain.ApprovalID(value), err
 }
 
+// NewNonce creates one opaque approval proof from cryptographic randomness.
+// It is never formatted, logged, persisted in plaintext, or reused as an ID.
+func (generator *IdentifierGenerator) NewNonce(ctx context.Context) (domain.ApprovalNonce, error) {
+	if generator == nil || ctx == nil || ctx.Err() != nil {
+		return domain.ApprovalNonce{}, ErrIdentifierUnavailable
+	}
+	value := make([]byte, domain.ApprovalNonceBytes)
+	if _, err := rand.Read(value); err != nil || ctx.Err() != nil {
+		return domain.ApprovalNonce{}, ErrIdentifierUnavailable
+	}
+	nonce, err := domain.NewApprovalNonce(value)
+	for index := range value {
+		value[index] = 0
+	}
+	if err != nil {
+		return domain.ApprovalNonce{}, ErrIdentifierUnavailable
+	}
+	return nonce, nil
+}
+
 func (generator *IdentifierGenerator) NewModelRequestID() (domain.ModelRequestID, error) {
 	value, err := generator.next()
 	return domain.ModelRequestID(value), err

@@ -8,9 +8,9 @@
 k9s is an established resource-oriented Kubernetes terminal application. A fork
 would provide substantial existing UI and cluster-management behavior, but it
 would also make those behaviors, state models, permissions, dependencies, and
-upstream changes KuPilot's starting point.
+upstream changes Kupilot's starting point.
 
-KuPilot has a different product center: one natural-language question, bounded
+Kupilot has a different product center: one natural-language question, bounded
 structured Evidence gathering, and a cautious Diagnosis. Most of a general
 resource management application would be outside the accepted scope and would
 need to be disabled, removed, audited, or continuously reconciled with
@@ -18,7 +18,7 @@ upstream.
 
 ## Decision
 
-KuPilot will not fork, embed, or use k9s as its application foundation. It will
+Kupilot will not fork, embed, or use k9s as its application foundation. It will
 build the smallest TUI and application flow required by the Agent-first product
 contract.
 
@@ -32,7 +32,7 @@ and scope review.
 
 Positive consequences:
 
-- KuPilot starts with the permissions, state, dependencies, and interaction
+- Kupilot starts with the permissions, state, dependencies, and interaction
   surface it actually needs.
 - Resource browsing and management behavior cannot become an accidental bypass
   around Application and Tool contracts.
@@ -44,7 +44,7 @@ Positive consequences:
 Costs and constraints:
 
 - Terminal components, focus behavior, accessibility, and rendering must be
-  implemented and tested by KuPilot.
+  implemented and tested by Kupilot.
 - The project does not inherit mature resource navigation or cluster-management
   features, even where they might appear convenient.
 - Maintainers must resist recreating the same broad surface incrementally.
@@ -55,9 +55,9 @@ Costs and constraints:
   inherited code and upgrade surface would remain large and safety review would
   have to prove that every bypass was removed.
 - Maintaining a thin Agent feature branch on top of k9s was rejected because
-  upstream product and internal changes would control KuPilot's architecture.
+  upstream product and internal changes would control Kupilot's architecture.
 - Launching or embedding k9s as a secondary interface was rejected because it
-  would create a parallel cluster path outside KuPilot's use cases.
+  would create a parallel cluster path outside Kupilot's use cases.
 
 ## Security and privacy impact
 
@@ -66,7 +66,7 @@ background behaviors, caches, and views that require review. All Kubernetes
 reads can be routed through the documented application, Tool, and adapter
 boundaries.
 
-This choice is not a security guarantee. KuPilot must still test import
+This choice is not a security guarantee. Kupilot must still test import
 boundaries, fixed resource allowlists, generation invalidation, projection,
 redaction, output limits, and zero-call denial paths.
 

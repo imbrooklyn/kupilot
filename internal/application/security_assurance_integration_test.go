@@ -505,7 +505,7 @@ func assuranceModelRequest() domain.ModelRequest {
 
 func assuranceScope() domain.ClusterScope {
 	return domain.ClusterScope{
-		Context: "selected", Namespace: "team-a", Generation: 7, ActivatedAt: time.UnixMilli(1).UTC(),
+		Context: "selected", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: time.UnixMilli(1).UTC(),
 	}
 }
 

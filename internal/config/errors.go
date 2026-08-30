@@ -34,7 +34,7 @@ func newSafeError(class ErrorClass, code, operation, message string) *SafeError 
 
 func (err *SafeError) Error() string {
 	if err == nil {
-		return "KuPilot configuration failed."
+		return "Kupilot configuration failed."
 	}
 	return err.message + " (" + err.code + ")"
 }

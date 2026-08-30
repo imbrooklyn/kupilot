@@ -25,8 +25,11 @@ const (
 	MaxModelStreamEventBytes = 64 * 1024
 	// MaxModelStreamEvents bounds emitted neutral events in one response stream.
 	MaxModelStreamEvents = 1024
-	// MaxModelMessageBytes matches the maximum independently safe Message content.
-	MaxModelMessageBytes = maxMessageContentBytes
+	// MaxModelInputMessageBytes bounds system, user, and Tool content sent to a model.
+	MaxModelInputMessageBytes = maxMessageContentBytes
+	// MaxModelMessageBytes bounds one assembled assistant response. The parsed
+	// answer and complete Diagnosis have additional, narrower semantic ceilings.
+	MaxModelMessageBytes = maxAssistantMessageContentBytes
 	// MaxModelToolArgumentsBytes bounds one assembled structured Tool argument object.
 	MaxModelToolArgumentsBytes = maxToolArgumentsBytes
 	// MaxModelToolCallIDBytes bounds an external Tool call correlation value.
@@ -36,10 +39,12 @@ const (
 	// MaxModelErrorBodyBytes bounds discarded HTTP error-body reads.
 	MaxModelErrorBodyBytes = 4096
 	// MaxModelRequestTimeout is the accepted per-request ceiling.
-	MaxModelRequestTimeout = 45 * time.Second
+	MaxModelRequestTimeout = 300 * time.Second
 
-	maxModelMessages             = 32
-	maxModelToolSpecifications   = 6
+	// A maximum-size conversation contains the two initial messages, one
+	// assistant turn per model call, and one result per admitted Tool call.
+	maxModelMessages             = 2 + MaxAgentModelCalls + MaxAgentToolCalls
+	maxModelToolSpecifications   = 7
 	maxModelToolSchemaBytes      = 16 * 1024
 	maxModelToolDescriptionBytes = 1024
 	maxModelCorrelationIDBytes   = 128
@@ -103,7 +108,7 @@ type ModelConfiguration struct {
 	TransportPolicy     ModelTransportPolicy
 }
 
-// Validate checks the fixed v0.1 model profile without accepting a credential.
+// Validate checks the fixed model profile without accepting a credential.
 func (configuration ModelConfiguration) Validate() error {
 	if configuration.ProviderKind != ModelProviderOpenAICompatible ||
 		configuration.APIKeySource != ModelAPIKeySourceRuntime ||
@@ -142,14 +147,13 @@ type ModelMessage struct {
 
 // Validate checks one neutral model request message.
 func (message ModelMessage) Validate() error {
-	contentValid := validModelText(message.Content, MaxModelMessageBytes, true)
 	switch message.Role {
 	case ModelMessageRoleSystem, ModelMessageRoleUser:
-		if !contentValid || message.Content == "" || message.ToolCallID != "" || len(message.ToolCalls) != 0 {
+		if !validModelText(message.Content, MaxModelInputMessageBytes, true) || message.Content == "" || message.ToolCallID != "" || len(message.ToolCalls) != 0 {
 			return ErrInvalidModelRequest
 		}
 	case ModelMessageRoleAssistant:
-		if !contentValid || message.ToolCallID != "" ||
+		if !validModelText(message.Content, MaxModelMessageBytes, true) || message.ToolCallID != "" ||
 			(message.Content == "") == (len(message.ToolCalls) == 0) {
 			return ErrInvalidModelRequest
 		}
@@ -164,7 +168,7 @@ func (message ModelMessage) Validate() error {
 			seen[call.ID] = struct{}{}
 		}
 	case ModelMessageRoleTool:
-		if !contentValid || message.Content == "" || !validModelToken(message.ToolCallID, MaxModelToolCallIDBytes) || len(message.ToolCalls) != 0 {
+		if !validModelText(message.Content, MaxModelInputMessageBytes, true) || message.Content == "" || !validModelToken(message.ToolCallID, MaxModelToolCallIDBytes) || len(message.ToolCalls) != 0 {
 			return ErrInvalidModelRequest
 		}
 	default:
@@ -236,6 +240,7 @@ func (request ModelRequest) Validate() error {
 		ToolNameGetPodLogs:          true,
 		ToolNameGetPreviousPodLogs:  true,
 		ToolNameGetRelatedResources: true,
+		ToolNameGetClusterOverview:  true,
 	}
 	for _, specification := range request.Tools {
 		if specification.Validate() != nil || !wanted[specification.Name] {

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	maxToolRequestDuration = 10 * time.Second
-	maxLogCalls            = 2
+	maxToolRequestDuration = 60 * time.Second
+	maxLogCalls            = 32
 )
 
 var (
@@ -19,9 +19,25 @@ var (
 	ErrInvalidRunBudget = errors.New("RunBudget data is invalid")
 )
 
+// BudgetProfile identifies one code-defined latency and cost envelope. A
+// profile is frozen into RunInput and cannot be changed by model output.
+type BudgetProfile string
+
+const (
+	BudgetProfileCompact  BudgetProfile = "compact"
+	BudgetProfileBalanced BudgetProfile = "balanced"
+	BudgetProfileExtended BudgetProfile = "extended"
+)
+
+// Valid reports whether the profile is selectable by an operator.
+func (profile BudgetProfile) Valid() bool {
+	return profile == BudgetProfileCompact || profile == BudgetProfileBalanced || profile == BudgetProfileExtended
+}
+
 // RunBudgetLimits is frozen in RunInput. Every value may be tightened but may
 // not exceed its code-defined maximum.
 type RunBudgetLimits struct {
+	Profile             BudgetProfile
 	RunDuration         time.Duration
 	Steps               int
 	ToolCalls           int
@@ -34,34 +50,67 @@ type RunBudgetLimits struct {
 	LogCalls            int
 }
 
-// DefaultRunBudgetLimits returns the complete v0.1 hard-ceiling snapshot.
+// DefaultRunBudgetLimits returns the balanced operational profile.
 func DefaultRunBudgetLimits() RunBudgetLimits {
-	return RunBudgetLimits{
-		RunDuration:         domain.MaxAgentRunDuration,
-		Steps:               domain.MaxAgentSteps,
-		ToolCalls:           domain.MaxAgentToolCalls,
-		ModelCalls:          domain.MaxAgentModelCalls,
-		ToolResultBytes:     domain.MaxToolResultBytes,
-		RunToolResultBytes:  domain.MaxAgentRunToolResultBytes,
-		NoProgressSteps:     domain.MaxAgentNoProgressSteps,
-		ModelRequestTimeout: domain.MaxModelRequestTimeout,
-		ToolRequestTimeout:  maxToolRequestDuration,
-		LogCalls:            maxLogCalls,
-	}
+	limits, _ := RunBudgetLimitsForProfile(BudgetProfileBalanced)
+	return limits
 }
 
-// Validate rejects zero, negative, and expanding limits.
+// RunBudgetLimitsForProfile returns the exact immutable limits for one known
+// profile. Unknown profiles fail before a run can perform external I/O.
+func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
+	limits := RunBudgetLimits{Profile: profile, ToolResultBytes: domain.MaxToolResultBytes}
+	switch profile {
+	case BudgetProfileCompact:
+		limits.RunDuration = 2 * time.Minute
+		limits.Steps = 12
+		limits.ToolCalls = 16
+		limits.ModelCalls = 6
+		limits.ModelRequestTimeout = 60 * time.Second
+		limits.ToolRequestTimeout = 15 * time.Second
+		limits.RunToolResultBytes = 1 * 1024 * 1024
+		limits.LogCalls = 4
+		limits.NoProgressSteps = 2
+	case BudgetProfileBalanced:
+		limits.RunDuration = 10 * time.Minute
+		limits.Steps = 32
+		limits.ToolCalls = 48
+		limits.ModelCalls = 16
+		limits.ModelRequestTimeout = 120 * time.Second
+		limits.ToolRequestTimeout = 30 * time.Second
+		limits.RunToolResultBytes = 4 * 1024 * 1024
+		limits.LogCalls = 12
+		limits.NoProgressSteps = 4
+	case BudgetProfileExtended:
+		limits.RunDuration = 30 * time.Minute
+		limits.Steps = 64
+		limits.ToolCalls = 128
+		limits.ModelCalls = 32
+		limits.ModelRequestTimeout = 300 * time.Second
+		limits.ToolRequestTimeout = 60 * time.Second
+		limits.RunToolResultBytes = 12 * 1024 * 1024
+		limits.LogCalls = 32
+		limits.NoProgressSteps = 6
+	default:
+		return RunBudgetLimits{}, ErrInvalidRunBudget
+	}
+	return limits, nil
+}
+
+// Validate rejects zero, negative, unknown-profile, profile-expanding, and
+// hard-ceiling-expanding limits. Callers may tighten a selected profile.
 func (limits RunBudgetLimits) Validate() error {
-	if limits.RunDuration <= 0 || limits.RunDuration > domain.MaxAgentRunDuration ||
-		limits.Steps <= 0 || limits.Steps > domain.MaxAgentSteps ||
-		limits.ToolCalls <= 0 || limits.ToolCalls > domain.MaxAgentToolCalls ||
-		limits.ModelCalls <= 0 || limits.ModelCalls > domain.MaxAgentModelCalls ||
-		limits.ToolResultBytes <= 0 || limits.ToolResultBytes > domain.MaxToolResultBytes ||
-		limits.RunToolResultBytes <= 0 || limits.RunToolResultBytes > domain.MaxAgentRunToolResultBytes ||
-		limits.NoProgressSteps <= 0 || limits.NoProgressSteps > domain.MaxAgentNoProgressSteps ||
-		limits.ModelRequestTimeout <= 0 || limits.ModelRequestTimeout > domain.MaxModelRequestTimeout ||
-		limits.ToolRequestTimeout <= 0 || limits.ToolRequestTimeout > maxToolRequestDuration ||
-		limits.LogCalls <= 0 || limits.LogCalls > maxLogCalls {
+	profileLimits, err := RunBudgetLimitsForProfile(limits.Profile)
+	if err != nil || limits.RunDuration <= 0 || limits.RunDuration > profileLimits.RunDuration || limits.RunDuration > domain.MaxAgentRunDuration ||
+		limits.Steps <= 0 || limits.Steps > profileLimits.Steps || limits.Steps > domain.MaxAgentSteps ||
+		limits.ToolCalls <= 0 || limits.ToolCalls > profileLimits.ToolCalls || limits.ToolCalls > domain.MaxAgentToolCalls ||
+		limits.ModelCalls <= 0 || limits.ModelCalls > profileLimits.ModelCalls || limits.ModelCalls > domain.MaxAgentModelCalls ||
+		limits.ToolResultBytes <= 0 || limits.ToolResultBytes > profileLimits.ToolResultBytes || limits.ToolResultBytes > domain.MaxToolResultBytes ||
+		limits.RunToolResultBytes <= 0 || limits.RunToolResultBytes > profileLimits.RunToolResultBytes || limits.RunToolResultBytes > domain.MaxAgentRunToolResultBytes ||
+		limits.NoProgressSteps <= 0 || limits.NoProgressSteps > profileLimits.NoProgressSteps || limits.NoProgressSteps > domain.MaxAgentNoProgressSteps ||
+		limits.ModelRequestTimeout <= 0 || limits.ModelRequestTimeout > profileLimits.ModelRequestTimeout || limits.ModelRequestTimeout > domain.MaxModelRequestTimeout ||
+		limits.ToolRequestTimeout <= 0 || limits.ToolRequestTimeout > profileLimits.ToolRequestTimeout || limits.ToolRequestTimeout > maxToolRequestDuration ||
+		limits.LogCalls <= 0 || limits.LogCalls > profileLimits.LogCalls || limits.LogCalls > maxLogCalls {
 		return ErrInvalidRunBudget
 	}
 	return nil
@@ -145,6 +194,13 @@ type repeatState struct {
 
 // RunBudgetSnapshot is a read-only copy of current accounting state.
 type RunBudgetSnapshot struct {
+	Profile               BudgetProfile
+	Limits                RunBudgetLimits
+	StartedAt             time.Time
+	Deadline              time.Time
+	CapturedAt            time.Time
+	Elapsed               time.Duration
+	Remaining             time.Duration
 	Steps                 int
 	ToolCalls             int
 	ModelCalls            int
@@ -214,8 +270,9 @@ func (budget *RunBudget) ReserveStep(ctx context.Context) error {
 	return nil
 }
 
-// CompleteStep records only the number of newly accepted Evidence items. Two
-// consecutive zero-Evidence steps seal the budget before another call intent.
+// CompleteStep records only the number of newly accepted Evidence items. The
+// profile-defined number of consecutive zero-Evidence steps seals the budget
+// before another call intent.
 func (budget *RunBudget) CompleteStep(newEvidence int) error {
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
@@ -346,7 +403,23 @@ func (budget *RunBudget) Terminate(reason RunStopReason) bool {
 func (budget *RunBudget) Snapshot() RunBudgetSnapshot {
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
+	capturedAt := budget.now()
+	elapsed := capturedAt.Sub(budget.startedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	remaining := budget.deadline.Sub(capturedAt)
+	if remaining < 0 {
+		remaining = 0
+	}
 	return RunBudgetSnapshot{
+		Profile:               budget.limits.Profile,
+		Limits:                budget.limits,
+		StartedAt:             budget.startedAt,
+		Deadline:              budget.deadline,
+		CapturedAt:            capturedAt,
+		Elapsed:               elapsed,
+		Remaining:             remaining,
 		Steps:                 budget.steps,
 		ToolCalls:             budget.toolCalls,
 		ModelCalls:            budget.modelCalls,

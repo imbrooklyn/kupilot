@@ -50,6 +50,7 @@ func sessionPrivacyLabel(value string) string {
 }
 
 func (picker *SessionPicker) SetLoading()                             { picker.list.setLoading() }
+func (picker *SessionPicker) SetStyles(styles PickerStyles)           { picker.list.setStyles(styles) }
 func (picker *SessionPicker) SetFailed()                              { picker.list.setFailed() }
 func (picker *SessionPicker) SetCandidates(values []SessionCandidate) { picker.list.setItems(values) }
 func (picker *SessionPicker) SetMaxVisible(limit int)                 { picker.list.setMaxVisible(limit) }

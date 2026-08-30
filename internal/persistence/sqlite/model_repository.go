@@ -40,7 +40,7 @@ const (
 		FROM model_requests
 		WHERE run_id = ?
 		ORDER BY sequence, id
-		LIMIT 3
+		LIMIT 64
 	`
 	getRunDetailPersistenceStateSQL = `
 		SELECT
@@ -133,7 +133,7 @@ func (repository *ModelRequestRepository) Save(ctx context.Context, request doma
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "model_request_save_failed", "save_model_request", "KuPilot could not store model request metadata.", err)
+		return repositoryFailure(repository.db, "model_request_save_failed", "save_model_request", "Kupilot could not store model request metadata.", err)
 	}
 	return nil
 }
@@ -150,16 +150,16 @@ func (repository *ModelRequestRepository) GetByID(ctx context.Context, id domain
 	if err := repository.db.handle.GetContext(ctx, &row, getModelRequestByIDSQL, id); errors.Is(err, sql.ErrNoRows) {
 		return domain.ModelRequestMetadata{}, ErrModelRequestNotFound
 	} else if err != nil {
-		return domain.ModelRequestMetadata{}, repositoryFailure(repository.db, "model_request_read_failed", "get_model_request", "KuPilot could not read model request metadata.", err)
+		return domain.ModelRequestMetadata{}, repositoryFailure(repository.db, "model_request_read_failed", "get_model_request", "Kupilot could not read model request metadata.", err)
 	}
 	request, err := row.domainModelRequest()
 	if err != nil {
-		return domain.ModelRequestMetadata{}, repositoryFailure(repository.db, "model_request_row_invalid", "get_model_request", "KuPilot could not read model request metadata safely.", err)
+		return domain.ModelRequestMetadata{}, repositoryFailure(repository.db, "model_request_row_invalid", "get_model_request", "Kupilot could not read model request metadata safely.", err)
 	}
 	return request, nil
 }
 
-// ListByRun returns the at-most-three request metadata records in stable order.
+// ListByRun returns the bounded request metadata records in stable order.
 func (repository *ModelRequestRepository) ListByRun(ctx context.Context, runID domain.AgentRunID) ([]domain.ModelRequestMetadata, error) {
 	if err := repositoryContext(ctx, repository.db, "list_model_requests"); err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func (repository *ModelRequestRepository) ListByRun(ctx context.Context, runID d
 	}
 	rows, err := repository.db.handle.QueryxContext(ctx, listModelRequestsByRunSQL, runID)
 	if err != nil {
-		return nil, repositoryFailure(repository.db, "model_request_list_failed", "list_model_requests", "KuPilot could not list model request metadata.", err)
+		return nil, repositoryFailure(repository.db, "model_request_list_failed", "list_model_requests", "Kupilot could not list model request metadata.", err)
 	}
 	defer rows.Close()
 
@@ -177,16 +177,16 @@ func (repository *ModelRequestRepository) ListByRun(ctx context.Context, runID d
 	for rows.Next() {
 		var row modelRequestRow
 		if err := rows.StructScan(&row); err != nil {
-			return nil, repositoryFailure(repository.db, "model_request_row_invalid", "list_model_requests", "KuPilot could not read model request metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "model_request_row_invalid", "list_model_requests", "Kupilot could not read model request metadata safely.", err)
 		}
 		value, err := row.domainModelRequest()
 		if err != nil || value.RunID != runID {
-			return nil, repositoryFailure(repository.db, "model_request_row_invalid", "list_model_requests", "KuPilot could not read model request metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "model_request_row_invalid", "list_model_requests", "Kupilot could not read model request metadata safely.", err)
 		}
 		values = append(values, value)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repositoryFailure(repository.db, "model_request_list_failed", "list_model_requests", "KuPilot could not list model request metadata.", err)
+		return nil, repositoryFailure(repository.db, "model_request_list_failed", "list_model_requests", "Kupilot could not list model request metadata.", err)
 	}
 	return values, nil
 }

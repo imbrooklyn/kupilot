@@ -1,10 +1,35 @@
 package application
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestUIHistoryMessagesUseRoleSpecificContentLimits(t *testing.T) {
+	t.Parallel()
+
+	assistant := UIHistoryMessage{
+		Role: domain.MessageRoleAssistant, Format: domain.MessageFormatMarkdown,
+		Content: strings.Repeat("a", MaxAnswerMarkdownBytes),
+	}
+	if !assistant.valid() {
+		t.Fatal("assistant history at the answer limit was rejected")
+	}
+	assistant.Content += "a"
+	if assistant.valid() {
+		t.Fatal("assistant history over the answer limit was accepted")
+	}
+
+	user := UIHistoryMessage{
+		Role: domain.MessageRoleUser, Format: domain.MessageFormatPlain,
+		Content: strings.Repeat("a", MaxQuestionBytes+1),
+	}
+	if user.valid() {
+		t.Fatal("user history over the question limit was accepted")
+	}
+}
 
 func TestStructuredUICommandsRejectMixedOrUnboundPickerData(t *testing.T) {
 	t.Parallel()
@@ -92,6 +117,18 @@ func TestUIResumeAndSelectionResultsValidateExclusiveSafeShapes(t *testing.T) {
 	if err := scopeResult.Validate(); err != nil {
 		t.Fatalf("scope result validation error = %v", err)
 	}
+	scopeResult.ScopePreferenceDegraded = true
+	if err := scopeResult.Validate(); err != nil {
+		t.Fatalf("verified scope with preference warning validation error = %v", err)
+	}
+	failedScope := UIScopeResult{
+		RequestID: 3, ExpectedGeneration: 7, ScopeGeneration: 8,
+		Failure: UIQueryUnavailable, ScopePreferenceDegraded: true,
+	}
+	if failedScope.Validate() == nil {
+		t.Fatal("failed scope result accepted an impossible preference-write warning")
+	}
+	scopeResult.ScopePreferenceDegraded = false
 	scopeResult.ScopeGeneration = scopeResult.ExpectedGeneration
 	if scopeResult.Validate() != nil {
 		t.Fatal("scope result rejected a verified no-op generation")

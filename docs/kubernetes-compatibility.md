@@ -1,171 +1,167 @@
 # Kubernetes Compatibility
 
-KuPilot pins `k8s.io/client-go v0.35.7`. The matching `k8s.io/api` and
-`k8s.io/apimachinery` modules are also resolved at `v0.35.7`; mixed Kubernetes
-module minors are not supported.
+Kupilot pins `k8s.io/client-go v0.35.7` together with matching `k8s.io/api` and
+`k8s.io/apimachinery` modules. The upstream module requires Go 1.25.0. Kupilot
+does not support mixed Kubernetes module minors.
 
-The upstream [`v0.35.7` module declaration](https://github.com/kubernetes/client-go/blob/v0.35.7/go.mod)
-requires Go 1.25.0, matching KuPilot's minimum Go version. Client-go publishes
-`v0.x.y` from the corresponding Kubernetes `v1.x.y` source, so this dependency
-matches Kubernetes 1.35.7 exactly. The upstream
-[versioning and compatibility contract](https://github.com/kubernetes/client-go/blob/v0.35.7/README.md)
-distinguishes an exact minor match from cross-minor use of shared APIs.
+The upstream [client-go compatibility contract](https://github.com/kubernetes/client-go/blob/v0.35.7/README.md)
+and [module declaration](https://github.com/kubernetes/client-go/blob/v0.35.7/go.mod)
+are dependency inputs; Kupilot's product surface remains narrower than
+client-go.
 
 ## Cluster version matrix
 
-KuPilot supports the following Kubernetes API server minors:
-
-| Kubernetes API server | KuPilot contract with client-go v0.35.7 |
+| Kubernetes API server | Kupilot contract |
 | --- | --- |
-| 1.34.x | Supported for code-allowlisted stable APIs shared with 1.35. |
-| 1.35.x | Supported; this is the exact client-go minor match. |
-| 1.36.x | Supported for code-allowlisted stable APIs shared with 1.35. |
+| 1.34.x | Supported for the documented stable APIs shared with 1.35. |
+| 1.35.x | Supported; exact client-go minor match. |
+| 1.36.x | Supported for the documented stable APIs shared with 1.35. |
 
-Older and newer server minors are outside the supported matrix. Patch versions
-within a supported minor do not change KuPilot's resource, relationship,
-projection, or request allowlists.
-
-This is a deliberately narrow KuPilot support contract, not a claim that every
-client-go API works across the three minors. The Kubernetes
-[version skew policy](https://kubernetes.io/releases/version-skew-policy/)
-defines a one-minor rule specifically for `kubectl`; KuPilot does not reinterpret
-that statement as a general guarantee for arbitrary Go clients. KuPilot admits
-only stable typed APIs and verifies their exact request paths across this matrix.
-Discovery never expands the supported surface.
+Older and newer minors are outside the supported matrix. Discovery never
+expands the surface, and this matrix is not a claim that every client-go API is
+supported.
 
 ## Kubeconfig loading
 
-KuPilot uses client-go's standard loading precedence:
+Kupilot uses client-go standard loading precedence:
 
-- When `KUBECONFIG` is non-empty, its platform-separated file list is loaded in
-  order, with duplicate paths removed. The first file to define a map entry wins.
-- Otherwise, the standard per-user kubeconfig file is selected.
-- Missing entries in a multi-file list are ignored when another usable source
-  exists. An entirely missing, empty, or invalid result fails with a safe summary.
-- Relative certificate, key, token, and related paths are resolved by client-go
-  against the source file that declared them.
+- A non-empty `KUBECONFIG` supplies a platform-separated file list, with
+  duplicate paths removed and normal client-go merge precedence.
+- Otherwise the standard per-user kubeconfig is selected.
+- Missing entries in a multi-file list are tolerated only when another usable
+  source exists.
+- Relative credential and certificate paths are resolved against their source
+  file.
 
-KuPilot disables client-go's legacy migration rule because loading must never
-copy or modify a user-owned kubeconfig. On Unix platforms, group- or
-world-accessible selected sources produce a fixed warning without disclosing a
-path or changing permissions.
-
+Legacy migration is disabled; Kupilot never copies or modifies kubeconfig.
 Only sorted Context names, the effective default Namespace, current selection,
-and whether a Context declares exec credentials leave the Kubernetes adapter.
-Raw kubeconfig values, source paths, clusters, users, server addresses,
-credentials, `rest.Config`, transports, and client-go clients remain private.
+and the presence of exec credentials leave the adapter. Raw kubeconfig,
+locations, server addresses, users, clusters, tokens, certificates, private
+keys, exec output, `rest.Config`, transports, and client-go values remain
+inside `internal/kube`.
 
 ## Client bundle contract
 
-Each selected Context creates a fresh, independently owned bundle with these
-fixed settings:
+Each selected Context owns a fresh bundle with:
 
-- User-Agent `kupilot/0.1`.
-- QPS `5` and Burst `10`.
-- A 10-second ceiling covering one HTTP request and any exec credential refresh
-  needed by that request.
-- Normal HTTPS certificate and hostname verification with TLS 1.2 or newer.
-- Rejection of `insecure-skip-tls-verify`, plain HTTP server URLs, URL user
-  information, queries, fragments, custom transports, legacy auth providers,
-  and every HTTP redirect.
+- User-Agent `kupilot/0.4`;
+- QPS 5 and Burst 10;
+- a Kubernetes request deadline selected from the immutable run profile, at
+  most 60 seconds and no later than the owning run deadline;
+- normal certificate and hostname verification with TLS 1.2 or newer; and
+- no HTTP redirect.
 
-The transport has no request or response dump wrapper. Authentication headers
-are attached only to the selected API server request and cannot cross a
-redirect. Closing the bundle prevents new requests, cancels and waits for
-in-flight requests and exec credential children, clears bundle-local credential
-state, and closes idle connections.
+The adapter rejects insecure TLS, plain HTTP API servers, URL user information,
+queries, fragments, custom transports, and legacy auth providers. It exposes
+no dynamic client, discovery client, REST client, arbitrary GVR, raw request
+builder, Watch, informer, generic resource operation, or generic write port.
 
-The bundle contains only a private typed clientset. It exposes no REST client,
-dynamic client, discovery client, generic resource interface, request builder,
-Watch, informer, or write-capable consumer method.
+Closing a bundle rejects new requests, cancels and joins in-flight requests and
+exec credential children, clears bundle-local credential state, and closes idle
+connections.
 
-## Scope activation and bounded reads
+## Scope activation
 
-Application owns the live scope generation and receives only an opaque client
-lifecycle handle plus project-owned DTOs. A Context activation first validates
-the exact local candidate, commits generation invalidation, cancels the active
-run, clears selected-resource and same-generation list caches, calls the fixed
-scope-invalidation hook, and closes the old bundle before creating the target
-bundle. It then verifies the target Context's effective Namespace with one exact
-core `v1` Namespace `GET`. A failed Context construction or Namespace
-verification leaves the new generation unavailable and never restores the old
-bundle implicitly.
+Application owns Context, working Namespace, namespace-access policy, and
+generation. Activating a Context verifies its working Namespace with one exact
+core `v1` Namespace GET. A Namespace selection is likewise verified before
+commit. A committed scope change invalidates generation first, cancels the old
+run, clears resource and approval state, and disposes or rebinds the client.
 
-A Namespace candidate is checked with one exact core `v1` Namespace `GET`
-before its commit point. A failed or forbidden check leaves the current scope
-unchanged. A successful change advances generation, performs the same local
-invalidation, and reuses the current Context bundle. Namespace picker reads use
-one core `v1` Namespace `LIST`, request at most 50 items, and return sorted names
-only. Empty Namespace input is never interpreted as all Namespaces.
+The Namespace picker uses one bounded core `v1` Namespace LIST for input help.
+Picker results are not Evidence and do not prove that a later resource exists.
+An empty Namespace is never interpreted as all Namespaces.
 
-The directly readable target surface is fixed:
+For run reads:
 
-| Target Kind | Stable typed API | Current-Namespace requests |
-| --- | --- | --- |
-| Pod | core `v1` | Exact `GET` and bounded `LIST` of `pods` |
-| Service | core `v1` | Exact `GET` and bounded `LIST` of `services` |
-| Deployment | `apps/v1` | Exact `GET` and bounded `LIST` of `deployments` |
-| ReplicaSet | `apps/v1` | Exact `GET` and bounded `LIST` of `replicasets` |
-| Job | `batch/v1` | Exact `GET` and bounded `LIST` of `jobs` |
+- `current` permits namespaced calls only in the working Namespace.
+- `all` permits a validated explicit Namespace and an explicit all-Namespace
+  list in the same Context.
+- Kubernetes RBAC remains mandatory for every request.
+- Cluster-scoped references contain no Namespace.
 
-Each list accepts a code-validated limit from 1 through 50, sends that limit to
-the API server, applies the same ceiling again after return, and accepts no raw
-label selector, field selector, continuation token, or all-Namespace option.
-Same-generation Namespace and resource-list results may be held in ephemeral
-Picker caches; every generation change clears them. Exact resource reads are
-not object-body cache entries.
+## Typed direct reads
 
-The public projection contains only the fixed ResourceRef, optional creation
-time, bounded phase or reason, applicable non-negative readiness and workload
-counts, Service type, and at most one allowlisted controller owner reference.
-It excludes labels, annotations, selectors, messages, container environment,
-volume details, addresses, managed fields, and raw Kubernetes objects.
+<!-- markdownlint-disable MD013 -->
 
-EndpointSlice remains package-internal to the fixed Service relationship. Its
-only admitted read is a namespaced `discovery.k8s.io/v1` list with the
-code-constructed `kubernetes.io/service-name` selector, at most 50 slices, and a
-local ceiling of 1,000 endpoint entries. Only ready and not-ready counts survive;
-addresses never enter the result. A Pod's existing `apps/v1` StatefulSet
-controller reference may be projected as `reference_only`; no StatefulSet
-`GET` or `LIST` exists.
+| API | Kind | Exact typed operations | Projection notes |
+| --- | --- | --- | --- |
+| core `v1` | Namespace | GET, bounded LIST | Identity, creation time, phase, and one bounded reason; no Namespace contents. |
+| core `v1` | Node | GET, bounded LIST | Identity, creation time, Ready/NotReady state, and one bounded health reason; no addresses, provider ID, images, system info, taint values, or capacity maps. |
+| core `v1` | Pod | GET, bounded LIST | Phase, readiness, restart/termination and bounded diagnostic status; no environment or volume-source data. |
+| core `v1` | Service | GET, bounded LIST | Type, safe ports/counts, selector-key count; no cluster/external addresses. |
+| core `v1` | PersistentVolumeClaim | GET, bounded LIST | Identity, creation time, and phase only; no access modes, storage class, volume source, or credential material. |
+| core `v1` | PersistentVolume | GET, bounded LIST | Identity, creation time, phase, and bounded reason only; no capacity, access modes, claim details, or volume source. |
+| core `v1` | ConfigMap | GET, bounded LIST | Identity and creation time only; `data` and `binaryData` are never projected. |
+| `apps/v1` | Deployment | GET, bounded LIST | Replica/condition summary and fixed relationships. |
+| `apps/v1` | ReplicaSet | GET, bounded LIST | Replica/condition and owner summary. |
+| `apps/v1` | StatefulSet | GET, bounded LIST | Desired, current, ready, and available replica counts; no conditions or embedded Pod-template fields. |
+| `apps/v1` | DaemonSet | GET, bounded LIST | Desired, ready, and available counts; no conditions or embedded Pod-template fields. |
+| `batch/v1` | Job | GET, bounded LIST | Active/succeeded/failed counts, conditions, bounded policy counts. |
+| `batch/v1` | CronJob | GET, bounded LIST | Active-job count and Active, Idle, or Suspended phase; no schedule, last-run time, or embedded Job template. |
+| `networking.k8s.io/v1` | Ingress | GET, bounded LIST | Identity and creation time only; no class, rules, backends, addresses, annotations, or Secret material. |
+| `autoscaling/v2` | HorizontalPodAutoscaler | GET, bounded LIST | Desired/current replica counts and one bounded failing-condition reason; no target identity or raw metrics. |
+| `policy/v1` | PodDisruptionBudget | GET, bounded LIST | Desired/current health, disruptions-allowed count, and one bounded failing-condition reason; no raw selector. |
 
-Secret, ConfigMap, EndpointSlice as a direct target, StatefulSet as a direct
-target, every unknown Kind, cross-Context, cross-Namespace, empty-Namespace,
-invalid-limit, and foreign-client requests are rejected before a resource
-client action whenever locally decidable. Scope-managed reads compare the
-complete bound Context, Namespace, and generation before invocation and after
-every return; a mismatch produces `stale_scope` and discards the candidate
-result.
+<!-- markdownlint-enable MD013 -->
 
-## Exec credential contract
+Every direct list limit is 1 through 50, is sent to the API server, and is
+enforced again after return. `get_cluster_overview` accepts a combined total of
+2 through 50 and splits it between its fixed Namespace and Node lists. Lists
+accept no model-controlled label selector, field
+selector, continuation token, or Watch flag. All-Namespace behavior is a
+separate explicit boolean in the internal port, never inferred from an empty
+Namespace.
 
-Exec credentials are accepted only when the selected kubeconfig Context
-declares them and `kubernetes.exec_credentials` is `allow`. With `deny`, a
-Context that requires exec authentication fails before client construction or
-process launch. Static credentials take precedence without launching a
-redundant exec program.
+Secret, arbitrary custom resources, admission objects, RBAC objects, generic
+discovery, and unknown API versions are denied before a Kubernetes call when
+locally decidable.
 
-KuPilot supports `client.authentication.k8s.io/v1` and `v1beta1` in
-non-interactive mode. `Never` and `IfAvailable` run without standard input;
-`Always` is rejected before launch. The executable, arguments, protocol version,
-declared environment, and optional cluster information originate only in the
-selected kubeconfig. The executable is launched directly without a shell.
+## Events, logs, and relationships
 
-KuPilot uses client-go's kubeconfig resolution, ExecCredential codecs, and TLS
-transport types, while keeping process invocation bundle-local so that the
-owning Context can cancel it. The process environment removes
-`KUPILOT_MODEL_API_KEY` from both the inherited environment and kubeconfig
-declarations. KuPilot supplies only the protocol-owned `KUBERNETES_EXEC_INFO`
-value in addition to the filtered environment.
+- Events use an exact code-built `involvedObject` selector and return at most 50
+  normalized entries. A cluster-scoped target may require a cluster-wide Event
+  list, still bound to the exact target.
+- Current and previous Pod logs use exact namespaced `pods/log` GETs. There is
+  no follow mode. Each call is capped at 200 lines, 15 minutes, and 64 KiB and
+  additionally requires the enabled container-output consent category.
+- Relationship traversal is code-defined and remains within the root
+  Namespace, at most two hops, 25 nodes, and 40 edges.
+- EndpointSlice contributes only address-free ready/not-ready counts through
+  the fixed Service relationship.
 
-Credential standard output is limited to 64 KiB and is consumed only by the
-client-go protocol decoder. Standard error is retained only in an 8 KiB
-discarding buffer and never enters an error, log, UI, model request, or durable
-field. Missing executables, nonzero exits, malformed credentials, cancellation,
-and timeout are translated to fixed safe error classes without command,
-argument, environment, path, or output text.
+## Supervised Deployment restart
 
-An allowed exec credential program runs with the local user's authority and may
-perform its own network or filesystem operations. KuPilot does not sandbox or
-audit those operations; strict deny is the fail-closed option for users who do
-not trust that kubeconfig execution surface.
+The sole mutation adapter supports one exact `apps/v1` Deployment. Proposal
+preparation and post-approval revalidation use exact GETs. Execution uses one
+merge PATCH with a fresh resource-version precondition and changes only the
+Kupilot-owned Pod-template restart annotation.
+
+The model cannot supply the patch, annotation, timestamp, UID, resource
+version, template fingerprint, generation, or concurrency precondition. No
+automatic write retry is allowed. Rollout verification performs bounded exact
+Deployment GETs and never changes the prior write outcome.
+
+## Exec credential authentication
+
+Exec credential authentication is the only admitted external process. The
+program and arguments come only from the selected kubeconfig, execute directly
+without a shell, receive a filtered environment without the model key, have
+bounded output, and terminate with the owning request or bundle. `deny` rejects
+an exec-bearing Context before launch. Kupilot does not validate or control the
+external program's own network behavior.
+
+## Verification boundary
+
+Deterministic tests assert exact verbs, groups, versions, resource paths,
+Namespaces, subresources, selectors, limits, projections, cancellation, and
+zero-action denials. Request-recording HTTP fixtures supplement client-go
+object fakes because the fake alone is not a security oracle.
+
+## References
+
+- [Scope](scope.md)
+- [Security Threat Model](security.md)
+- [Least-Privilege RBAC](rbac/README.md)
+- [ADR-0007](adr/0007-use-client-go-behind-narrow-kubernetes-ports.md)
+- [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)

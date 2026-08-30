@@ -51,6 +51,7 @@ func TestModelRequestRepositoryRoundTripsBoundedMetadata(t *testing.T) {
 
 	errorClass := domain.SafeErrorClassUnavailable
 	second := testModelRequest("00000000-0000-7000-8000-000000002005", run.ID, 2, time.UnixMilli(103).UTC())
+	second.Sequence = domain.MaxAgentModelCalls
 	second.Status = domain.ModelRequestStatusFailed
 	second.ErrorClass = &errorClass
 	second.ProviderRequestID = nil

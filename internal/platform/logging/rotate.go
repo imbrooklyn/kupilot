@@ -48,20 +48,20 @@ func ensurePrivateDirectory(directory string) error {
 	created := false
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
-			return newSafeError(ClassInternal, "log_directory_unavailable", "KuPilot could not create its local log directory.")
+			return newSafeError(ClassInternal, "log_directory_unavailable", "Kupilot could not create its local log directory.")
 		}
 		created = true
 		info, err = os.Lstat(directory)
 	}
 	if err != nil {
-		return newSafeError(ClassInternal, "log_directory_unavailable", "KuPilot could not inspect its local log directory.")
+		return newSafeError(ClassInternal, "log_directory_unavailable", "Kupilot could not inspect its local log directory.")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "The local log directory must not be a symbolic link.")
 	}
 	if created {
 		if err := os.Chmod(directory, 0o700); err != nil {
-			return newSafeError(ClassInternal, "log_directory_unavailable", "KuPilot could not protect its new local log directory.")
+			return newSafeError(ClassInternal, "log_directory_unavailable", "Kupilot could not protect its new local log directory.")
 		}
 	}
 	return nil
@@ -79,14 +79,14 @@ func (writer *rotatingWriter) prune(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
-			return newSafeError(ClassInternal, "log_file_unavailable", "KuPilot could not inspect its local log files.")
+			return newSafeError(ClassInternal, "log_file_unavailable", "Kupilot could not inspect its local log files.")
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "Local log files must be regular files and must not be symbolic links.")
 		}
 		if index >= writer.maxFiles || info.Size() > writer.maxFileBytes || now.Sub(info.ModTime()) >= writer.maxAge {
 			if err := os.Remove(name); err != nil {
-				return newSafeError(ClassInternal, "log_rotation_failed", "KuPilot could not enforce the local log retention ceiling.")
+				return newSafeError(ClassInternal, "log_rotation_failed", "Kupilot could not enforce the local log retention ceiling.")
 			}
 		}
 	}
@@ -162,11 +162,11 @@ func (writer *rotatingWriter) openCurrent() error {
 			return newSafeError(ClassConfigurationInvalid, "log_path_unsafe", "The current local log must be a regular file and must not be a symbolic link.")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return newSafeError(ClassInternal, "log_file_unavailable", "KuPilot could not inspect its current local log.")
+		return newSafeError(ClassInternal, "log_file_unavailable", "Kupilot could not inspect its current local log.")
 	}
 	file, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return newSafeError(ClassInternal, "log_file_unavailable", "KuPilot could not open its local log file.")
+		return newSafeError(ClassInternal, "log_file_unavailable", "Kupilot could not open its local log file.")
 	}
 	openedInfo, err := file.Stat()
 	pathInfo, pathErr := os.Lstat(name)

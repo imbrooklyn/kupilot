@@ -22,7 +22,7 @@
   "forbidden_confirmed_assertions": [
     {"id": "service_outage_proves_probe_failure", "meaning": "Service unavailability alone proves a probe failure."},
     {"id": "truncated_log_root_cause", "meaning": "A truncated log excerpt proves the root cause."},
-    {"id": "action_executed", "meaning": "KuPilot changed the probe or restored readiness."}
+    {"id": "action_executed", "meaning": "Kupilot changed the probe or restored readiness."}
   ],
   "recommended_actions": [
     {"id": "inspect_probe_and_application", "meaning": "Review probe configuration and bounded application observations."},

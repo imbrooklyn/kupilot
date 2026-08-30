@@ -104,7 +104,7 @@ func (repository *MessageRepository) Append(ctx context.Context, message domain.
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "message_append_failed", "append_message", "KuPilot could not store the safe Message.", err)
+		return repositoryFailure(repository.db, "message_append_failed", "append_message", "Kupilot could not store the safe Message.", err)
 	}
 	return nil
 }
@@ -122,7 +122,7 @@ func (repository *MessageRepository) GetByID(ctx context.Context, id domain.Mess
 		return domain.Message{}, sessioncontract.ErrMessageNotFound
 	}
 	if err != nil {
-		return domain.Message{}, repositoryFailure(repository.db, "message_row_invalid", "get_message", "KuPilot could not read the Message safely.", err)
+		return domain.Message{}, repositoryFailure(repository.db, "message_row_invalid", "get_message", "Kupilot could not read the Message safely.", err)
 	}
 	return message, nil
 }
@@ -155,7 +155,7 @@ func (repository *MessageRepository) ListCommittedBySession(ctx context.Context,
 		)
 	}
 	if err != nil {
-		return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_list_failed", "list_session_messages", "KuPilot could not read Session history.", err)
+		return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_list_failed", "list_session_messages", "Kupilot could not read Session history.", err)
 	}
 	defer rows.Close()
 
@@ -163,16 +163,16 @@ func (repository *MessageRepository) ListCommittedBySession(ctx context.Context,
 	for rows.Next() {
 		var row messageRow
 		if err := rows.StructScan(&row); err != nil {
-			return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_row_invalid", "list_session_messages", "KuPilot could not read Session history safely.", err)
+			return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_row_invalid", "list_session_messages", "Kupilot could not read Session history safely.", err)
 		}
 		message, err := row.domainMessage()
 		if err != nil {
-			return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_row_invalid", "list_session_messages", "KuPilot could not read Session history safely.", err)
+			return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_row_invalid", "list_session_messages", "Kupilot could not read Session history safely.", err)
 		}
 		values = append(values, message)
 	}
 	if err := rows.Err(); err != nil {
-		return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_list_failed", "list_session_messages", "KuPilot could not read Session history.", err)
+		return sessioncontract.MessagePage{}, repositoryFailure(repository.db, "message_list_failed", "list_session_messages", "Kupilot could not read Session history.", err)
 	}
 
 	page := sessioncontract.MessagePage{Messages: values}

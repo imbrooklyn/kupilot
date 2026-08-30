@@ -1,11 +1,11 @@
 # ADR-0034: Export Only Versioned Redacted Session Summaries
 
-- Status: Accepted
+- Status: Superseded by ADR-0041
 - Date: 2026-08-14
 
 ## Context
 
-Users need a portable account of their own local KuPilot Session without
+Users need a portable account of their own local Kupilot Session without
 turning the product into a Session browser, backup system, or generic data
 exporter. A useful summary may include retained conversation text and
 Diagnosis provenance, but an unrestricted serialization could also expose raw
@@ -19,7 +19,7 @@ defines the narrow export category that satisfies those constraints.
 
 ## Decision
 
-KuPilot may export one explicitly selected, resumable standard-persistence
+Kupilot may export one explicitly selected, resumable standard-persistence
 Session as a deterministic Markdown document. Export is available only through
 the existing `/privacy` flow, uses the existing composer for target entry, and
 requires a target-bound confirmation. It adds no CLI command, file browser,

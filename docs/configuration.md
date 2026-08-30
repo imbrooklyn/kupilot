@@ -1,7 +1,7 @@
-# KuPilot Configuration
+# Kupilot Configuration
 
-KuPilot uses one process-frozen Home for its automatically managed local files.
-`KUPILOT_HOME` selects an absolute, normalized directory; otherwise KuPilot
+Kupilot uses one process-frozen Home for its automatically managed local files.
+`KUPILOT_HOME` selects an absolute, normalized directory; otherwise Kupilot
 uses `$HOME/.kupilot`. The fixed layout is:
 
 | Purpose | Path below Home |
@@ -13,15 +13,14 @@ uses `$HOME/.kupilot`. The fixed layout is:
 
 There are no XDG, macOS Library, working-directory, or repository-relative
 storage locations. The version 1 schema has no configurable path fields. An
-explicit Session-summary export remains the only user-confirmed KuPilot write
+explicit Session-summary export remains the only user-confirmed Kupilot write
 outside Home.
 
 ## First start and interactive model setup
 
 A bare `kupilot` starts the TUI without requiring a configuration file, model
 endpoint, model identifier, or API key. When any model requirement is missing,
-the footer shows `model not configured` and the sole composer opens a fixed setup
-flow:
+the sole composer opens a fixed setup flow:
 
 1. Enter the OpenAI-compatible endpoint.
 2. Enter the model identifier.
@@ -30,14 +29,14 @@ flow:
 
 `save` discloses that the key will be plaintext and not encrypted, then
 atomically writes the effective typed settings and key to
-`KUPILOT_HOME/config.yaml`. `session` keeps the key only in the current KuPilot
+`KUPILOT_HOME/config.yaml`. `session` keeps the key only in the current Kupilot
 process. `/model` repeats setup. Reconfiguration cancels and joins an active
-diagnostic run, constructs one replacement runtime, invalidates consent if the
+AgentRun, constructs one replacement runtime, invalidates consent if the
 canonical model origin changed, and closes the prior runtime after the swap.
 
 Adapter construction is local and network-free. The endpoint's complete stream
 and structured Tool compatibility is checked by the first consented model
-request; KuPilot does not probe, auto-detect, route, or fall back to another
+request; Kupilot does not probe, auto-detect, route, or fall back to another
 provider.
 
 ## Precedence and file selection
@@ -54,7 +53,7 @@ The model credential uses `KUPILOT_MODEL_API_KEY` over an optional
 
 `--config PATH` selects an explicit file. `KUPILOT_CONFIG_FILE` is used when
 the CLI option is absent. Both must be absolute, normalized paths. Otherwise
-KuPilot reads `KUPILOT_HOME/config.yaml`. A missing Home file is allowed; a
+Kupilot reads `KUPILOT_HOME/config.yaml`. A missing Home file is allowed; a
 missing explicit file is an error.
 
 Explicit files are read-only sources. Interactive setup always writes the fixed
@@ -65,7 +64,7 @@ business initialization.
 Each load uses an independent parser. Unknown fields, duplicate or wrongly
 typed values, unsupported enums, files larger than 64 KiB, additional YAML
 documents, nulls, aliases, and merges are rejected. A selected file must be a
-regular non-symlink file. Wider existing Unix permissions are accepted; KuPilot
+regular non-symlink file. Wider existing Unix permissions are accepted; Kupilot
 does not chmod or chown the file and warns that it may contain a plaintext key.
 
 ## Version 1 fields
@@ -79,9 +78,10 @@ an actual key so it remains safe to copy and inspect.
 | Field | Default and validation |
 | --- | --- |
 | `version` | Required schema version `1`. |
-| `context` | Empty; when set, at most 253 UTF-8 bytes with no control or bidirectional-control characters. |
-| `namespace` | Empty; when set, one DNS label of at most 63 bytes. All-Namespace values are rejected. |
+| `context` | Empty; when set, at most 253 UTF-8 bytes with no control or bidirectional-control characters. When empty, startup uses the last successfully verified local Context, then kubeconfig `current-context`. |
+| `namespace` | `default`; when set, one working-Namespace DNS label of at most 63 bytes. It is never an all-Namespace marker. |
 | `no_color` | `false`; `--no-color` overrides it, while the presence of `NO_COLOR` supplies `true` at environment priority. |
+| `runtime.budget_profile` | `balanced`; accepted values are `compact`, `balanced`, and `extended`. The profile is frozen into each run and cannot be expanded by model output. |
 | `model.provider_kind` | Fixed to `openai_compatible`. |
 | `model.endpoint` | Empty until configured; HTTPS is required except for explicit loopback HTTP. |
 | `model.model` | Empty until configured; 1–128 ASCII letters, digits, `.`, `_`, `-`, `/`, or `:`. |
@@ -89,10 +89,11 @@ an actual key so it remains safe to copy and inspect.
 | `model.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. Use it when a reasoning model must disable reasoning to combine Chat Completions with function Tools. |
 | `model.temperature` | `0.1`; accepted range `0` through `0.2`. |
 | `model.max_output_tokens` | `2048`; accepted range `1` through the code-defined ceiling `8192`. |
-| `model.request_timeout_seconds` | `45`; accepted range `1` through the hard model-request ceiling `45`. |
+| `model.request_timeout_seconds` | `300`; accepted range `1` through `300`. The active budget profile and remaining run time apply a smaller per-call deadline when required. |
 | `model.streaming` | Fixed to `true`. |
 | `model.tool_calling_required` | Fixed to `true`. |
 | `kubernetes.exec_credentials` | `allow`; may be set to `deny`. It never selects or supplies a command. |
+| `kubernetes.namespace_access` | `all`; may be tightened to `current`. `all` permits explicit cross-Namespace and all-Namespace reads in the same Context only when RBAC also permits them. |
 | `logging.enabled` | `true`; may be disabled. |
 | `logging.level` | `info`; `warn` and `error` are also accepted. Debug logging is unavailable. |
 | `logging.sensitive_diagnostics` | `false`; when explicitly enabled, terminal model failures may add bounded endpoint, model, provider-error, and full Go stack details to the local log. |
@@ -100,24 +101,31 @@ an actual key so it remains safe to copy and inspect.
 <!-- markdownlint-enable MD013 -->
 
 Each supplied endpoint or model identifier is validated independently. If the
-effective endpoint, model identifier, or API key is absent, KuPilot opens the
+effective endpoint, model identifier, or API key is absent, Kupilot opens the
 interactive model setup flow to complete the profile.
 
 The admitted environment variables are:
 
 - Home and file selection: `KUPILOT_HOME`, `KUPILOT_CONFIG_FILE`.
-- Scope and rendering: `KUPILOT_CONTEXT`, `KUPILOT_NAMESPACE`,
-  `KUPILOT_NO_COLOR`, and `NO_COLOR`.
+- Scope, runtime, and rendering: `KUPILOT_CONTEXT`, `KUPILOT_NAMESPACE`,
+  `KUPILOT_BUDGET_PROFILE`, `KUPILOT_NO_COLOR`, and `NO_COLOR`.
 - Model: `KUPILOT_MODEL_ENDPOINT`, `KUPILOT_MODEL`,
   `KUPILOT_MODEL_API_KEY`, `KUPILOT_MODEL_REASONING_EFFORT`,
   `KUPILOT_MODEL_TEMPERATURE`, `KUPILOT_MODEL_MAX_OUTPUT_TOKENS`, and
   `KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS`.
-- Kubernetes: `KUPILOT_EXEC_CREDENTIALS`.
+- Kubernetes: `KUPILOT_EXEC_CREDENTIALS` and
+  `KUPILOT_NAMESPACE_ACCESS`.
 - Logging: `KUPILOT_LOG_ENABLED` and `KUPILOT_LOG_LEVEL`.
 
 The CLI exposes only `--config`, `--context`, `--namespace`, and `--no-color`
 as startup overrides. It has no API-key, token, kubeconfig-content, arbitrary
 header, TLS-bypass, redirect, or command value option.
+
+The remembered Context is not another configuration-precedence source and is
+not written to a selected YAML file. It is a bounded global preference in the
+Home SQLite database. An effective CLI, environment, or file `context` always
+wins. Each startup resolves the chosen name against the current kubeconfig and
+verifies the exact Namespace before it becomes an active scope.
 
 ## Home and permission behavior
 
@@ -125,14 +133,14 @@ header, TLS-bypass, redirect, or command value option.
 the process. An existing Home symlink is canonicalized once; symbolic links
 below that canonical Home are not followed for managed files.
 
-On supported Unix platforms KuPilot applies these modes only when it creates a
+On supported Unix platforms Kupilot applies these modes only when it creates a
 path:
 
 - New Home, `state`, `cache`, and `logs` directories: `0700`.
 - New configuration, database, SQLite sidecar, cache, and log files: `0600`.
 
 Existing user-managed directory and regular-file modes are respected, even
-when they include group or other bits. KuPilot does not silently tighten them
+when they include group or other bits. Kupilot does not silently tighten them
 and does not make an exact mode an availability requirement. The Home and
 selected configuration checks may emit a bounded warning. Non-regular managed
 targets, unsafe links below Home, path replacement, and actual I/O failures are
@@ -140,10 +148,10 @@ still rejected at the affected boundary. Local logging degrades visibly to a
 disabled sink; required durable storage remains a fail-closed run gate.
 
 These modes do not provide encryption, protection from another process running
-as the same user, or forensic deletion. Windows remains experimental; KuPilot
+as the same user, or forensic deletion. Windows remains experimental; Kupilot
 does not claim equivalent Unix mode enforcement there.
 
-Because no version has been released with the retired layout, KuPilot performs
+Because no version has been released with the retired layout, Kupilot performs
 no legacy path discovery, schema compatibility read, or data migration. The
 configuration schema remains version 1.
 
@@ -151,7 +159,7 @@ configuration schema remains version 1.
 
 The API key may come from masked TUI input, `model.api_key` in the selected
 file, or `KUPILOT_MODEL_API_KEY`. The environment value has highest credential
-precedence. KuPilot reads it once into an opaque wrapper and removes the entry
+precedence. Kupilot reads it once into an opaque wrapper and removes the entry
 from its own process environment; it never writes an environment-sourced value
 back to disk automatically.
 
@@ -165,8 +173,8 @@ boundary.
 
 A locally saved key is deliberately plaintext. It may be exposed by wider
 permissions, another same-user process, filesystem inspection, backups, or
-snapshots. KuPilot does not claim an encrypted credential store. Removing an
-environment entry from the KuPilot process also cannot remove a value exported
+snapshots. Kupilot does not claim an encrypted credential store. Removing an
+environment entry from the Kupilot process also cannot remove a value exported
 by its parent shell.
 
 ## Endpoint and transport policy
@@ -207,7 +215,7 @@ expand these ceilings. The handler admits only code-defined `startup`,
 `agent_run`, and `model_request` events and validated scalar fields. Terminal
 model failures use `error`, except cancellation at `warn`, and may include the
 local request ID, stable error metadata, observed HTTP status, fixed cause
-category, and a sink-generated call chain of at most 32 KuPilot function names
+category, and a sink-generated call chain of at most 32 Kupilot function names
 and 512 bytes. In the default mode, it does not write arbitrary messages,
 caller-provided stacks, raw errors, file names or lines, headers, bodies,
 arguments, configuration contents, credentials, or cluster payloads.
@@ -216,10 +224,10 @@ Set `logging.sensitive_diagnostics: true` only while diagnosing a model failure.
 Terminal `model_request` failures may then add the configured endpoint and
 model, a credential-redacted error chain capped at 16 KiB, the first 4 KiB of a
 provider error response with a truncation flag, and a current-goroutine Go stack
-capped at 64 KiB with file names, line numbers, and a truncation flag. KuPilot
+capped at 64 KiB with file names, line numbers, and a truncation flag. Kupilot
 normalizes these external fields and applies its fixed sensitive-value handling
 before logging them. It prints a startup warning while this mode is active.
-KuPilot does not deliberately attach headers, the model API key, request bodies,
+Kupilot does not deliberately attach headers, the model API key, request bodies,
 successful responses, streams, prompts, Tool data, or Kubernetes content to the
 record. The untrusted provider error and error chain may nevertheless echo user
 or cluster content after fixed sensitive-value handling, so the resulting file
@@ -227,7 +235,7 @@ must still be treated as sensitive.
 
 Sensitive records use the same local files and seven-day rotation. Disable the
 setting after reproduction and remove `logs/kupilot.log` plus its numbered
-rotations when the diagnostic copy is no longer needed. KuPilot does not encrypt
+rotations when the diagnostic copy is no longer needed. Kupilot does not encrypt
 these files or remove them when the setting is turned off.
 
 Set `logging.enabled: false` or `KUPILOT_LOG_ENABLED=false` to disable this

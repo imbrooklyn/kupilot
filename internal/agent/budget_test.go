@@ -11,8 +11,60 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
+func TestRunBudgetProfilesMatchOperationalContract(t *testing.T) {
+	tests := []struct {
+		profile              BudgetProfile
+		run                  time.Duration
+		steps, tools, models int
+		model, kube          time.Duration
+		bytes, logs, stalled int
+	}{
+		{BudgetProfileCompact, 2 * time.Minute, 12, 16, 6, 60 * time.Second, 15 * time.Second, 1 * 1024 * 1024, 4, 2},
+		{BudgetProfileBalanced, 10 * time.Minute, 32, 48, 16, 120 * time.Second, 30 * time.Second, 4 * 1024 * 1024, 12, 4},
+		{BudgetProfileExtended, 30 * time.Minute, 64, 128, 32, 300 * time.Second, 60 * time.Second, 12 * 1024 * 1024, 32, 6},
+	}
+	for _, test := range tests {
+		t.Run(string(test.profile), func(t *testing.T) {
+			limits, err := RunBudgetLimitsForProfile(test.profile)
+			if err != nil || limits.Validate() != nil {
+				t.Fatalf("RunBudgetLimitsForProfile(%q) = %#v, %v", test.profile, limits, err)
+			}
+			if limits.RunDuration != test.run || limits.Steps != test.steps || limits.ToolCalls != test.tools ||
+				limits.ModelCalls != test.models || limits.ModelRequestTimeout != test.model || limits.ToolRequestTimeout != test.kube ||
+				limits.RunToolResultBytes != test.bytes || limits.LogCalls != test.logs || limits.NoProgressSteps != test.stalled ||
+				limits.ToolResultBytes != domain.MaxToolResultBytes {
+				t.Fatalf("profile limits = %#v", limits)
+			}
+		})
+	}
+	if _, err := RunBudgetLimitsForProfile("unknown"); !errors.Is(err, ErrInvalidRunBudget) {
+		t.Fatalf("unknown profile error = %v", err)
+	}
+	if got := DefaultRunBudgetLimits().Profile; got != BudgetProfileBalanced {
+		t.Fatalf("default profile = %q", got)
+	}
+}
+
+func TestRunBudgetSnapshotReportsTimeAndFrozenLimits(t *testing.T) {
+	clock := newFakeClock()
+	limits := DefaultRunBudgetLimits()
+	startedAt := clock.Now()
+	budget, err := NewRunBudget(limits, startedAt, clock.Now)
+	if err != nil {
+		t.Fatalf("NewRunBudget() error = %v", err)
+	}
+	clock.Advance(90 * time.Second)
+	snapshot := budget.Snapshot()
+	if snapshot.Profile != BudgetProfileBalanced || snapshot.Limits != limits || snapshot.StartedAt != startedAt ||
+		snapshot.Deadline != startedAt.Add(limits.RunDuration) || snapshot.CapturedAt != clock.Now() ||
+		snapshot.Elapsed != 90*time.Second || snapshot.Remaining != limits.RunDuration-90*time.Second {
+		t.Fatalf("budget snapshot = %#v", snapshot)
+	}
+}
+
+func TestRunBudgetEnforcesSelectedProfileLimits(t *testing.T) {
 	input := testRunInput(t, "Inspect the selected Pod.")
+	limits := DefaultRunBudgetLimits()
 
 	t.Run("steps", func(t *testing.T) {
 		clock := newFakeClock()
@@ -20,7 +72,7 @@ func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRunBudget() error = %v", err)
 		}
-		for index := 0; index < domain.MaxAgentSteps; index++ {
+		for index := 0; index < limits.Steps; index++ {
 			if err := budget.ReserveStep(context.Background()); err != nil {
 				t.Fatalf("ReserveStep(%d) error = %v", index, err)
 			}
@@ -38,12 +90,12 @@ func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRunBudget() error = %v", err)
 		}
-		for index := 0; index < domain.MaxAgentModelCalls; index++ {
+		for index := 0; index < limits.ModelCalls; index++ {
 			reservation, reserveErr := budget.ReserveModelCall(context.Background())
 			if reserveErr != nil {
 				t.Fatalf("ReserveModelCall(%d) error = %v", index, reserveErr)
 			}
-			if reservation.Timeout > domain.MaxModelRequestTimeout {
+			if reservation.Timeout > limits.ModelRequestTimeout {
 				t.Fatalf("model timeout = %s", reservation.Timeout)
 			}
 		}
@@ -56,7 +108,7 @@ func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewRunBudget() error = %v", err)
 		}
-		for index := 0; index < domain.MaxAgentToolCalls; index++ {
+		for index := 0; index < limits.ToolCalls; index++ {
 			call := testBoundCall(t, input, invocationID(index), fmt.Sprintf("sample-pod-%d", index))
 			if _, reserveErr := budget.ReserveToolCall(context.Background(), call); reserveErr != nil {
 				t.Fatalf("ReserveToolCall(%d) error = %v", index, reserveErr)
@@ -65,17 +117,19 @@ func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
 				t.Fatalf("CompleteToolCall(%d) error = %v", index, completeErr)
 			}
 		}
-		call := testBoundCall(t, input, invocationID(domain.MaxAgentToolCalls), "one-more-pod")
+		call := testBoundCall(t, input, invocationID(limits.ToolCalls), "one-more-pod")
 		assertBudgetStop(t, firstError(budget.ReserveToolCall(context.Background(), call)), RunStopToolCallLimit)
 	})
 
 	t.Run("cumulative Tool bytes", func(t *testing.T) {
 		clock := newFakeClock()
-		budget, err := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
+		byteLimits := limits
+		byteLimits.RunToolResultBytes = 2 * domain.MaxToolResultBytes
+		budget, err := NewRunBudget(byteLimits, clock.Now(), clock.Now)
 		if err != nil {
 			t.Fatalf("NewRunBudget() error = %v", err)
 		}
-		for index := 0; index < domain.MaxAgentRunToolResultBytes/domain.MaxToolResultBytes; index++ {
+		for index := 0; index < byteLimits.RunToolResultBytes/domain.MaxToolResultBytes; index++ {
 			call := testBoundCall(t, input, invocationID(index), fmt.Sprintf("sample-pod-%d", index))
 			if _, reserveErr := budget.ReserveToolCall(context.Background(), call); reserveErr != nil {
 				t.Fatalf("ReserveToolCall(%d) error = %v", index, reserveErr)
@@ -84,7 +138,7 @@ func TestRunBudgetEnforcesExactHardLimits(t *testing.T) {
 				t.Fatalf("CompleteToolCall(%d) error = %v", index, completeErr)
 			}
 		}
-		call := testBoundCall(t, input, invocationID(8), "overflow-pod")
+		call := testBoundCall(t, input, invocationID(2), "overflow-pod")
 		if _, err := budget.ReserveToolCall(context.Background(), call); err != nil {
 			t.Fatalf("ReserveToolCall(overflow) error = %v", err)
 		}
@@ -146,16 +200,17 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 
 	t.Run("two no-progress steps", func(t *testing.T) {
 		clock := newFakeClock()
-		budget, _ := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
-		for index := 0; index < domain.MaxAgentNoProgressSteps; index++ {
+		limits := DefaultRunBudgetLimits()
+		budget, _ := NewRunBudget(limits, clock.Now(), clock.Now)
+		for index := 0; index < limits.NoProgressSteps; index++ {
 			if err := budget.ReserveStep(context.Background()); err != nil {
 				t.Fatalf("ReserveStep(%d) error = %v", index, err)
 			}
 			err := budget.CompleteStep(0)
-			if index+1 < domain.MaxAgentNoProgressSteps && err != nil {
+			if index+1 < limits.NoProgressSteps && err != nil {
 				t.Fatalf("CompleteStep(%d) error = %v", index, err)
 			}
-			if index+1 == domain.MaxAgentNoProgressSteps {
+			if index+1 == limits.NoProgressSteps {
 				assertBudgetStop(t, err, RunStopNoProgress)
 			}
 		}
@@ -173,8 +228,9 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 
 	t.Run("run deadline", func(t *testing.T) {
 		clock := newFakeClock()
-		budget, _ := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
-		clock.Advance(domain.MaxAgentRunDuration)
+		limits := DefaultRunBudgetLimits()
+		budget, _ := NewRunBudget(limits, clock.Now(), clock.Now)
+		clock.Advance(limits.RunDuration)
 		assertBudgetStop(t, firstError(budget.ReserveModelCall(context.Background())), RunStopTimedOut)
 	})
 
@@ -189,8 +245,9 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 
 	t.Run("log calls", func(t *testing.T) {
 		clock := newFakeClock()
-		budget, _ := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
-		for index := 0; index < maxLogCalls; index++ {
+		limits := DefaultRunBudgetLimits()
+		budget, _ := NewRunBudget(limits, clock.Now(), clock.Now)
+		for index := 0; index < limits.LogCalls; index++ {
 			call, err := BindToolCall(input, invocationID(index), domain.ModelToolCall{
 				ID:            fmt.Sprintf("call-%d", index+1),
 				Name:          domain.ToolNameGetPodLogs,
@@ -206,7 +263,7 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 				t.Fatalf("CompleteToolCall(log %d) error = %v", index, err)
 			}
 		}
-		oneMore, err := BindToolCall(input, invocationID(maxLogCalls), domain.ModelToolCall{
+		oneMore, err := BindToolCall(input, invocationID(limits.LogCalls), domain.ModelToolCall{
 			ID:            "call-log-over",
 			Name:          domain.ToolNameGetPreviousPodLogs,
 			ArgumentsJSON: `{"pod_name":"sample-pod-over","purpose":"Inspect bounded previous logs."}`,
@@ -223,18 +280,19 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		name   string
 		mutate func(*RunBudgetLimits)
 	}{
-		{name: "run duration", mutate: func(limits *RunBudgetLimits) { limits.RunDuration = domain.MaxAgentRunDuration + time.Nanosecond }},
-		{name: "steps", mutate: func(limits *RunBudgetLimits) { limits.Steps = domain.MaxAgentSteps + 1 }},
-		{name: "Tool calls", mutate: func(limits *RunBudgetLimits) { limits.ToolCalls = domain.MaxAgentToolCalls + 1 }},
-		{name: "model calls", mutate: func(limits *RunBudgetLimits) { limits.ModelCalls = domain.MaxAgentModelCalls + 1 }},
+		{name: "profile", mutate: func(limits *RunBudgetLimits) { limits.Profile = "unknown" }},
+		{name: "run duration", mutate: func(limits *RunBudgetLimits) { limits.RunDuration++ }},
+		{name: "steps", mutate: func(limits *RunBudgetLimits) { limits.Steps++ }},
+		{name: "Tool calls", mutate: func(limits *RunBudgetLimits) { limits.ToolCalls++ }},
+		{name: "model calls", mutate: func(limits *RunBudgetLimits) { limits.ModelCalls++ }},
 		{name: "result bytes", mutate: func(limits *RunBudgetLimits) { limits.ToolResultBytes = domain.MaxToolResultBytes + 1 }},
-		{name: "run result bytes", mutate: func(limits *RunBudgetLimits) { limits.RunToolResultBytes = domain.MaxAgentRunToolResultBytes + 1 }},
-		{name: "no progress", mutate: func(limits *RunBudgetLimits) { limits.NoProgressSteps = domain.MaxAgentNoProgressSteps + 1 }},
+		{name: "run result bytes", mutate: func(limits *RunBudgetLimits) { limits.RunToolResultBytes++ }},
+		{name: "no progress", mutate: func(limits *RunBudgetLimits) { limits.NoProgressSteps++ }},
 		{name: "model timeout", mutate: func(limits *RunBudgetLimits) {
-			limits.ModelRequestTimeout = domain.MaxModelRequestTimeout + time.Nanosecond
+			limits.ModelRequestTimeout++
 		}},
-		{name: "Tool timeout", mutate: func(limits *RunBudgetLimits) { limits.ToolRequestTimeout = maxToolRequestDuration + time.Nanosecond }},
-		{name: "log calls", mutate: func(limits *RunBudgetLimits) { limits.LogCalls = maxLogCalls + 1 }},
+		{name: "Tool timeout", mutate: func(limits *RunBudgetLimits) { limits.ToolRequestTimeout++ }},
+		{name: "log calls", mutate: func(limits *RunBudgetLimits) { limits.LogCalls++ }},
 	}
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
@@ -247,6 +305,7 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 	}
 
 	tightened := RunBudgetLimits{
+		Profile:             BudgetProfileBalanced,
 		RunDuration:         time.Second,
 		Steps:               1,
 		ToolCalls:           1,
@@ -267,7 +326,7 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunBudget() error = %v", err)
 	}
-	clock.Advance(80 * time.Second)
+	clock.Advance(DefaultRunBudgetLimits().RunDuration - 10*time.Second)
 	reservation, err := budget.ReserveModelCall(context.Background())
 	if err != nil {
 		t.Fatalf("ReserveModelCall() error = %v", err)
@@ -279,16 +338,17 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 
 func TestRunBudgetAtomicallyReservesConcurrentCallIntentions(t *testing.T) {
 	clock := newFakeClock()
-	budget, err := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
+	limits := DefaultRunBudgetLimits()
+	budget, err := NewRunBudget(limits, clock.Now(), clock.Now)
 	if err != nil {
 		t.Fatalf("NewRunBudget() error = %v", err)
 	}
 
 	const extraAttempts = 4
 	start := make(chan struct{})
-	results := make(chan error, domain.MaxAgentModelCalls+extraAttempts)
+	results := make(chan error, limits.ModelCalls+extraAttempts)
 	var wait sync.WaitGroup
-	for index := 0; index < domain.MaxAgentModelCalls+extraAttempts; index++ {
+	for index := 0; index < limits.ModelCalls+extraAttempts; index++ {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
@@ -309,11 +369,11 @@ func TestRunBudgetAtomicallyReservesConcurrentCallIntentions(t *testing.T) {
 		}
 		assertBudgetStop(t, reserveErr, RunStopModelCallLimit)
 	}
-	if successes != domain.MaxAgentModelCalls {
-		t.Fatalf("successful concurrent reservations = %d, want %d", successes, domain.MaxAgentModelCalls)
+	if successes != limits.ModelCalls {
+		t.Fatalf("successful concurrent reservations = %d, want %d", successes, limits.ModelCalls)
 	}
 	snapshot := budget.Snapshot()
-	if snapshot.ModelCalls != domain.MaxAgentModelCalls || !snapshot.Stopped || snapshot.StopReason != RunStopModelCallLimit {
+	if snapshot.ModelCalls != limits.ModelCalls || !snapshot.Stopped || snapshot.StopReason != RunStopModelCallLimit {
 		t.Fatalf("concurrent budget snapshot = %#v", snapshot)
 	}
 }

@@ -20,7 +20,7 @@
   "forbidden_confirmed_assertions": [
     {"id": "registry_credential_is_wrong", "meaning": "A registry credential is definitely wrong."},
     {"id": "secret_value_known", "meaning": "A forbidden Secret value is known or inferred."},
-    {"id": "action_executed", "meaning": "KuPilot changed the image or credential."}
+    {"id": "action_executed", "meaning": "Kupilot changed the image or credential."}
   ],
   "recommended_actions": [
     {"id": "verify_image_reference", "meaning": "Verify the image reference in an authorized external workflow."},

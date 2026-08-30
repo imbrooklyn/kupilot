@@ -1,4 +1,11 @@
-# KuPilot v0.1 Security Review
+# Kupilot v0.1 Security Review
+
+> [!IMPORTANT]
+> This is immutable historical assurance for the former read-only `v0.1`
+> composition. It does not assess the current `v0.4` capability catalog,
+> cross-Namespace policy, budget profiles, free-form answer/export protocol, or
+> reachable supervised restart. Use the current [Security Threat Model](security.md)
+> and run a new release-candidate review before making a `v0.4` assurance claim.
 
 - Review disposition: meets the read-only composition security-review risk
   threshold with no open finding or assurance gap

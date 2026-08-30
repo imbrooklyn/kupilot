@@ -60,3 +60,35 @@ func TestMessageValidationCoversHashNullableScopeAndLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageValidationUsesRoleSpecificContentLimits(t *testing.T) {
+	now := time.UnixMilli(2).UTC()
+	message := Message{
+		ID:        "00000000-0000-7000-8000-000000000101",
+		SessionID: "00000000-0000-7000-8000-000000000102",
+		Role:      MessageRoleAssistant,
+		Content:   strings.Repeat("a", maxAssistantMessageContentBytes),
+		Format:    MessageFormatMarkdown,
+		Status:    MessageStatusCommitted,
+		CreatedAt: now,
+	}
+	message.Hash = MessageContentHash(message.Content)
+	if err := message.Validate(); err != nil {
+		t.Fatalf("Validate(assistant at limit) error = %v", err)
+	}
+
+	oversizedAssistant := message
+	oversizedAssistant.Content += "a"
+	oversizedAssistant.Hash = MessageContentHash(oversizedAssistant.Content)
+	if err := oversizedAssistant.Validate(); err == nil {
+		t.Fatal("Validate(assistant over limit) error = nil")
+	}
+
+	oversizedUser := message
+	oversizedUser.Role = MessageRoleUser
+	oversizedUser.Content = strings.Repeat("a", maxMessageContentBytes+1)
+	oversizedUser.Hash = MessageContentHash(oversizedUser.Content)
+	if err := oversizedUser.Validate(); err == nil {
+		t.Fatal("Validate(user over limit) error = nil")
+	}
+}

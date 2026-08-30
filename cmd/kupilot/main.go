@@ -15,6 +15,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/approval"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
 	"github.com/imbrooklyn/kupilot/internal/cli"
 	"github.com/imbrooklyn/kupilot/internal/config"
@@ -56,7 +57,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		if err := config.ClearCache(ctx, paths); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintln(stdout, "KuPilot cache cleared.")
+		_, err := fmt.Fprintln(stdout, "Kupilot cache cleared.")
 		return err
 	}
 	loaded, err := config.Load(ctx, config.LoadOptions{
@@ -127,7 +128,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	evidenceRepository := sqlite.NewEvidenceRepository(database)
 	diagnosisRepository := sqlite.NewDiagnosisRepository(database)
 	auditRepository := sqlite.NewAuditRepository(database)
+	approvalRepository := sqlite.NewApprovalRepository(database)
 	retentionRepository := sqlite.NewRetentionRepository(database)
+	scopePreferenceRepository := sqlite.NewScopePreferenceRepository(database)
 	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
 		Store: sqlite.NewPrivacyRepository(database), Origin: loaded.Model.Origin, Now: utcNow,
 	})
@@ -142,8 +145,17 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		evidence: evidenceRepository, diagnoses: diagnosisRepository,
 	}
 
+	now := utcNow
+	budgetLimits, err := configuredBudgetLimits(loaded.Config)
+	if err != nil {
+		return err
+	}
 	loader := kube.NewConfigLoader()
-	factory, err := kube.NewClientFactory(loader, configuredExecPolicy(loaded.Kubernetes.ExecCredentials))
+	factory, err := kube.NewClientFactory(
+		loader,
+		configuredExecPolicy(loaded.Kubernetes.ExecCredentials),
+		budgetLimits.ToolRequestTimeout,
+	)
 	if err != nil {
 		return err
 	}
@@ -155,13 +167,35 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
-	now := utcNow
-	scopeManager, err := application.NewScopeManager(runtimeGateway, baseGateway, baseGateway, runtimeGateway, now)
+	scopeManager, err := application.NewScopeManager(
+		runtimeGateway, baseGateway, baseGateway, runtimeGateway, now,
+		domain.NamespaceAccessPolicy(loaded.Kubernetes.NamespaceAccess),
+	)
 	if err != nil {
 		return err
 	}
 	composition.scope = scopeManager
 	identifiers, err := application.NewIdentifierGenerator(now)
+	if err != nil {
+		return err
+	}
+	restarter, err := kube.NewDeploymentRestarter(runtimeGateway, now)
+	if err != nil {
+		return err
+	}
+	rolloutObserver, err := kube.NewDeploymentRolloutObserver(runtimeGateway, kube.RolloutObserverConfig{})
+	if err != nil {
+		return err
+	}
+	approvalService, err := approval.NewService(approval.ServiceConfig{
+		Clock:       compositionApprovalClock{now: now},
+		Nonces:      identifiers,
+		Store:       approvalRepository,
+		Scope:       scopeManager,
+		Revalidator: restarter,
+		Executor:    restarter,
+		AuditIDs:    identifiers,
+	})
 	if err != nil {
 		return err
 	}
@@ -219,6 +253,20 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}()
 	deliveryStop := make(chan struct{})
 	uiEventSink := &deliveryUIEventSink{events: make(chan application.UIEvent, 64), stopped: deliveryStop}
+	approvalCoordinator, err := application.NewApprovalCoordinator(application.ApprovalCoordinatorConfig{
+		Service:      approvalService,
+		Persistence:  approvalRepository,
+		ResultAudits: auditRepository,
+		Scope:        scopeManager,
+		ApprovalIDs:  identifiers,
+		AuditIDs:     identifiers,
+		UIEvents:     uiEventSink,
+		Rollout:      rolloutObserver,
+		Now:          now,
+	})
+	if err != nil {
+		return err
+	}
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
@@ -226,9 +274,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: redactor, Exports: sessionRepository, ExportFiles: filesystem.NewExportWriter(), ExportText: redactor,
 		Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
-		Now: now,
+		Now: now, BudgetLimits: budgetLimits,
 		UI: &application.CoordinatorUIConfig{
 			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
+			ScopePreferences: scopePreferenceRepository,
+			Approvals:        approvalCoordinator, RestartProposals: restarter,
 			EvidenceDetail: evidenceApplication, LocalState: database,
 		},
 	})
@@ -252,24 +302,28 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 	initialScope := tui.ScopeView{}
-	if shouldActivateInitialScope(startIntent) {
-		initialScope, err = activateInitialScope(ctx, coordinator, loaded.Config)
+	scopePreferenceDegraded := startResult.ScopePreferenceDegraded
+	if shouldActivateInitialScope(startIntent) && startResult.ScopeCandidate != nil {
+		var activationDegraded bool
+		initialScope, activationDegraded, err = activateInitialScope(ctx, coordinator, *startResult.ScopeCandidate)
 		if err != nil {
 			return err
 		}
+		scopePreferenceDegraded = scopePreferenceDegraded || activationDegraded
 	} else if startResult.ScopeCandidate != nil {
 		initialScope.Context = startResult.ScopeCandidate.Context
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
 	}
 	model := tui.NewModel(tui.Config{
-		NoColor:            loaded.NoColor,
-		StartIntent:        startIntent,
-		Scope:              initialScope,
-		ModelEndpoint:      loaded.Model.Endpoint,
-		ModelName:          loaded.Model.Model,
-		ModelConfigured:    initialRuntime != nil,
-		ModelConfiguredSet: true,
-		PrivacyMode:        domain.PrivacyModeStandard,
+		NoColor:                 loaded.NoColor,
+		StartIntent:             startIntent,
+		Scope:                   initialScope,
+		ModelEndpoint:           loaded.Model.Endpoint,
+		ModelName:               loaded.Model.Model,
+		ModelConfigured:         initialRuntime != nil,
+		ModelConfiguredSet:      true,
+		PrivacyMode:             domain.PrivacyModeStandard,
+		ScopePreferenceDegraded: scopePreferenceDegraded,
 	})
 	if startResult.Session != nil {
 		updated, _ := model.Update(tui.CommandResultMsg{Result: application.UICommandOutcome{
@@ -468,57 +522,26 @@ func shouldActivateInitialScope(intent application.UIStartIntent) bool {
 func activateInitialScope(
 	ctx context.Context,
 	coordinator *application.Coordinator,
-	loaded config.Config,
-) (tui.ScopeView, error) {
-	contextName := loaded.Context
-	if contextName == "" && loaded.Namespace == "" {
-		return tui.ScopeView{}, nil
-	}
-	if contextName == "" {
-		completion, err := coordinator.QueryUI(ctx, application.UICompletionQuery{
-			RequestID: 1, Kind: application.UICompletionContext, Limit: application.MaxUIQueryCandidates,
-		})
-		if err != nil || completion.Failure != "" {
-			return tui.ScopeView{}, initialScopeError{}
-		}
-		for _, candidate := range completion.Contexts {
-			if candidate.Current {
-				contextName = candidate.Name
-				break
-			}
-		}
-		if contextName == "" {
-			return tui.ScopeView{}, initialScopeError{}
-		}
-	}
+	candidate domain.ScopeCandidate,
+) (tui.ScopeView, bool, error) {
 	contextOutcome, err := coordinator.ExecuteUICommand(ctx, application.UICommand{
-		Kind: application.UICommandSelectContext, RequestID: 2, Text: contextName,
+		Kind: application.UICommandActivateScope, RequestID: 1, Scope: &candidate,
 	})
 	if err != nil || contextOutcome.Scope == nil || contextOutcome.Scope.Failure != "" {
-		return tui.ScopeView{}, initialScopeError{}
+		return tui.ScopeView{}, false, initialScopeError{}
 	}
 	result := contextOutcome.Scope
-	if loaded.Namespace != "" && loaded.Namespace != result.Namespace {
-		namespaceOutcome, namespaceErr := coordinator.ExecuteUICommand(ctx, application.UICommand{
-			Kind: application.UICommandSelectNamespace, RequestID: 3, Text: loaded.Namespace,
-			ExpectedScopeGeneration: result.ScopeGeneration,
-		})
-		if namespaceErr != nil || namespaceOutcome.Scope == nil || namespaceOutcome.Scope.Failure != "" {
-			return tui.ScopeView{}, initialScopeError{}
-		}
-		result = namespaceOutcome.Scope
-	}
 	return tui.ScopeView{
 		Context: result.Context, Namespace: result.Namespace,
 		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
-	}, nil
+	}, result.ScopePreferenceDegraded, nil
 }
 
 type initialScopeError struct{}
 
 func (initialScopeError) Error() string { return "initial Kubernetes scope unavailable" }
 func (initialScopeError) SafeMessage() string {
-	return "The configured Kubernetes scope could not be verified safely."
+	return "The Kubernetes scope could not be verified safely."
 }
 
 type deliveryUIEventSink struct {
@@ -908,6 +931,21 @@ func modelConfiguration(value config.ModelConfig) domain.ModelConfiguration {
 	}
 }
 
+func configuredBudgetLimits(value config.Config) (agent.RunBudgetLimits, error) {
+	limits, err := agent.RunBudgetLimitsForProfile(agent.BudgetProfile(value.Runtime.BudgetProfile))
+	if err != nil {
+		return agent.RunBudgetLimits{}, err
+	}
+	configuredModelTimeout := time.Duration(value.Model.RequestTimeoutSeconds) * time.Second
+	if configuredModelTimeout > 0 && configuredModelTimeout < limits.ModelRequestTimeout {
+		limits.ModelRequestTimeout = configuredModelTimeout
+	}
+	if limits.Validate() != nil {
+		return agent.RunBudgetLimits{}, agent.ErrInvalidRunBudget
+	}
+	return limits, nil
+}
+
 func configuredExecPolicy(value string) kube.ExecCredentialPolicy {
 	if value == config.ExecCredentialsDeny {
 		return kube.ExecCredentialsDeny
@@ -924,6 +962,17 @@ func configuredLogLevel(value string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+type compositionApprovalClock struct {
+	now func() time.Time
+}
+
+func (clock compositionApprovalClock) Now() time.Time {
+	if clock.now == nil {
+		return time.Time{}
+	}
+	return clock.now()
 }
 
 func utcNow() time.Time {

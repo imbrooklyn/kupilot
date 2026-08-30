@@ -97,6 +97,23 @@ model:
 	}
 }
 
+func TestLoadUsesDefaultNamespaceWithoutSelectingContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configFile := filepath.Join(root, "config.yaml")
+	writePrivateFile(t, configFile, []byte("version: 1\n"))
+	paths := testPaths(root)
+	paths.ConfigFile = configFile
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Context != "" || loaded.Namespace != DefaultNamespace {
+		t.Fatalf("loaded scope defaults = Context %q Namespace %q", loaded.Context, loaded.Namespace)
+	}
+}
+
 func TestLoadSelectsConfigurationFileByPrecedence(t *testing.T) {
 	t.Parallel()
 

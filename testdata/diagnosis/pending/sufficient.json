@@ -1,7 +1,12 @@
 {
   "name": "pending_sufficient",
   "question": "Why is example-pod still Pending?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,9 @@
             "fact": "Pod example-pod has phase Pending.",
             "source_path": "projected.status",
             "severity": "warning",
-            "supports": ["pod_pending_phase"]
+            "supports": [
+              "pod_pending_phase"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001402",
@@ -26,7 +33,10 @@
             "fact": "Condition PodScheduled is False with reason Unschedulable: no matching node satisfies the projected constraints.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["pod_unscheduled_condition", "scheduling_constraints_possible"]
+            "supports": [
+              "pod_unscheduled_condition",
+              "scheduling_constraints_possible"
+            ]
           }
         ]
       }
@@ -46,7 +56,10 @@
             "fact": "Warning Event FailedScheduling for Pod example-pod reported that no matching node satisfied the projected constraints.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["failed_scheduling_event_observed", "scheduling_constraints_possible"]
+            "supports": [
+              "failed_scheduling_event_observed",
+              "scheduling_constraints_possible"
+            ]
           }
         ]
       }
@@ -66,51 +79,83 @@
             "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
             "source_path": "projected.metadata.controller_owner",
             "severity": "info",
-            "supports": ["pod_owner_observed"]
+            "supports": [
+              "pod_owner_observed"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Pod phase is Pending.", "evidence_ids": ["00000000-0000-7000-8000-000000001401"]},
-      {"statement": "The projected PodScheduled condition is False with reason Unschedulable.", "evidence_ids": ["00000000-0000-7000-8000-000000001402"]},
-      {"statement": "A recent FailedScheduling Event reported unmatched projected constraints.", "evidence_ids": ["00000000-0000-7000-8000-000000001403"]},
-      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001404"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Pod phase is Pending.\n- The projected PodScheduled condition is False with reason Unschedulable.\n- A recent FailedScheduling Event reported unmatched projected constraints.\n- The Pod has a projected ReplicaSet owner relationship.\n\nThe projected scheduling constraints may prevent placement. Confidence: medium. To verify: A later bounded observation reports PodScheduled=True without changing the constraints.\n\nNode-level capacity and complete workload scheduling configuration were not collected. Impact: The exact constraint or capacity condition is not established.\n\nSuggested next step: Review the owning workload scheduling constraints and compare them with authorized cluster capacity information. Risk: Changing constraints may place the Pod on different nodes. Before acting: Validate any change outside Kupilot.",
+    "evidence_citations": [
       {
-        "statement": "The projected scheduling constraints may prevent placement.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001402", "00000000-0000-7000-8000-000000001403"],
-        "confidence": "medium",
-        "falsifier": "A later bounded observation reports PodScheduled=True without changing the constraints."
+        "claim": "The projected Pod phase is Pending.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001401"
+        ]
+      },
+      {
+        "claim": "The projected PodScheduled condition is False with reason Unschedulable.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001402"
+        ]
+      },
+      {
+        "claim": "A recent FailedScheduling Event reported unmatched projected constraints.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001403"
+        ]
+      },
+      {
+        "claim": "The Pod has a projected ReplicaSet owner relationship.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001404"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "absent", "detail": "Node-level capacity and complete workload scheduling configuration were not collected.", "impact": "The exact constraint or capacity condition is not established."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Review the owning workload scheduling constraints and compare them with authorized cluster capacity information.",
-        "risk": "Changing constraints may place the Pod on different nodes.",
-        "prerequisites": ["Validate any change outside KuPilot."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "pod_pending_phase"},
-      {"index": 1, "assertion": "pod_unscheduled_condition"},
-      {"index": 2, "assertion": "failed_scheduling_event_observed"},
-      {"index": 3, "assertion": "pod_owner_observed"}
+      {
+        "index": 0,
+        "assertion": "pod_pending_phase"
+      },
+      {
+        "index": 1,
+        "assertion": "pod_unscheduled_condition"
+      },
+      {
+        "index": 2,
+        "assertion": "failed_scheduling_event_observed"
+      },
+      {
+        "index": 3,
+        "assertion": "pod_owner_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "scheduling_constraints_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_scheduling_constraints"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "scheduling_constraints_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_scheduling_constraints"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["pod_pending_phase", "pod_unscheduled_condition", "failed_scheduling_event_observed", "pod_owner_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "pod_pending_phase",
+    "pod_unscheduled_condition",
+    "failed_scheduling_event_observed",
+    "pod_owner_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

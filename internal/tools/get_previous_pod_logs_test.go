@@ -67,7 +67,7 @@ func TestCurrentAndPreviousLogsExposeSeparateFixedSchemas(t *testing.T) {
 	}
 	if current == nil || previous == nil || current.Name == previous.Name || current.Description == previous.Description ||
 		current.InputSchemaJSON != previous.InputSchemaJSON || strings.Contains(current.InputSchemaJSON, "previous") ||
-		strings.Contains(current.InputSchemaJSON, "namespace") || strings.Contains(current.InputSchemaJSON, "limit_bytes") ||
+		!strings.Contains(current.InputSchemaJSON, "namespace") || strings.Contains(current.InputSchemaJSON, "limit_bytes") ||
 		strings.Contains(current.InputSchemaJSON, "follow") {
 		t.Fatalf("current/previous specifications = %#v / %#v", current, previous)
 	}

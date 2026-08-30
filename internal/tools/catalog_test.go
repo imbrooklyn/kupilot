@@ -12,7 +12,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
-func TestReadOnlyToolSchemasRemainExactStrictScopeFreeAndPurposeBound(t *testing.T) {
+func TestReadOnlyToolSchemasRemainExactStrictPolicyBoundAndPurposeBound(t *testing.T) {
 	t.Parallel()
 
 	specifications := agent.ToolSpecifications()
@@ -23,6 +23,7 @@ func TestReadOnlyToolSchemasRemainExactStrictScopeFreeAndPurposeBound(t *testing
 		domain.ToolNameGetPodLogs:          false,
 		domain.ToolNameGetPreviousPodLogs:  false,
 		domain.ToolNameGetRelatedResources: false,
+		domain.ToolNameGetClusterOverview:  false,
 	}
 	if len(specifications) != len(wanted) {
 		t.Fatalf("fixed Tool specification count = %d, want %d", len(specifications), len(wanted))
@@ -42,7 +43,7 @@ func TestReadOnlyToolSchemasRemainExactStrictScopeFreeAndPurposeBound(t *testing
 			}
 		}
 		for _, prohibited := range []string{
-			`"context"`, `"namespace"`, `"scope"`, `"gvr"`, `"raw_selector"`, `"hard_limit"`,
+			`"context"`, `"scope"`, `"gvr"`, `"raw_selector"`, `"hard_limit"`,
 			`"continue"`, `"subresource"`, `"limit_bytes"`, `"watch"`, `"follow"`,
 		} {
 			if strings.Contains(schema, prohibited) {
@@ -57,7 +58,7 @@ func TestReadOnlyToolSchemasRemainExactStrictScopeFreeAndPurposeBound(t *testing
 	}
 }
 
-func TestReadOnlyToolCatalogBuildsExactlySixConcreteHandlers(t *testing.T) {
+func TestReadOnlyToolCatalogBuildsExactlySevenConcreteHandlers(t *testing.T) {
 	t.Parallel()
 
 	resourceReader := &fakeResourceReader{}
@@ -81,6 +82,7 @@ func TestReadOnlyToolCatalogBuildsExactlySixConcreteHandlers(t *testing.T) {
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
 		domain.ToolNameGetRelatedResources,
+		domain.ToolNameGetClusterOverview,
 	}
 	for _, name := range want {
 		if handler, err := handlers.Resolve(name); err != nil || handler == nil {
@@ -100,7 +102,7 @@ func TestReadOnlyToolCatalogBuildsExactlySixConcreteHandlers(t *testing.T) {
 	}
 }
 
-func TestSixToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
+func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 	resourceReader := &fakeResourceReader{}
 	eventReader := &fakeEventReader{}
 	logReader := &fakePodLogReader{}
@@ -182,21 +184,21 @@ func TestResourceToolResultSupportsCanonicalInvocationAuditContract(t *testing.T
 	}
 }
 
-func TestResourceToolBindingCanonicalizesDefaultsWithoutScopeOrHardCeilings(t *testing.T) {
+func TestResourceToolBindingCanonicalizesDefaultsWithPolicyBoundNamespace(t *testing.T) {
 	t.Parallel()
 
 	input := testRunInput(t, 0)
 	getCall := boundGetCall(t, input, `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
-	if got := getCall.ArgumentsJSON(); got != `{"detail":"diagnostic","purpose":"Inspect one Pod.","resource":{"api_version":"v1","kind":"Pod","name":"sample-pod"}}` {
+	if got := getCall.ArgumentsJSON(); got != `{"detail":"diagnostic","purpose":"Inspect one Pod.","resource":{"api_version":"v1","kind":"Pod","name":"sample-pod","namespace":"team-a"}}` {
 		t.Fatalf("canonical get_resource arguments = %s", got)
 	}
 	listCall := boundListCall(t, input, `{"kind":"Pod","purpose":"Find abnormal Pods."}`)
-	if got := listCall.ArgumentsJSON(); got != `{"health_filter":"abnormal","kind":"Pod","limit":20,"purpose":"Find abnormal Pods."}` {
+	if got := listCall.ArgumentsJSON(); got != `{"health_filter":"abnormal","kind":"Pod","limit":20,"namespace":"team-a","purpose":"Find abnormal Pods."}` {
 		t.Fatalf("canonical list_resources arguments = %s", got)
 	}
 	for _, value := range []string{getCall.ArgumentsJSON(), listCall.ArgumentsJSON()} {
 		lower := strings.ToLower(value)
-		for _, prohibited := range []string{"context", "namespace", "gvr", "selector", "max_result_bytes"} {
+		for _, prohibited := range []string{"context", "gvr", "selector", "max_result_bytes"} {
 			if strings.Contains(lower, prohibited) {
 				t.Fatalf("canonical arguments contain runtime authority %q: %s", prohibited, value)
 			}

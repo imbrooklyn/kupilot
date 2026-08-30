@@ -1,176 +1,180 @@
-# KuPilot Scope
+# Kupilot Scope
 
-This document freezes the product boundary for the read-only `v0.1` MVP and
-the single controlled change allowed in `v0.2`.
+This document defines the executable `v0.4` product boundary. It replaces the
+MVP feature freeze while preserving local authority, projection, approval, and
+data-safety controls.
 
-## `v0.1`: read-only Agent MVP
+## In scope for `v0.4`
 
-`v0.1` includes:
+- A local, single-process, single-user TUI with one active AgentRun.
+- One configured `openai_compatible` model origin and the accepted streaming
+  structured-capability protocol.
+- One verified Kubernetes Context, one visible working Namespace, and one
+  immutable `current` or `all` namespace-access policy per run.
+- Startup Context resolution uses the effective configured Context, the last
+  successfully verified local Context, then kubeconfig `current-context`.
+  Without an explicit Namespace, the startup working Namespace is `default`.
+- Natural-language questions, safe validation progress, compact inline
+  capability steps, cancellation, and a validated free-form Markdown answer.
+- A versioned code-owned read catalog over the built-in resource allowlist in
+  the Product Contract.
+- Cross-Namespace exact reads and bounded all-Namespace lists in the same
+  Context when the frozen namespace-access policy is `all`.
+- Cluster-scoped Namespace, Node, and PersistentVolume reads with exact
+  scope-aware Evidence.
+- One supervised `restart_deployment` action behind digest-bound approval,
+  target revalidation, durable audit, one execution attempt, and bounded
+  rollout verification.
+- Compact, balanced, and extended run-budget profiles with balanced as the
+  default and `/status` visibility.
+- Explicit Session resume, local SQLite persistence, informed model-transfer
+  consent, privacy modes, retention controls, redacted export, and deletion.
+- macOS and Linux support on `amd64` and `arm64`; Windows remains experimental.
 
-- A local, single-process, single-user TUI with one active AgentRun at a time.
-- One fixed user-managed Home selected by `KUPILOT_HOME`, with configuration,
-  SQLite state, cache, and bounded logs under fixed descendants.
-- Bare unconfigured TUI startup, masked setup for the one model runtime, and an
-  explicit plaintext-local or process-only credential choice.
-- The fixed `kupilot cache clear` maintenance command, limited to entries below
-  the Home cache child and short-circuited before ordinary startup.
-- A new Session for every bare start and explicit Session resume by picker,
-  exact Session identifier, or `--last`. Session history is not inferred from a
-  working directory.
-- Selection and verification of one kubeconfig Context and Namespace for the
-  active ClusterScope.
-- An optional ResourceRef limited to Pod, Deployment, ReplicaSet, Job, or
-  Service in the current Namespace.
-- Natural-language questions, streaming responses, visible ToolInvocations,
-  cancellation, safe history, and recoverable error reporting.
-- Exactly six constrained, structured, read-only Tools.
-- The eight diagnostic categories in the
-  [product contract](./product.md#eight-mvp-diagnostic-categories).
-- A Diagnosis that separates confirmed facts, hypotheses, missing information,
-  and recommended actions.
-- Informed consent before eligible cluster data is sent to the configured cloud
-  model, plus minimal and sanitized local persistence.
-- No background scan, Watch, informer, or autonomous AgentRun.
+## Read capability catalog
 
-`v0.1` performs no Kubernetes write. It contains no Approval Dialog, no hidden
-write executor, and no alternative command that can perform a recommendation.
-The user performs any chosen action independently.
-
-## The six read-only Tools
-
-These are the complete model-visible Tool catalog for `v0.1`. Each
-ToolInvocation inherits the AgentRun ClusterScope. The model cannot select a
-different Context or Namespace, expand hard limits, or supply a generic
-Kubernetes resource type.
+The complete initial `v0.4` read catalog is:
 
 ### `get_resource`
 
-Reads the diagnostic projection of one ResourceRef. It returns selected status
-and relationship fields, never full YAML or arbitrary object data.
+Reads one exact allowlisted resource and returns a bounded summary or diagnostic
+projection. Namespaced resources default to the working Namespace and may use
+an explicit Namespace under `all` policy. Cluster-scoped resources reject a
+Namespace argument.
 
 ### `list_resources`
 
-Finds a bounded set of named candidates or abnormal summaries in the current
-Namespace. It is not a resource browser and accepts no raw selectors, pagination
-control, or all-Namespace listing.
+Lists one allowlisted Kind with an optional bounded name query and health
+filter. It accepts the working Namespace, an explicit Namespace, or the explicit
+all-Namespace marker when policy and resource scope allow it. It never accepts a
+raw selector or pagination token.
+
+### `get_cluster_overview`
+
+Returns a bounded, typed Namespace and Node health summary. It is not API
+discovery and does not return Node addresses, provider IDs, allocatable values,
+taint values, annotations, or Namespace contents. Its limit is one combined
+total from 2 through 50, shared across the two fixed lists so neither Kind can
+consume the entire request.
 
 ### `get_events`
 
-Reads recent, related Kubernetes Events for one ResourceRef. Events are bounded,
-sanitized, and treated as untrusted data rather than instructions.
+Returns recent bounded normalized Events for one exact allowlisted resource.
+The target Namespace follows the same explicit policy as `get_resource`.
 
 ### `get_pod_logs`
 
-Reads a bounded, sanitized tail from the current instance of one Pod container.
-It provides no follow or streaming mode, and raw log bytes are not persisted.
+Returns one non-following current container-output tail for one exact Pod and
+container. Container output remains disabled until the user enables its consent
+category. The Namespace is explicit and policy-bound.
 
 ### `get_previous_pod_logs`
 
-Reads a bounded, sanitized tail from the previous instance of one restarted Pod
-container. It is separate from current logs, is unavailable when no previous
-instance exists, and never expands to every container.
+Uses the same bounds and policy as `get_pod_logs`, but requests the previous
+container instance.
 
 ### `get_related_resources`
 
-Follows fixed Kubernetes relationships needed for a Diagnosis. Traversal is
-directed and bounded to at most two hops, with no recursive discovery or generic
-graph traversal.
+Follows only code-defined relationships from one exact root inside the root's
+Namespace. Relationship depth, nodes, and edges are runtime ceilings. It never
+performs recursive discovery or crosses Namespace boundaries implicitly.
 
-The directly addressable target kinds are fixed to Pod, Deployment, ReplicaSet,
-Job, and Service. EndpointSlice can contribute only safe endpoint counts inside
-a related-resource ToolInvocation. A StatefulSet can appear only as an existing
-owner reference already carried by a Pod; KuPilot does not fetch or list the
-StatefulSet. Custom resources and arbitrary Kubernetes API types are outside the
-MVP.
+Every capability has strict input decoding, canonical arguments, runtime-
+injected Context and ceilings, pre- and post-I/O generation checks, project-
+owned projection, sensitive-value handling, and deterministic Evidence.
 
-Tool output is bounded and locally projected. A partial, truncated, forbidden,
-unsupported, or stale result becomes missing information in the Diagnosis; it is
-not an invitation to bypass policy or broaden the ClusterScope.
+## Resource source allowlist
 
-## `v0.2`: one controlled write
+<!-- markdownlint-disable MD013 -->
 
-`v0.2` adds exactly one Kubernetes write operation:
-`restart_deployment` for one explicitly identified Deployment.
+| API | Direct Kinds | Data boundary |
+| --- | --- | --- |
+| core `v1` | Namespace, Node, Pod, Service, PersistentVolumeClaim, PersistentVolume, ConfigMap | ConfigMap metadata only; no `data` or `binaryData`. Node addresses, images, provider IDs, system info, and volume source details are excluded. |
+| `apps/v1` | Deployment, ReplicaSet, StatefulSet, DaemonSet | Bounded metadata, replica status, conditions, and fixed relationships. No Pod template environment, volume source, or arbitrary annotations. |
+| `batch/v1` | Job, CronJob | Job status and conditions; CronJob activity and suspend state. No schedule or embedded Pod/Job template data. |
+| `networking.k8s.io/v1` | Ingress | Identity and creation time only; no class, rules, backends, addresses, arbitrary annotations, or Secret references. |
+| `autoscaling/v2` | HorizontalPodAutoscaler | Desired/current replica counts and one bounded failing-condition reason; no target identity or raw metrics. |
+| `policy/v1` | PodDisruptionBudget | Bounded desired/current health and disruption counts; no raw selector. |
 
-The product boundary for that operation is:
+<!-- markdownlint-enable MD013 -->
 
-- The Agent may propose it but cannot approve or execute it by itself.
-- A dedicated Approval Dialog appears only in `v0.2`, defaults to rejection, and
-  authorizes one specific, short-lived proposal.
-- KuPilot revalidates the ClusterScope, target identity, and operation before the
-  write. A changed or expired proposal fails closed.
-- The operation accepts no arbitrary patch, YAML, command, or additional write
-  parameters.
-- KuPilot records the write attempt and distinguishes request acceptance,
-  observed rollout progress, timeout, and verified completion.
+EndpointSlice remains an indirect Service-read source and contributes readiness
+counts only. Secret is denied as both a direct and related source. Unknown and
+custom resources are denied before a Kubernetes call whenever locally
+decidable.
 
-`v0.2` still excludes every other write, including arbitrary patch, apply, or
-delete; Pod deletion; scale; rollback; exec; batch changes; automatic approval;
-and background remediation. A second write operation requires a future product
-decision and is not implied by `v0.2`.
+## Namespace policy
+
+The working Namespace remains mandatory because it anchors default intent,
+resource selection, action targets, and the persistent footer.
+
+- `current` permits only that Namespace for namespaced resources and denies
+  all-Namespace lists locally.
+- `all` permits a validated explicit Namespace and the explicit all-Namespace
+  list marker. It does not bypass API-server RBAC.
+- Cluster-scoped resources use no Namespace and never inherit a fake one.
+- No policy permits another Context or cluster during the same run.
+
+A committed Context, working-Namespace, or namespace-policy change increments
+the generation, cancels the run, clears resource and approval state, and rejects
+late results at all three scope gates.
+
+## Action catalog
+
+`restart_deployment` is the only currently composed write operation. It is
+proposed through typed Agent output and requires the approval contract in
+ADR-0012. The approved diff changes only `kupilot.io/restartedAt` on one exact
+Deployment Pod template.
+
+No current action performs scale, delete, apply, generic patch, rollback, exec,
+port forwarding, Helm, batch mutation, or automatic remediation. These are not
+permanent product prohibitions, but each requires a separate typed design and
+Accepted decision before it can enter the catalog.
+
+## Execution budgets
+
+The compact, balanced, and extended profiles and hard ceilings are normative in
+ADR-0039. Configuration selects a profile before a run. Model text, Tool output,
+and a partial result cannot expand it. `/status` shows usage and remaining run
+time; reaching a limit produces a safe partial answer or terminal explanation.
 
 ## Explicit non-goals
 
-KuPilot does not include:
+- A primary resource table, tree, dashboard, full YAML view/editor, or raw log
+  browser.
+- Shell, kubectl, Pod Exec, command generation/execution, or arbitrary HTTP.
+- Watch, informer, continuous live monitoring, background scan, scheduled run,
+  or controller behavior.
+- Generic Kubernetes discovery exposed to the model, custom resources, dynamic
+  plugins, MCP, RAG, retrievers, or Multi-Agent orchestration.
+- Cross-cluster diagnosis or concurrent active AgentRuns.
+- Autonomous approval or remediation.
 
-- A Kubernetes Dashboard, k9s replacement, resource tree, primary resource
-  table, full YAML browser or editor, or live monitoring view.
-- Shell or kubectl execution, Pod Exec, port forwarding, Helm, arbitrary network
-  requests, or a general command runner.
-- All-Namespace or cross-cluster diagnosis, concurrent cluster diagnosis,
-  background inspection, scheduled tasks, or autonomous remediation.
-- Secret reads, ConfigMap data reads, arbitrary Kubernetes API discovery, custom
-  resources, or unbounded relationship traversal.
-- Plugins, dynamic commands, MCP, RAG, retrievers, Multi-Agent orchestration, or
-  a general extension platform.
-- A web application, server-side control plane, accounts, team collaboration,
-  remote cluster-side Agent or controller, telemetry, or crash reporting.
-- Multiple model providers at once or a claim of compatibility with every
-  endpoint described as OpenAI-compatible.
-- A repository workspace model, code execution workflow, or general DevOps
-  Agent behavior.
+## Capability admission gate
 
-## Feature admission gate
+A new source or action must identify the operational need and document:
 
-Every proposed capability starts with one question:
+1. the exact typed API, verb, scope, and RBAC impact;
+2. strict model schema and runtime-injected authority;
+3. allowed and prohibited source fields;
+4. projection, normalization, sensitive-data, consent, and retention behavior;
+5. time, item, byte, call, retry, and traversal budgets;
+6. partial, cancellation, timeout, conflict, and stale-scope behavior;
+7. deterministic Evidence or action-state mapping;
+8. request-recording success and zero-call denial tests; and
+9. why the capability helps the conversational Agent rather than creating a
+   parallel cluster interface.
 
-> Does this feature help the Agent gather bounded Evidence and produce a safer
-> Diagnosis, or does it replace the Agent with another cluster interface?
+An action must additionally define the semantic diff, digest fields, approval
+copy, TTL, revalidation, concurrency precondition, audit transaction, ambiguous
+outcome behavior, and verification states.
 
-A feature is not admitted when it mainly replaces the Agent. It must also pass
-every applicable gate below:
+## References
 
-1. Does it directly improve the success rate or safety of the
-   Evidence-to-Diagnosis flow?
-2. Without it, would the user need to leave KuPilot to provide context that the
-   Agent actually needs?
-3. Does natural-language diagnostic intent remain the primary interaction,
-   instead of resource navigation or direct manipulation?
-4. Can it use fixed structured inputs, allowlists, strict output budgets, and
-   deterministic tests?
-5. Does it avoid expanding exposure of kubeconfig material, Kubernetes Secrets,
-   the model API key, Events, or logs?
-6. Is it required by at least one named diagnostic category with a repeatable,
-   sanitized fixture?
-7. Can a small maintainer team support it without a new always-on service or a
-   broad compatibility matrix?
-8. If it writes, is it the already admitted `v0.2` operation? Any other write is
-   outside the frozen version boundary even if it appears useful.
-
-Passing the gate does not override the version contract. A proposal must state
-the target diagnostic category, required permissions, data eligible for model
-transfer, output limits, failure modes, non-goals, test fixture, and a clear
-"helps the Agent" conclusion.
-
-Examples:
-
-- Following a fixed owner relationship to find bounded Pod Evidence helps the
-  Agent.
-- Showing the purpose and result of a ToolInvocation helps the user supervise
-  the Agent.
-- Adding a sortable Deployment inventory with a restart shortcut replaces the
-  Agent and is rejected.
-- Adding a full YAML editor creates another Kubernetes IDE and is rejected.
-
-See the [Glossary](./glossary.md) for the canonical domain language and the
-[Privacy Overview](./privacy-overview.md) for data boundaries.
+- [Product Contract](product.md)
+- [Architecture](architecture.md)
+- [Security Threat Model](security.md)
+- [Privacy Overview](privacy-overview.md)
+- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
+- [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)

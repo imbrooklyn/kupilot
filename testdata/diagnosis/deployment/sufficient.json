@@ -1,7 +1,12 @@
 {
   "name": "deployment_unavailable_sufficient",
   "question": "Why does example-deployment have no available replicas?",
-  "target": {"api_version": "apps/v1", "kind": "Deployment", "namespace": "example-namespace", "name": "example-deployment"},
+  "target": {
+    "api_version": "apps/v1",
+    "kind": "Deployment",
+    "namespace": "example-namespace",
+    "name": "example-deployment"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,11 @@
             "fact": "Deployment example-deployment was observed; ready 0 of 3; available 0 of 3; current 3; updated 3; unavailable 3.",
             "source_path": "projected.status",
             "severity": "warning",
-            "supports": ["deployment_zero_available", "pod_startup_blocks_rollout_possible", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_zero_available",
+              "pod_startup_blocks_rollout_possible",
+              "rollout_progress_stalled_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001602",
@@ -26,7 +35,10 @@
             "fact": "Condition Available is False with reason MinimumReplicasUnavailable.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["deployment_available_false", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_available_false",
+              "rollout_progress_stalled_possible"
+            ]
           }
         ]
       }
@@ -46,7 +58,10 @@
             "fact": "ReplicaSet example-replicaset was observed; ready 0 of 3; available 0 of 3; current 3; unavailable 3.",
             "source_path": "projected.related.nodes.status",
             "severity": "warning",
-            "supports": ["deployment_replicaset_observed", "pod_startup_blocks_rollout_possible"]
+            "supports": [
+              "deployment_replicaset_observed",
+              "pod_startup_blocks_rollout_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001604",
@@ -54,7 +69,10 @@
             "fact": "Pod example-rollout-pod was observed; phase Pending; ready 0 of 1; reason ContainersNotReady.",
             "source_path": "projected.related.nodes.status",
             "severity": "warning",
-            "supports": ["deployment_pod_pending_observed", "pod_startup_blocks_rollout_possible"]
+            "supports": [
+              "deployment_pod_pending_observed",
+              "pod_startup_blocks_rollout_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001605",
@@ -62,7 +80,10 @@
             "fact": "The fixed owner relationship connects Deployment example-deployment to ReplicaSet example-replicaset.",
             "source_path": "projected.related.edges.owner_reference",
             "severity": "info",
-            "supports": ["deployment_owner_chain_observed", "pod_startup_blocks_rollout_possible"]
+            "supports": [
+              "deployment_owner_chain_observed",
+              "pod_startup_blocks_rollout_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001606",
@@ -70,7 +91,10 @@
             "fact": "The fixed owner relationship connects ReplicaSet example-replicaset to Pod example-rollout-pod.",
             "source_path": "projected.related.edges.owner_reference",
             "severity": "info",
-            "supports": ["deployment_owner_chain_observed", "pod_startup_blocks_rollout_possible"]
+            "supports": [
+              "deployment_owner_chain_observed",
+              "pod_startup_blocks_rollout_possible"
+            ]
           }
         ]
       }
@@ -90,64 +114,111 @@
             "fact": "Warning Event ProgressDeadlineExceeded for Deployment example-deployment reported that rollout progress exceeded its deadline.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["deployment_progress_event_observed", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_progress_event_observed",
+              "rollout_progress_stalled_possible"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Deployment has zero available replicas out of three desired replicas.", "evidence_ids": ["00000000-0000-7000-8000-000000001601"]},
-      {"statement": "The projected Available condition is False.", "evidence_ids": ["00000000-0000-7000-8000-000000001602"]},
-      {"statement": "The bounded relationship result includes a ReplicaSet with zero ready replicas.", "evidence_ids": ["00000000-0000-7000-8000-000000001603"]},
-      {"statement": "The bounded relationship result includes a Pending Pod with zero ready containers.", "evidence_ids": ["00000000-0000-7000-8000-000000001604"]},
-      {"statement": "The fixed owner graph connects the Deployment to the ReplicaSet and the ReplicaSet to the Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001605", "00000000-0000-7000-8000-000000001606"]},
-      {"statement": "A recent Deployment Event reported that rollout progress exceeded its deadline.", "evidence_ids": ["00000000-0000-7000-8000-000000001607"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Deployment has zero available replicas out of three desired replicas.\n- The projected Available condition is False.\n- The bounded relationship result includes a ReplicaSet with zero ready replicas.\n- The bounded relationship result includes a Pending Pod with zero ready containers.\n- The fixed owner graph connects the Deployment to the ReplicaSet and the ReplicaSet to the Pod.\n- A recent Deployment Event reported that rollout progress exceeded its deadline.\n\nThe observed Pending Pod may be preventing the rollout from producing available replicas. Confidence: medium. To verify: A fresh bounded owner graph shows available replacement Pods or identifies a different rollout branch.\n\nThe rollout may be stalled, but the Deployment condition and Event do not identify the underlying Pod cause. Confidence: medium. To verify: A fresh Deployment observation shows progress and available replicas within the same rollout generation.\n\nNo Pod-specific Event or container log Evidence was collected. Impact: The observed Pending state does not establish why the Pod did not become ready.\n\nSuggested next step: Collect bounded status, Event, and permitted log Evidence for the observed related Pod. Risk: Inspecting additional bounded Evidence is read-only, but acting on it outside Kupilot may replace Pods. Before acting: Keep the active scope fixed and verify the related Pod identity before any external change.",
+    "evidence_citations": [
       {
-        "statement": "The observed Pending Pod may be preventing the rollout from producing available replicas.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001601", "00000000-0000-7000-8000-000000001603", "00000000-0000-7000-8000-000000001604", "00000000-0000-7000-8000-000000001605", "00000000-0000-7000-8000-000000001606"],
-        "confidence": "medium",
-        "falsifier": "A fresh bounded owner graph shows available replacement Pods or identifies a different rollout branch."
+        "claim": "The projected Deployment has zero available replicas out of three desired replicas.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001601"
+        ]
       },
       {
-        "statement": "The rollout may be stalled, but the Deployment condition and Event do not identify the underlying Pod cause.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001601", "00000000-0000-7000-8000-000000001602", "00000000-0000-7000-8000-000000001607"],
-        "confidence": "medium",
-        "falsifier": "A fresh Deployment observation shows progress and available replicas within the same rollout generation."
-      }
-    ],
-    "missing_information": [
-      {"kind": "absent", "detail": "No Pod-specific Event or container log Evidence was collected.", "impact": "The observed Pending state does not establish why the Pod did not become ready."}
-    ],
-    "recommended_actions": [
+        "claim": "The projected Available condition is False.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001602"
+        ]
+      },
       {
-        "action": "Collect bounded status, Event, and permitted log Evidence for the observed related Pod.",
-        "risk": "Inspecting additional bounded Evidence is read-only, but acting on it outside KuPilot may replace Pods.",
-        "prerequisites": ["Keep the active scope fixed and verify the related Pod identity before any external change."],
-        "executed": false
+        "claim": "The bounded relationship result includes a ReplicaSet with zero ready replicas.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001603"
+        ]
+      },
+      {
+        "claim": "The bounded relationship result includes a Pending Pod with zero ready containers.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001604"
+        ]
+      },
+      {
+        "claim": "The fixed owner graph connects the Deployment to the ReplicaSet and the ReplicaSet to the Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001605",
+          "00000000-0000-7000-8000-000000001606"
+        ]
+      },
+      {
+        "claim": "A recent Deployment Event reported that rollout progress exceeded its deadline.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001607"
+        ]
       }
-    ]
+    ],
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "deployment_zero_available"},
-      {"index": 1, "assertion": "deployment_available_false"},
-      {"index": 2, "assertion": "deployment_replicaset_observed"},
-      {"index": 3, "assertion": "deployment_pod_pending_observed"},
-      {"index": 4, "assertion": "deployment_owner_chain_observed"},
-      {"index": 5, "assertion": "deployment_progress_event_observed"}
+      {
+        "index": 0,
+        "assertion": "deployment_zero_available"
+      },
+      {
+        "index": 1,
+        "assertion": "deployment_available_false"
+      },
+      {
+        "index": 2,
+        "assertion": "deployment_replicaset_observed"
+      },
+      {
+        "index": 3,
+        "assertion": "deployment_pod_pending_observed"
+      },
+      {
+        "index": 4,
+        "assertion": "deployment_owner_chain_observed"
+      },
+      {
+        "index": 5,
+        "assertion": "deployment_progress_event_observed"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "pod_startup_blocks_rollout_possible"},
-      {"index": 1, "assertion": "rollout_progress_stalled_possible"}
+      {
+        "index": 0,
+        "assertion": "pod_startup_blocks_rollout_possible"
+      },
+      {
+        "index": 1,
+        "assertion": "rollout_progress_stalled_possible"
+      }
     ],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_related_pod_evidence"}]
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_related_pod_evidence"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["deployment_zero_available", "deployment_available_false", "deployment_replicaset_observed", "deployment_pod_pending_observed", "deployment_owner_chain_observed", "deployment_progress_event_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "deployment_zero_available",
+    "deployment_available_false",
+    "deployment_replicaset_observed",
+    "deployment_pod_pending_observed",
+    "deployment_owner_chain_observed",
+    "deployment_progress_event_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

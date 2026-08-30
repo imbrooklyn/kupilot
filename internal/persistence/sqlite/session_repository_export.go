@@ -36,6 +36,7 @@ const (
 			d.hypotheses_json AS hypotheses_json,
 			d.missing_json AS missing_json,
 			d.actions_json AS actions_json,
+			d.answer_markdown AS answer_markdown,
 			d.created_at_ms AS created_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -93,6 +94,7 @@ type exportDiagnosisRow struct {
 	HypothesesJSON  string `db:"hypotheses_json"`
 	MissingJSON     string `db:"missing_json"`
 	ActionsJSON     string `db:"actions_json"`
+	AnswerMarkdown  string `db:"answer_markdown"`
 	CreatedAtMS     int64  `db:"created_at_ms"`
 	ScopeContext    string `db:"scope_context"`
 	ScopeNamespace  string `db:"scope_namespace"`
@@ -112,7 +114,7 @@ func (repository *SessionRepository) ReadExportSnapshot(
 	}
 	tx, err := repository.db.handle.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "KuPilot could not read the Session export safely.", err)
+		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "Kupilot could not read the Session export safely.", err)
 	}
 	defer tx.Rollback()
 
@@ -121,10 +123,10 @@ func (repository *SessionRepository) ReadExportSnapshot(
 		return application.SessionExportSnapshot{}, err
 	}
 	if err != nil {
-		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "KuPilot could not read the Session export safely.", err)
+		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "Kupilot could not read the Session export safely.", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "KuPilot could not read the Session export safely.", err)
+		return application.SessionExportSnapshot{}, repositoryFailure(repository.db, "session_export_failed", "read_session_export", "Kupilot could not read the Session export safely.", err)
 	}
 	return snapshot, nil
 }
@@ -268,12 +270,13 @@ func (row exportDiagnosisRow) exportRecord() (application.ExportDiagnosisRecord,
 		ID: domain.DiagnosisID(row.ID), RunID: domain.AgentRunID(row.RunID),
 		Scope:          domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing, RecommendedActions: actions,
-		AnswerMarkdown: "Validated export projection.", CreatedAt: createdAt,
+		AnswerMarkdown: row.AnswerMarkdown, CreatedAt: createdAt,
 	}
 	if validation.Validate() != nil {
 		return application.ExportDiagnosisRecord{}, domain.ErrInvalidDiagnosis
 	}
 	return application.ExportDiagnosisRecord{
+		AnswerMarkdown: row.AnswerMarkdown,
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing,
 		RecommendedActions: actions, CreatedAt: createdAt,
 	}, nil

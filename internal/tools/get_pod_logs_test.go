@@ -73,13 +73,13 @@ func TestGetPodLogsReturnsSanitizedBoundedTailAndConciseEvidence(t *testing.T) {
 	}
 }
 
-func TestRunBudgetRejectsThirdLogReadBeforeHandlerOrReaderAction(t *testing.T) {
+func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) {
 	input := testRunInput(t, 0)
 	budget, err := agent.NewRunBudget(input.BudgetLimits(), eventObservedAt, func() time.Time { return eventObservedAt })
 	if err != nil {
 		t.Fatalf("agent.NewRunBudget() error = %v", err)
 	}
-	for index := 0; index < 2; index++ {
+	for index := 0; index < input.BudgetLimits().LogCalls; index++ {
 		invocationID := domain.ToolInvocationID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 20_000+index))
 		call, bindErr := agent.BindToolCall(input, invocationID, domain.ModelToolCall{
 			ID:            fmt.Sprintf("call-log-budget-%d", index),
@@ -96,8 +96,8 @@ func TestRunBudgetRejectsThirdLogReadBeforeHandlerOrReaderAction(t *testing.T) {
 			t.Fatalf("CompleteToolCall(%d) error = %v", index, completeErr)
 		}
 	}
-	third, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000020002", domain.ModelToolCall{
-		ID:            "call-log-budget-third",
+	excess, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000020099", domain.ModelToolCall{
+		ID:            "call-log-budget-excess",
 		Name:          domain.ToolNameGetPreviousPodLogs,
 		ArgumentsJSON: `{"pod_name":"sample-pod-third","purpose":"Inspect one bounded previous log tail."}`,
 	})
@@ -105,10 +105,10 @@ func TestRunBudgetRejectsThirdLogReadBeforeHandlerOrReaderAction(t *testing.T) {
 		t.Fatalf("agent.BindToolCall(third) error = %v", err)
 	}
 	reader := &fakePodLogReader{}
-	_, err = budget.ReserveToolCall(context.Background(), third)
+	_, err = budget.ReserveToolCall(context.Background(), excess)
 	var budgetErr *agent.RunBudgetError
 	if err == nil || !errors.As(err, &budgetErr) || budgetErr.Reason() != agent.RunStopLogCallLimit || reader.count() != 0 {
-		t.Fatalf("third reservation error/reader calls = %#v/%d", err, reader.count())
+		t.Fatalf("excess reservation error/reader calls = %#v/%d", err, reader.count())
 	}
 }
 

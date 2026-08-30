@@ -53,6 +53,7 @@ func newFixtureServer(t *testing.T, errorCanary string) *fixtureServer {
 	for _, name := range []string{
 		"normal.sse",
 		"tool-call-fragments.sse",
+		"interleaved-tool-calls.sse",
 		"no-usage-eof.sse",
 		"malformed.sse",
 		"error-400.json",
@@ -122,6 +123,8 @@ func (fixture *fixtureServer) serveHTTP(response http.ResponseWriter, request *h
 		fixture.serveSSE(response, "normal.sse", "request-fixture-normal")
 	case "/v1/tool-call-fragments/chat/completions":
 		fixture.serveSSE(response, "tool-call-fragments.sse", "request-fixture-tool")
+	case "/v1/interleaved-tool-calls/chat/completions":
+		fixture.serveSSE(response, "interleaved-tool-calls.sse", "request-fixture-interleaved")
 	case "/v1/no-usage-eof/chat/completions":
 		fixture.serveSSE(response, "no-usage-eof.sse", "")
 	case "/v1/malformed/chat/completions":

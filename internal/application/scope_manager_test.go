@@ -322,6 +322,54 @@ func TestScopeManagerNamespaceSwitchVerifiesBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestScopeManagerExactActivationVerifiesOnlyRequestedNamespace(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeScopeClient{context: ContextCandidate{Name: "selected", DefaultNamespace: "legacy"}}
+	var contextCalls atomic.Int64
+	var createCalls atomic.Int64
+	factory := &fakeScopeFactory{
+		contextsFn: func(context.Context) ([]ContextCandidate, error) {
+			contextCalls.Add(1)
+			return []ContextCandidate{client.context}, nil
+		},
+		createFn: func(_ context.Context, name string) (ScopeClient, error) {
+			createCalls.Add(1)
+			if name != client.context.Name {
+				return nil, errors.New("unexpected Context")
+			}
+			return client, nil
+		},
+	}
+	verifiedNamespace := ""
+	namespaces := &fakeNamespaceReader{verifyFn: func(_ context.Context, _ ScopeClient, namespace string) error {
+		verifiedNamespace = namespace
+		return nil
+	}}
+	hook := &fakeScopeInvalidationHook{}
+	manager := newTestScopeManager(t, factory, namespaces, &fakeResourceService{}, hook)
+
+	target := domain.ScopeCandidate{Context: "selected", Namespace: "default"}
+	scope, err := manager.ActivateScope(context.Background(), target, 0)
+	if err != nil {
+		t.Fatalf("ActivateScope() error = %v", err)
+	}
+	if scope.Context != target.Context || scope.Namespace != target.Namespace || scope.Generation != 1 ||
+		verifiedNamespace != target.Namespace || contextCalls.Load() != 1 || createCalls.Load() != 1 ||
+		namespaces.verifyCalls.Load() != 1 || hook.calls.Load() != 1 {
+		t.Fatalf("exact activation = %#v, verified %q, calls contexts/create/verify/hook = %d/%d/%d/%d",
+			scope, verifiedNamespace, contextCalls.Load(), createCalls.Load(), namespaces.verifyCalls.Load(), hook.calls.Load())
+	}
+
+	invalid := domain.ScopeCandidate{Context: "selected"}
+	if _, err := manager.ActivateScope(context.Background(), invalid, scope.Generation); err == nil {
+		t.Fatal("ActivateScope(invalid) error = nil")
+	}
+	if contextCalls.Load() != 1 || createCalls.Load() != 1 || namespaces.verifyCalls.Load() != 1 || hook.calls.Load() != 1 {
+		t.Fatal("invalid exact activation performed external or invalidation work")
+	}
+}
+
 func TestScopeManagerDropsBlockedOldGenerationResourceResult(t *testing.T) {
 	oldClient := &fakeScopeClient{context: ContextCandidate{Name: "old-context", DefaultNamespace: "team-a"}}
 	newClient := &fakeScopeClient{context: ContextCandidate{Name: "new-context", DefaultNamespace: "team-b"}}

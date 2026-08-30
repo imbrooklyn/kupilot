@@ -9,7 +9,9 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-const MaxRunEvents = 4096
+// MaxRunEvents covers the hard Tool/Evidence/model budget while retaining an
+// independent finite ceiling on the internal ordered stream.
+const MaxRunEvents = 32 * 1024
 
 var (
 	// ErrInvalidRunEvent reports an invalid neutral event without echoing data.

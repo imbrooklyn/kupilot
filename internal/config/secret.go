@@ -70,7 +70,7 @@ func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error)
 		return SecretValue{}, false, nil
 	}
 	if err := unset(ModelAPIKeyEnvironmentVariable); err != nil {
-		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "KuPilot could not remove the model API key from its process environment; startup was stopped.")
+		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "Kupilot could not remove the model API key from its process environment; startup was stopped.")
 	}
 	if value == "" {
 		return SecretValue{}, false, nil
@@ -83,7 +83,7 @@ func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error)
 }
 
 func missingAPIKeyError() *SafeError {
-	return newSafeError(ClassConfigurationInvalid, "model_api_key_missing", "read_model_api_key", "Model API key is required; set KUPILOT_MODEL_API_KEY before starting KuPilot.")
+	return newSafeError(ClassConfigurationInvalid, "model_api_key_missing", "read_model_api_key", "Model API key is required; set KUPILOT_MODEL_API_KEY before starting Kupilot.")
 }
 
 func validSecret(value string) bool {

@@ -56,6 +56,16 @@ func TestDiagnosisValidationKeepsFourCollectionsAndUnexecutedActions(t *testing.
 		{name: "partial time window", mutate: func(value *Diagnosis) { value.ObservedTo = nil }},
 		{name: "creation before observation", mutate: func(value *Diagnosis) { value.CreatedAt = observedFrom }},
 		{name: "invalid Evidence state", mutate: func(value *Diagnosis) { value.EvidenceDetailsState = "current" }},
+		{name: "oversized typed action reason", mutate: func(value *Diagnosis) {
+			value.RecommendedActions[0].Operation = ApprovalOperationRestartDeployment
+			value.RecommendedActions[0].Target = &ResourceRef{
+				APIVersion: RestartDeploymentTargetAPIVersion,
+				Kind:       RestartDeploymentTargetKind,
+				Namespace:  value.Scope.Namespace,
+				Name:       "sample-deployment",
+			}
+			value.RecommendedActions[0].Action = strings.Repeat("r", MaxApprovalReasonSummaryBytes+1)
+		}},
 		{name: "too many Evidence references", mutate: func(value *Diagnosis) {
 			ids := make([]EvidenceID, maxEvidencePerInvocation)
 			for index := range ids {

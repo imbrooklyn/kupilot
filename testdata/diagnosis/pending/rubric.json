@@ -25,10 +25,10 @@
   "forbidden_confirmed_assertions": [
     {"id": "missing_event_proves_capacity_shortage", "meaning": "Missing Events prove a resource shortage."},
     {"id": "unobserved_node_or_volume_cause", "meaning": "An unobserved Node or volume issue is the confirmed cause."},
-    {"id": "action_executed", "meaning": "KuPilot changed scheduling configuration."}
+    {"id": "action_executed", "meaning": "Kupilot changed scheduling configuration."}
   ],
   "recommended_actions": [
-    {"id": "inspect_scheduling_constraints", "meaning": "Review workload scheduling constraints outside KuPilot."},
+    {"id": "inspect_scheduling_constraints", "meaning": "Review workload scheduling constraints outside Kupilot."},
     {"id": "collect_fresh_scheduling_evidence", "meaning": "Collect a fresh bounded scheduling observation before concluding."}
   ],
   "permission_or_missing_paths": [

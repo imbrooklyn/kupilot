@@ -55,7 +55,7 @@ func migrate(ctx context.Context, db *sqlx.DB, applicationVersion, correlationID
 			ClassPersistenceUnavailable,
 			"storage_migration_invalid",
 			"load_storage_migrations",
-			"KuPilot could not verify its embedded storage migrations.",
+			"Kupilot could not verify its embedded storage migrations.",
 			correlationID,
 			err,
 		)
@@ -66,7 +66,7 @@ func migrate(ctx context.Context, db *sqlx.DB, applicationVersion, correlationID
 			ClassPersistenceUnavailable,
 			"storage_schema_unknown",
 			"inspect_storage_schema",
-			"KuPilot could not recognize the local database schema.",
+			"Kupilot could not recognize the local database schema.",
 			correlationID,
 			err,
 		)
@@ -76,7 +76,7 @@ func migrate(ctx context.Context, db *sqlx.DB, applicationVersion, correlationID
 			ClassPersistenceUnavailable,
 			"storage_schema_unknown",
 			"inspect_storage_schema",
-			"KuPilot could not recognize the local database schema.",
+			"Kupilot could not recognize the local database schema.",
 			correlationID,
 			nil,
 		)
@@ -96,7 +96,7 @@ func migrate(ctx context.Context, db *sqlx.DB, applicationVersion, correlationID
 				ClassPersistenceUnavailable,
 				"storage_migration_failed",
 				"apply_storage_migration",
-				"KuPilot could not update the local database schema.",
+				"Kupilot could not update the local database schema.",
 				correlationID,
 				err,
 			)
@@ -192,7 +192,7 @@ func validateAppliedMigrations(
 			ClassPersistenceUnavailable,
 			"storage_schema_unknown",
 			"verify_migration_history",
-			"KuPilot could not recognize the local database schema.",
+			"Kupilot could not recognize the local database schema.",
 			correlationID,
 			err,
 		)
@@ -207,7 +207,7 @@ func validateAppliedMigrations(
 				ClassPersistenceUnavailable,
 				"storage_schema_unknown",
 				"verify_migration_history",
-				"KuPilot could not recognize the local database schema.",
+				"Kupilot could not recognize the local database schema.",
 				correlationID,
 				err,
 			)
@@ -217,7 +217,7 @@ func validateAppliedMigrations(
 				ClassPersistenceUnavailable,
 				"storage_schema_too_new",
 				"verify_migration_history",
-				"The local database schema is newer than this KuPilot build supports.",
+				"The local database schema is newer than this Kupilot build supports.",
 				correlationID,
 				nil,
 			)
@@ -227,7 +227,7 @@ func validateAppliedMigrations(
 				ClassPersistenceUnavailable,
 				"storage_migration_history_invalid",
 				"verify_migration_history",
-				"KuPilot could not verify the local database migration history.",
+				"Kupilot could not verify the local database migration history.",
 				correlationID,
 				nil,
 			)
@@ -237,7 +237,7 @@ func validateAppliedMigrations(
 				ClassPersistenceUnavailable,
 				"storage_migration_history_invalid",
 				"verify_migration_history",
-				"KuPilot could not verify the local database migration history.",
+				"Kupilot could not verify the local database migration history.",
 				correlationID,
 				nil,
 			)
@@ -248,7 +248,7 @@ func validateAppliedMigrations(
 				ClassPersistenceUnavailable,
 				"storage_migration_checksum_mismatch",
 				"verify_migration_history",
-				"KuPilot could not verify the local database migration history.",
+				"Kupilot could not verify the local database migration history.",
 				correlationID,
 				nil,
 			)
@@ -260,7 +260,7 @@ func validateAppliedMigrations(
 			ClassPersistenceUnavailable,
 			"storage_schema_unknown",
 			"verify_migration_history",
-			"KuPilot could not read the local database migration history.",
+			"Kupilot could not read the local database migration history.",
 			correlationID,
 			err,
 		)
@@ -275,18 +275,19 @@ func applyMigration(
 	applicationVersion string,
 	createLedger bool,
 ) error {
-	if migration.version == 4 && migration.name == "000004_minimal_run_identity.sql" {
-		return applyMinimalRunIdentityMigration(ctx, db, migration, applicationVersion)
+	if migration.version == 4 && migration.name == "000004_minimal_run_identity.sql" ||
+		migration.version == 5 && migration.name == "000005_v04_runtime_limits.sql" {
+		return applyForeignKeyGraphMigration(ctx, db, migration, applicationVersion)
 	}
 	return withTx(ctx, db, func(tx *sqlx.Tx) error {
 		return executeMigration(ctx, tx, migration, applicationVersion, createLedger)
 	})
 }
 
-// Migration 4 rebuilds the AgentRun parent table while preserving all child
-// rows. SQLite requires foreign-key enforcement to be changed before the
-// transaction; the dedicated connection is checked and restored before reuse.
-func applyMinimalRunIdentityMigration(
+// Migrations 4 and 5 rebuild referenced tables while preserving their graph.
+// SQLite requires foreign-key enforcement to be changed before the transaction;
+// the dedicated connection is checked and restored before reuse.
+func applyForeignKeyGraphMigration(
 	ctx context.Context,
 	db *sqlx.DB,
 	migration migration,

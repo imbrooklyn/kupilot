@@ -12,10 +12,29 @@ import (
 )
 
 type diagnosisWire struct {
-	ConfirmedFacts     *[]domain.ConfirmedFact      `json:"confirmed_facts"`
-	Hypotheses         *[]domain.Hypothesis         `json:"hypotheses"`
-	MissingInformation *[]domain.MissingInformation `json:"missing_information"`
-	RecommendedActions *[]domain.RecommendedAction  `json:"recommended_actions"`
+	AnswerMarkdown    *string                 `json:"answer_markdown"`
+	EvidenceCitations *[]evidenceCitationWire `json:"evidence_citations"`
+	ProposedActions   *[]proposedActionWire   `json:"proposed_actions"`
+}
+
+type evidenceCitationWire struct {
+	Claim       string              `json:"claim"`
+	EvidenceIDs []domain.EvidenceID `json:"evidence_ids"`
+}
+
+type proposedActionTargetWire struct {
+	APIVersion string `json:"api_version"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+}
+
+type proposedActionWire struct {
+	Operation     domain.ApprovalOperation `json:"operation"`
+	Reason        string                   `json:"reason"`
+	Risk          string                   `json:"risk"`
+	Prerequisites []string                 `json:"prerequisites"`
+	Target        proposedActionTargetWire `json:"target"`
 }
 
 func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
@@ -35,15 +54,39 @@ func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF || wire.ConfirmedFacts == nil || wire.Hypotheses == nil ||
-		wire.MissingInformation == nil || wire.RecommendedActions == nil {
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
+	if wire.AnswerMarkdown == nil || wire.EvidenceCitations == nil || wire.ProposedActions == nil {
+		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	}
+	citations := make([]domain.ConfirmedFact, len(*wire.EvidenceCitations))
+	for index, citation := range *wire.EvidenceCitations {
+		citations[index] = domain.ConfirmedFact{
+			Statement:   citation.Claim,
+			EvidenceIDs: append([]domain.EvidenceID(nil), citation.EvidenceIDs...),
+		}
+	}
+	actions := make([]domain.RecommendedAction, len(*wire.ProposedActions))
+	for index, action := range *wire.ProposedActions {
+		target := &domain.ResourceRef{
+			APIVersion: action.Target.APIVersion,
+			Kind:       action.Target.Kind,
+			Namespace:  action.Target.Namespace,
+			Name:       action.Target.Name,
+		}
+		actions[index] = domain.RecommendedAction{
+			Operation:     action.Operation,
+			Target:        target,
+			Action:        action.Reason,
+			Risk:          action.Risk,
+			Prerequisites: append([]string(nil), action.Prerequisites...),
+		}
+	}
 	return agent.DiagnosisDraft{
-		ConfirmedFacts:     append([]domain.ConfirmedFact(nil), (*wire.ConfirmedFacts)...),
-		Hypotheses:         append([]domain.Hypothesis(nil), (*wire.Hypotheses)...),
-		MissingInformation: append([]domain.MissingInformation(nil), (*wire.MissingInformation)...),
-		RecommendedActions: append([]domain.RecommendedAction(nil), (*wire.RecommendedActions)...),
+		AnswerMarkdown:     *wire.AnswerMarkdown,
+		ConfirmedFacts:     citations,
+		RecommendedActions: actions,
 	}, nil
 }
 

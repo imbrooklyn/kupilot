@@ -55,7 +55,7 @@ func newKubeSafeError(class ErrorClass, code, operation, message string) *SafeEr
 
 func (err *SafeError) Error() string {
 	if err == nil {
-		return "KuPilot Kubernetes access failed."
+		return "Kupilot Kubernetes access failed."
 	}
 	return err.message + " (" + err.code + ")"
 }
@@ -128,7 +128,7 @@ func classifyKubernetesError(operation string, raw error) *SafeError {
 		return newKubeSafeError(ClassTimeout, "kubernetes_request_timeout", operation, "The Kubernetes request reached its time limit.")
 	}
 	if errors.Is(raw, errRedirectDenied) {
-		return newKubeSafeError(ClassPolicyDenied, "kubernetes_redirect_denied", operation, "The Kubernetes server attempted a redirect that KuPilot does not allow.")
+		return newKubeSafeError(ClassPolicyDenied, "kubernetes_redirect_denied", operation, "The Kubernetes server attempted a redirect that Kupilot does not allow.")
 	}
 	if apierrors.IsUnauthorized(raw) {
 		return newKubeSafeError(ClassAuthenticationFailed, "kubernetes_authentication_failed", operation, "Kubernetes authentication failed.")

@@ -26,25 +26,63 @@ var (
 	ErrInvalidResourceSummary = errors.New("resource summary data is invalid")
 )
 
-// ResourceKind is one directly addressable v0.1 target Kind.
+// NamespaceAccessPolicy is the immutable per-run policy for namespaced reads.
+// It never changes Context authority and never treats an empty Namespace as an
+// all-Namespace request.
+type NamespaceAccessPolicy string
+
+const (
+	NamespaceAccessCurrent NamespaceAccessPolicy = "current"
+	NamespaceAccessAll     NamespaceAccessPolicy = "all"
+)
+
+// Valid reports whether the policy is one code-defined value.
+func (policy NamespaceAccessPolicy) Valid() bool {
+	return policy == NamespaceAccessCurrent || policy == NamespaceAccessAll
+}
+
+// ResourceKind is one directly addressable built-in target Kind.
 type ResourceKind string
 
 const (
-	ResourceKindPod        ResourceKind = "Pod"
-	ResourceKindDeployment ResourceKind = "Deployment"
-	ResourceKindReplicaSet ResourceKind = "ReplicaSet"
-	ResourceKindJob        ResourceKind = "Job"
-	ResourceKindService    ResourceKind = "Service"
+	ResourceKindNamespace               ResourceKind = "Namespace"
+	ResourceKindNode                    ResourceKind = "Node"
+	ResourceKindPod                     ResourceKind = "Pod"
+	ResourceKindService                 ResourceKind = "Service"
+	ResourceKindPersistentVolumeClaim   ResourceKind = "PersistentVolumeClaim"
+	ResourceKindPersistentVolume        ResourceKind = "PersistentVolume"
+	ResourceKindConfigMap               ResourceKind = "ConfigMap"
+	ResourceKindDeployment              ResourceKind = "Deployment"
+	ResourceKindReplicaSet              ResourceKind = "ReplicaSet"
+	ResourceKindStatefulSet             ResourceKind = "StatefulSet"
+	ResourceKindDaemonSet               ResourceKind = "DaemonSet"
+	ResourceKindJob                     ResourceKind = "Job"
+	ResourceKindCronJob                 ResourceKind = "CronJob"
+	ResourceKindIngress                 ResourceKind = "Ingress"
+	ResourceKindHorizontalPodAutoscaler ResourceKind = "HorizontalPodAutoscaler"
+	ResourceKindPodDisruptionBudget     ResourceKind = "PodDisruptionBudget"
 )
 
-// Valid reports whether the Kind is directly addressable in v0.1.
+// Valid reports whether the Kind is directly addressable by the built-in
+// operational capability catalog.
 func (kind ResourceKind) Valid() bool {
 	switch kind {
-	case ResourceKindPod,
+	case ResourceKindNamespace,
+		ResourceKindNode,
+		ResourceKindPod,
+		ResourceKindService,
+		ResourceKindPersistentVolumeClaim,
+		ResourceKindPersistentVolume,
+		ResourceKindConfigMap,
 		ResourceKindDeployment,
 		ResourceKindReplicaSet,
+		ResourceKindStatefulSet,
+		ResourceKindDaemonSet,
 		ResourceKindJob,
-		ResourceKindService:
+		ResourceKindCronJob,
+		ResourceKindIngress,
+		ResourceKindHorizontalPodAutoscaler,
+		ResourceKindPodDisruptionBudget:
 		return true
 	default:
 		return false
@@ -54,15 +92,40 @@ func (kind ResourceKind) Valid() bool {
 // APIVersion returns the one code-defined stable API version for the Kind.
 func (kind ResourceKind) APIVersion() string {
 	switch kind {
-	case ResourceKindPod, ResourceKindService:
+	case ResourceKindNamespace, ResourceKindNode, ResourceKindPod, ResourceKindService,
+		ResourceKindPersistentVolumeClaim, ResourceKindPersistentVolume, ResourceKindConfigMap:
 		return "v1"
-	case ResourceKindDeployment, ResourceKindReplicaSet:
+	case ResourceKindDeployment, ResourceKindReplicaSet, ResourceKindStatefulSet, ResourceKindDaemonSet:
 		return "apps/v1"
-	case ResourceKindJob:
+	case ResourceKindJob, ResourceKindCronJob:
 		return "batch/v1"
+	case ResourceKindIngress:
+		return "networking.k8s.io/v1"
+	case ResourceKindHorizontalPodAutoscaler:
+		return "autoscaling/v2"
+	case ResourceKindPodDisruptionBudget:
+		return "policy/v1"
 	default:
 		return ""
 	}
+}
+
+// Namespaced reports whether the Kubernetes resource is Namespace-scoped.
+func (kind ResourceKind) Namespaced() bool {
+	if !kind.Valid() {
+		return false
+	}
+	switch kind {
+	case ResourceKindNamespace, ResourceKindNode, ResourceKindPersistentVolume:
+		return false
+	default:
+		return true
+	}
+}
+
+// ClusterScoped reports whether the Kubernetes resource is cluster-scoped.
+func (kind ResourceKind) ClusterScoped() bool {
+	return kind.Valid() && !kind.Namespaced()
 }
 
 // ResourceKindForReference returns the fixed Kind only when API version and
@@ -72,23 +135,51 @@ func ResourceKindForReference(reference ResourceRef) (ResourceKind, bool) {
 	return kind, kind.Valid() && reference.APIVersion == kind.APIVersion()
 }
 
+// ReferenceMatchesWorkingNamespace reports whether a selectable or durable
+// reference belongs to the working Namespace, or is correctly cluster-scoped.
+// It does not authorize cross-Namespace runtime reads.
+func ReferenceMatchesWorkingNamespace(reference ResourceRef, namespace string) bool {
+	kind, ok := ResourceKindForReference(reference)
+	return ok && ValidNamespaceName(namespace) &&
+		(kind.ClusterScoped() && reference.Namespace == "" || kind.Namespaced() && reference.Namespace == namespace)
+}
+
 // ClusterScope is immutable live scope authority for one process generation.
 // It contains no client, endpoint, credential, path, context.Context, or callback.
 type ClusterScope struct {
-	Context     string
-	Namespace   string
-	Generation  int64
-	ActivatedAt time.Time
+	Context         string
+	Namespace       string
+	NamespaceAccess NamespaceAccessPolicy
+	Generation      int64
+	ActivatedAt     time.Time
 }
 
 // Validate checks a complete live scope without consulting external state.
 func (scope ClusterScope) Validate() error {
-	if !ValidContextName(scope.Context) || !ValidNamespaceName(scope.Namespace) ||
+	if !ValidContextName(scope.Context) || !ValidNamespaceName(scope.Namespace) || !scope.NamespaceAccess.Valid() ||
 		scope.Generation < 1 || scope.ActivatedAt.IsZero() ||
 		scope.ActivatedAt.Location() != time.UTC || scope.ActivatedAt.UnixMilli() < 0 {
 		return ErrInvalidClusterScope
 	}
 	return nil
+}
+
+// AllowsReference reports whether one already-valid reference is admitted by
+// this immutable live scope. Cluster-scoped references are independent of the
+// working Namespace; namespaced references remain governed by the frozen
+// current/all policy.
+func (scope ClusterScope) AllowsReference(reference ResourceRef) bool {
+	kind, ok := ResourceKindForReference(reference)
+	if scope.Validate() != nil || !ok || ValidateLiveResourceRef(reference) != nil {
+		return false
+	}
+	return kind.ClusterScoped() || scope.NamespaceAccess == NamespaceAccessAll || reference.Namespace == scope.Namespace
+}
+
+// AllowsAllNamespaces reports whether an explicit bounded all-Namespace LIST
+// is permitted for a namespaced Kind.
+func (scope ClusterScope) AllowsAllNamespaces(kind ResourceKind) bool {
+	return scope.Validate() == nil && kind.Namespaced() && scope.NamespaceAccess == NamespaceAccessAll
 }
 
 // Snapshot returns persistence-safe historic metadata without activation time.
@@ -144,7 +235,7 @@ func ValidResourceName(value string) bool {
 
 // ValidateLiveResourceRef checks the stricter current-scope identity contract.
 func ValidateLiveResourceRef(reference ResourceRef) error {
-	if reference.Validate() != nil || !ValidNamespaceName(reference.Namespace) || !ValidResourceName(reference.Name) ||
+	if reference.Validate() != nil || !ValidResourceName(reference.Name) ||
 		!validSafeOptionalText(reference.UID, maxResourceUIDBytes) ||
 		!validSafeOptionalText(reference.ResourceVersion, maxResourceVersionBytes) {
 		return ErrInvalidResourceRef
@@ -233,14 +324,13 @@ func (owner ResourceOwner) validFor(child ResourceKind) bool {
 	}
 	switch child {
 	case ResourceKindPod:
-		if owner.APIVersion == "apps/v1" && owner.Kind == "StatefulSet" {
-			return owner.ReferenceOnly
-		}
 		return !owner.ReferenceOnly &&
-			(owner.APIVersion == "apps/v1" && owner.Kind == "ReplicaSet" ||
+			(owner.APIVersion == "apps/v1" && (owner.Kind == "ReplicaSet" || owner.Kind == "StatefulSet" || owner.Kind == "DaemonSet") ||
 				owner.APIVersion == "batch/v1" && owner.Kind == "Job")
 	case ResourceKindReplicaSet:
 		return !owner.ReferenceOnly && owner.APIVersion == "apps/v1" && owner.Kind == "Deployment"
+	case ResourceKindJob:
+		return !owner.ReferenceOnly && owner.APIVersion == "batch/v1" && owner.Kind == "CronJob"
 	default:
 		return false
 	}
@@ -273,7 +363,8 @@ func (summary ResourceSummary) Validate() error {
 	return nil
 }
 
-// ResourceList is a bounded deterministic current-Namespace result.
+// ResourceList is a bounded deterministic typed-read result. Item references
+// carry their exact Namespace, or none for cluster-scoped Kinds.
 type ResourceList struct {
 	Items     []ResourceSummary
 	Truncated bool

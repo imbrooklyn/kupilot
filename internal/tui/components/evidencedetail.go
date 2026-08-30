@@ -52,6 +52,9 @@ func NewEvidenceDetailDialog(styles EvidenceDetailStyles) EvidenceDetailDialog {
 	return EvidenceDetailDialog{styles: styles}
 }
 
+// SetStyles updates presentation without changing evidence state.
+func (dialog *EvidenceDetailDialog) SetStyles(styles EvidenceDetailStyles) { dialog.styles = styles }
+
 // ShowLoading opens a request-bound placeholder without observation content.
 func (dialog *EvidenceDetailDialog) ShowLoading(evidenceID string) {
 	dialog.state = evidenceDialogLoading

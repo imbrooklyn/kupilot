@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -22,25 +23,35 @@ func TestViewStructureKeepsTranscriptComposerSuggestionsAndFooterOrder(t *testin
 	questionAt := strings.Index(content, "Why is the Pod restarting?")
 	agentAt := strings.Index(content, "Final diagnosis.")
 	toolAt := strings.Index(content, "Inspect resource · done")
+	separatorAt := strings.Index(content, "────────")
+	timingAt := strings.Index(content, "Worked for ")
 	composerAt := strings.Index(content, "/r")
 	candidateAt := strings.Index(content, "/resource")
 	footerAt := strings.Index(content, "Context test-context")
-	if !(questionAt >= 0 && questionAt < agentAt && agentAt < toolAt && toolAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
-		t.Fatalf("unexpected vertical order: question=%d agent=%d tool=%d composer=%d candidate=%d footer=%d\n%s",
-			questionAt, agentAt, toolAt, composerAt, candidateAt, footerAt, content)
+	if !(questionAt >= 0 && questionAt < toolAt && toolAt < separatorAt && separatorAt < agentAt &&
+		agentAt < timingAt && timingAt < composerAt && composerAt < candidateAt && candidateAt < footerAt) {
+		t.Fatalf("unexpected vertical order: question=%d tool=%d separator=%d agent=%d timing=%d composer=%d candidate=%d footer=%d\n%s",
+			questionAt, toolAt, separatorAt, agentAt, timingAt, composerAt, candidateAt, footerAt, content)
 	}
 
 	lines := strings.Split(content, "\n")
 	questionLine := lineContaining(lines, "Why is the Pod restarting?")
 	composerLine := lineContaining(lines, "/r")
 	agentLine := lineContaining(lines, "Final diagnosis.")
-	if !strings.Contains(questionLine, "│") || !strings.Contains(composerLine, "│") {
-		t.Fatalf("user/composer surface mismatch: %q / %q", questionLine, composerLine)
+	if strings.ContainsAny(questionLine, "│╭╰") || strings.ContainsAny(composerLine, "│╭╰") ||
+		!strings.Contains(questionLine, "› Why is the Pod restarting?") || !strings.Contains(composerLine, "› /r") {
+		t.Fatalf("user/composer surfaces are framed or the prompt marker is missing: %q / %q", questionLine, composerLine)
 	}
-	if strings.Contains(agentLine, "│") || strings.Contains(agentLine, "You:") || strings.Contains(agentLine, "KuPilot:") {
+	historySurface := model.styles.transcript.UserSurface.Width(model.width - 2).Render(
+		model.styles.transcript.UserPrompt.Render("› ") + model.styles.transcript.UserText.Render("one line"),
+	)
+	if got, want := lipgloss.Height(historySurface), model.composer.FrameHeight(); got != want {
+		t.Fatalf("single-line history surface height = %d, composer frame height = %d", got, want)
+	}
+	if strings.Contains(agentLine, "│") || strings.Contains(agentLine, "You:") || strings.Contains(agentLine, "Kupilot:") {
 		t.Fatalf("Agent prose is framed or role-labeled: %q", agentLine)
 	}
-	if strings.Contains(content, "Commands:") || strings.Contains(content, "Command mode") || strings.Contains(content, "Ask KuPilot") {
+	if strings.Contains(content, "Commands:") || strings.Contains(content, "Command mode") || strings.Contains(content, "Ask Kupilot") {
 		t.Fatalf("view contains a forbidden mode title: %q", content)
 	}
 	if countCandidateLines(lines) > MaxSlashCandidates {
@@ -53,16 +64,14 @@ func TestViewNoColorSemanticGolden(t *testing.T) {
 
 	model := populatedViewModel(t)
 	got := semanticViewSnapshot(sanitizeExternalText(model.View().Content, 0))
-	want := strings.TrimSpace(`<surface-border>
-<user-surface> Why is the Pod restarting?
-<surface-border>
-<agent> Final diagnosis.
+	want := strings.TrimSpace(`<user-surface> › Why is the Pod restarting?
 <tool> Inspect resource · done
-<surface-border>
-<composer> /r
-<surface-border>
+<separator>
+<agent> Final diagnosis.
+<timing> Worked for <1s
+<composer> › /r
 <candidate> /resource
-<footer> Context test-context · Namespace test-namespace · read-only`)
+<footer> Context test-context · Namespace test-namespace · supervised`)
 	if got != want {
 		t.Fatalf("semantic golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -102,8 +111,8 @@ func TestSemanticPaletteModesKeepMeaningIndependentOfColor(t *testing.T) {
 	if SemanticPaletteFor(ThemeNoColor, true).ColorEnabled {
 		t.Fatal("no-color palette reports color enabled")
 	}
-	if !strings.Contains(newTestModel().View().Content, "read-only") {
-		t.Fatal("read-only state depends on color")
+	if !strings.Contains(newTestModel().View().Content, "supervised") {
+		t.Fatal("supervision state depends on color")
 	}
 }
 
@@ -154,27 +163,25 @@ func countCandidateLines(lines []string) int {
 
 func semanticViewSnapshot(content string) string {
 	var snapshot []string
-	borderCount := 0
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case strings.HasPrefix(trimmed, "╭") || strings.HasPrefix(trimmed, "╰"):
-			if borderCount < 4 {
-				snapshot = append(snapshot, "<surface-border>")
-				borderCount++
-			}
 		case strings.Contains(trimmed, "Why is the Pod restarting?"):
-			snapshot = append(snapshot, "<user-surface> Why is the Pod restarting?")
+			snapshot = append(snapshot, "<user-surface> › Why is the Pod restarting?")
 		case strings.Contains(trimmed, "Final diagnosis."):
 			snapshot = append(snapshot, "<agent> Final diagnosis.")
 		case strings.Contains(trimmed, "Inspect resource · done"):
 			snapshot = append(snapshot, "<tool> Inspect resource · done")
-		case strings.Contains(trimmed, "│ /r"):
-			snapshot = append(snapshot, "<composer> /r")
+		case strings.HasPrefix(trimmed, "────────"):
+			snapshot = append(snapshot, "<separator>")
+		case strings.HasPrefix(trimmed, "Worked for "):
+			snapshot = append(snapshot, "<timing> "+trimmed)
+		case trimmed == "› /r":
+			snapshot = append(snapshot, "<composer> › /r")
 		case strings.HasPrefix(trimmed, "› /resource"):
 			snapshot = append(snapshot, "<candidate> /resource")
 		case strings.Contains(trimmed, "Context test-context"):
-			snapshot = append(snapshot, "<footer> Context test-context · Namespace test-namespace · read-only")
+			snapshot = append(snapshot, "<footer> Context test-context · Namespace test-namespace · supervised")
 		}
 	}
 	return strings.Join(snapshot, "\n")

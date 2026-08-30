@@ -1,7 +1,12 @@
 {
   "name": "service_relationship_forbidden",
   "question": "Why does example-service have no ready backend?",
-  "target": {"api_version": "v1", "kind": "Service", "namespace": "example-namespace", "name": "example-service"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Service",
+    "namespace": "example-namespace",
+    "name": "example-service"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Service example-service was observed; selector keys 1; service type ClusterIP.",
             "source_path": "projected.status",
             "severity": "info",
-            "supports": ["service_selector_present", "selector_mismatch_possible"]
+            "supports": [
+              "service_selector_present",
+              "selector_mismatch_possible"
+            ]
           }
         ]
       }
@@ -37,36 +45,43 @@
     }
   ],
   "diagnosis": {
+    "answer_markdown": "The projected Service has one selector key.\n\nA selector mismatch remains possible, but the denied relationship read provides no backend Evidence. Confidence: high. To verify: A permitted bounded relationship read shows matching ready Pods and a ready endpoint count.\n\nThe fixed matching Pod and EndpointSlice relationship read was denied. Impact: No matching Pod readiness or ready endpoint count can be confirmed.\n\nSuggested next step: Obtain permission for the fixed Pod and EndpointSlice relationship read before evaluating backend readiness. Risk: Granting read permission changes cluster authorization outside Kupilot. Before acting: Do not infer selector matches, endpoint counts, topology, or network identities from the Service object.",
+    "evidence_citations": [
+      {
+        "claim": "The projected Service has one selector key.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001811"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
     "confirmed_facts": [
-      {"statement": "The projected Service has one selector key.", "evidence_ids": ["00000000-0000-7000-8000-000000001811"]}
+      {
+        "index": 0,
+        "assertion": "service_selector_present"
+      }
     ],
     "hypotheses": [
       {
-        "statement": "A selector mismatch remains possible, but the denied relationship read provides no backend Evidence.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001811", "00000000-0000-7000-8000-000000009908"],
-        "confidence": "high",
-        "falsifier": "A permitted bounded relationship read shows matching ready Pods and a ready endpoint count."
+        "index": 0,
+        "assertion": "selector_mismatch_possible"
       }
-    ],
-    "missing_information": [
-      {"kind": "forbidden", "detail": "The fixed matching Pod and EndpointSlice relationship read was denied.", "impact": "No matching Pod readiness or ready endpoint count can be confirmed."}
     ],
     "recommended_actions": [
       {
-        "action": "Obtain permission for the fixed Pod and EndpointSlice relationship read before evaluating backend readiness.",
-        "risk": "Granting read permission changes cluster authorization outside KuPilot.",
-        "prerequisites": ["Do not infer selector matches, endpoint counts, topology, or network identities from the Service object."],
-        "executed": false
+        "index": 0,
+        "assertion": "obtain_service_relationship_access"
       }
     ]
   },
-  "annotations": {
-    "confirmed_facts": [{"index": 0, "assertion": "service_selector_present"}],
-    "hypotheses": [{"index": 0, "assertion": "selector_mismatch_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "obtain_service_relationship_access"}]
-  },
-  "required_confirmed_assertions": ["service_selector_present"],
-  "required_missing_kinds": ["forbidden", "unsupported"],
+  "required_confirmed_assertions": [
+    "service_selector_present"
+  ],
+  "required_missing_kinds": [
+    "forbidden"
+  ],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

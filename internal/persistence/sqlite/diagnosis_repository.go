@@ -170,7 +170,7 @@ func (repository *DiagnosisRepository) Save(ctx context.Context, diagnosis domai
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "diagnosis_save_failed", "save_diagnosis", "KuPilot could not store the validated Diagnosis.", err)
+		return repositoryFailure(repository.db, "diagnosis_save_failed", "save_diagnosis", "Kupilot could not store the validated Diagnosis.", err)
 	}
 	return nil
 }
@@ -187,19 +187,19 @@ func (repository *DiagnosisRepository) GetByRunID(ctx context.Context, runID dom
 	if err := repository.db.handle.GetContext(ctx, &row, getDiagnosisByRunIDSQL, runID); errors.Is(err, sql.ErrNoRows) {
 		return domain.Diagnosis{}, ErrDiagnosisNotFound
 	} else if err != nil {
-		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_read_failed", "get_diagnosis", "KuPilot could not read the Diagnosis.", err)
+		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_read_failed", "get_diagnosis", "Kupilot could not read the Diagnosis.", err)
 	}
 	diagnosis, err := row.domainDiagnosis()
 	if err != nil || diagnosis.RunID != runID {
-		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_row_invalid", "get_diagnosis", "KuPilot could not read the Diagnosis safely.", err)
+		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_row_invalid", "get_diagnosis", "Kupilot could not read the Diagnosis safely.", err)
 	}
 	summary, err := summarizeDiagnosisEvidence(ctx, repository.db.handle, diagnosis)
 	if err != nil {
-		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_evidence_read_failed", "get_diagnosis", "KuPilot could not determine whether historic observation details remain available.", err)
+		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_evidence_read_failed", "get_diagnosis", "Kupilot could not determine whether historic observation details remain available.", err)
 	}
 	diagnosis.EvidenceDetailsState = summary.State
 	if err := diagnosis.Validate(); err != nil {
-		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_row_invalid", "get_diagnosis", "KuPilot could not read the Diagnosis safely.", err)
+		return domain.Diagnosis{}, repositoryFailure(repository.db, "diagnosis_row_invalid", "get_diagnosis", "Kupilot could not read the Diagnosis safely.", err)
 	}
 	return diagnosis, nil
 }

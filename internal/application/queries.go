@@ -67,9 +67,10 @@ func (state UISessionState) validate() bool {
 
 // UIStartResult is the side-effect result of one fixed CLI start intent.
 type UIStartResult struct {
-	Intent         UIStartIntent
-	Session        *UISessionState
-	ScopeCandidate *domain.ScopeCandidate
+	Intent                  UIStartIntent
+	Session                 *UISessionState
+	ScopeCandidate          *domain.ScopeCandidate
+	ScopePreferenceDegraded bool
 }
 
 // Validate checks that only a new start creates a Session immediately.
@@ -78,12 +79,11 @@ func (result UIStartResult) Validate() error {
 		return ErrInvalidUIQueryResult
 	}
 	if result.Intent.Kind == UIStartNew {
-		if result.Session == nil || !result.Session.validate() || result.Session.Resumed || result.ScopeCandidate != nil {
+		if result.Session == nil || !result.Session.validate() || result.Session.Resumed {
 			return ErrInvalidUIQueryResult
 		}
-		return nil
 	}
-	if result.Session != nil {
+	if result.Intent.Kind != UIStartNew && result.Session != nil {
 		return ErrInvalidUIQueryResult
 	}
 	if result.ScopeCandidate != nil && result.ScopeCandidate.Validate() != nil {
@@ -417,9 +417,13 @@ type UIHistoryMessage struct {
 }
 
 func (message UIHistoryMessage) valid() bool {
+	contentLimit := MaxQuestionBytes
+	if message.Role == domain.MessageRoleAssistant {
+		contentLimit = MaxAnswerMarkdownBytes
+	}
 	if (message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant && message.Role != domain.MessageRoleSystemNotice) ||
 		(message.Format != domain.MessageFormatPlain && message.Format != domain.MessageFormatMarkdown) ||
-		!validUIBoundedText(message.Content, 1, MaxQuestionBytes) || len(message.EvidenceReferences) > 100 {
+		!validUIBoundedText(message.Content, 1, contentLimit) || len(message.EvidenceReferences) > 100 {
 		return false
 	}
 	if message.RunID != "" && !message.RunID.Valid() || len(message.EvidenceReferences) > 0 && message.Role != domain.MessageRoleAssistant {
@@ -472,7 +476,13 @@ func validUIResumedSession(session UIResumedSession, requestID uint64) bool {
 		return false
 	}
 	if session.SavedResource != nil {
-		if session.SavedScope == nil || session.SavedResource.Namespace != session.SavedScope.Namespace ||
+		reference := domain.ResourceRef{
+			APIVersion: session.SavedResource.APIVersion,
+			Kind:       string(session.SavedResource.Kind),
+			Namespace:  session.SavedResource.Namespace,
+			Name:       session.SavedResource.Name,
+		}
+		if session.SavedScope == nil || !domain.ReferenceMatchesWorkingNamespace(reference, session.SavedScope.Namespace) ||
 			!validResourceCandidates([]UIResourceCandidate{*session.SavedResource}) {
 			return false
 		}

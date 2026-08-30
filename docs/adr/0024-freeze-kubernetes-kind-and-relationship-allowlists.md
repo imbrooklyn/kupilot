@@ -1,6 +1,6 @@
 # ADR-0024: Freeze Kubernetes Kind and Relationship Allowlists
 
-- Status: Accepted
+- Status: Superseded by ADR-0037
 - Date: 2026-08-08
 
 ## Context
@@ -51,7 +51,7 @@ ambiguous matches produce partial Evidence or an explicit gap.
 EndpointSlice is an indirect source only for safe ready/not-ready counts in a
 Service relationship. It is not selectable, listed independently, or returned
 with addresses. StatefulSet may appear only as a bounded existing owner
-reference already present on a Pod; KuPilot does not fetch or list it.
+reference already present on a Pod; Kupilot does not fetch or list it.
 
 Secret, ConfigMap data, custom resources, arbitrary API discovery, Namespace as
 a Tool target, Node, PersistentVolume, PersistentVolumeClaim, Ingress, RBAC

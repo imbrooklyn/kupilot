@@ -238,6 +238,7 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 				Now:      func() time.Time { return now },
 				UI: &application.CoordinatorUIConfig{
 					Sessions: service, Search: sessions, Titles: service, Startup: service, Scopes: scopeManager,
+					ScopePreferences: sqlite.NewScopePreferenceRepository(database),
 				},
 			})
 			if err != nil {

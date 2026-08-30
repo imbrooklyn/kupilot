@@ -24,14 +24,31 @@ const helpText = `/help                 Show commands and key bindings
 /rename [title]       Rename the current Session
 /privacy              Show privacy, retention, and Session controls
 /cancel               Cancel the active diagnostic run
-/quit                 Exit KuPilot
+/quit                 Exit Kupilot
 
-Enter sends. Ctrl+J inserts a newline. Tab completes a command.
+Enter sends. Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Tab completes a command.
+Ctrl+P and Ctrl+N recall submitted input. Page Up and Page Down scroll the transcript.
 Ctrl+E opens supporting observation details.`
+
+const transcriptWheelRows = 3
 
 // Update reduces one message into pure UI state and deferred typed commands.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
+	case tea.BackgroundColorMsg:
+		if message.Color == nil || model.theme == ThemeANSI16 || model.theme == ThemeNoColor {
+			return model, nil
+		}
+		resolved := model.theme
+		if resolved == ThemeAuto {
+			resolved = ThemeLight
+			if message.IsDark() {
+				resolved = ThemeDark
+			}
+		}
+		model.applyStyleSet(newStyleSetForBackground(resolved, message.IsDark(), message.Color))
+		model.reflow()
+		return model, nil
 	case tea.WindowSizeMsg:
 		model.width = max(1, message.Width)
 		model.height = max(1, message.Height)
@@ -110,6 +127,18 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!model.evidenceDialog.Open() && !model.transcript.EvidenceSelecting() {
 			_ = model.composer.Focus()
 			model.focus = FocusComposer
+		}
+		return model, nil
+	case tea.MouseWheelMsg:
+		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
+			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
+			return model, nil
+		}
+		switch message.Mouse().Button {
+		case tea.MouseWheelUp:
+			model.transcript.ScrollUp(transcriptWheelRows)
+		case tea.MouseWheelDown:
+			model.transcript.ScrollDown(transcriptWheelRows)
 		}
 		return model, nil
 	case tea.PasteMsg:
@@ -469,13 +498,13 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.transcript.PageDown()
 		return model, nil
 	}
-	if key.Matches(message, model.keymap.Previous) && model.composer.HistoryEligible() {
+	if key.Matches(message, model.keymap.PreviousAlt) && model.composer.HistoryEligible() {
 		model.composer.PreviousHistory()
 		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
 		return model, queryCmd
 	}
-	if key.Matches(message, model.keymap.Next) && model.composer.NextHistory() {
+	if key.Matches(message, model.keymap.NextAlt) && model.composer.NextHistory() {
 		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
 		return model, queryCmd
@@ -1092,7 +1121,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title, Resumed: result.Session.Resumed}
 		model.transcript.AppendNotice("The current Session title was updated.")
 	case application.UICommandShowStatus:
-		model.transcript.AppendNotice(statusText(*result.Status))
+		model.transcript.AppendNotice(statusText(*result.Status, model.modelName))
 	case application.UICommandSubmitQuestion:
 		if model.pendingSubmitID == 0 || result.RequestID != model.pendingSubmitID {
 			return
@@ -1188,13 +1217,13 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.resetAfterHistoryDeletion()
 			model.quitAfterLocalDeletion = true
 			if result.Failure != "" {
-				model.showDialog("Local database deletion incomplete", "KuPilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the fixed KUPILOT_HOME/state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
+				model.showDialog("Local database deletion incomplete", "Kupilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the fixed KUPILOT_HOME/state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
 				return
 			}
-			model.showDialog("Local database state deleted", "KuPilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc or Enter to exit.")
+			model.showDialog("Local database state deleted", "Kupilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc or Enter to exit.")
 			return
 		}
-		model.showDialog("Local data not deleted", "Storage path validation or preflight failed before the database was closed. KuPilot remains open and no complete deletion was reported.")
+		model.showDialog("Local data not deleted", "Storage path validation or preflight failed before the database was closed. Kupilot remains open and no complete deletion was reported.")
 	case application.UICommandExportSession:
 		if model.pendingExportID == 0 || result.RequestID != model.pendingExportID || model.sessionExport == nil {
 			return
@@ -1566,7 +1595,11 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 	model.scopeConflict.Close()
 	model.resetTranscript()
 	for _, message := range resumed.History {
-		text := sanitizeExternalText(message.Content, application.MaxQuestionBytes)
+		textLimit := application.MaxQuestionBytes
+		if message.Role == domain.MessageRoleAssistant {
+			textLimit = application.MaxAnswerMarkdownBytes
+		}
+		text := sanitizeExternalText(message.Content, textLimit)
 		if text == "" {
 			continue
 		}
@@ -1635,6 +1668,9 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	if changed {
 		model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")
 	}
+	if result.ScopePreferenceDegraded {
+		model.transcript.AppendNotice("The scope is active, but Kupilot could not save this Context for the next start.")
+	}
 }
 
 func (model *Model) finishRunForScopeChange() {
@@ -1646,10 +1682,21 @@ func (model *Model) finishRunForScopeChange() {
 	model.run.Terminal = true
 	model.run.Status = "cancelled"
 	model.run.StreamedText = cancellation
-	model.transcript.FinishAgent(cancellation)
+	model.transcript.FinishAgentWithDuration(cancellation, model.currentRunElapsed())
 }
 
-func statusText(status application.UIStatusResult) string {
+func (model Model) currentRunElapsed() time.Duration {
+	if model.run.StartedAt.IsZero() || model.now == nil {
+		return 0
+	}
+	now := model.now().UTC().Truncate(time.Millisecond)
+	if now.IsZero() || now.UnixMilli() < 0 || now.Before(model.run.StartedAt) {
+		return 0
+	}
+	return now.Sub(model.run.StartedAt)
+}
+
+func statusText(status application.UIStatusResult, modelName string) string {
 	contextName := status.Context
 	if contextName == "" {
 		contextName = "unavailable"
@@ -1659,14 +1706,65 @@ func statusText(status application.UIStatusResult) string {
 		namespace = "unavailable"
 	}
 	access := "scope unverified"
+	actions := "unavailable until scope verification"
 	if status.ReadOnly {
-		access = "read-only"
+		access = "namespace policy " + string(status.NamespaceAccess)
+		actions = "restart_deployment · local approval and Kubernetes RBAC required"
 	}
 	run := "idle"
 	if status.RunActive {
-		run = "diagnosing"
+		run = "active (" + string(status.RunID) + ")"
 	}
-	return fmt.Sprintf("Context: %s · Namespace: %s · %s · %s", contextName, namespace, access, run)
+	session := "unavailable"
+	privacy := "unavailable"
+	if status.Session != nil {
+		session = string(status.Session.ID)
+		privacy = string(status.Session.PrivacyMode)
+	}
+	storage := "healthy"
+	if status.PersistenceDegraded {
+		storage = "degraded"
+	}
+	budget := status.Budget
+	modelName = sanitizeExternalText(modelName, application.MaxModelSetupNameBytes)
+	if modelName == "" {
+		modelName = "unavailable"
+	}
+	return fmt.Sprintf(`Kupilot status
+
+Session: %s
+Model: %s
+Context: %s
+Namespace: %s
+Scope generation: %d
+Access: %s
+Actions: %s
+Run: %s
+Capability catalog: %s
+Budget: %s · elapsed %s · remaining %s
+Usage: steps %d/%d · tools %d/%d · model %d/%d
+Data: %s/%s · log calls %d/%d
+Privacy: %s · local storage: %s`,
+		session, modelName, contextName, namespace, status.ScopeGeneration, access, actions, run, status.CapabilityCatalogVersion, budget.Profile,
+		statusDuration(budget.ElapsedMilliseconds), statusDuration(budget.RemainingMilliseconds),
+		budget.StepsUsed, budget.StepsMaximum, budget.ToolCallsUsed, budget.ToolCallsMaximum,
+		budget.ModelCallsUsed, budget.ModelCallsMaximum,
+		statusBytes(budget.ToolResultBytesUsed), statusBytes(budget.ToolResultBytesMaximum),
+		budget.LogCallsUsed, budget.LogCallsMaximum, privacy, storage)
+}
+
+func statusDuration(milliseconds int64) string {
+	return (time.Duration(milliseconds) * time.Millisecond).Truncate(time.Second).String()
+}
+
+func statusBytes(value int) string {
+	if value >= 1024*1024 {
+		return fmt.Sprintf("%.1f MiB", float64(value)/(1024*1024))
+	}
+	if value >= 1024 {
+		return fmt.Sprintf("%.1f KiB", float64(value)/1024)
+	}
+	return fmt.Sprintf("%d B", value)
 }
 
 func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
@@ -1709,7 +1807,8 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		}
 		model.run = RunView{
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
-			LastSequence: event.Sequence, Active: true, Status: "active",
+			LastSequence: event.Sequence, StartedAt: model.now().UTC().Truncate(time.Millisecond),
+			Active: true, Status: "active",
 		}
 		model.closeEvidenceInteraction()
 		model.transcript.StartAgent()
@@ -1765,7 +1864,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 
 	switch event.Kind {
 	case application.UIEventTextDelta:
-		remaining := application.MaxQuestionBytes - len(model.run.StreamedText)
+		remaining := application.MaxAnswerMarkdownBytes - len(model.run.StreamedText)
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -1775,6 +1874,12 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		}
 		model.run.StreamedText += text
 		model.transcript.AppendAgent(text)
+	case application.UIEventValidationWarning:
+		text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
+		if text == "" {
+			text = "Kupilot removed unsupported final-answer metadata. Review the remaining Evidence before relying on affected claims."
+		}
+		model.transcript.AppendNotice(text)
 	case application.UIEventPersistenceDegraded:
 		text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
 		if text == "" {
@@ -1795,7 +1900,11 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		})
 	case application.UIEventRunCompleted, application.UIEventRunFailed, application.UIEventRunCancelled:
 		model.clearApproval()
-		text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
+		textLimit := application.MaxQuestionBytes
+		if event.Kind == application.UIEventRunCompleted {
+			textLimit = application.MaxAnswerMarkdownBytes
+		}
+		text := sanitizeExternalText(event.Text, textLimit)
 		if text == "" {
 			switch event.Kind {
 			case application.UIEventRunCompleted:
@@ -1817,7 +1926,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		default:
 			model.run.Status = "failed"
 		}
-		model.transcript.FinishAgent(text)
+		model.transcript.FinishAgentWithDuration(text, model.currentRunElapsed())
 		if event.Kind == application.UIEventRunCompleted {
 			model.appendEvidenceReferences(event.EvidenceReferences)
 		}

@@ -14,6 +14,16 @@ func (model Model) View() tea.View {
 	view.AltScreen = true
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
+	// Mouse reporting prevents ordinary terminal drag-selection. Keep it off
+	// so visible transcript text can be selected and copied natively.
+	view.MouseMode = tea.MouseModeNone
+	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
+		wheel, ok := message.(tea.MouseWheelMsg)
+		if !ok {
+			return nil
+		}
+		return func() tea.Msg { return wheel }
+	}
 	return view
 }
 
@@ -55,32 +65,6 @@ func (model Model) render() string {
 }
 
 func (model Model) footerView() string {
-	resource := ""
-	if model.resource.Kind != "" && model.resource.Name != "" {
-		resource = model.resource.Kind + "/" + model.resource.Name
-	}
-	run := "idle"
-	if model.run.Active {
-		run = "diagnosing"
-	} else if model.run.Status != "" {
-		switch model.run.Status {
-		case "completed":
-			run = "diagnosis complete"
-		case "cancelled":
-			run = "diagnosis cancelled"
-		case "failed":
-			run = "diagnosis failed"
-		default:
-			run = "diagnosis " + model.run.Status
-		}
-	}
-	if model.run.PersistenceDegraded {
-		run += " · storage degraded"
-	}
-	modelStatus := "model not configured"
-	if model.modelConfigured && model.modelName != "" {
-		modelStatus = "model " + model.modelName
-	}
 	approvalStatus := ""
 	if model.pendingApproval != nil {
 		approvalStatus = "approval pending"
@@ -90,14 +74,9 @@ func (model Model) footerView() string {
 			approvalStatus = "approval in progress"
 		}
 	}
-	privacyStatus := "history saved"
-	if model.privacyMode == domain.PrivacyModeMinimal {
-		privacyStatus = "memory-only history"
-	}
 	return model.footer.View(model.width, components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
-		Approval: approvalStatus, Resource: resource, Run: run, Model: modelStatus,
-		Privacy: privacyStatus,
+		Approval: approvalStatus,
 	})
 }

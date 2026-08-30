@@ -5,7 +5,7 @@
 
 ## Context
 
-KuPilot must resolve local kubeconfig Contexts, use standard Kubernetes
+Kupilot must resolve local kubeconfig Contexts, use standard Kubernetes
 authentication, issue cancellable namespaced reads, and interpret stable
 Kubernetes API types. Reimplementing Kubernetes transport, authentication,
 serialization, and API negotiation would create unnecessary security and
@@ -17,7 +17,7 @@ authority.
 
 ## Decision
 
-KuPilot will use the maintained Kubernetes Go client, client-go, inside
+Kupilot will use the maintained Kubernetes Go client, client-go, inside
 `internal/kube`. Client-go types, clients, configuration, transport, discovery,
 watch, and fake types do not cross the adapter boundary.
 
@@ -28,7 +28,8 @@ The adapter will:
 - Construct one client bundle for the active Context and dispose it on a
   committed Context switch.
 - Implement consumer-owned, task-specific ports for scope activation, the
-  Resource Picker, and the six read-only Tools.
+  Resource Picker, the versioned read catalog, and the separately gated fixed
+  Deployment restart.
 - Prefer typed stable API clients and explicit projected fields. Discovery does
   not expand the Kind or relationship allowlists.
 - Apply the run Context, a shorter request deadline, the active Namespace, and
@@ -39,9 +40,9 @@ The adapter will:
 The adapter does not expose a dynamic client, REST client, generic resource
 interface, arbitrary GroupVersionResource, raw request builder, informer,
 Watch, or write-capable interface to its consumers. The existence of a method in
-client-go does not admit it into KuPilot.
+client-go does not admit it into Kupilot.
 
-Kubeconfig exec authentication is governed separately by ADR-0020. KuPilot uses
+Kubeconfig exec authentication is governed separately by ADR-0020. Kupilot uses
 `k8s.io/client-go v0.35.7`, which requires Go 1.25.0, with a supported
 Kubernetes test matrix of versions 1.34, 1.35, and 1.36.
 
@@ -49,14 +50,14 @@ Kubernetes test matrix of versions 1.34, 1.35, and 1.36.
 
 Positive consequences:
 
-- KuPilot uses the standard Kubernetes authentication and transport ecosystem.
+- Kupilot uses the standard Kubernetes authentication and transport ecosystem.
 - Typed API values can be projected at one reviewed boundary.
 - Context cancellation and request deadlines integrate with the run lifecycle.
 - The product allowlist remains smaller than the dependency's capability.
 
 Costs and constraints:
 
-- client-go has a large dependency graph and supports many capabilities KuPilot
+- client-go has a large dependency graph and supports many capabilities Kupilot
   must not expose.
 - Version selection must account for Go requirements and Kubernetes API skew.
 - Client fakes may not reproduce transport, RBAC, defaulting, or serialization;
@@ -79,12 +80,13 @@ Costs and constraints:
 
 Credentials stay inside client construction and transport. They do not enter
 safe errors, events, DTOs, the model, TUI, logs, or SQLite. RBAC is required but
-does not replace KuPilot's fixed scope, Kind, relation, projection, and budget
+does not replace Kupilot's fixed scope, Kind, relation, projection, and budget
 controls.
 
 Every forbidden locally identifiable request must fail before client-go is
-called. A broad kubeconfig identity therefore cannot make Secret, cross-
-Namespace, generic discovery, Watch, or write behavior reachable from a Tool.
+called. A broad kubeconfig identity therefore cannot make Secret,
+cross-Namespace access outside the frozen policy, generic discovery, Watch, or
+write behavior reachable from a read Tool.
 
 ## Validation
 
@@ -100,8 +102,8 @@ Compatibility and adapter tests must verify:
    query bounds, and cancellation.
 5. Safe mapping for permission, authentication, not-found, timeout, throttling,
    unavailable, unsupported, and malformed-response errors.
-6. Default QPS 5, Burst 10, a 10-second request ceiling, and configuration that
-   can only tighten those values.
+6. Profile-selected Kubernetes request ceilings no greater than 60 seconds,
+   with remaining-run deadline caps, plus fixed QPS 5 and Burst 10.
 7. Disposal behavior for transports and exec credential children on scope
    switch and shutdown.
 

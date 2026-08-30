@@ -50,6 +50,9 @@ func NewApprovalDialog(styles ApprovalDialogStyles) ApprovalDialog {
 	return ApprovalDialog{styles: styles}
 }
 
+// SetStyles updates presentation without changing approval selection or state.
+func (dialog *ApprovalDialog) SetStyles(styles ApprovalDialogStyles) { dialog.styles = styles }
+
 // Show opens a bounded non-editable dialog only before its expiry.
 func (dialog *ApprovalDialog) Show(content ApprovalDialogContent, now time.Time) {
 	dialog.Close()

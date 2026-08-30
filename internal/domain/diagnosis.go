@@ -88,15 +88,21 @@ type MissingInformation struct {
 	Impact string                 `json:"impact"`
 }
 
-// RecommendedAction is user-evaluated text and is never executed in v0.1.
+// RecommendedAction is retained as the durable compatibility name for a
+// bounded proposed action. Operation and Target are populated by the v0.4
+// protocol; legacy rows may contain only explanatory text.
 type RecommendedAction struct {
-	Action        string   `json:"action"`
-	Risk          string   `json:"risk"`
-	Prerequisites []string `json:"prerequisites,omitempty"`
-	Executed      bool     `json:"executed"`
+	Operation     ApprovalOperation `json:"operation,omitempty"`
+	Target        *ResourceRef      `json:"target,omitempty"`
+	Action        string            `json:"action"`
+	Risk          string            `json:"risk"`
+	Prerequisites []string          `json:"prerequisites,omitempty"`
+	Executed      bool              `json:"executed"`
 }
 
-// Diagnosis is the locally validated four-part diagnostic result.
+// Diagnosis is the locally validated terminal answer. The four legacy
+// collections remain readable for storage compatibility; new answers use
+// AnswerMarkdown, citation-backed ConfirmedFacts, and typed proposed actions.
 type Diagnosis struct {
 	ID                   DiagnosisID
 	RunID                AgentRunID
@@ -113,7 +119,8 @@ type Diagnosis struct {
 	EvidenceDetailsState EvidenceDetailState
 }
 
-// Validate checks structure, bounded text, evidence references, and v0.1 action state.
+// Validate checks structure, bounded text, evidence references, and proposed
+// action state.
 func (diagnosis Diagnosis) Validate() error {
 	if !diagnosis.ID.Valid() || !diagnosis.RunID.Valid() || diagnosis.Scope.Validate() != nil ||
 		len(diagnosis.ConfirmedFacts) > maxDiagnosisItems || len(diagnosis.Hypotheses) > maxDiagnosisItems ||
@@ -151,15 +158,35 @@ func (diagnosis Diagnosis) Validate() error {
 			return ErrInvalidDiagnosis
 		}
 	}
+	typedActionCount := 0
 	for _, action := range diagnosis.RecommendedActions {
 		if action.Executed || !validDiagnosisText(action.Action, 1, maxDiagnosisTextBytes) || !validDiagnosisText(action.Risk, 1, maxDiagnosisTextBytes) || len(action.Prerequisites) > maxDiagnosisItems {
 			return ErrInvalidDiagnosis
+		}
+		if action.Operation == "" {
+			if action.Target != nil {
+				return ErrInvalidDiagnosis
+			}
+		} else {
+			typedActionCount++
+			if !action.Operation.Valid() || action.Target == nil || action.Target.Validate() != nil ||
+				action.Operation != ApprovalOperationRestartDeployment ||
+				!ValidApprovalReasonSummary(action.Action) ||
+				action.Target.APIVersion != RestartDeploymentTargetAPIVersion ||
+				action.Target.Kind != RestartDeploymentTargetKind ||
+				action.Target.Namespace != diagnosis.Scope.Namespace ||
+				action.Target.UID != "" || action.Target.ResourceVersion != "" {
+				return ErrInvalidDiagnosis
+			}
 		}
 		for _, prerequisite := range action.Prerequisites {
 			if !validDiagnosisText(prerequisite, 1, maxDiagnosisTextBytes) {
 				return ErrInvalidDiagnosis
 			}
 		}
+	}
+	if typedActionCount > 1 {
+		return ErrInvalidDiagnosis
 	}
 	for _, warning := range diagnosis.ValidationWarnings {
 		if !validDiagnosisText(warning, 1, maxDiagnosisWarningBytes) {

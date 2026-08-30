@@ -64,7 +64,7 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 	sort.Slice(observations.Items, func(left, right int) bool {
 		leftReference := observations.Items[left].Summary.Reference
 		rightReference := observations.Items[right].Summary.Reference
-		return leftReference.Name < rightReference.Name
+		return leftReference.Namespace+"\x00"+leftReference.Name < rightReference.Namespace+"\x00"+rightReference.Name
 	})
 	filtered := make([]ResourceObservation, 0, min(len(observations.Items), request.Limit))
 	matchedCount := 0
@@ -307,19 +307,33 @@ func domainOptionalCount(value *int32) domain.OptionalCount {
 func resourceAbnormal(summary domain.ResourceSummary) bool {
 	status := summary.Status
 	switch domain.ResourceKind(summary.Reference.Kind) {
+	case domain.ResourceKindNamespace:
+		return status.Phase != "Active" || status.Reason != ""
+	case domain.ResourceKindNode:
+		return status.Phase != "Ready" || status.Reason != "" || lessThan(status.Ready, status.Desired)
 	case domain.ResourceKindPod:
 		if status.Phase != "Running" && status.Phase != "Succeeded" || status.Reason != "" {
 			return true
 		}
 		return lessThan(status.Ready, status.Desired)
-	case domain.ResourceKindDeployment, domain.ResourceKindReplicaSet:
+	case domain.ResourceKindDeployment, domain.ResourceKindReplicaSet, domain.ResourceKindStatefulSet, domain.ResourceKindDaemonSet:
 		return status.Reason != "" || lessThan(status.Ready, status.Desired) || lessThan(status.Available, status.Desired)
 	case domain.ResourceKindJob:
 		return status.Phase == "Failed" || status.Reason != "" || status.Failed.Present && status.Failed.Value > 0
-	case domain.ResourceKindService:
+	case domain.ResourceKindPersistentVolumeClaim:
+		return status.Phase != "Bound" || status.Reason != ""
+	case domain.ResourceKindPersistentVolume:
+		return status.Phase != "Bound" && status.Phase != "Available" || status.Reason != ""
+	case domain.ResourceKindHorizontalPodAutoscaler, domain.ResourceKindPodDisruptionBudget:
+		return status.Reason != "" || lessThan(status.Ready, status.Desired)
+	case domain.ResourceKindCronJob:
+		return status.Reason != ""
+	case domain.ResourceKindService, domain.ResourceKindIngress:
 		// Direct Service summaries cannot prove endpoint health. Keep the bounded
 		// candidate so a later fixed relationship read can gather that Evidence.
 		return true
+	case domain.ResourceKindConfigMap:
+		return false
 	default:
 		return false
 	}

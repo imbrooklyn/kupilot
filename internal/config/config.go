@@ -4,15 +4,23 @@ const (
 	CurrentVersion                    = 1
 	ProviderOpenAICompatible          = "openai_compatible"
 	ModelReasoningEffortNone          = "none"
+	BudgetProfileCompact              = "compact"
+	BudgetProfileBalanced             = "balanced"
+	BudgetProfileExtended             = "extended"
+	DefaultBudgetProfile              = BudgetProfileBalanced
+	NamespaceAccessCurrent            = "current"
+	NamespaceAccessAll                = "all"
+	DefaultNamespaceAccess            = NamespaceAccessAll
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
 	DefaultMaxModelOutputTokens       = 2048
 	MaxModelOutputTokens              = 8192
-	DefaultModelRequestTimeoutSeconds = 45
-	MaxModelRequestTimeoutSeconds     = 45
+	DefaultModelRequestTimeoutSeconds = 300
+	MaxModelRequestTimeoutSeconds     = 300
 	MaxContextBytes                   = 253
 	MaxNamespaceBytes                 = 63
+	DefaultNamespace                  = "default"
 	MaxModelIdentifierBytes           = 128
 	MaxPathBytes                      = 4096
 )
@@ -24,9 +32,16 @@ type Config struct {
 	Context    string           `mapstructure:"context" yaml:"context,omitempty" json:"context,omitempty"`
 	Namespace  string           `mapstructure:"namespace" yaml:"namespace,omitempty" json:"namespace,omitempty"`
 	NoColor    bool             `mapstructure:"no_color" yaml:"no_color" json:"no_color"`
+	Runtime    RuntimeConfig    `mapstructure:"runtime" yaml:"runtime" json:"runtime"`
 	Model      ModelConfig      `mapstructure:"model" yaml:"model" json:"model"`
 	Kubernetes KubernetesConfig `mapstructure:"kubernetes" yaml:"kubernetes" json:"kubernetes"`
 	Logging    LoggingConfig    `mapstructure:"logging" yaml:"logging" json:"logging"`
+}
+
+// RuntimeConfig selects one code-defined run envelope. Individual limits are
+// intentionally not free-form configuration.
+type RuntimeConfig struct {
+	BudgetProfile string `mapstructure:"budget_profile" yaml:"budget_profile" json:"budget_profile"`
 }
 
 // ModelConfig contains only validated, non-sensitive model settings.
@@ -66,6 +81,7 @@ type Loaded struct {
 // KubernetesConfig contains the non-sensitive kubeconfig execution policy.
 type KubernetesConfig struct {
 	ExecCredentials string `mapstructure:"exec_credentials" yaml:"exec_credentials" json:"exec_credentials"`
+	NamespaceAccess string `mapstructure:"namespace_access" yaml:"namespace_access" json:"namespace_access"`
 }
 
 // LoggingConfig controls the fixed local file logger. Rotation ceilings remain
@@ -99,7 +115,8 @@ type Overrides struct {
 // Defaults returns the code-defined configuration defaults.
 func Defaults() Config {
 	return Config{
-		Version: CurrentVersion,
+		Version: CurrentVersion, Namespace: DefaultNamespace,
+		Runtime: RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
 		Model: ModelConfig{
 			ProviderKind:          ProviderOpenAICompatible,
 			Temperature:           DefaultModelTemperature,
@@ -108,7 +125,7 @@ func Defaults() Config {
 			Streaming:             true,
 			ToolCallingRequired:   true,
 		},
-		Kubernetes: KubernetesConfig{ExecCredentials: ExecCredentialsAllow},
+		Kubernetes: KubernetesConfig{ExecCredentials: ExecCredentialsAllow, NamespaceAccess: DefaultNamespaceAccess},
 		Logging: LoggingConfig{
 			Enabled:              true,
 			Level:                "info",

@@ -1,4 +1,4 @@
-# KuPilot Repository Instructions
+# Kupilot Repository Instructions
 
 These instructions apply to the entire repository. They do not override any
 higher-level instruction. This file MUST remain the only committed Agent or
@@ -18,12 +18,13 @@ baseline and every relevant ADR whose status is Accepted:
 - [Security Threat Model](docs/security.md),
   [Privacy Overview](docs/privacy-overview.md), and
   [Data Retention Contract](docs/data-retention.md)
-- [ADR-0009: Fixed Structured Tools](docs/adr/0009-use-fixed-structured-tools.md)
-  and [ADR-0011: Read-Only v0.1](docs/adr/0011-keep-v0.1-strictly-read-only.md)
-- [ADR-0023: Agent-Supervision TUI](docs/adr/0023-use-a-single-screen-agent-supervision-tui.md)
+- [ADR-0037: Operational Capability Catalog](docs/adr/0037-adopt-an-operational-capability-catalog.md),
+  [ADR-0038: Free-Form Evidence-Backed Answers](docs/adr/0038-use-free-form-answers-with-verified-evidence-metadata.md),
+  and [ADR-0039: Runtime Budget Profiles](docs/adr/0039-use-configurable-runtime-budget-profiles.md)
+- [ADR-0040: Codex-Style Conversational TUI](docs/adr/0040-use-a-codex-style-conversational-tui.md)
   and [ADR-0031: Explicit Session Resume](docs/adr/0031-require-explicit-cli-session-resume.md)
 - [ADR-0012: Digest-Bound Write Approval](docs/adr/0012-require-digest-bound-write-approval.md)
-  and [ADR-0029: Deployment Restart Only](docs/adr/0029-limit-v0.2-to-deployment-restart.md)
+  and [ADR-0041: Free-Form Session Export](docs/adr/0041-export-free-form-session-summaries.md)
 - [ADR-0032: English Public Material](docs/adr/0032-use-english-for-public-project-material.md)
 
 Accepted public decisions are normative. An implementation MUST NOT silently
@@ -34,24 +35,27 @@ MUST NOT depend on ignored or local-only documents.
 
 ## Product and version boundary
 
-- KuPilot MUST remain a local, single-process, single-user, Agent-first
-  Kubernetes TUI. `v0.1` MUST allow only one active AgentRun, and every run MUST
-  use one immutable ClusterScope containing one verified Context and Namespace.
-- `v0.1` MUST remain read-only and limited to the six Tools and eight diagnostic
-  categories in the public contracts. It MUST provide supervised Evidence
-  collection and a cautious Diagnosis, not autonomous remediation.
-- `v0.2` MAY add only `restart_deployment` with the approval, revalidation,
-  audit, and verification rules below. `v0.2` code or design MUST NOT make a
-  write path reachable in a `v0.1` composition.
-- KuPilot MUST NOT become k9s, a Dashboard, a kubectl wrapper, an IDE, a web or
-  hosted service, a cluster controller, or a general DevOps Agent. MUST NOT add
+- Kupilot MUST remain a local, single-process, single-user, Agent-first
+  Kubernetes TUI with only one active AgentRun. Every run MUST use one immutable
+  ClusterScope containing one verified Context, one working Namespace, one
+  namespace-access policy, and one generation.
+- `v0.4` MUST use the versioned typed capability catalog and free-form answer
+  contract in the public baseline. Only deterministic local handling MAY create
+  Evidence; model prose and proposed actions MUST NOT create authority.
+- `v0.4` MAY execute only the composed `restart_deployment` action and only
+  through the approval, revalidation, audit, one-attempt, and verification rules
+  below. It MUST NOT perform autonomous remediation.
+- Kupilot MUST NOT become k9s, a Dashboard, a kubectl wrapper, an IDE, a web or
+  hosted service, or a cluster controller. MUST NOT add
   a resource tree, primary inventory table, full YAML view or editor, live
   monitoring, shell, kubectl, Pod Exec, port forwarding, Helm, arbitrary
   network requests, plugins, MCP, RAG, retrievers, Multi-Agent orchestration,
   dynamic commands, or simultaneous multi-provider support.
-- MUST NOT add all-Namespace or cross-cluster diagnosis, background scans,
-  Watch or informer loops, scheduled runs, or autonomous remediation.
-- Every proposed feature MUST identify a named diagnostic need and show that it
+- Cross-Namespace exact reads and bounded all-Namespace lists MAY occur only
+  under the frozen `all` policy in the same Context. MUST NOT add cross-cluster
+  calls, background scans, Watch or informer loops, scheduled runs, or
+  autonomous remediation.
+- Every proposed feature MUST identify a named operational need and show that it
   helps the Agent gather bounded Evidence or helps the user supervise that
   work. A feature that primarily replaces the Agent with cluster browsing or
   direct manipulation MUST be rejected.
@@ -74,7 +78,8 @@ MUST NOT depend on ignored or local-only documents.
   such data safely.
 - The Agent MAY answer in the language of the current user question and MUST
   fall back to English when needed. MUST NOT add language settings, locale
-  negotiation, translated safety copy, or an i18n framework in `v0.1`.
+  negotiation, translated safety copy, or an i18n framework in the current
+  product line.
 
 ## Architecture and dependency direction
 
@@ -167,16 +172,18 @@ MUST NOT depend on ignored or local-only documents.
 ## Kubernetes and scope safety
 
 - Kubernetes access MUST use client-go only inside `internal/kube`, behind
-  task-specific consumer-owned ports. `v0.1` ports MUST NOT expose a dynamic
+  task-specific consumer-owned ports. Read ports MUST NOT expose a dynamic
   client, REST client, generic GroupVersionResource, raw request builder,
-  Watch, informer, arbitrary selector, generic discovery, or write method.
-- Direct `v0.1` targets MUST be limited to Pod, Deployment, ReplicaSet, Job, and
-  Service in the active Namespace. EndpointSlice MAY contribute address-free
-  readiness counts only through the fixed Service relationship. StatefulSet
-  MAY appear only as an unfetched owner reference already projected from a Pod.
-- Secret objects and data, ConfigMap data, container environment values,
-  unlisted Kinds, custom resources, cluster-scoped targets, and cross-Namespace
-  reads MUST be denied before a Kubernetes call whenever locally decidable.
+  Watch, informer, arbitrary selector, generic discovery, or generic write
+  method.
+- Direct targets MUST be limited to the 16 stable built-in Kinds admitted by
+  ADR-0037. EndpointSlice MAY contribute address-free readiness counts only
+  through the fixed Service relationship. Cluster-scoped references MUST use no
+  fake Namespace; namespaced references MUST satisfy the frozen policy.
+- Secret objects and data, ConfigMap data and binaryData, container environment
+  values, unlisted Kinds, custom resources, cross-Context calls, and
+  cross-Namespace reads outside the `all` policy MUST be denied before a
+  Kubernetes call whenever locally decidable.
   Source allowlisting and projection MUST happen before redaction.
 - Kubeconfig contents, `rest.Config`, tokens, certificates, private keys, and
   exec credential output MUST remain in the Kubernetes adapter and MUST NOT
@@ -196,7 +203,7 @@ MUST NOT depend on ignored or local-only documents.
 
 ## Model, privacy, and Evidence
 
-- `v0.1` MUST support exactly one configured `openai_compatible` provider kind,
+- Kupilot MUST support exactly one configured `openai_compatible` provider kind,
   one canonical origin, and the accepted Chat Completions-style streaming and
   structured Tool-call contract. MUST NOT add provider auto-detection,
   fallback, routing, or prompt-parsed Tool calls.
@@ -225,14 +232,15 @@ MUST NOT depend on ignored or local-only documents.
   endpoint errors MUST remain untrusted data. Prompt text and model output MUST
   NOT change scope, policy, endpoint, budgets, Tool authority, consent,
   Evidence, approval, or execution state.
-- Only deterministic runtime Tool handling MAY create Evidence. Every confirmed
-  fact MUST cite accepted Evidence from the same AgentRun. A Diagnosis MUST keep
-  confirmed facts, hypotheses, missing information, and recommended actions
-  distinct; `v0.1` recommendations MUST be marked as not executed.
+- Only deterministic runtime Tool handling MAY create Evidence. Current-cluster
+  claims SHOULD cite accepted Evidence from the same AgentRun. The final visible
+  answer MUST remain bounded free-form Markdown; citations and typed proposed
+  actions MUST be validated separately, and proposed actions MUST remain
+  unexecuted until Application creates valid local approval authority.
 
 ## SQLite and retention
 
-- KuPilot MUST use one local SQLite database through `database/sql` and exactly
+- Kupilot MUST use one local SQLite database through `database/sql` and exactly
   one pure-Go driver selected by the required evidence gate. MUST NOT silently
   introduce CGO, a second production driver, another database, or claim an
   unverified driver passed.
@@ -260,9 +268,9 @@ MUST NOT depend on ignored or local-only documents.
 - Newly created Home, state, database, and sidecar paths MUST use owner-only
   permissions on supported platforms. Existing user-managed modes MUST be
   respected rather than rejected or changed solely for being wider. Unsafe
-  managed symlinks and file types MUST still be rejected. KuPilot MUST NOT claim
+  managed symlinks and file types MUST still be rejected. Kupilot MUST NOT claim
   SQLite encryption, tamper resistance, or forensic deletion.
-- A failed durable run start MUST prevent model and Tool I/O. A later read-only
+- A failed durable run start MUST prevent model and Tool I/O. A later read-side
   persistence failure MAY finish the in-memory Diagnosis only with visible
   degraded state and no false resume claim. A pre-write storage or audit failure
   MUST produce zero executor calls.
@@ -288,9 +296,11 @@ MUST NOT depend on ignored or local-only documents.
   accept credential values, raw kubeconfig, questions, arbitrary commands, or
   approval tokens.
 - The TUI MUST remain a low-chrome single Agent-supervision screen: continuous
-  transcript, inline Tool steps, exactly one three-to-eight-row multiline
-  composer, optional untitled suggestions or Picker below it, and a scope footer
-  that prioritizes Context, Namespace, and read-only or approval state.
+  transcript, compact inline Tool steps, exactly one one-to-eight-row multiline
+  borderless `›` composer, optional untitled suggestions or Picker below it,
+  and a scope footer that prioritizes Context, Namespace, and supervised or
+  approval state. Detailed safe runtime state MUST be available through
+  `/status` without external I/O.
 - The TUI MUST NOT add a resource browser, primary table, full YAML, raw log
   viewer, action menu, dashboard, shell, kubectl, multi-page navigation, or a
   second editor. A Picker MUST remain a bounded input aid and MUST NOT create
@@ -300,7 +310,8 @@ MUST NOT depend on ignored or local-only documents.
   messages MUST carry and validate the applicable request ID, run ID, scope
   generation, sequence, and terminal state before changing UI state.
 - The Slash registry MUST be compile-time fixed to the commands accepted by
-  ADR-0023. Unknown commands, dynamic commands, and `!` syntax MUST perform no
+  ADR-0040 and the public CLI/TUI contract. Unknown commands, dynamic commands,
+  and `!` syntax MUST perform no
   external action and MUST NOT enter the model as Tool authority.
 - External text MUST be valid, bounded, and stripped or visibly replaced for
   unsafe terminal, escape, device-control, and bidirectional sequences before
@@ -309,14 +320,16 @@ MUST NOT depend on ignored or local-only documents.
 
 ## Tools and execution budgets
 
-- The complete `v0.1` model-visible catalog MUST contain exactly
+- The complete `v0.4` model-visible catalog MUST contain exactly
   `get_resource`, `list_resources`, `get_events`, `get_pod_logs`,
-  `get_previous_pod_logs`, and `get_related_resources`.
+  `get_previous_pod_logs`, `get_related_resources`, and
+  `get_cluster_overview`.
 - Every Tool name, purpose, version, input schema, result DTO, and Evidence
   mapping MUST be code-defined and strict. Unknown, duplicate, wrong-type,
   overlong, or extra fields MUST be rejected. The model MUST NOT supply Context,
-  Namespace, endpoint, credential, arbitrary Kind or GVR, raw selector,
-  deadline, or hard limit.
+  endpoint, credential, arbitrary Kind or GVR, raw selector, deadline, or hard
+  limit. A Namespace argument MUST be validated and canonicalized under the
+  frozen namespace-access policy.
 - Runtime MUST validate and canonicalize the call, atomically reserve budgets,
   inject immutable scope and ceilings, check generation at all three gates, and
   dispatch through a fixed table. Tool-like prose, malformed structured output,
@@ -325,27 +338,22 @@ MUST NOT depend on ignored or local-only documents.
   and safe error metadata, observation time, and deterministic Evidence. MUST
   deny, project, normalize, redact or block, and limit before any model or
   persistence sink; MUST NOT marshal a raw Kubernetes object as Tool output.
-- Runtime MUST enforce ADR-0016 ceilings: 90-second runs; 10-second Kubernetes
-  and 45-second model requests; 8 Agent steps, 10 Tool calls, and 3 model calls;
-  64 KiB per ToolResult and 384 KiB per run; 50 resources, 50 Events, and 100
-  Evidence items per result; 200 log lines, 15 minutes, 64 KiB, and 2 log calls;
-  2 relationship hops, 25 nodes, and 40 edges; and stop after 2 no-progress
-  steps. Configuration MAY tighten but MUST NOT expand these ceilings.
-- A proposed seventh Tool is outside `v0.1` and MUST NOT be implemented until
-  the version scope and relevant Accepted decisions admit it. Its proposal MUST
-  name the diagnostic category, permissions, sources and model fields, privacy
+- Runtime MUST enforce the immutable compact, balanced, or extended profile in
+  ADR-0039 and its hard ceilings. One ToolResult remains 64 KiB; one result
+  remains limited to 50 resources, 50 Events, and 100 Evidence items; one log
+  call remains 200 lines, 15 minutes, and 64 KiB; relationships remain two hops,
+  25 nodes, and 40 edges. Model output MUST NOT select, change, or expand a
+  profile.
+- A proposed capability outside the admitted catalog MUST NOT be implemented
+  until public scope and a relevant Accepted decision admit it. Its proposal
+  MUST name the operational need, permissions, sources and model fields, privacy
   treatment, strict schema, budgets, errors and partial behavior, Evidence
   mapping, RBAC impact, fixtures, denial tests, and why it helps the Agent.
 
 ## Kubernetes writes and approval
 
-- The `v0.1` composition MUST contain no mutation port, write-capable consumer
-  interface, mutation adapter, approval coordinator, Approval Dialog, generic
-  Kubernetes client, write Tool, or command that executes a recommendation.
-  Read-only MUST be provable from imports, wiring, schemas, RBAC fixtures, and
-  recorded requests.
-- `v0.2` MUST expose only `restart_deployment` for one exact `apps/v1`
-  Deployment. It MUST change only the KuPilot-owned Pod-template annotation and
+- The composition MUST expose only `restart_deployment` for one exact `apps/v1`
+  Deployment. It MUST change only the Kupilot-owned Pod-template annotation and
   MUST NOT accept arbitrary patch, YAML, annotation, timestamp, resource
   version, delete, scale, rollback, exec, or additional write parameters.
 - Agent, model, Tool, CLI, and TUI MUST NOT hold or call the executor. Only the
@@ -430,7 +438,7 @@ Reviewers MUST reject a change when any applicable item is true:
    behavior, Evidence provenance, request recording, or zero-call denial tests.
 7. A migration edits a released file, lacks upgrade and rollback-failure tests,
    adds a generic payload escape hatch, or cannot upgrade an old fixture.
-8. A `v0.2` write path has an approval bypass, mutable parameters, replay,
+8. A supervised write path has an approval bypass, mutable parameters, replay,
    stale-target path, missing durable pre-audit, automatic retry, or conflated
    execution and verification result.
 9. A security test checks only an error string instead of also proving the

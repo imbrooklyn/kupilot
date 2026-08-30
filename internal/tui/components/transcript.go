@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
@@ -24,6 +25,11 @@ type Entry struct {
 	Streaming          bool
 	ToolSteps          []ToolStep
 	EvidenceReferences []EvidenceReference
+	WorkedFor          time.Duration
+	ShowWorkedFor      bool
+	markdownCache      string
+	markdownCacheWidth int
+	markdownCacheValid bool
 }
 
 // EvidenceReference is a display-only transcript citation. Index maps back to
@@ -37,11 +43,16 @@ type EvidenceReference struct {
 // TranscriptStyles defines only semantic surfaces and prose styles.
 type TranscriptStyles struct {
 	UserSurface lipgloss.Style
+	UserPrompt  lipgloss.Style
+	UserText    lipgloss.Style
 	AgentText   lipgloss.Style
+	Markdown    MarkdownStyles
 	NoticeText  lipgloss.Style
 	Placeholder lipgloss.Style
 	Evidence    lipgloss.Style
 	Selected    lipgloss.Style
+	Separator   lipgloss.Style
+	Timing      lipgloss.Style
 }
 
 // Transcript is a continuous scrollable conversation projection.
@@ -57,7 +68,7 @@ type Transcript struct {
 	selected    int
 }
 
-// NewTranscript creates an empty, mouse-free viewport.
+// NewTranscript creates an empty viewport. The root reducer owns mouse routing.
 func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcript {
 	view := viewport.New(viewport.WithWidth(80), viewport.WithHeight(12))
 	view.SoftWrap = true
@@ -73,9 +84,22 @@ func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcrip
 	}
 }
 
+// SetStyles updates presentation while retaining conversation, selection,
+// viewport, and inline Tool state.
+func (transcript *Transcript) SetStyles(styles TranscriptStyles, toolStyles ToolStepStyles) {
+	transcript.styles = styles
+	transcript.toolSteps.SetStyles(toolStyles)
+	transcript.invalidateMarkdownCaches()
+	transcript.refresh(false)
+}
+
 // SetSize changes only viewport layout state.
 func (transcript *Transcript) SetSize(width, height int) {
-	transcript.width = max(8, width)
+	nextWidth := max(8, width)
+	if transcript.width != nextWidth {
+		transcript.invalidateMarkdownCaches()
+	}
+	transcript.width = nextWidth
 	transcript.height = max(1, height)
 	transcript.viewport.SetWidth(transcript.width)
 	transcript.viewport.SetHeight(transcript.height)
@@ -109,16 +133,33 @@ func (transcript *Transcript) AppendAgent(delta string) {
 		return
 	}
 	transcript.entries[transcript.activeAgent].Text += delta
+	transcript.entries[transcript.activeAgent].markdownCacheValid = false
 	transcript.refresh(true)
 }
 
 // FinishAgent replaces provisional text with one terminal safe result.
 func (transcript *Transcript) FinishAgent(text string) {
+	transcript.finishAgent(text, 0, false)
+}
+
+// FinishAgentWithDuration replaces provisional text and records display-only
+// local elapsed time for a newly completed run.
+func (transcript *Transcript) FinishAgentWithDuration(text string, workedFor time.Duration) {
+	transcript.finishAgent(text, workedFor, true)
+}
+
+func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, showWorkedFor bool) {
 	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) {
 		return
 	}
+	if workedFor < 0 {
+		workedFor = 0
+	}
 	transcript.entries[transcript.activeAgent].Text = text
+	transcript.entries[transcript.activeAgent].markdownCacheValid = false
 	transcript.entries[transcript.activeAgent].Streaming = false
+	transcript.entries[transcript.activeAgent].WorkedFor = workedFor
+	transcript.entries[transcript.activeAgent].ShowWorkedFor = showWorkedFor
 	transcript.refresh(true)
 }
 
@@ -202,6 +243,9 @@ func (transcript Transcript) Entries() []Entry {
 	for index := range entries {
 		entries[index].ToolSteps = append([]ToolStep(nil), entries[index].ToolSteps...)
 		entries[index].EvidenceReferences = append([]EvidenceReference(nil), entries[index].EvidenceReferences...)
+		entries[index].markdownCache = ""
+		entries[index].markdownCacheWidth = 0
+		entries[index].markdownCacheValid = false
 	}
 	return entries
 }
@@ -215,6 +259,15 @@ func (transcript *Transcript) PageUp() { transcript.viewport.PageUp() }
 // PageDown scrolls transcript history without moving the composer.
 func (transcript *Transcript) PageDown() { transcript.viewport.PageDown() }
 
+// ScrollUp moves the transcript by a bounded number of rows.
+func (transcript *Transcript) ScrollUp(rows int) { transcript.viewport.ScrollUp(max(1, rows)) }
+
+// ScrollDown moves the transcript by a bounded number of rows.
+func (transcript *Transcript) ScrollDown(rows int) { transcript.viewport.ScrollDown(max(1, rows)) }
+
+// ScrollOffset reports transcript position for deterministic reducer tests.
+func (transcript Transcript) ScrollOffset() int { return transcript.viewport.YOffset() }
+
 // View returns the current bounded transcript viewport.
 func (transcript Transcript) View() string { return transcript.viewport.View() }
 
@@ -226,33 +279,77 @@ func (transcript *Transcript) refresh(follow bool) {
 	}
 }
 
-func (transcript Transcript) renderContent() string {
+func (transcript *Transcript) renderContent() string {
 	parts := make([]string, 0, len(transcript.entries))
-	for _, entry := range transcript.entries {
+	for entryIndex := range transcript.entries {
+		entry := &transcript.entries[entryIndex]
 		var rendered string
 		switch entry.Kind {
 		case EntryUser:
-			rendered = transcript.styles.UserSurface.Width(max(1, transcript.width-4)).Render(entry.Text)
+			// Both segments carry the surface background explicitly. Lipgloss
+			// resets SGR state after the styled prompt, so leaving the body raw
+			// would make only the historic message text fall back to the terminal
+			// background inside the otherwise continuous user surface.
+			content := transcript.styles.UserPrompt.Render("› ") + transcript.styles.UserText.Render(entry.Text)
+			rendered = transcript.styles.UserSurface.Width(max(1, transcript.width-2)).Render(content)
 		case EntryAgent:
+			blocks := make([]string, 0, 5)
+			stepRenderer := transcript.toolSteps
+			stepRenderer.steps = append([]ToolStep(nil), entry.ToolSteps...)
+			steps := stepRenderer.View()
+			if steps != "" {
+				blocks = append(blocks, steps)
+			}
 			text := entry.Text
 			if text == "" && entry.Streaming {
 				text = transcript.styles.Placeholder.Render("Working…")
 			}
-			rendered = transcript.styles.AgentText.Width(max(1, transcript.width)).Render(text)
-			stepRenderer := transcript.toolSteps
-			stepRenderer.steps = append([]ToolStep(nil), entry.ToolSteps...)
-			if steps := stepRenderer.View(); steps != "" {
-				rendered += "\n" + steps
+			if text != "" {
+				if steps != "" && !entry.Streaming {
+					blocks = append(blocks, transcript.styles.Separator.Render(strings.Repeat("─", max(1, transcript.width))))
+				}
+				blocks = append(blocks, transcript.renderMarkdown(entry))
 			}
 			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences); references != "" {
-				rendered += "\n" + references
+				blocks = append(blocks, references)
 			}
+			if entry.ShowWorkedFor && !entry.Streaming {
+				blocks = append(blocks, transcript.styles.Timing.Render("Worked for "+formatWorkedFor(entry.WorkedFor)))
+			}
+			rendered = strings.Join(blocks, "\n\n")
 		case EntryNotice:
 			rendered = transcript.styles.NoticeText.Render(entry.Text)
 		}
 		parts = append(parts, rendered)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (transcript *Transcript) renderMarkdown(entry *Entry) string {
+	if entry.markdownCacheValid && entry.markdownCacheWidth == transcript.width {
+		return entry.markdownCache
+	}
+	markdownStyles := transcript.styles.Markdown
+	markdownStyles.Text = markdownStyles.Text.Inherit(transcript.styles.AgentText)
+	entry.markdownCache = renderTerminalMarkdown(entry.Text, transcript.width, markdownStyles)
+	entry.markdownCacheWidth = transcript.width
+	entry.markdownCacheValid = true
+	return entry.markdownCache
+}
+
+func (transcript *Transcript) invalidateMarkdownCaches() {
+	for index := range transcript.entries {
+		transcript.entries[index].markdownCache = ""
+		transcript.entries[index].markdownCacheWidth = 0
+		transcript.entries[index].markdownCacheValid = false
+	}
+}
+
+func formatWorkedFor(duration time.Duration) string {
+	if duration < time.Second {
+		return "<1s"
+	}
+	return duration.Truncate(time.Second).String()
 }
 
 func (transcript Transcript) renderEvidenceReferences(references []EvidenceReference) string {

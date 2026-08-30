@@ -105,6 +105,52 @@ func TestCoordinatorDurableBeginFailurePerformsZeroAgentCalls(t *testing.T) {
 	}
 }
 
+func TestCoordinatorStatusProjectsFrozenBudgetWithoutExternalWork(t *testing.T) {
+	clock := newCoordinatorClock()
+	coordinator, persistence, scope, ui := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
+		t.Fatal("status query called the Agent runner")
+		return agent.RunOutcome{}
+	}))
+	session := createCoordinatorSession(t, coordinator)
+	limits := agent.DefaultRunBudgetLimits()
+	input, err := agent.NewRunInput(
+		domain.AgentRunID(coordinatorUUID(901)), session.ID, domain.MessageID(coordinatorUUID(902)),
+		"Inspect the selected Pod.", scope.scope, nil, limits,
+	)
+	if err != nil {
+		t.Fatalf("NewRunInput() error = %v", err)
+	}
+	startedAt := clock.Now().Add(-90 * time.Second)
+	coordinator.mu.Lock()
+	coordinator.active = &activeRun{
+		input: input,
+		run: domain.AgentRun{
+			ID: input.RunID(), SessionID: session.ID, RequestMessageID: domain.MessageID(coordinatorUUID(902)),
+			Status: domain.AgentRunStatusRunning, Scope: scope.scope.Snapshot(), PromptVersion: input.PromptVersion(),
+			ToolCatalogVersion: input.CatalogVersion(), StepCount: 3, ToolCallCount: 5, ModelRequestCount: 3,
+			StartedAt: &startedAt,
+		},
+		toolResultBytes: 96 * 1024,
+		logCalls:        2,
+	}
+	coordinator.mu.Unlock()
+
+	status := coordinator.uiStatus()
+	if !status.valid() || !status.RunActive || status.RunID != input.RunID() ||
+		status.Budget.Profile != agent.BudgetProfileBalanced || status.Budget.StepsUsed != 3 ||
+		status.Budget.ToolCallsUsed != 5 || status.Budget.ModelCallsUsed != 3 ||
+		status.Budget.ToolResultBytesUsed != 96*1024 || status.Budget.LogCallsUsed != 2 ||
+		status.Budget.ElapsedMilliseconds < 90_000 || status.Budget.RemainingMilliseconds >= limits.RunDuration.Milliseconds() {
+		t.Fatalf("UI status = %#v", status)
+	}
+	if persistence.beginCalls() != 0 || len(ui.events()) != 0 {
+		t.Fatalf("status side effects: run starts=%d UI events=%d", persistence.beginCalls(), len(ui.events()))
+	}
+	coordinator.mu.Lock()
+	coordinator.active = nil
+	coordinator.mu.Unlock()
+}
+
 func TestCoordinatorRejectsCancelledAndStaleStartsBeforePersistence(t *testing.T) {
 	t.Parallel()
 	t.Run("cancelled Context", func(t *testing.T) {
@@ -197,6 +243,82 @@ func TestCoordinatorRejectsCompleteScopeMismatchBeforeToolPersistence(t *testing
 		t.Fatalf("scope mismatch result/tool calls = %#v/%d", result, persistence.toolCalls())
 	}
 	assertOneUITerminal(t, ui.events(), UIEventRunFailed)
+}
+
+func TestCoordinatorRejectsCrossNamespaceEvidenceUnderCurrentPolicyBeforePersistence(t *testing.T) {
+	t.Parallel()
+	clock := newCoordinatorClock()
+	rejected := make(chan agent.EventSinkResult, 1)
+	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+		if err != nil {
+			t.Fatalf("NewEventPublisher() error = %v", err)
+		}
+		if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
+			t.Fatalf("Publish(started) error = %v", err)
+		}
+		purpose := "Inspect one bounded projection."
+		arguments := `{"kind":"Pod","name":"sample-pod"}`
+		startedAt := clock.Now()
+		invocation := domain.ToolInvocation{
+			ID: domain.ToolInvocationID(coordinatorUUID(881)), RunID: input.RunID(), Sequence: 1,
+			Name: domain.ToolNameGetResource, Version: "tool-v1", Purpose: &purpose,
+			Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
+			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
+		}
+		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
+			t.Fatalf("Publish(requested) = %q/%v", result, err)
+		}
+		finishedAt := clock.Now()
+		summary := "One projected observation was collected."
+		invocation.Status = domain.ToolInvocationStatusSucceeded
+		invocation.ResultSummary = &summary
+		invocation.EvidenceCount = 1
+		invocation.FinishedAt = &finishedAt
+		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallCompleted, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
+			t.Fatalf("Publish(completed) = %q/%v", result, err)
+		}
+		evidence := domain.Evidence{
+			ID: domain.EvidenceID(coordinatorUUID(882)), RunID: input.RunID(), InvocationID: invocation.ID,
+			Category: domain.EvidenceCategoryResourceStatus, Scope: input.Scope().Snapshot(),
+			Resource: domain.ResourceRef{
+				APIVersion: "v1", Kind: "Pod", Namespace: "other-namespace", Name: "sample-pod",
+			},
+			Fact: "The projected Pod phase is Pending.", Fingerprint: domain.SHA256Hex("cross-namespace-evidence"),
+			ObservedAt: finishedAt,
+		}
+		result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventEvidenceCollected, Evidence: &evidence})
+		if err != nil {
+			t.Fatalf("Publish(Evidence) error = %v", err)
+		}
+		rejected <- result
+		class := domain.SafeErrorClassPolicyDenied
+		_, _ = publisher.Publish(ctx, agent.RunEvent{
+			Kind: agent.RunEventRunFailed,
+			Failure: &agent.RunEventFailure{
+				Class: class, SafeMessage: "The AgentRun stopped at the namespace policy boundary.",
+			},
+		})
+		return agent.RunOutcome{
+			Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+			SafeMessage: "The AgentRun stopped at the namespace policy boundary.",
+		}
+	})
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
+		SessionID: session.ID, Question: "Inspect the selected Pod.",
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	result, err := coordinator.WaitRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+	if <-rejected != agent.EventSinkRejected || persistence.toolCalls() != 0 || result.Status != domain.AgentRunStatusFailed {
+		t.Fatalf("cross-Namespace result/tool writes = %#v/%d", result, persistence.toolCalls())
+	}
 }
 
 func TestCoordinatorSurfacesLaterAuditDegradationAndFinishesInMemory(t *testing.T) {
@@ -809,7 +931,7 @@ func newCoordinatorHarness(
 	t.Helper()
 	persistence := new(memoryCoordinatorPersistence)
 	scope := &coordinatorScope{scope: domain.ClusterScope{
-		Context: "test-context", Namespace: "team-a", Generation: 7,
+		Context: "test-context", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7,
 		ActivatedAt: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
 	}}
 	ui := new(recordingUIEvents)

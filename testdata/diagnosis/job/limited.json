@@ -1,7 +1,12 @@
 {
   "name": "job_failed_conflicting_owned_pod",
   "question": "Why did example-job fail?",
-  "target": {"api_version": "batch/v1", "kind": "Job", "namespace": "example-namespace", "name": "example-job"},
+  "target": {
+    "api_version": "batch/v1",
+    "kind": "Job",
+    "namespace": "example-namespace",
+    "name": "example-job"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Job example-job was observed; phase Failed; active 0; succeeded 0; failed 1; parallelism 1; backoff limit 1.",
             "source_path": "projected.status",
             "severity": "warning",
-            "supports": ["job_failed_count_observed", "observation_timing_or_replacement_possible"]
+            "supports": [
+              "job_failed_count_observed",
+              "observation_timing_or_replacement_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001712",
@@ -26,7 +34,10 @@
             "fact": "Condition Failed is True with reason BackoffLimitExceeded.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["job_failed_condition_observed", "observation_timing_or_replacement_possible"]
+            "supports": [
+              "job_failed_condition_observed",
+              "observation_timing_or_replacement_possible"
+            ]
           }
         ]
       }
@@ -46,7 +57,10 @@
             "fact": "Pod example-job-pod was observed; phase Succeeded; ready 0 of 1; reason Completed.",
             "source_path": "projected.related.nodes.status",
             "severity": "info",
-            "supports": ["job_owned_pod_succeeded_observed", "observation_timing_or_replacement_possible"]
+            "supports": [
+              "job_owned_pod_succeeded_observed",
+              "observation_timing_or_replacement_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001714",
@@ -54,7 +68,10 @@
             "fact": "The fixed owner relationship connects Job example-job to Pod example-job-pod.",
             "source_path": "projected.related.edges.owner_reference",
             "severity": "info",
-            "supports": ["job_pod_owner_observed", "observation_timing_or_replacement_possible"]
+            "supports": [
+              "job_pod_owner_observed",
+              "observation_timing_or_replacement_possible"
+            ]
           }
         ]
       }
@@ -71,45 +88,74 @@
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Job status contains one failed attempt and no succeeded attempts.", "evidence_ids": ["00000000-0000-7000-8000-000000001711"]},
-      {"statement": "The projected Failed condition is True.", "evidence_ids": ["00000000-0000-7000-8000-000000001712"]},
-      {"statement": "A later bounded relationship observation contains one owned Pod in phase Succeeded.", "evidence_ids": ["00000000-0000-7000-8000-000000001713"]},
-      {"statement": "The fixed owner graph connects the Job to that Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001714"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Job status contains one failed attempt and no succeeded attempts.\n- The projected Failed condition is True.\n- A later bounded relationship observation contains one owned Pod in phase Succeeded.\n- The fixed owner graph connects the Job to that Pod.\n\nDifferent observation times or Pod attempts may explain the inconsistent Job count and owned Pod phase. Confidence: high. To verify: One fresh bounded observation reconciles the Job counts with all returned owned Pod phases.\n\nThe Job reports zero succeeded attempts while the later complete owner graph contains one Succeeded Pod. Impact: The observations cannot support a definite failed-attempt or application root cause.\n\nNo recent Job Event was returned. Impact: There is no Event Evidence to reconcile the status transition.\n\nSuggested next step: Collect a fresh bounded Job and owned Pod observation before attributing the failure. Risk: Waiting for a fresh observation can delay investigation, while changing the Job outside Kupilot may create new attempts. Before acting: Preserve both conflicting observations and do not infer an exit cause.",
+    "evidence_citations": [
       {
-        "statement": "Different observation times or Pod attempts may explain the inconsistent Job count and owned Pod phase.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001711", "00000000-0000-7000-8000-000000001712", "00000000-0000-7000-8000-000000001713", "00000000-0000-7000-8000-000000001714", "00000000-0000-7000-8000-000000009907"],
-        "confidence": "high",
-        "falsifier": "One fresh bounded observation reconciles the Job counts with all returned owned Pod phases."
+        "claim": "The projected Job status contains one failed attempt and no succeeded attempts.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001711"
+        ]
+      },
+      {
+        "claim": "The projected Failed condition is True.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001712"
+        ]
+      },
+      {
+        "claim": "A later bounded relationship observation contains one owned Pod in phase Succeeded.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001713"
+        ]
+      },
+      {
+        "claim": "The fixed owner graph connects the Job to that Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001714"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "conflicting", "detail": "The Job reports zero succeeded attempts while the later complete owner graph contains one Succeeded Pod.", "impact": "The observations cannot support a definite failed-attempt or application root cause."},
-      {"kind": "absent", "detail": "No recent Job Event was returned.", "impact": "There is no Event Evidence to reconcile the status transition."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Collect a fresh bounded Job and owned Pod observation before attributing the failure.",
-        "risk": "Waiting for a fresh observation can delay investigation, while changing the Job outside KuPilot may create new attempts.",
-        "prerequisites": ["Preserve both conflicting observations and do not infer an exit cause."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "job_failed_count_observed"},
-      {"index": 1, "assertion": "job_failed_condition_observed"},
-      {"index": 2, "assertion": "job_owned_pod_succeeded_observed"},
-      {"index": 3, "assertion": "job_pod_owner_observed"}
+      {
+        "index": 0,
+        "assertion": "job_failed_count_observed"
+      },
+      {
+        "index": 1,
+        "assertion": "job_failed_condition_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "job_owned_pod_succeeded_observed"
+      },
+      {
+        "index": 3,
+        "assertion": "job_pod_owner_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "observation_timing_or_replacement_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "collect_fresh_job_and_pod_state"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "observation_timing_or_replacement_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "collect_fresh_job_and_pod_state"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["job_failed_count_observed", "job_failed_condition_observed", "job_owned_pod_succeeded_observed", "job_pod_owner_observed"],
-  "required_missing_kinds": ["conflicting", "absent", "unsupported"],
+  "required_confirmed_assertions": [
+    "job_failed_count_observed",
+    "job_failed_condition_observed",
+    "job_owned_pod_succeeded_observed",
+    "job_pod_owner_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

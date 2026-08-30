@@ -1,7 +1,12 @@
 {
   "name": "job_failed_sufficient",
   "question": "Why did example-job fail?",
-  "target": {"api_version": "batch/v1", "kind": "Job", "namespace": "example-namespace", "name": "example-job"},
+  "target": {
+    "api_version": "batch/v1",
+    "kind": "Job",
+    "namespace": "example-namespace",
+    "name": "example-job"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,11 @@
             "fact": "Job example-job was observed; phase Failed; active 0; succeeded 0; failed 1; parallelism 1; backoff limit 1.",
             "source_path": "projected.status",
             "severity": "warning",
-            "supports": ["job_failed_count_observed", "pod_execution_failure_possible", "controller_retry_exhaustion_possible"]
+            "supports": [
+              "job_failed_count_observed",
+              "pod_execution_failure_possible",
+              "controller_retry_exhaustion_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001702",
@@ -26,7 +35,10 @@
             "fact": "Condition Failed is True with reason BackoffLimitExceeded.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["job_failed_condition_observed", "controller_retry_exhaustion_possible"]
+            "supports": [
+              "job_failed_condition_observed",
+              "controller_retry_exhaustion_possible"
+            ]
           }
         ]
       }
@@ -46,7 +58,10 @@
             "fact": "Pod example-job-pod was observed; phase Failed; ready 0 of 1; reason Error.",
             "source_path": "projected.related.nodes.status",
             "severity": "warning",
-            "supports": ["job_owned_pod_failed_observed", "pod_execution_failure_possible"]
+            "supports": [
+              "job_owned_pod_failed_observed",
+              "pod_execution_failure_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001704",
@@ -54,7 +69,10 @@
             "fact": "The fixed owner relationship connects Job example-job to Pod example-job-pod.",
             "source_path": "projected.related.edges.owner_reference",
             "severity": "info",
-            "supports": ["job_pod_owner_observed", "pod_execution_failure_possible"]
+            "supports": [
+              "job_pod_owner_observed",
+              "pod_execution_failure_possible"
+            ]
           }
         ]
       }
@@ -74,62 +92,99 @@
             "fact": "Warning Event BackoffLimitExceeded for Job example-job reported that the fixed retry limit was reached.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["job_failure_event_observed", "controller_retry_exhaustion_possible"]
+            "supports": [
+              "job_failure_event_observed",
+              "controller_retry_exhaustion_possible"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Job status contains one failed attempt.", "evidence_ids": ["00000000-0000-7000-8000-000000001701"]},
-      {"statement": "The projected Failed condition is True with reason BackoffLimitExceeded.", "evidence_ids": ["00000000-0000-7000-8000-000000001702"]},
-      {"statement": "The bounded relationship result includes an owned Pod in phase Failed.", "evidence_ids": ["00000000-0000-7000-8000-000000001703"]},
-      {"statement": "The fixed owner graph connects the Job to the observed Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001704"]},
-      {"statement": "A recent Job Event reported that the retry limit was reached.", "evidence_ids": ["00000000-0000-7000-8000-000000001705"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Job status contains one failed attempt.\n- The projected Failed condition is True with reason BackoffLimitExceeded.\n- The bounded relationship result includes an owned Pod in phase Failed.\n- The fixed owner graph connects the Job to the observed Pod.\n- A recent Job Event reported that the retry limit was reached.\n\nThe observed failed Pod execution may have contributed to the Job failure, but its application cause is not known. Confidence: medium. To verify: A fresh bounded Pod observation shows that a different attempt or controller condition caused the Job result.\n\nThe controller may have exhausted its configured retries without revealing why the Pod attempt failed. Confidence: medium. To verify: A fresh Job observation shows another terminal condition or an incomplete retry sequence.\n\nNo container termination detail or permitted Pod log excerpt was collected. Impact: The failed Pod phase and retry condition do not identify the application exit cause.\n\nSuggested next step: Collect bounded resource, Event, and permitted log Evidence for the observed failed Pod attempt. Risk: Inspecting bounded Evidence is read-only, but rerunning or changing a Job outside Kupilot may create new workload attempts. Before acting: Verify the owned Pod identity and retain the current immutable scope.",
+    "evidence_citations": [
       {
-        "statement": "The observed failed Pod execution may have contributed to the Job failure, but its application cause is not known.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001701", "00000000-0000-7000-8000-000000001703", "00000000-0000-7000-8000-000000001704"],
-        "confidence": "medium",
-        "falsifier": "A fresh bounded Pod observation shows that a different attempt or controller condition caused the Job result."
+        "claim": "The projected Job status contains one failed attempt.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001701"
+        ]
       },
       {
-        "statement": "The controller may have exhausted its configured retries without revealing why the Pod attempt failed.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001701", "00000000-0000-7000-8000-000000001702", "00000000-0000-7000-8000-000000001705"],
-        "confidence": "medium",
-        "falsifier": "A fresh Job observation shows another terminal condition or an incomplete retry sequence."
-      }
-    ],
-    "missing_information": [
-      {"kind": "absent", "detail": "No container termination detail or permitted Pod log excerpt was collected.", "impact": "The failed Pod phase and retry condition do not identify the application exit cause."}
-    ],
-    "recommended_actions": [
+        "claim": "The projected Failed condition is True with reason BackoffLimitExceeded.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001702"
+        ]
+      },
       {
-        "action": "Collect bounded resource, Event, and permitted log Evidence for the observed failed Pod attempt.",
-        "risk": "Inspecting bounded Evidence is read-only, but rerunning or changing a Job outside KuPilot may create new workload attempts.",
-        "prerequisites": ["Verify the owned Pod identity and retain the current immutable scope."],
-        "executed": false
+        "claim": "The bounded relationship result includes an owned Pod in phase Failed.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001703"
+        ]
+      },
+      {
+        "claim": "The fixed owner graph connects the Job to the observed Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001704"
+        ]
+      },
+      {
+        "claim": "A recent Job Event reported that the retry limit was reached.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001705"
+        ]
       }
-    ]
+    ],
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "job_failed_count_observed"},
-      {"index": 1, "assertion": "job_failed_condition_observed"},
-      {"index": 2, "assertion": "job_owned_pod_failed_observed"},
-      {"index": 3, "assertion": "job_pod_owner_observed"},
-      {"index": 4, "assertion": "job_failure_event_observed"}
+      {
+        "index": 0,
+        "assertion": "job_failed_count_observed"
+      },
+      {
+        "index": 1,
+        "assertion": "job_failed_condition_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "job_owned_pod_failed_observed"
+      },
+      {
+        "index": 3,
+        "assertion": "job_pod_owner_observed"
+      },
+      {
+        "index": 4,
+        "assertion": "job_failure_event_observed"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "pod_execution_failure_possible"},
-      {"index": 1, "assertion": "controller_retry_exhaustion_possible"}
+      {
+        "index": 0,
+        "assertion": "pod_execution_failure_possible"
+      },
+      {
+        "index": 1,
+        "assertion": "controller_retry_exhaustion_possible"
+      }
     ],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_failed_pod_evidence"}]
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_failed_pod_evidence"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["job_failed_count_observed", "job_failed_condition_observed", "job_owned_pod_failed_observed", "job_pod_owner_observed", "job_failure_event_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "job_failed_count_observed",
+    "job_failed_condition_observed",
+    "job_owned_pod_failed_observed",
+    "job_pod_owner_observed",
+    "job_failure_event_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

@@ -2,10 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-08-05
+- Amended by: ADR-0037
 
 ## Context
 
-KuPilot combines a terminal UI, a single-Agent runtime, structured Tools,
+Kupilot combines a terminal UI, a single-Agent runtime, structured Tools,
 Kubernetes clients, a cloud model transport, local persistence, and safety
 processing. Without explicit ownership, framework types and I/O concerns could
 leak into the domain, the TUI could become a second cluster client, and
@@ -17,7 +18,7 @@ look layered.
 
 ## Decision
 
-KuPilot will use a small layered, ports-and-adapters style with the following
+Kupilot will use a small layered, ports-and-adapters style with the following
 fixed ownership:
 
 - `internal/domain` owns pure models and invariants.
@@ -26,7 +27,7 @@ fixed ownership:
 - `internal/agent` owns neutral single-Agent policy and its consumer ports.
 - `internal/agent/einoadapter` is the Eino translation boundary. Eino types do
   not cross it.
-- `internal/tools` owns the six structured handlers and the narrow Kubernetes
+- `internal/tools` owns the admitted structured handlers and the narrow Kubernetes
   read ports they consume.
 - `internal/kube` and `internal/persistence/sqlite` are infrastructure adapters.
 - `internal/cli` and `internal/tui` are delivery adapters that depend only on
@@ -89,7 +90,8 @@ The boundaries make safety controls independently enforceable:
 - SQL rows, transport bodies, credentials, and framework callbacks cannot enter
   Domain or Application contracts.
 - The composition root is the one place where an adapter can become reachable;
-  `v0.1` omits approval and mutation adapters there.
+  the current composition includes only the admitted read adapters and the one
+  supervised Deployment restart path.
 
 Layering is not sufficient by itself. Runtime generation checks, allowlists,
 projection, redaction, budgets, and tests remain required.
@@ -113,5 +115,5 @@ appears.
 ## References
 
 - [Architecture](../architecture.md)
-- [ADR-0002: Use a Local Single Process with No KuPilot Server](0002-local-single-process-no-server.md)
+- [ADR-0002: Use a Local Single Process with No Kupilot Server](0002-local-single-process-no-server.md)
 - [ADR-0003: Keep the Product Agent-First](0003-agent-first-interaction.md)

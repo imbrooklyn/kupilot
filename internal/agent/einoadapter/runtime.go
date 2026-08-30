@@ -308,6 +308,7 @@ func (state *runState) finishLocalDiagnosis(ctx context.Context, failure *runtim
 		kind = domain.MissingInformationTruncated
 	}
 	draft := agent.DiagnosisDraft{
+		AnswerMarkdown: failure.safeMessage,
 		MissingInformation: []domain.MissingInformation{{
 			Kind:   kind,
 			Detail: failure.safeMessage,

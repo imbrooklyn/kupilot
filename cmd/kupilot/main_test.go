@@ -3,19 +3,42 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/cli"
+	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 	"github.com/imbrooklyn/kupilot/internal/tui"
 )
+
+func TestConfiguredBudgetLimitsSelectsProfileAndHonorsTighterModelTimeout(t *testing.T) {
+	value := config.Defaults()
+	value.Runtime.BudgetProfile = config.BudgetProfileExtended
+	limits, err := configuredBudgetLimits(value)
+	if err != nil || limits.Profile != agent.BudgetProfileExtended || limits.RunDuration != 30*time.Minute ||
+		limits.ModelRequestTimeout != 300*time.Second {
+		t.Fatalf("configuredBudgetLimits(extended) = %#v, %v", limits, err)
+	}
+	value.Model.RequestTimeoutSeconds = 30
+	limits, err = configuredBudgetLimits(value)
+	if err != nil || limits.ModelRequestTimeout != 30*time.Second || limits.Profile != agent.BudgetProfileExtended {
+		t.Fatalf("configuredBudgetLimits(tightened) = %#v, %v", limits, err)
+	}
+	value.Runtime.BudgetProfile = "unlimited"
+	if _, err := configuredBudgetLimits(value); !errors.Is(err, agent.ErrInvalidRunBudget) {
+		t.Fatalf("configuredBudgetLimits(unknown) error = %v", err)
+	}
+}
 
 func TestCompositionRoot(t *testing.T) {
 	t.Parallel()
@@ -101,7 +124,7 @@ func TestCompositionRootCacheClearShortCircuitsOrdinaryStartup(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := run(context.Background(), []string{"cache", "clear"}, &stdout, &stderr, buildinfo.Info{})
-	if code != cli.ExitOK || stdout.String() != "KuPilot cache cleared.\n" || stderr.String() != "" {
+	if code != cli.ExitOK || stdout.String() != "Kupilot cache cleared.\n" || stderr.String() != "" {
 		t.Fatalf("cache clear = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if entries, err := os.ReadDir(cachePath); err != nil || len(entries) != 0 {

@@ -277,7 +277,7 @@ func newResumeCommand(intent *StartIntent, startup *startupFlags) *cobra.Command
 func newCacheCommand(intent *StartIntent, startup *startupFlags) *cobra.Command {
 	cache := &cobra.Command{
 		Use:   "cache",
-		Short: "Manage the local KuPilot cache",
+		Short: "Manage the local Kupilot cache",
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				return &parseFailure{message: "unknown cache command"}
@@ -290,7 +290,7 @@ func newCacheCommand(intent *StartIntent, startup *startupFlags) *cobra.Command 
 	}
 	clear := &cobra.Command{
 		Use:   "clear",
-		Short: "Clear entries from the local KuPilot cache",
+		Short: "Clear entries from the local Kupilot cache",
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				return &parseFailure{message: "cache clear does not accept arguments"}

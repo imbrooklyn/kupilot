@@ -6,7 +6,7 @@
 
 ## Context
 
-KuPilot receives errors from configuration, filesystems, child processes,
+Kupilot receives errors from configuration, filesystems, child processes,
 SQLite, Kubernetes, HTTP, model protocols, Eino, terminal lifecycle, and local
 policy. Raw errors may contain paths, URLs, headers, credential-bearing output,
 SQL, object fields, or remote bodies. Matching their text is also unstable and
@@ -54,7 +54,7 @@ The stable `v0.1` classes are:
 | `sensitive_output_blocked` | High-risk content was blocked before a sink; not retryable by sending the original and represented as missing information |
 | `invalid_external_response` | Kubernetes, model, exec credential, or storage data violated the bounded protocol contract; not automatically retried |
 | `persistence_unavailable` | Required SQLite open, validation, migration, recovery, retention, transaction, or query failed; behavior follows the degraded-storage contract |
-| `internal` | A KuPilot invariant failed or no safer specific class applies; not automatically retried and never exposes implementation details |
+| `internal` | A Kupilot invariant failed or no safer specific class applies; not automatically retried and never exposes implementation details |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -135,7 +135,7 @@ text or vendor error types and that retryable classes still obey remaining
 budget, cancellation, generation, and one-repeat rules.
 
 Each adapter must provide deterministic mapping tests, and the complete
-six-Tool catalog must be covered by the cross-sink canary matrix. Vendor error
+admitted catalog must be covered by the cross-sink canary matrix. Vendor error
 strings and unverified API behavior never become runtime contracts.
 
 ## Revisit triggers

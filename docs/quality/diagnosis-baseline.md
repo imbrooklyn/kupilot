@@ -8,7 +8,7 @@ allowed and forbidden semantic assertions, and unexecuted recommendations. It
 does not score prose style, compare complete natural-language answers, use a
 live model, or delegate judgment to another model.
 
-The Product Contract and ADR-0015 remain authoritative. A successful fixture
+The Product Contract and ADR-0038 remain authoritative. A successful fixture
 means the runtime honored the Evidence and Diagnosis contract for a bounded
 synthetic conversation; it does not establish a universal root-cause accuracy
 rate.
@@ -40,7 +40,7 @@ weakening the rubric or changing prose alone.
 Every run must satisfy all of these thresholds:
 
 1. The Tool order exactly matches the category policy and the catalog remains
-   the six fixed read-only Tools.
+   the seven admitted typed read capabilities.
 2. Every accepted Evidence item has the expected current AgentRun, immutable
    ClusterScope, ToolInvocation, category, safe projection, and exact
    observation time.
@@ -48,7 +48,8 @@ Every run must satisfy all of these thresholds:
    every cited fixture item directly supports the reviewed assertion without
    truncation.
 4. Zero forbidden confirmed assertions, unknown Evidence references, executed
-   recommendations, or missing four-part sections are accepted.
+   recommendations, or empty/invalid final Markdown answers are accepted. No
+   fixed four-part presentation template is required or injected.
 5. Every permission denial, stale observation, conflict, sensitive block,
    absence, unsupported reference, partial result, or truncation required by a
    fixture appears as the corresponding `missing_information` kind.
@@ -59,8 +60,9 @@ Every run must satisfy all of these thresholds:
 7. Removing an unregistered or duplicate hypothesis citation forces that
    hypothesis to `low` confidence and adds an `unsupported` gap without
    changing confirmed facts.
-8. Every recommendation is structurally `executed=false` and renders the plain
-   `Not executed` marker.
+8. Every proposed action is structurally `executed=false`, uses an admitted
+   typed operation and safe target, and carries no approval or execution
+   authority. Explanatory recommendations remain descriptive only.
 9. The Diagnosis observation window equals the earliest and latest accepted
    Evidence times, including accepted Evidence not cited by final text.
 10. Partial or truncated Evidence produces `partial` detail state, and hostile
@@ -128,7 +130,7 @@ traffic, credentials, and adapter errors are excluded by the typed projection,
 local filtering, and deterministic sink tests.
 
 Current accepted Evidence remains inspectable from bounded Application memory
-when later read-only persistence is degraded. Explicitly resumed history
+when later read-side persistence is degraded. Explicitly resumed history
 restores references only from a retained same-run Diagnosis. Deleted or expired
 Evidence produces `expired`; an invalid source, unreferenced identifier, or
 run/scope mismatch produces `unavailable`; neither state carries observation

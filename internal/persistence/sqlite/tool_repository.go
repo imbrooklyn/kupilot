@@ -54,7 +54,7 @@ const (
 		JOIN agent_runs AS r ON r.id = t.run_id
 		WHERE t.run_id = ?
 		ORDER BY t.sequence, t.id
-		LIMIT 10
+		LIMIT 256
 	`
 )
 
@@ -140,7 +140,7 @@ func (repository *ToolInvocationRepository) Save(ctx context.Context, invocation
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "tool_invocation_save_failed", "save_tool_invocation", "KuPilot could not store safe tool-activity metadata.", err)
+		return repositoryFailure(repository.db, "tool_invocation_save_failed", "save_tool_invocation", "Kupilot could not store safe tool-activity metadata.", err)
 	}
 	return nil
 }
@@ -157,16 +157,16 @@ func (repository *ToolInvocationRepository) GetByID(ctx context.Context, id doma
 	if err := repository.db.handle.GetContext(ctx, &row, getToolInvocationByIDSQL, id); errors.Is(err, sql.ErrNoRows) {
 		return domain.ToolInvocation{}, ErrToolInvocationNotFound
 	} else if err != nil {
-		return domain.ToolInvocation{}, repositoryFailure(repository.db, "tool_invocation_read_failed", "get_tool_invocation", "KuPilot could not read tool-activity metadata.", err)
+		return domain.ToolInvocation{}, repositoryFailure(repository.db, "tool_invocation_read_failed", "get_tool_invocation", "Kupilot could not read tool-activity metadata.", err)
 	}
 	value, err := row.domainToolInvocation()
 	if err != nil {
-		return domain.ToolInvocation{}, repositoryFailure(repository.db, "tool_invocation_row_invalid", "get_tool_invocation", "KuPilot could not read tool-activity metadata safely.", err)
+		return domain.ToolInvocation{}, repositoryFailure(repository.db, "tool_invocation_row_invalid", "get_tool_invocation", "Kupilot could not read tool-activity metadata safely.", err)
 	}
 	return value, nil
 }
 
-// ListByRun returns the at-most-ten invocations in stable sequence order.
+// ListByRun returns the bounded invocations in stable sequence order.
 func (repository *ToolInvocationRepository) ListByRun(ctx context.Context, runID domain.AgentRunID) ([]domain.ToolInvocation, error) {
 	if err := repositoryContext(ctx, repository.db, "list_tool_invocations"); err != nil {
 		return nil, err
@@ -176,23 +176,23 @@ func (repository *ToolInvocationRepository) ListByRun(ctx context.Context, runID
 	}
 	rows, err := repository.db.handle.QueryxContext(ctx, listToolInvocationsByRunSQL, runID)
 	if err != nil {
-		return nil, repositoryFailure(repository.db, "tool_invocation_list_failed", "list_tool_invocations", "KuPilot could not list tool-activity metadata.", err)
+		return nil, repositoryFailure(repository.db, "tool_invocation_list_failed", "list_tool_invocations", "Kupilot could not list tool-activity metadata.", err)
 	}
 	defer rows.Close()
 	values := make([]domain.ToolInvocation, 0, 10)
 	for rows.Next() {
 		var row toolInvocationRow
 		if err := rows.StructScan(&row); err != nil {
-			return nil, repositoryFailure(repository.db, "tool_invocation_row_invalid", "list_tool_invocations", "KuPilot could not read tool-activity metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "tool_invocation_row_invalid", "list_tool_invocations", "Kupilot could not read tool-activity metadata safely.", err)
 		}
 		value, err := row.domainToolInvocation()
 		if err != nil || value.RunID != runID {
-			return nil, repositoryFailure(repository.db, "tool_invocation_row_invalid", "list_tool_invocations", "KuPilot could not read tool-activity metadata safely.", err)
+			return nil, repositoryFailure(repository.db, "tool_invocation_row_invalid", "list_tool_invocations", "Kupilot could not read tool-activity metadata safely.", err)
 		}
 		values = append(values, value)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repositoryFailure(repository.db, "tool_invocation_list_failed", "list_tool_invocations", "KuPilot could not list tool-activity metadata.", err)
+		return nil, repositoryFailure(repository.db, "tool_invocation_list_failed", "list_tool_invocations", "Kupilot could not list tool-activity metadata.", err)
 	}
 	return values, nil
 }

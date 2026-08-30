@@ -153,7 +153,7 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	if result.Persisted {
 		model.transcript.AppendNotice("Model configured. The API key was saved as plaintext in KUPILOT_HOME/config.yaml.")
 	} else {
-		model.transcript.AppendNotice("Model configured for this KuPilot process only.")
+		model.transcript.AppendNotice("Model configured for this Kupilot process only.")
 	}
 }
 

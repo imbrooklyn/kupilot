@@ -49,6 +49,7 @@ func (availability PodLogAvailability) valid() bool {
 // previous semantics, and every hard limit are runtime-derived.
 type PodLogReadRequest struct {
 	Scope        domain.ClusterScope
+	Namespace    string
 	PodName      string
 	Container    string
 	Previous     bool
@@ -98,7 +99,8 @@ func (content PodLogContent) bytes() []byte {
 
 // Validate rejects cross-scope or expanding log reads before an adapter action.
 func (request PodLogReadRequest) Validate() error {
-	if request.Scope.Validate() != nil || !domain.ValidResourceName(request.PodName) ||
+	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName}
+	if request.Scope.Validate() != nil || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
 		request.Container != "" && !domain.ValidResourceName(request.Container) ||
 		request.TailLines < 1 || request.TailLines > 200 || request.SinceSeconds < 1 || request.SinceSeconds > 900 ||
 		request.LimitBytes < 1 || request.LimitBytes > domain.MaxToolResultBytes {
@@ -125,7 +127,7 @@ type PodLogObservation struct {
 func (observation PodLogObservation) Validate(request PodLogReadRequest) error {
 	if request.Validate() != nil || domain.ValidateLiveResourceRef(observation.Pod) != nil ||
 		observation.Pod.APIVersion != "v1" || observation.Pod.Kind != "Pod" ||
-		observation.Pod.Namespace != request.Scope.Namespace || observation.Pod.Name != request.PodName ||
+		observation.Pod.Namespace != request.Namespace || observation.Pod.Name != request.PodName ||
 		!domain.ValidResourceName(observation.Container) ||
 		request.Container != "" && observation.Container != request.Container ||
 		observation.Previous != request.Previous || !observation.Availability.valid() || observation.RestartCount < 0 ||
@@ -227,6 +229,7 @@ func (tool *GetPodLogsTool) Execute(ctx context.Context, call BoundToolCall) Too
 
 type getPodLogsArguments struct {
 	Container    string `json:"container,omitempty"`
+	Namespace    string `json:"namespace"`
 	PodName      string `json:"pod_name"`
 	Purpose      string `json:"purpose"`
 	SinceSeconds int    `json:"since_seconds"`
@@ -258,7 +261,7 @@ func decodePodLogCall(call BoundToolCall, previous bool) (decodedPodLogCall, err
 	effectiveWindow := min(arguments.SinceSeconds, max(1, int(call.Ceilings().MaxLogWindow/time.Second)), 900)
 	effectiveBytes := min(domain.MaxToolResultBytes, call.Ceilings().MaxResultBytes)
 	request := PodLogReadRequest{
-		Scope: call.Scope(), PodName: arguments.PodName, Container: arguments.Container, Previous: previous,
+		Scope: call.Scope(), Namespace: arguments.Namespace, PodName: arguments.PodName, Container: arguments.Container, Previous: previous,
 		TailLines: effectiveLines, SinceSeconds: effectiveWindow, LimitBytes: effectiveBytes,
 	}
 	if request.Validate() != nil {

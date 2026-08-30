@@ -7,7 +7,7 @@
 
 Kubernetes diagnosis often requires choosing a small sequence of observations
 rather than browsing every object. A resource-first terminal interface would
-pull KuPilot toward inventory, navigation, object viewing, and direct cluster
+pull Kupilot toward inventory, navigation, object viewing, and direct cluster
 management. That would duplicate mature tools while weakening the distinction
 between observed Evidence and model inference.
 
@@ -17,18 +17,19 @@ Evidence.
 
 ## Decision
 
-KuPilot will be Agent-first.
+Kupilot will be Agent-first.
 
-The primary interaction is a natural-language diagnostic question. For each
-question, one AgentRun chooses a bounded Evidence path from the fixed structured
-Tool catalog and produces a Diagnosis. The TUI helps the user:
+The primary interaction is a natural-language operational question. For each
+question, one AgentRun chooses a bounded Evidence path from the versioned
+structured capability catalog and produces a validated answer. The TUI helps
+the user:
 
 - Establish and see the active ClusterScope.
 - Optionally bind one ResourceRef through a bounded Picker.
 - Submit diagnostic intent and cancel the run.
 - Supervise Tool purpose, status, safe summaries, and Evidence-backed output.
 
-The Picker is an input aid, not a general browser. KuPilot will not make a
+The Picker is an input aid, not a general browser. Kupilot will not make a
 resource tree, inventory table, full object view, direct manipulation surface,
 or background monitor its primary interaction.
 
@@ -53,8 +54,8 @@ Positive consequences:
 
 Costs and constraints:
 
-- KuPilot will not satisfy users seeking a general Kubernetes browser or daily
-  cluster management interface.
+- Kupilot will not satisfy users seeking a direct general Kubernetes browser or
+  imperative cluster-management interface.
 - The Agent loop and Diagnosis validator require careful deterministic policy
   around budgets, Evidence, gaps, and uncertainty.
 - The bounded Picker and Tool catalog may require users to use another tool for
@@ -85,10 +86,10 @@ be interpreted as autonomous remediation.
 
 ## Validation
 
-The [Product Contract](../product.md) defines eight diagnostic categories, and
-the [Scope](../scope.md) fixes the six `v0.1` Tools and explicit non-goals. The
-[Architecture](../architecture.md) routes all cluster reads through bounded
-Tool or Picker contracts.
+The [Product Contract](../product.md) defines the current operational mission,
+and the [Scope](../scope.md) fixes the admitted capability catalog and explicit
+non-goals. The [Architecture](../architecture.md) routes all cluster reads
+through bounded Tool or Picker contracts.
 
 Acceptance tests must validate the Evidence paths and ensure that the TUI has no
 alternate direct cluster path.

@@ -3,9 +3,18 @@
 ## A bare start is always new
 
 `kupilot` without a subcommand creates a new Session. It does not inspect the
-current working directory, repository, previous Context, Namespace, environment,
-or crash state to select history. A new empty Session is not eligible for resume
-until it has at least one committed safe Message.
+current working directory, repository, Context, Namespace, environment, or crash
+state to select history. Scope selection is independent: Kupilot uses an
+effective configured Context, then the last successfully verified local
+Context, then kubeconfig `current-context`, and freshly verifies it with the
+configured Namespace or `default`. A new empty Session is not eligible for
+resume until it has at least one committed safe Message.
+
+The remembered Context is only a local candidate. It does not restore a
+Kubernetes client, scope generation, AgentRun, ResourceRef, approval, or
+Session. If the name no longer exists, Kupilot falls back to kubeconfig
+`current-context`. Use the existing Context and Namespace controls to change
+the active scope; a Context is remembered only after activation succeeds.
 
 Starting another new Session does not imply that the old one was deleted. Safe
 standard-persistence history remains in the local database until the user
@@ -86,7 +95,8 @@ exported across processes.
 Resume loads only allowlisted safe history and historic candidates:
 
 - Committed, locally processed user Messages.
-- Final validated assistant Messages and structured Diagnosis history.
+- Final validated assistant Messages, free-form answers, and safe Diagnosis
+  metadata.
 - Safe Session metadata.
 - An unverified historic Context and Namespace candidate.
 - An unverified historic ResourceRef candidate when eligible.
@@ -110,7 +120,7 @@ startup overrides also requests separate scope activation.
 ## Saved-scope conflict
 
 A saved Context and Namespace are candidates, never live authority. When a
-resumed Session's saved scope differs from the current scope, KuPilot opens
+resumed Session's saved scope differs from the current scope, Kupilot opens
 `Confirm Session scope` with two choices:
 
 1. `Keep current scope`, selected by default.
@@ -119,7 +129,7 @@ resumed Session's saved scope differs from the current scope, KuPilot opens
 No scope action occurs until the user confirms a choice. `Esc` cancels the
 resume. Choosing the saved scope resolves that Context from local kubeconfig,
 creates a fresh client bundle, and verifies the exact Namespace. Failure leaves
-the attempted generation unavailable; KuPilot does not silently restore the old
+the attempted generation unavailable; Kupilot does not silently restore the old
 client or create a new Session.
 
 Explicit top-level `--context` or `--namespace` overrides take precedence over
@@ -133,11 +143,11 @@ clears the selected ResourceRef and picker caches, closes or replaces the old
 client, and rejects late results.
 
 After resume, a saved ResourceRef is eligible for revalidation only when its
-saved Namespace matches the newly verified ClusterScope. KuPilot reads the
+saved Namespace matches the newly verified ClusterScope. Kupilot reads the
 exact object and checks stronger identity when available before selecting it.
 If the object is absent, forbidden, changed, cross-Namespace, or otherwise
 unavailable, the selection remains cleared. Selecting a candidate never creates
-Evidence; the next AgentRun must verify it through a fixed read-only Tool.
+Evidence; the next AgentRun must verify it through a typed bounded capability.
 
 ## Resume privacy behavior
 

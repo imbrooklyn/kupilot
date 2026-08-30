@@ -276,6 +276,34 @@ func TestScopeAndResourceResultsRejectStaleIdentity(t *testing.T) {
 	}
 }
 
+func TestScopePreferenceFailuresRemainVisibleWithoutRevokingScope(t *testing.T) {
+	t.Parallel()
+
+	startup := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		Scope:                   ScopeView{Context: "current", Namespace: "default", Generation: 1, ReadOnly: true},
+		ScopePreferenceDegraded: true,
+	})
+	entries := startup.transcript.Entries()
+	if len(entries) != 1 || !strings.Contains(entries[0].Text, "could not be read") {
+		t.Fatalf("startup preference warning entries = %#v", entries)
+	}
+
+	model := newTestModel()
+	model.pendingScopeID = 19
+	model.scope.Switching = true
+	model, _ = updateModel(t, model, ScopeResultMsg{Result: application.UIScopeResult{
+		RequestID: 19, ExpectedGeneration: 7, ScopeGeneration: 8,
+		Context: "development", Namespace: "default", ReadOnly: true,
+		ScopePreferenceDegraded: true,
+	}})
+	entries = model.transcript.Entries()
+	if model.scope.Context != "development" || model.scope.Namespace != "default" || !model.scope.ReadOnly ||
+		len(entries) != 2 || !strings.Contains(entries[1].Text, "could not save this Context") {
+		t.Fatalf("active scope or preference warning = %#v / %#v", model.scope, entries)
+	}
+}
+
 func TestScopeSwitchDiscardsLateRunEventsAndTerminatesOldRunProjection(t *testing.T) {
 	t.Parallel()
 

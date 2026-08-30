@@ -257,7 +257,7 @@ func newExecutionFixture(t *testing.T) *executionFixture {
 		ResourceVersion: "fresh-rv-18",
 	}}
 	scope := &fakeExecutionScope{scope: domain.ClusterScope{
-		Context: "test-context", Namespace: "test-namespace", Generation: 7, ActivatedAt: now,
+		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: now,
 	}}
 	clock := &fakeClock{now: now}
 	service, err := NewService(ServiceConfig{

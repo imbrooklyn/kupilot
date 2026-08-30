@@ -525,7 +525,7 @@ func relatedGapMessage(class domain.SafeErrorClass) string {
 	case domain.SafeErrorClassNotFound:
 		return "One related object was not found during the bounded snapshot."
 	case domain.SafeErrorClassUnsupported:
-		return "One existing relationship cannot be expanded by the fixed v0.1 policy."
+		return "One existing relationship cannot be expanded by the fixed relationship policy."
 	case domain.SafeErrorClassPolicyDenied:
 		return "One relationship branch was stopped by the fixed policy."
 	case domain.SafeErrorClassConflict:

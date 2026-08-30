@@ -36,40 +36,47 @@ type SemanticPalette struct {
 
 // SemanticPaletteFor returns one fixed dark, light, ANSI16, or no-color palette.
 func SemanticPaletteFor(mode ThemeMode, darkBackground bool) SemanticPalette {
-	if mode == ThemeAuto {
-		if darkBackground {
-			mode = ThemeDark
-		} else {
-			mode = ThemeLight
-		}
-	}
+	defaultColor := lipgloss.NoColor{}
 	switch mode {
+	case ThemeAuto:
+		// Until the terminal answers the background-color query, keep both
+		// foreground and surface on terminal defaults. ANSI semantic colors are
+		// theme-adjustable and cannot create a hard-coded light-on-light surface.
+		return SemanticPalette{
+			BaseText: defaultColor, MutedText: defaultColor,
+			Surface: defaultColor, SurfaceBorder: defaultColor,
+			Accent: lipgloss.Cyan, Success: lipgloss.Green,
+			Warning: defaultColor, Danger: lipgloss.Red, ColorEnabled: true,
+		}
 	case ThemeDark:
 		return SemanticPalette{
-			BaseText: lipgloss.Color("#d6d9e0"), MutedText: lipgloss.Color("#7f8799"),
-			Surface: lipgloss.Color("#20242e"), SurfaceBorder: lipgloss.Color("#3a4152"),
-			Accent: lipgloss.Color("#7aa2f7"), Success: lipgloss.Color("#9ece6a"),
-			Warning: lipgloss.Color("#e0af68"), Danger: lipgloss.Color("#f7768e"), ColorEnabled: true,
+			BaseText: defaultColor, MutedText: defaultColor,
+			Surface: lipgloss.Color("#1e1e1e"), SurfaceBorder: defaultColor,
+			Accent: lipgloss.Cyan, Success: lipgloss.Green,
+			Warning: lipgloss.Yellow, Danger: lipgloss.Red, ColorEnabled: true,
 		}
 	case ThemeLight:
 		return SemanticPalette{
-			BaseText: lipgloss.Color("#20242e"), MutedText: lipgloss.Color("#667085"),
-			Surface: lipgloss.Color("#f1f3f7"), SurfaceBorder: lipgloss.Color("#c7ceda"),
-			Accent: lipgloss.Color("#315da8"), Success: lipgloss.Color("#2f7d32"),
-			Warning: lipgloss.Color("#9a6700"), Danger: lipgloss.Color("#b42318"), ColorEnabled: true,
+			BaseText: defaultColor, MutedText: defaultColor,
+			Surface: lipgloss.Color("#f4f4f4"), SurfaceBorder: defaultColor,
+			Accent: lipgloss.Color("#005f87"), Success: lipgloss.Green,
+			Warning: defaultColor, Danger: lipgloss.Red, ColorEnabled: true,
 		}
 	case ThemeANSI16:
+		warning := color.Color(defaultColor)
+		if darkBackground {
+			warning = lipgloss.Yellow
+		}
 		return SemanticPalette{
-			BaseText: lipgloss.White, MutedText: lipgloss.BrightBlack,
-			Surface: lipgloss.Black, SurfaceBorder: lipgloss.BrightBlack,
-			Accent: lipgloss.BrightBlue, Success: lipgloss.Green,
-			Warning: lipgloss.Yellow, Danger: lipgloss.Red, ColorEnabled: true,
+			BaseText: defaultColor, MutedText: defaultColor,
+			Surface: defaultColor, SurfaceBorder: defaultColor,
+			Accent: lipgloss.Cyan, Success: lipgloss.Green,
+			Warning: warning, Danger: lipgloss.Red, ColorEnabled: true,
 		}
 	default:
-		noColor := lipgloss.NoColor{}
 		return SemanticPalette{
-			BaseText: noColor, MutedText: noColor, Surface: noColor, SurfaceBorder: noColor,
-			Accent: noColor, Success: noColor, Warning: noColor, Danger: noColor,
+			BaseText: defaultColor, MutedText: defaultColor, Surface: defaultColor, SurfaceBorder: defaultColor,
+			Accent: defaultColor, Success: defaultColor, Warning: defaultColor, Danger: defaultColor,
 		}
 	}
 }
@@ -90,17 +97,53 @@ type styleSet struct {
 
 func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 	palette := SemanticPaletteFor(mode, darkBackground)
-	base := lipgloss.NewStyle().Foreground(palette.BaseText)
-	muted := lipgloss.NewStyle().Foreground(palette.MutedText)
-	surface := base.Background(palette.Surface)
-	focusedSurface := surface.
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(palette.Accent).
-		Padding(0, 1)
-	blurredSurface := surface.
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(palette.SurfaceBorder).
-		Padding(0, 1)
+	return styleSetForPalette(palette)
+}
+
+func newStyleSetForBackground(mode ThemeMode, darkBackground bool, background color.Color) styleSet {
+	palette := SemanticPaletteFor(mode, darkBackground)
+	if background != nil && (mode == ThemeDark || mode == ThemeLight) {
+		palette.Surface = blendedUserSurface(background, darkBackground)
+	}
+	return styleSetForPalette(palette)
+}
+
+// blendedUserSurface follows Codex CLI's terminal-relative user-message
+// surface: 12% white over a dark background or 4% black over a light one.
+func blendedUserSurface(background color.Color, darkBackground bool) color.Color {
+	red, green, blue, _ := background.RGBA()
+	alpha := uint32(4)
+	top := uint32(0)
+	if darkBackground {
+		alpha = 12
+		top = 255
+	}
+	blend := func(channel uint32) uint8 {
+		return uint8((top*alpha + (channel>>8)*(100-alpha)) / 100)
+	}
+	return color.RGBA{R: blend(red), G: blend(green), B: blend(blue), A: 255}
+}
+
+func styleSetForPalette(palette SemanticPalette) styleSet {
+	base := foregroundStyle(palette.BaseText)
+	muted := foregroundStyle(palette.MutedText)
+	accent := foregroundStyle(palette.Accent)
+	success := foregroundStyle(palette.Success)
+	warning := foregroundStyle(palette.Warning)
+	danger := foregroundStyle(palette.Danger)
+	if palette.ColorEnabled {
+		muted = muted.Faint(true)
+		accent = accent.Bold(true)
+		success = success.Bold(true)
+		warning = warning.Bold(true)
+		danger = danger.Bold(true)
+	}
+	surface := backgroundStyle(base, palette.Surface)
+	mutedSurface := backgroundStyle(muted, palette.Surface)
+	accentSurface := backgroundStyle(accent, palette.Surface)
+	focusedSurface := surface.Padding(1, 1)
+	blurredSurface := surface.Padding(1, 1)
+	userSurface := surface.Padding(1, 1)
 
 	textareaFocused := textarea.StyleState{
 		Base:             surface,
@@ -108,11 +151,12 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 		CursorLineNumber: muted,
 		EndOfBuffer:      muted,
 		LineNumber:       muted,
-		Placeholder:      muted.Background(palette.Surface),
-		Prompt:           muted,
+		Placeholder:      mutedSurface,
+		Prompt:           accentSurface,
 		Text:             surface,
 	}
 	textareaBlurred := textareaFocused
+	textareaBlurred.Prompt = mutedSurface
 	textareaStyles := textarea.Styles{
 		Focused: textareaFocused,
 		Blurred: textareaBlurred,
@@ -125,8 +169,8 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 	evidenceSelected := lipgloss.NewStyle()
 	evidenceTitle := lipgloss.NewStyle()
 	if palette.ColorEnabled {
-		evidenceSelected = evidenceSelected.Foreground(palette.Accent).Bold(true)
-		evidenceTitle = evidenceTitle.Foreground(palette.Accent).Bold(true)
+		evidenceSelected = accent
+		evidenceTitle = accent
 	}
 
 	return styleSet{
@@ -137,50 +181,86 @@ func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
 			Textarea:       textareaStyles,
 		},
 		transcript: components.TranscriptStyles{
-			UserSurface: blurredSurface,
+			UserSurface: userSurface,
+			UserPrompt:  accentSurface,
+			UserText:    surface,
 			AgentText:   base,
+			Markdown: components.MarkdownStyles{
+				Text:          base,
+				Heading:       base.Bold(true),
+				Strong:        base.Bold(true),
+				Emphasis:      base.Italic(true),
+				Strikethrough: base.Strikethrough(true),
+				Code:          accent,
+				Quote:         muted,
+				ListMarker:    accent,
+				Link:          accent.Underline(true),
+				TableHeader:   base.Bold(true),
+				TableBorder:   muted,
+			},
 			NoticeText:  muted,
 			Placeholder: muted,
 			Evidence:    muted,
 			Selected:    evidenceSelected,
+			Separator:   muted,
+			Timing:      muted,
 		},
 		toolSteps: components.ToolStepStyles{
-			Muted: muted, Success: lipgloss.NewStyle().Foreground(palette.Success),
-			Warning: lipgloss.NewStyle().Foreground(palette.Warning),
-			Danger:  lipgloss.NewStyle().Foreground(palette.Danger),
+			Normal: base, Muted: muted, Success: success,
+			Warning: warning, Danger: danger,
 		},
 		slashMenu: components.SlashMenuStyles{
-			Normal: base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
+			Normal: base, Selected: accent,
 			Muted: muted, Disabled: muted,
 		},
 		dialog: components.DialogStyles{
 			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Danger).Padding(1, 2),
-			Title: lipgloss.NewStyle().Foreground(palette.Danger).Bold(true),
+			Title: danger,
 			Body:  base,
 			Hint:  muted,
 		},
 		evidence: components.EvidenceDetailStyles{
 			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Accent).Padding(1, 2),
 			Title: evidenceTitle,
-			Body:  base, Muted: muted, Warning: lipgloss.NewStyle().Foreground(palette.Warning),
+			Body:  base, Muted: muted, Warning: warning,
 		},
 		approval: components.ApprovalDialogStyles{
 			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),
-			Title: lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
-			Body:  base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
-			Muted: muted, Danger: lipgloss.NewStyle().Foreground(palette.Danger),
+			Title: warning,
+			Body:  base, Selected: accent,
+			Muted: muted, Danger: danger,
 		},
 		picker: components.PickerStyles{
-			Normal: base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true),
-			Muted: muted, Danger: lipgloss.NewStyle().Foreground(palette.Danger),
+			Normal: base, Selected: accent,
+			Muted: muted, Danger: danger,
 		},
 		scopeConflict: components.ScopeConflictStyles{
 			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),
-			Title: lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
-			Body:  base, Selected: lipgloss.NewStyle().Foreground(palette.Accent).Bold(true), Muted: muted,
+			Title: warning,
+			Body:  base, Selected: accent, Muted: muted,
 		},
 		footer: components.FooterStyles{
-			Primary: base, Secondary: muted, Warning: lipgloss.NewStyle().Foreground(palette.Warning),
+			Primary: base, Secondary: muted, Warning: warning,
 		},
 	}
+}
+
+func foregroundStyle(value color.Color) lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if !isDefaultColor(value) {
+		style = style.Foreground(value)
+	}
+	return style
+}
+
+func backgroundStyle(style lipgloss.Style, value color.Color) lipgloss.Style {
+	if !isDefaultColor(value) {
+		style = style.Background(value)
+	}
+	return style
+}
+
+func isDefaultColor(value color.Color) bool {
+	_, ok := value.(lipgloss.NoColor)
+	return ok
 }

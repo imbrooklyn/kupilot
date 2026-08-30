@@ -16,7 +16,7 @@ const (
 	MaxCleanupBatchSize = 100
 	// DefaultOperationalDetailRetentionDays is the accepted safe-detail default.
 	DefaultOperationalDetailRetentionDays = 30
-	// ReadAuditRetentionDays is the fixed v0.1 lifecycle-audit period.
+	// ReadAuditRetentionDays is the fixed lifecycle-audit period.
 	ReadAuditRetentionDays = 90
 	// WriteAuditRetentionDays is the fixed future write-audit period.
 	WriteAuditRetentionDays = 180
@@ -111,7 +111,7 @@ func (request CleanupRequest) DetailCutoff() time.Time {
 	return request.Now.UTC().Add(-time.Duration(request.OperationalDetailRetentionDays) * 24 * time.Hour)
 }
 
-// ReadAuditCutoff returns the inclusive fixed v0.1 audit boundary.
+// ReadAuditCutoff returns the inclusive fixed lifecycle-audit boundary.
 func (request CleanupRequest) ReadAuditCutoff() time.Time {
 	return request.Now.UTC().Add(-ReadAuditRetentionDays * 24 * time.Hour)
 }

@@ -1,7 +1,12 @@
 {
   "name": "deployment_relationship_partial_forbidden",
   "question": "Why does example-deployment have no available replicas?",
-  "target": {"api_version": "apps/v1", "kind": "Deployment", "namespace": "example-namespace", "name": "example-deployment"},
+  "target": {
+    "api_version": "apps/v1",
+    "kind": "Deployment",
+    "namespace": "example-namespace",
+    "name": "example-deployment"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Deployment example-deployment was observed; ready 0 of 3; available 0 of 3; current 3; updated 3; unavailable 3.",
             "source_path": "projected.status",
             "severity": "warning",
-            "supports": ["deployment_zero_available", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_zero_available",
+              "rollout_progress_stalled_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001612",
@@ -26,7 +34,10 @@
             "fact": "Condition Available is False with reason MinimumReplicasUnavailable.",
             "source_path": "projected.status.conditions",
             "severity": "warning",
-            "supports": ["deployment_available_false", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_available_false",
+              "rollout_progress_stalled_possible"
+            ]
           }
         ]
       }
@@ -49,7 +60,10 @@
             "source_path": "projected.related.nodes.status",
             "severity": "warning",
             "truncated": true,
-            "supports": ["deployment_replicaset_observed", "rollout_progress_stalled_possible"]
+            "supports": [
+              "deployment_replicaset_observed",
+              "rollout_progress_stalled_possible"
+            ]
           }
         ]
       }
@@ -66,42 +80,54 @@
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The projected Deployment has zero available replicas out of three desired replicas.", "evidence_ids": ["00000000-0000-7000-8000-000000001611"]},
-      {"statement": "The projected Available condition is False.", "evidence_ids": ["00000000-0000-7000-8000-000000001612"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The projected Deployment has zero available replicas out of three desired replicas.\n- The projected Available condition is False.\n\nThe rollout may be stalled, but the incomplete relationship result does not identify a Pod cause. Confidence: high. To verify: A complete fresh rollout graph shows available related Pods or a different controller state.\n\nPart of the fixed ReplicaSet and Pod relationship read was denied. Impact: No Pod or owner-chain cause can be confirmed.\n\nThe relationship result is partial. Impact: The returned ReplicaSet observation cannot represent the complete rollout graph.\n\nNo recent Deployment Event was returned. Impact: The current condition cannot be corroborated with a recent controller Event.\n\nSuggested next step: Obtain access to the fixed rollout relationship and collect a fresh bounded graph before assigning a Pod cause. Risk: Granting read permission changes cluster authorization outside Kupilot. Before acting: Do not infer the missing owner or Pod branch from the partial result.",
+    "evidence_citations": [
       {
-        "statement": "The rollout may be stalled, but the incomplete relationship result does not identify a Pod cause.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001611", "00000000-0000-7000-8000-000000001612", "00000000-0000-7000-8000-000000001613", "00000000-0000-7000-8000-000000009906"],
-        "confidence": "high",
-        "falsifier": "A complete fresh rollout graph shows available related Pods or a different controller state."
+        "claim": "The projected Deployment has zero available replicas out of three desired replicas.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001611"
+        ]
+      },
+      {
+        "claim": "The projected Available condition is False.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001612"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "forbidden", "detail": "Part of the fixed ReplicaSet and Pod relationship read was denied.", "impact": "No Pod or owner-chain cause can be confirmed."},
-      {"kind": "truncated", "detail": "The relationship result is partial.", "impact": "The returned ReplicaSet observation cannot represent the complete rollout graph."},
-      {"kind": "absent", "detail": "No recent Deployment Event was returned.", "impact": "The current condition cannot be corroborated with a recent controller Event."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Obtain access to the fixed rollout relationship and collect a fresh bounded graph before assigning a Pod cause.",
-        "risk": "Granting read permission changes cluster authorization outside KuPilot.",
-        "prerequisites": ["Do not infer the missing owner or Pod branch from the partial result."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "deployment_zero_available"},
-      {"index": 1, "assertion": "deployment_available_false"}
+      {
+        "index": 0,
+        "assertion": "deployment_zero_available"
+      },
+      {
+        "index": 1,
+        "assertion": "deployment_available_false"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "rollout_progress_stalled_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "collect_complete_rollout_graph"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "rollout_progress_stalled_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "collect_complete_rollout_graph"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["deployment_zero_available", "deployment_available_false"],
-  "required_missing_kinds": ["forbidden", "truncated", "absent", "unsupported"],
+  "required_confirmed_assertions": [
+    "deployment_zero_available",
+    "deployment_available_false"
+  ],
+  "required_missing_kinds": [
+    "truncated"
+  ],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "partial"
 }

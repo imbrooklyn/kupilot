@@ -11,7 +11,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
+func TestToolCatalogIsExactStrictAndPolicyBound(t *testing.T) {
 	specifications := ToolSpecifications()
 	want := []domain.ToolName{
 		domain.ToolNameGetResource,
@@ -20,6 +20,7 @@ func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
 		domain.ToolNameGetRelatedResources,
+		domain.ToolNameGetClusterOverview,
 	}
 	if len(specifications) != len(want) {
 		t.Fatalf("Tool specification count = %d, want %d", len(specifications), len(want))
@@ -32,7 +33,7 @@ func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
 			t.Fatalf("invalid Tool specification: %#v", specification)
 		}
 		lowerSchema := strings.ToLower(specification.InputSchemaJSON)
-		for _, prohibited := range []string{`"context"`, `"namespace"`, `"scope"`, `"gvr"`, `"endpoint"`, `"credential"`, `"kubeconfig"`, `"deadline"`, `"max_bytes"`, `"max_items"`} {
+		for _, prohibited := range []string{`"context"`, `"scope"`, `"gvr"`, `"endpoint"`, `"credential"`, `"kubeconfig"`, `"deadline"`, `"max_bytes"`, `"max_items"`} {
 			if strings.Contains(lowerSchema, prohibited) {
 				t.Fatalf("Tool %q schema contains prohibited field %s", specification.Name, prohibited)
 			}
@@ -40,12 +41,9 @@ func TestToolCatalogIsExactStrictAndScopeFree(t *testing.T) {
 	}
 	listDescription := specifications[1].Description
 	for _, required := range []string{
-		"Pod, Deployment, ReplicaSet, Job, or Service",
-		"A request for Pods in the current Namespace is supported",
-		"use health_filter=any when no health restriction was requested",
-		"Never use this Tool to list or discover Namespace objects",
-		"inspect Nodes",
-		"cluster-wide inventory",
+		"code-allowlisted Kubernetes Kind",
+		"namespace=*",
+		"frozen namespace-access policy",
 	} {
 		if !strings.Contains(listDescription, required) {
 			t.Fatalf("list_resources description missing %q", required)
@@ -102,6 +100,12 @@ func TestToolCatalogNullableDefaultsCanonicalizeLocally(t *testing.T) {
 			tool:      domain.ToolNameGetRelatedResources,
 			arguments: `{"include":null,"purpose":"Inspect bounded Pod relationships.","relation_depth":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod","uid":null}}`,
 			want:      []string{`"include":["owners","service_endpoints","services"]`, `"relation_depth":2`},
+		},
+		{
+			name:      "get cluster overview",
+			tool:      domain.ToolNameGetClusterOverview,
+			arguments: `{"limit":null,"purpose":"Inspect cluster health."}`,
+			want:      []string{`"limit":20`},
 		},
 	}
 
@@ -169,14 +173,14 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	if call.Scope() != input.Scope() || call.Scope().Namespace != "test-namespace" {
 		t.Fatalf("bound scope = %#v", call.Scope())
 	}
-	if strings.Contains(strings.ToLower(call.ArgumentsJSON()), `"namespace"`) {
-		t.Fatalf("canonical arguments contain scope: %s", call.ArgumentsJSON())
+	if !strings.Contains(call.ArgumentsJSON(), `"namespace":"test-namespace"`) {
+		t.Fatalf("canonical arguments do not contain the runtime-resolved Namespace: %s", call.ArgumentsJSON())
 	}
 	if !strings.Contains(call.ArgumentsJSON(), `"api_version":"v1"`) || !strings.Contains(call.ArgumentsJSON(), `"detail":"diagnostic"`) {
 		t.Fatalf("canonical arguments did not inject defaults: %s", call.ArgumentsJSON())
 	}
 	ceilings := call.Ceilings()
-	if ceilings.RequestTimeout != maxToolRequestDuration ||
+	if ceilings.RequestTimeout != input.BudgetLimits().ToolRequestTimeout ||
 		ceilings.MaxResultBytes != domain.MaxToolResultBytes ||
 		ceilings.MaxEvidenceItems != domain.MaxEvidenceItemsPerResult ||
 		ceilings.MaxResourceItems != 50 || ceilings.MaxEventItems != 50 ||
@@ -195,6 +199,26 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	}
 	if !strings.Contains(boundedList.ArgumentsJSON(), `"limit":5`) {
 		t.Fatalf("canonical list arguments = %s", boundedList.ArgumentsJSON())
+	}
+}
+
+func TestToolCallBindingPreservesSingleItemListsAndRequiresTwoItemOverview(t *testing.T) {
+	input := testRunInput(t, "Inspect Kubernetes resources.")
+	list, err := BindToolCall(input, invocationID(1), domain.ModelToolCall{
+		ID:   "call-list-one",
+		Name: domain.ToolNameListResources,
+		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":1,"name_query":null,` +
+			`"namespace":null,"purpose":"Inspect one Pod."}`,
+	})
+	if err != nil || !strings.Contains(list.ArgumentsJSON(), `"limit":1`) {
+		t.Fatalf("BindToolCall(single list) = %#v, %v", list, err)
+	}
+	if _, err = BindToolCall(input, invocationID(2), domain.ModelToolCall{
+		ID:            "call-overview-one",
+		Name:          domain.ToolNameGetClusterOverview,
+		ArgumentsJSON: `{"limit":1,"purpose":"Inspect cluster health."}`,
+	}); err != ErrToolPolicyDenied {
+		t.Fatalf("BindToolCall(single overview) error = %v, want %v", err, ErrToolPolicyDenied)
 	}
 }
 
@@ -294,7 +318,7 @@ func FuzzBindToolCallStrictSchema(f *testing.F) {
 		}
 		canonical := bound.ArgumentsJSON()
 		for _, prohibited := range []string{
-			`"context":`, `"namespace":`, `"scope":`, `"gvr":`, `"selector":`,
+			`"context":`, `"scope":`, `"gvr":`, `"selector":`,
 			`"endpoint":`, `"credential":`, `"kubeconfig":`, `"deadline":`,
 			`"max_bytes":`, `"max_items":`,
 		} {

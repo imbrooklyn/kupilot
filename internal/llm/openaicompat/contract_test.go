@@ -135,7 +135,6 @@ type streamDecoder struct {
 	usageSeen     bool
 	sawText       bool
 	sawTool       bool
-	lastToolIndex int
 	tools         map[int]*toolAssembly
 }
 
@@ -202,10 +201,9 @@ func (model *referenceModel) Stream(ctx context.Context, request domain.ModelReq
 	}
 
 	decoder := streamDecoder{
-		requestID:     request.ID,
-		consume:       consume,
-		lastToolIndex: -1,
-		tools:         make(map[int]*toolAssembly),
+		requestID: request.ID,
+		consume:   consume,
+		tools:     make(map[int]*toolAssembly),
 	}
 	if providerRequestID := response.Header.Get("X-Request-ID"); providerRequestID != "" {
 		metadata := domain.ModelResponseMetadata{ProviderRequestID: providerRequestID}
@@ -454,10 +452,18 @@ func (decoder *streamDecoder) consumeLine(raw []byte) *domain.ModelError {
 }
 
 func (decoder *streamDecoder) consumeToolFragment(fragment wireToolFragment) *domain.ModelError {
-	if fragment.Index < decoder.lastToolIndex || fragment.Type != "" && fragment.Type != "function" {
+	if fragment.Type != "" && fragment.Type != "function" {
 		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
 	}
-	decoder.lastToolIndex = fragment.Index
+	neutral := domain.ModelToolCallFragment{
+		Index:             fragment.Index,
+		IDFragment:        fragment.ID,
+		NameFragment:      fragment.Function.Name,
+		ArgumentsFragment: fragment.Function.Arguments,
+	}
+	if neutral.Validate() != nil {
+		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+	}
 	decoder.sawTool = true
 	assembly := decoder.tools[fragment.Index]
 	if assembly == nil {
@@ -473,15 +479,6 @@ func (decoder *streamDecoder) consumeToolFragment(fragment wireToolFragment) *do
 		return decoder.modelError(domain.ModelErrorCodeStreamLimitExceeded)
 	}
 
-	neutral := domain.ModelToolCallFragment{
-		Index:             fragment.Index,
-		IDFragment:        fragment.ID,
-		NameFragment:      fragment.Function.Name,
-		ArgumentsFragment: fragment.Function.Arguments,
-	}
-	if neutral.Validate() != nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
-	}
 	if modelError := decoder.emit(domain.ModelStreamEvent{
 		Kind:             domain.ModelStreamEventToolCallFragment,
 		ToolCallFragment: &neutral,
@@ -671,6 +668,7 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 		wantText      string
 		wantFinish    domain.ModelFinishReason
 		wantArguments string
+		wantToolArgs  map[int]string
 		wantUsage     *domain.ModelUsage
 	}{
 		{
@@ -687,6 +685,13 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 			wantKinds:     []domain.ModelStreamEventKind{domain.ModelStreamEventMetadata, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventCompleted},
 			wantFinish:    domain.ModelFinishReasonToolCalls,
 			wantArguments: `{"kind":"Pod","name":"sample-pod"}`,
+		},
+		{
+			name:         "role-only chunk and interleaved Tool calls",
+			scenario:     "interleaved-tool-calls",
+			wantKinds:    []domain.ModelStreamEventKind{domain.ModelStreamEventMetadata, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventCompleted},
+			wantFinish:   domain.ModelFinishReasonToolCalls,
+			wantToolArgs: map[int]string{0: `{"kind":"Pod","name":"sample-pod"}`, 1: `{"kind":"Pod","name":"sample-pod"}`},
 		},
 		{
 			name:       "usage and DONE omitted",
@@ -718,6 +723,7 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 				t.Fatalf("event kinds = %v, want %v", got, current.wantKinds)
 			}
 			var text, arguments string
+			argumentsByIndex := make(map[int]string)
 			var usage *domain.ModelUsage
 			for _, event := range events {
 				if err := event.Validate(); err != nil {
@@ -726,14 +732,18 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 				text += event.TextDelta
 				if event.ToolCallFragment != nil {
 					arguments += event.ToolCallFragment.ArgumentsFragment
+					argumentsByIndex[event.ToolCallFragment.Index] += event.ToolCallFragment.ArgumentsFragment
 				}
 				if event.Usage != nil {
 					copy := *event.Usage
 					usage = &copy
 				}
 			}
-			if text != current.wantText || arguments != current.wantArguments {
+			if text != current.wantText || current.wantToolArgs == nil && arguments != current.wantArguments {
 				t.Fatalf("assembled text/arguments = %q / %q, want %q / %q", text, arguments, current.wantText, current.wantArguments)
+			}
+			if current.wantToolArgs != nil && !reflect.DeepEqual(argumentsByIndex, current.wantToolArgs) {
+				t.Fatalf("assembled Tool arguments = %#v, want %#v", argumentsByIndex, current.wantToolArgs)
 			}
 			if fmt.Sprint(usage) != fmt.Sprint(current.wantUsage) {
 				t.Fatalf("usage = %v, want %v", usage, current.wantUsage)
@@ -970,6 +980,7 @@ func fixtureModelRequest() domain.ModelRequest {
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
 		domain.ToolNameGetRelatedResources,
+		domain.ToolNameGetClusterOverview,
 	}
 	tools := make([]domain.ModelToolSpecification, 0, len(names))
 	for _, name := range names {
@@ -1003,7 +1014,7 @@ func requestWithWireSize(t *testing.T, configuration domain.ModelConfiguration, 
 	}
 	remaining := target - len(body)
 	for index := range request.Messages {
-		capacity := domain.MaxModelMessageBytes - len(request.Messages[index].Content)
+		capacity := domain.MaxModelInputMessageBytes - len(request.Messages[index].Content)
 		if capacity > remaining {
 			capacity = remaining
 		}
@@ -1091,7 +1102,7 @@ func assertRequestAndSinkSafety(t *testing.T, server *fixtureServer, apiCanary, 
 		t.Fatalf("decode captured request: %v", err)
 	}
 	if payload.Model != "fixture-model" || !payload.Stream || !payload.StreamOptions.IncludeUsage ||
-		len(payload.Messages) == 0 || len(payload.Tools) != 6 {
+		len(payload.Messages) == 0 || len(payload.Tools) != 7 {
 		t.Fatal("captured request does not match the fixed streaming Tool profile")
 	}
 	var rawPayload map[string]json.RawMessage

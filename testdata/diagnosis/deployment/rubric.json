@@ -25,7 +25,7 @@
   "forbidden_confirmed_assertions": [
     {"id": "deployment_condition_is_root_cause", "meaning": "A Deployment condition by itself proves the underlying cause."},
     {"id": "unobserved_pod_cause", "meaning": "An unobserved Pod, Node, image, volume, or application cause is confirmed."},
-    {"id": "action_executed", "meaning": "KuPilot restarted or changed the Deployment."}
+    {"id": "action_executed", "meaning": "Kupilot restarted or changed the Deployment."}
   ],
   "recommended_actions": [
     {"id": "inspect_related_pod_evidence", "meaning": "Collect bounded Pod status, Event, or log Evidence for the observed related Pod."},

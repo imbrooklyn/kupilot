@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// DeploymentRestarter is the sole v0.2 Kubernetes mutation adapter. It shares
+// DeploymentRestarter is the sole Kubernetes mutation adapter. It shares
 // the active opaque scope binding but exposes no client-go value or generic
 // write capability.
 type DeploymentRestarter struct {
@@ -23,8 +23,9 @@ type DeploymentRestarter struct {
 }
 
 var (
-	_ approval.RestartDeploymentRevalidator = (*DeploymentRestarter)(nil)
-	_ approval.RestartDeploymentExecutor    = (*DeploymentRestarter)(nil)
+	_ application.RestartDeploymentProposalPreparer = (*DeploymentRestarter)(nil)
+	_ approval.RestartDeploymentRevalidator         = (*DeploymentRestarter)(nil)
+	_ approval.RestartDeploymentExecutor            = (*DeploymentRestarter)(nil)
 )
 
 // NewDeploymentRestarter validates fixed local dependencies without performing
@@ -39,6 +40,68 @@ func NewDeploymentRestarter(binding *ToolScopeBinding, now func() time.Time) (*D
 		)
 	}
 	return &DeploymentRestarter{binding: binding, now: now}, nil
+}
+
+// PrepareRestartDeploymentProposal performs one exact read and derives the
+// identity, Pod-template fingerprint, and generation that are bound into an
+// approval digest. Model output supplies only the admitted target name and a
+// human-readable reason; it cannot supply write authority or concurrency data.
+func (restarter *DeploymentRestarter) PrepareRestartDeploymentProposal(
+	ctx context.Context,
+	scope domain.ScopeSnapshot,
+	target domain.ResourceRef,
+	reason string,
+) (domain.OperationIntent, error) {
+	if ctx == nil || scope.Validate() != nil || target.Validate() != nil ||
+		target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
+		target.Kind != domain.RestartDeploymentTargetKind || target.Namespace != scope.Namespace ||
+		target.UID != "" || target.ResourceVersion != "" || !domain.ValidApprovalReasonSummary(reason) {
+		return domain.OperationIntent{}, restartInputError("prepare_restart_deployment")
+	}
+	if ctx.Err() != nil {
+		return domain.OperationIntent{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
+	}
+	bundle, client, err := restarter.capture(scope, "prepare_restart_deployment")
+	if err != nil {
+		return domain.OperationIntent{}, err
+	}
+	object, rawErr := bundle.typed.AppsV1().Deployments(scope.Namespace).Get(
+		ctx,
+		target.Name,
+		metav1.GetOptions{},
+	)
+	if ctx.Err() != nil {
+		return domain.OperationIntent{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
+	}
+	if rawErr != nil {
+		return domain.OperationIntent{}, classifyKubernetesError("prepare_restart_deployment", rawErr)
+	}
+	if object == nil || object.APIVersion != "" && object.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
+		object.Kind != "" && object.Kind != domain.RestartDeploymentTargetKind ||
+		object.Namespace != scope.Namespace || object.Name != target.Name || object.UID == "" || object.Generation < 1 {
+		return domain.OperationIntent{}, invalidKubernetesProjectionError("prepare_restart_deployment")
+	}
+	fingerprint, err := deploymentTemplateFingerprint(object.Spec.Template)
+	if err != nil {
+		return domain.OperationIntent{}, invalidKubernetesProjectionError("prepare_restart_deployment")
+	}
+	intent := domain.OperationIntent{
+		Operation:            domain.ApprovalOperationRestartDeployment,
+		Scope:                scope,
+		DeploymentName:       object.Name,
+		DeploymentUID:        string(object.UID),
+		TemplateFingerprint:  fingerprint,
+		DeploymentGeneration: object.Generation,
+		PolicyVersion:        domain.RestartDeploymentApprovalPolicyVersion,
+		ReasonSummary:        reason,
+	}
+	if intent.Validate() != nil {
+		return domain.OperationIntent{}, restartInputError("prepare_restart_deployment")
+	}
+	if !restarter.bindingCurrent(client, scope) {
+		return domain.OperationIntent{}, restartStaleScopeError("prepare_restart_deployment")
+	}
+	return intent, nil
 }
 
 // RevalidateApprovedRestart performs the mandatory exact fresh Deployment GET

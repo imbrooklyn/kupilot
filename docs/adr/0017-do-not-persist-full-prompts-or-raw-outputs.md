@@ -6,7 +6,7 @@
 
 ## Context
 
-KuPilot keeps useful local history, but an assembled model prompt and raw
+Kupilot keeps useful local history, but an assembled model prompt and raw
 adapter outputs combine data from trust boundaries with different eligibility
 rules. They may contain credentials, high-risk values, injected instructions,
 unbounded cluster text, transport details, or content that is safe only after a
@@ -22,7 +22,7 @@ ADR defines the narrower eligibility decision for prompts and raw outputs.
 
 ## Decision
 
-KuPilot will never persist an assembled prompt or general raw external output
+Kupilot will never persist an assembled prompt or general raw external output
 in `v0.1`. This zero-day rule also applies to the admitted `v0.2` approval flow
 unless an Accepted ADR explicitly changes a narrow data category. ADR-0036
 admits one such exception: explicitly enabled, bounded model-failure details in

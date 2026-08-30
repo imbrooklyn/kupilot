@@ -112,7 +112,7 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	}
 	warnings := make([]string, 0, 2)
 	if options.Paths.HomePermissionsWider {
-		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; KuPilot will respect the existing user-managed permissions.")
+		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; Kupilot will respect the existing user-managed permissions.")
 	}
 	if permissionsWider {
 		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain a plaintext model API key.")
@@ -229,6 +229,10 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 			if !yamlScalar(value, "!!bool") {
 				return false
 			}
+		case "runtime":
+			if !validRuntimeYAML(value) {
+				return false
+			}
 		case "model":
 			if !validModelYAML(value, allowCredential) {
 				return false
@@ -246,6 +250,12 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 		}
 	}
 	return versionSeen
+}
+
+func validRuntimeYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		return key == "budget_profile" && yamlString(value)
+	})
 }
 
 func validModelYAML(node *yaml.Node, allowCredential bool) bool {
@@ -269,7 +279,7 @@ func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 
 func validKubernetesYAML(node *yaml.Node) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
-		return key == "exec_credentials" && yamlString(value)
+		return (key == "exec_credentials" || key == "namespace_access") && yamlString(value)
 	})
 }
 
@@ -341,6 +351,7 @@ func setDefaults(instance *viper.Viper) {
 	instance.SetDefault("context", defaults.Context)
 	instance.SetDefault("namespace", defaults.Namespace)
 	instance.SetDefault("no_color", defaults.NoColor)
+	instance.SetDefault("runtime.budget_profile", defaults.Runtime.BudgetProfile)
 	instance.SetDefault("model.provider_kind", defaults.Model.ProviderKind)
 	instance.SetDefault("model.endpoint", defaults.Model.Endpoint)
 	instance.SetDefault("model.model", defaults.Model.Model)
@@ -351,6 +362,7 @@ func setDefaults(instance *viper.Viper) {
 	instance.SetDefault("model.streaming", defaults.Model.Streaming)
 	instance.SetDefault("model.tool_calling_required", defaults.Model.ToolCallingRequired)
 	instance.SetDefault("kubernetes.exec_credentials", defaults.Kubernetes.ExecCredentials)
+	instance.SetDefault("kubernetes.namespace_access", defaults.Kubernetes.NamespaceAccess)
 	instance.SetDefault("logging.enabled", defaults.Logging.Enabled)
 	instance.SetDefault("logging.level", defaults.Logging.Level)
 	instance.SetDefault("logging.sensitive_diagnostics", defaults.Logging.SensitiveDiagnostics)
@@ -373,6 +385,7 @@ func applyEnvironment(instance *viper.Viper, lookup func(string) (string, bool))
 	}{
 		{environment: "KUPILOT_CONTEXT", key: "context", kind: environmentString},
 		{environment: "KUPILOT_NAMESPACE", key: "namespace", kind: environmentString},
+		{environment: "KUPILOT_BUDGET_PROFILE", key: "runtime.budget_profile", kind: environmentString},
 		{environment: "KUPILOT_NO_COLOR", key: "no_color", kind: environmentBool},
 		{environment: "KUPILOT_MODEL_ENDPOINT", key: "model.endpoint", kind: environmentString},
 		{environment: "KUPILOT_MODEL", key: "model.model", kind: environmentString},
@@ -381,6 +394,7 @@ func applyEnvironment(instance *viper.Viper, lookup func(string) (string, bool))
 		{environment: "KUPILOT_MODEL_MAX_OUTPUT_TOKENS", key: "model.max_output_tokens", kind: environmentInt},
 		{environment: "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS", key: "model.request_timeout_seconds", kind: environmentInt},
 		{environment: "KUPILOT_EXEC_CREDENTIALS", key: "kubernetes.exec_credentials", kind: environmentString},
+		{environment: "KUPILOT_NAMESPACE_ACCESS", key: "kubernetes.namespace_access", kind: environmentString},
 		{environment: "KUPILOT_LOG_ENABLED", key: "logging.enabled", kind: environmentBool},
 		{environment: "KUPILOT_LOG_LEVEL", key: "logging.level", kind: environmentString},
 	}
@@ -435,7 +449,7 @@ func readConfigFile(ctx context.Context, path string, required bool) ([]byte, bo
 		return nil, false, false, nil
 	}
 	if err != nil {
-		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the selected configuration file.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "Kupilot could not read the selected configuration file.")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file must be a regular file and must not be a symbolic link.")
@@ -445,16 +459,16 @@ func readConfigFile(ctx context.Context, path string, required bool) ([]byte, bo
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the selected configuration file.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "Kupilot could not read the selected configuration file.")
 	}
 	defer file.Close()
 	openedInfo, err := file.Stat()
 	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
-		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file changed or became unsafe while KuPilot was opening it.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unsafe", "read_configuration", "The configuration file changed or became unsafe while Kupilot was opening it.")
 	}
 	content, err := io.ReadAll(io.LimitReader(file, MaxConfigFileBytes+1))
 	if err != nil {
-		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "KuPilot could not read the configuration file.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "Kupilot could not read the configuration file.")
 	}
 	if len(content) > MaxConfigFileBytes {
 		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_too_large", "read_configuration", "The configuration file exceeds the 64 KiB limit.")

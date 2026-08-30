@@ -84,17 +84,15 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 	}
 }
 
-func TestAdapterCompletesUnsupportedSourceDiagnosisWithoutToolCall(t *testing.T) {
+func TestAdapterCompletesGeneralAnswerWithoutToolCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
-	const diagnosisJSON = `{"confirmed_facts":[],"hypotheses":[],"missing_information":[{"kind":"unsupported","detail":"Namespace discovery is outside the fixed Agent Tool catalog.","impact":"This run cannot list Namespace objects or present a cluster-wide Namespace inventory."}],"recommended_actions":[]}`
+	const diagnosisJSON = `{"answer_markdown":"Use /status to inspect the active runtime policy.","evidence_citations":[],"proposed_actions":[]}`
 	model := &recordingModel{scripts: []modelScript{
 		func(ctx context.Context, request domain.ModelRequest, consume agent.ModelStreamConsumer) *domain.ModelError {
-			if !strings.Contains(request.Messages[0].Content, "do not call any Tool as a proxy") ||
-				!strings.Contains(request.Tools[1].Description, "Never use this Tool to list or discover Namespace objects") ||
-				!strings.Contains(request.Tools[1].Description, "A request for Pods in the current Namespace is supported") ||
-				!strings.Contains(request.Tools[1].Description, "use health_filter=any when no health restriction was requested") {
-				t.Fatal("unsupported-source policy is absent from the initial model request")
+			if !strings.Contains(request.Messages[0].Content, "free-form Markdown") ||
+				!strings.Contains(request.Messages[0].Content, "Do not add mandatory report headings") {
+				t.Fatal("free-form answer policy is absent from the initial model request")
 			}
 			return scriptedEvents(diagnosisEvents(diagnosisJSON)...)(ctx, request, consume)
 		},
@@ -107,15 +105,11 @@ func TestAdapterCompletesUnsupportedSourceDiagnosisWithoutToolCall(t *testing.T)
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	foundUnsupported := false
-	for _, missing := range outcome.Diagnosis.MissingInformation {
-		foundUnsupported = foundUnsupported || missing.Kind == domain.MissingInformationUnsupported
-	}
-	if !foundUnsupported {
-		t.Fatalf("missing information = %#v", outcome.Diagnosis.MissingInformation)
+	if outcome.Diagnosis.AnswerMarkdown != "Use /status to inspect the active runtime policy." {
+		t.Fatalf("answer = %q", outcome.Diagnosis.AnswerMarkdown)
 	}
 	if len(model.Requests()) != 1 || len(tool.Calls()) != 0 {
-		t.Fatalf("unsupported-source calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
+		t.Fatalf("general-answer calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
 	}
 	assertTerminalSequence(t, recorder.Events())
 }
@@ -169,17 +163,13 @@ func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 		clock := newTestClock()
 		guard := newTestScopeGuard()
 		encodedDiagnosis, err := json.Marshal(struct {
-			ConfirmedFacts     []domain.ConfirmedFact      `json:"confirmed_facts"`
-			Hypotheses         []domain.Hypothesis         `json:"hypotheses"`
-			MissingInformation []domain.MissingInformation `json:"missing_information"`
-			RecommendedActions []domain.RecommendedAction  `json:"recommended_actions"`
+			AnswerMarkdown    string                 `json:"answer_markdown"`
+			EvidenceCitations []evidenceCitationWire `json:"evidence_citations"`
+			ProposedActions   []proposedActionWire   `json:"proposed_actions"`
 		}{
-			ConfirmedFacts:     []domain.ConfirmedFact{},
-			Hypotheses:         []domain.Hypothesis{},
-			MissingInformation: []domain.MissingInformation{},
-			RecommendedActions: []domain.RecommendedAction{{
-				Action: blockedText, Risk: "Review is required.", Prerequisites: []string{}, Executed: false,
-			}},
+			AnswerMarkdown:    blockedText,
+			EvidenceCitations: []evidenceCitationWire{},
+			ProposedActions:   []proposedActionWire{},
 		})
 		if err != nil {
 			t.Fatalf("json.Marshal(Diagnosis) error = %v", err)
@@ -258,6 +248,7 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
 		domain.ToolNameGetRelatedResources,
+		domain.ToolNameGetClusterOverview,
 	}
 	if len(specifications) != len(wantNames) {
 		t.Fatalf("Tool specification count = %d, want %d", len(specifications), len(wantNames))
@@ -290,12 +281,12 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
 	}
-	const expectedSnapshotSHA256 = "ee65b8f1a94da99a0282298174b461aef8b711d77e1dacbe51ff8e34725a9316"
+	const expectedSnapshotSHA256 = "f3cacefe71cd5e31d2fea2548b3c1486fb11fda82fe134f726a3a082dd2822d5"
 	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
 		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
 	}
 	lowerSnapshot := strings.ToLower(string(encodedSnapshot))
-	for _, prohibited := range []string{"run_shell", "kubectl", "secret", "write", "patch", "delete", "exec", `\"namespace\"`, `\"gvr\"`, `\"raw_selector\"`} {
+	for _, prohibited := range []string{"run_shell", "kubectl", "secret", "write", "patch", "delete", "exec", `\"context\"`, `\"scope\"`, `\"gvr\"`, `\"raw_selector\"`} {
 		if strings.Contains(lowerSnapshot, prohibited) {
 			t.Fatalf("Eino Tool catalog snapshot contains prohibited authority %q", prohibited)
 		}
@@ -324,7 +315,7 @@ func TestAdapterDoesNotInheritCallerEinoCallbacks(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(diagnosisEvents(readFixture(t, "agent-runtime-hostile-diagnosis.json"))...),
+		scriptedEvents(diagnosisEvents(`{"answer_markdown":"No cluster observation was requested.","evidence_citations":[],"proposed_actions":[]}`)...),
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return emptyToolResult(t, call, clock.Now())
@@ -478,7 +469,7 @@ func TestAdapterRejectsHostileToolSelectionsBeforeHandler(t *testing.T) {
 	}
 }
 
-func TestAdapterFiltersPseudoEvidenceAndExecutionClaimWithoutToolAction(t *testing.T) {
+func TestAdapterRemovesUnregisteredCitationWithoutGrantingAuthority(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
@@ -491,11 +482,11 @@ func TestAdapterFiltersPseudoEvidenceAndExecutionClaimWithoutToolAction(t *testi
 	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
-	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || outcome.ErrorClass != nil {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	if len(outcome.Diagnosis.ConfirmedFacts) != 0 || len(outcome.Diagnosis.RecommendedActions) != 1 ||
-		outcome.Diagnosis.RecommendedActions[0].Executed || len(outcome.Diagnosis.ValidationWarnings) < 2 {
+	if len(outcome.Diagnosis.ConfirmedFacts) != 0 || len(outcome.Diagnosis.ValidationWarnings) != 1 ||
+		len(outcome.Diagnosis.RecommendedActions) != 1 || outcome.Diagnosis.RecommendedActions[0].Executed {
 		t.Fatalf("validated Diagnosis = %#v", outcome.Diagnosis)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
@@ -531,7 +522,7 @@ func TestMaliciousToolOutputCannotAuthorizeAnotherTool(t *testing.T) {
 func TestAdapterRejectsMalformedFinalDiagnosis(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
-	malformed := `{"confirmed_facts":[],"confirmed_facts":[],"hypotheses":[],"missing_information":[],"recommended_actions":[]}`
+	malformed := `{"answer_markdown":"first","answer_markdown":"second","evidence_citations":[],"proposed_actions":[]}`
 	model := &recordingModel{scripts: []modelScript{scriptedEvents(diagnosisEvents(malformed)...)}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return emptyToolResult(t, call, clock.Now())

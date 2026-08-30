@@ -1,7 +1,12 @@
 {
   "name": "crashloop_previous_logs_forbidden",
   "question": "Why does example-pod keep restarting?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Container example-container is waiting, ready=false, restarts=3, reason CrashLoopBackOff; previous state terminated, reason Error, exit_code=1.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_crashloop_waiting", "application_startup_failure_possible"]
+            "supports": [
+              "container_crashloop_waiting",
+              "application_startup_failure_possible"
+            ]
           }
         ]
       }
@@ -38,7 +46,9 @@
             "fact": "Warning Event BackOff for Pod example-pod was observed 2 times.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["restart_backoff_observed"]
+            "supports": [
+              "restart_backoff_observed"
+            ]
           }
         ]
       }
@@ -70,49 +80,74 @@
             "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
             "source_path": "projected.metadata.controller_owner",
             "severity": "info",
-            "supports": ["pod_owner_observed"]
+            "supports": [
+              "pod_owner_observed"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The container is waiting in CrashLoopBackOff after three recorded restarts.", "evidence_ids": ["00000000-0000-7000-8000-000000001111"]},
-      {"statement": "A recent BackOff Event was observed for the Pod.", "evidence_ids": ["00000000-0000-7000-8000-000000001112"]},
-      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001114"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The container is waiting in CrashLoopBackOff after three recorded restarts.\n- A recent BackOff Event was observed for the Pod.\n- The Pod has a projected ReplicaSet owner relationship.\n\nAn application startup failure remains possible, but its precise cause is unknown. Confidence: high. To verify: A permitted previous log observation or a later successful start contradicts this possibility.\n\nThe previous container log read was denied. Impact: The process exit cannot be correlated with a bounded previous log excerpt.\n\nSuggested next step: Review the owning workload configuration and obtain previous logs through an authorized external workflow. Risk: External configuration changes may replace Pods. Before acting: Preserve the active scope and follow local access policy.",
+    "evidence_citations": [
       {
-        "statement": "An application startup failure remains possible, but its precise cause is unknown.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001111", "00000000-0000-7000-8000-000000001112", "00000000-0000-7000-8000-000000009901"],
-        "confidence": "high",
-        "falsifier": "A permitted previous log observation or a later successful start contradicts this possibility."
+        "claim": "The container is waiting in CrashLoopBackOff after three recorded restarts.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001111"
+        ]
+      },
+      {
+        "claim": "A recent BackOff Event was observed for the Pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001112"
+        ]
+      },
+      {
+        "claim": "The Pod has a projected ReplicaSet owner relationship.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001114"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "forbidden", "detail": "The previous container log read was denied.", "impact": "The process exit cannot be correlated with a bounded previous log excerpt."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Review the owning workload configuration and obtain previous logs through an authorized external workflow.",
-        "risk": "External configuration changes may replace Pods.",
-        "prerequisites": ["Preserve the active scope and follow local access policy."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "container_crashloop_waiting"},
-      {"index": 1, "assertion": "restart_backoff_observed"},
-      {"index": 2, "assertion": "pod_owner_observed"}
+      {
+        "index": 0,
+        "assertion": "container_crashloop_waiting"
+      },
+      {
+        "index": 1,
+        "assertion": "restart_backoff_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "pod_owner_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "application_startup_failure_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_owner_configuration"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "application_startup_failure_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_owner_configuration"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["container_crashloop_waiting", "restart_backoff_observed", "pod_owner_observed"],
-  "required_missing_kinds": ["forbidden", "unsupported"],
+  "required_confirmed_assertions": [
+    "container_crashloop_waiting",
+    "restart_backoff_observed",
+    "pod_owner_observed"
+  ],
+  "required_missing_kinds": [
+    "forbidden"
+  ],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

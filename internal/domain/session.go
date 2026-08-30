@@ -1,4 +1,4 @@
-// Package domain contains KuPilot-owned values and invariants without I/O.
+// Package domain contains Kupilot-owned values and invariants without I/O.
 package domain
 
 import (
@@ -79,10 +79,12 @@ type ResourceRef struct {
 
 // Validate checks structural and byte bounds for a safe resource identity.
 func (reference ResourceRef) Validate() error {
+	kind, allowed := ResourceKindForReference(reference)
 	if !validBoundedText(reference.APIVersion, 1, maxAPIVersionBytes) ||
 		!validBoundedText(reference.Kind, 1, maxKindBytes) ||
-		!allowedDirectResource(reference.APIVersion, reference.Kind) ||
-		!validBoundedText(reference.Namespace, 1, maxNamespaceBytes) ||
+		!allowed ||
+		kind.Namespaced() && !validBoundedText(reference.Namespace, 1, maxNamespaceBytes) ||
+		kind.ClusterScoped() && reference.Namespace != "" ||
 		!validBoundedText(reference.Name, 1, maxResourceNameBytes) ||
 		!validOptionalText(reference.UID, maxResourceUIDBytes) ||
 		!validOptionalText(reference.ResourceVersion, maxResourceVersionBytes) {
@@ -123,8 +125,9 @@ func (session Session) Validate() error {
 		}
 	}
 	if session.SelectedResource != nil {
-		if session.LastScope == nil ||
-			session.SelectedResource.Namespace != session.LastScope.Namespace ||
+		kind, allowed := ResourceKindForReference(*session.SelectedResource)
+		if session.LastScope == nil || !allowed ||
+			kind.Namespaced() && session.SelectedResource.Namespace != session.LastScope.Namespace ||
 			session.SelectedResource.Validate() != nil {
 			return ErrInvalidSession
 		}
@@ -137,19 +140,6 @@ func (session Session) Validate() error {
 		return ErrInvalidSession
 	}
 	return nil
-}
-
-func allowedDirectResource(apiVersion, kind string) bool {
-	switch {
-	case apiVersion == "v1" && (kind == "Pod" || kind == "Service"):
-		return true
-	case apiVersion == "apps/v1" && (kind == "Deployment" || kind == "ReplicaSet"):
-		return true
-	case apiVersion == "batch/v1" && kind == "Job":
-		return true
-	default:
-		return false
-	}
 }
 
 // HasResumableMetadata reports the status and privacy part of resume eligibility.

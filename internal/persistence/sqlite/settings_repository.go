@@ -68,11 +68,11 @@ func (repository *SettingsRepository) Put(ctx context.Context, setting domain.Se
 		setting.UpdatedAt.UTC().UnixMilli(),
 	)
 	if err != nil {
-		return repositoryFailure(repository.db, "setting_put_failed", "put_setting", "KuPilot could not store the setting.", err)
+		return repositoryFailure(repository.db, "setting_put_failed", "put_setting", "Kupilot could not store the setting.", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return repositoryFailure(repository.db, "setting_put_failed", "put_setting", "KuPilot could not store the setting.", err)
+		return repositoryFailure(repository.db, "setting_put_failed", "put_setting", "Kupilot could not store the setting.", err)
 	}
 	if affected != 1 {
 		return auditcontract.ErrSettingConflict
@@ -92,11 +92,11 @@ func (repository *SettingsRepository) Get(ctx context.Context, key domain.Settin
 	if err := repository.db.handle.GetContext(ctx, &row, getSettingSQL, key); errors.Is(err, sql.ErrNoRows) {
 		return domain.Setting{}, auditcontract.ErrSettingNotFound
 	} else if err != nil {
-		return domain.Setting{}, repositoryFailure(repository.db, "setting_read_failed", "get_setting", "KuPilot could not read the setting.", err)
+		return domain.Setting{}, repositoryFailure(repository.db, "setting_read_failed", "get_setting", "Kupilot could not read the setting.", err)
 	}
 	setting, err := row.domainSetting()
 	if err != nil || setting.Key != key {
-		return domain.Setting{}, repositoryFailure(repository.db, "setting_row_invalid", "get_setting", "KuPilot could not read the setting safely.", err)
+		return domain.Setting{}, repositoryFailure(repository.db, "setting_row_invalid", "get_setting", "Kupilot could not read the setting safely.", err)
 	}
 	return setting, nil
 }
@@ -111,11 +111,11 @@ func (repository *SettingsRepository) Delete(ctx context.Context, key domain.Set
 	}
 	result, err := repository.db.handle.ExecContext(ctx, deleteSettingSQL, key)
 	if err != nil {
-		return repositoryFailure(repository.db, "setting_delete_failed", "delete_setting", "KuPilot could not delete the setting.", err)
+		return repositoryFailure(repository.db, "setting_delete_failed", "delete_setting", "Kupilot could not delete the setting.", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return repositoryFailure(repository.db, "setting_delete_failed", "delete_setting", "KuPilot could not delete the setting.", err)
+		return repositoryFailure(repository.db, "setting_delete_failed", "delete_setting", "Kupilot could not delete the setting.", err)
 	}
 	if affected != 1 {
 		return auditcontract.ErrSettingNotFound

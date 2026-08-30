@@ -2,11 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0036
+- Amended by: ADR-0036 and ADR-0039
 
 ## Context
 
-KuPilot's Agent-first interaction needs incremental user feedback and
+Kupilot's Agent-first interaction needs incremental user feedback and
 machine-distinguishable Tool selections. A chat endpoint that returns only prose
 cannot provide a safe Tool authorization boundary. Providers also differ in
 stream framing, partial arguments, finish reasons, error bodies, usage, and
@@ -18,7 +18,7 @@ one OpenAI-compatible adapter implement it.
 ## Decision
 
 A model endpoint is usable only if it implements the accepted Chat
-Completions-style streaming and Tool-call profile and satisfies KuPilot's neutral
+Completions-style streaming and Tool-call profile and satisfies Kupilot's neutral
 Model contract:
 
 - Bounded request messages with project-owned roles and content parts.
@@ -29,21 +29,24 @@ Model contract:
 - Deterministic request completion, finish reason, and one terminal success or
   classified failure. Usage and response-format features are optional and never
   required for core safety.
-- Context cancellation and a 45-second per-request ceiling further bounded by
-  remaining AgentRun time.
+- Context cancellation and a profile-selected per-request ceiling of at most
+  300 seconds, further bounded by remaining AgentRun time.
 
 The adapter must assemble fragmented structured arguments under fixed byte and
 event limits, reject unknown or duplicate fields according to the Tool schema,
-and reject ambiguous, malformed, reordered, duplicate-terminal, or unsupported
-events. Text that resembles JSON, a Tool name, approval, command, or execution
-claim remains text and never dispatches a Tool.
+and reject ambiguous, malformed, non-contiguous, duplicate-terminal, or
+unsupported events. Bounded empty deltas are inert no-ops. Fragments belonging
+to distinct bounded Tool indexes may interleave, but assembly preserves arrival
+order within each index and every complete indexed call still passes the fixed
+catalog and strict-schema gates. Text that resembles JSON, a Tool name,
+approval, command, or execution claim remains text and never dispatches a Tool.
 
-KuPilot does not downgrade to prompt-parsed Tool calls, a prose-only diagnostic
+Kupilot does not downgrade to prompt-parsed Tool calls, a prose-only diagnostic
 mode, or an endpoint-selected Tool schema. If required capabilities are absent,
 the run stops before cluster data is transferred or returns a safe unsupported
 classification from a content-free capability check.
 
-The user must configure the model identifier; KuPilot does not embed a provider
+The user must configure the model identifier; Kupilot does not embed a provider
 default. Temperature is accepted only in the low range from 0 through 0.2, and a
 hard output-token limit is mandatory. The concrete default must remain inside
 that range and be documented with the model adapter configuration. An optional
@@ -103,8 +106,9 @@ Local fake-endpoint and Eino adapter tests must prove:
 
 1. Required structured Tool schema and streaming event representation.
 2. Cancellation and exactly one terminal outcome at every chunk boundary.
-3. Bounded fragmented argument assembly and rejection of malformed, duplicate,
-   reordered, unknown, oversized, and mixed text/Tool events.
+3. Bounded fragmented argument assembly, inert empty deltas, interleaved
+   distinct Tool indexes, and rejection of malformed, duplicate,
+   non-contiguous, unknown, oversized, and mixed text/Tool events.
 4. No Tool dispatch from prose or unsupported fallback behavior.
 5. Safe mapping of finish reasons, optional usage, authentication, permission,
    throttling, timeout, unavailable, and malformed responses.

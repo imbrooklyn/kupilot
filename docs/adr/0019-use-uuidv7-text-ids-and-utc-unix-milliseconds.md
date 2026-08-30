@@ -16,7 +16,7 @@ milliseconds in SQLite, and local-time presentation in the TUI.
 
 ## Decision
 
-KuPilot will generate every durable domain identifier in application code as a
+Kupilot will generate every durable domain identifier in application code as a
 UUIDv7 value and persist its textual representation in an explicit SQLite
 `TEXT` primary or foreign-key column. SQLite `rowid` is not a domain identifier,
 is not exposed through Application ports, and is not used for resume, scope,
@@ -54,7 +54,7 @@ date or zone context to avoid presenting two different instants as one event.
 
 Migration versions remain monotonically increasing integers and are not UUIDs.
 Protocol-owned identifiers received from Kubernetes or a model provider remain
-typed external values and are not silently converted into KuPilot domain IDs.
+typed external values and are not silently converted into Kupilot domain IDs.
 
 This ADR selects representations and semantics rather than a UUID library or
 vendor API. Any selected library must preserve this contract.
@@ -100,7 +100,7 @@ An identifier is not a secret, capability, or proof of authorization. Every
 lookup still applies retention, eligibility, Session, scope, and approval rules.
 Safe errors avoid turning exact-ID lookup into a history-enumeration channel.
 
-Because UUIDv7 carries approximate time, KuPilot exposes identifiers only where
+Because UUIDv7 carries approximate time, Kupilot exposes identifiers only where
 the product contract needs them. IDs contain no Context, Namespace, resource
 name, user name, endpoint, model name, or credential. UTC storage also prevents
 local timezone data from becoming an unnecessary durable attribute.

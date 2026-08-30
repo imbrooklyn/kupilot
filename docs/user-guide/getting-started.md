@@ -2,7 +2,7 @@
 
 ## Requirements
 
-KuPilot currently supports local interactive use on macOS and Linux on `amd64`
+Kupilot currently supports local interactive use on macOS and Linux on `amd64`
 and `arm64`. You need:
 
 - Go 1.25.0 or newer for a source build.
@@ -14,8 +14,8 @@ and `arm64`. You need:
 - Permission under your organization's policy to send the displayed diagnostic
   data categories to that model destination.
 
-Windows is experimental and is not part of the supported `v0.3` runtime gate.
-KuPilot is not intended to run as a cluster controller, shared server, or
+Windows is experimental and is not part of the supported `v0.4` runtime gate.
+Kupilot is not intended to run as a cluster controller, shared server, or
 container-only service.
 
 ## Build the binary
@@ -32,11 +32,11 @@ package-manager installation is supported.
 
 ## Optional configuration and model setup
 
-No configuration file is required to open KuPilot. A bare start uses one fixed
+No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
 the endpoint, model identifier, or API key is absent.
 
-If you prefer a file, KuPilot accepts one strict version 1 YAML document. For
+If you prefer a file, Kupilot accepts one strict version 1 YAML document. For
 example:
 
 ```yaml
@@ -44,9 +44,15 @@ version: 1
 context: example-context
 namespace: example-namespace
 
+runtime:
+  budget_profile: balanced
+
 model:
   endpoint: https://model.example.invalid/v1
   model: example-model
+
+kubernetes:
+  namespace_access: all
 ```
 
 The endpoint and names are deliberately non-working placeholders. Replace them
@@ -61,11 +67,11 @@ must use an absolute normalized path:
 
 Unknown fields, duplicate keys, aliases, merges, nulls, wrong types, additional
 documents, and files larger than 64 KiB are rejected. Existing user-managed
-file permissions are respected; new KuPilot-created Home directories use
+file permissions are respected; new Kupilot-created Home directories use
 `0700` and new files use `0600` on supported Unix platforms.
 
 The key can instead come from `KUPILOT_MODEL_API_KEY`, which overrides a file
-value, is read once, and is removed from the KuPilot process environment. It is
+value, is read once, and is removed from the Kupilot process environment. It is
 also accepted through the masked TUI setup. Choose `save` only after reviewing
 the plaintext, not-encrypted disclosure; choose `session` to keep the key in
 this process only. No credential-valued CLI option exists.
@@ -73,14 +79,16 @@ this process only. No credential-valued CLI option exists.
 See [Configuration](../configuration.md) for the full schema, Home layout,
 precedence, environment variables, endpoint rules, and credential boundary.
 
-## Grant read-only Kubernetes access
+## Grant Kubernetes access
 
-Apply the namespaced read rules and Namespace-verification rule through your
-normal cluster-administration process. Bind namespaced access only in each
-Namespace KuPilot is permitted to diagnose. Do not bind a reusable namespaced
-ClusterRole with a ClusterRoleBinding, and do not use `cluster-admin`.
+Choose `kubernetes.namespace_access: current` for working-Namespace-only reads,
+or `all` for explicit cross-Namespace and all-Namespace reads in the same
+Context. Apply only the matching namespaced and cluster-scoped read rules
+through your normal cluster-administration process. If Deployment restart is
+needed, add the separate exact resource-name Role for each admitted target. Do
+not use `cluster-admin` or grant wildcard writes.
 
-KuPilot also enforces its own Kind, Namespace, relationship, projection, and
+Kupilot also enforces its own Kind, Namespace, relationship, projection, and
 budget allowlists. RBAC remains an independent defense if another defect or
 local configuration grants a broader identity.
 
@@ -99,34 +107,34 @@ startup overrides may be supplied explicitly:
 ./bin/kupilot --context example-context --namespace example-namespace
 ```
 
-The Context and Namespace must exist in the selected kubeconfig and Kubernetes
-API. A Context is resolved locally; the Namespace is verified through an exact
-read before it becomes an active ClusterScope. Empty Namespace input never
-means all Namespaces.
+The Context and working Namespace must exist in the selected kubeconfig and
+Kubernetes API. A Context is resolved locally; the working Namespace is
+verified through an exact read before it becomes an active ClusterScope. Empty
+Namespace input never means all Namespaces. The configured namespace-access
+policy is frozen into each run and is visible through `/status`.
 
 ## Complete the first-run flow
 
-1. If the footer shows `model not configured`, complete the four-step endpoint,
+1. If model configuration is incomplete, complete the four-step endpoint,
    model, storage, and masked-key flow. `/model` can reconfigure it later.
-2. Confirm the footer shows the intended verified Context, Namespace, and
-   `read-only` state. If no scope is active, use `/context` and `/namespace`.
-3. Optionally use `/resource` to attach one Pod, Deployment, ReplicaSet, Job, or
-   Service. Picker selection is only an input aid; it is not an observation and
-   does not prove that the object still exists.
+2. Confirm the footer shows the intended verified Context, working Namespace,
+   and `supervised` state. Use `/status` to check namespace policy and budget;
+   use `/context` and `/namespace` when scope is unavailable.
+3. Optionally use `/resource` to attach one allowlisted direct resource. Picker
+   selection is only an input aid; it is not Evidence and does not prove that
+   the object still exists.
 4. Open `/privacy`. Review the canonical model destination, every enabled data
    category, and every never-eligible category. Container output is disabled by
    default. Accepting consent authorizes only the exact displayed tuple.
-5. Enter one diagnostic question. KuPilot durably begins the run before any
-   model or cluster read, binds it to the verified Context and Namespace, and
-   shows each bounded activity step with a readable label.
-6. Review the final confirmed facts, hypotheses, missing information, and
-   recommendations. Every recommendation is marked `Not executed`. Press
-   `Ctrl+E` to inspect bounded safe observation details when needed. Repeated
-   homogeneous resource statuses appear as a compact, non-interactive table
-   with columns appropriate to Pod, Deployment, ReplicaSet, Job, or Service.
+5. Enter an operational question. Kupilot durably begins the run before model
+   or cluster I/O, freezes Context, working Namespace, namespace policy, and
+   budget, and shows compact bounded activity steps.
+6. Review the free-form Markdown answer and use `Ctrl+E` for bounded supporting
+   observations. A proposed `restart_deployment` action remains unexecuted until
+   a separate local approval is reviewed and accepted.
 
 Changing Context, Namespace, or the container-output privacy category cancels
-an active diagnostic run and invalidates stale work before another transfer.
+an active AgentRun and invalidates stale work before another transfer.
 
 ## TUI commands
 
@@ -139,26 +147,34 @@ The compile-time command registry is fixed:
 | `/context [filter]` | Select a kubeconfig Context. |
 | `/namespace [filter]`, `/ns` | Select a Namespace in the current Context. |
 | `/resource [filter]`, `/res` | Select or clear a direct target resource. |
-| `/status` | Show current safe Session, scope, access, and run status. |
+| `/status` | Show current safe Session, scope, namespace policy, capability catalog, action availability, budget usage, privacy, and storage status. |
 | `/new` | Create a new Session without querying history. |
 | `/resume [filter]` | Open eligible local Session selection inside the TUI. |
 | `/rename [title]` | Rename the current standard-persistence Session. |
 | `/privacy` | Review model data sharing, persistence, retention, deletion, and export controls. |
 | `/cancel` | Cancel the active diagnostic run. |
-| `/quit`, `/exit` | Exit KuPilot. |
+| `/quit`, `/exit` | Exit Kupilot. |
 
 Unknown commands and `!` syntax perform no external action. Use a leading `//`
 to submit an ordinary question that begins with `/`.
 
-Key bindings include `Enter` to submit, `Ctrl+J` for a newline, `Tab` for
+Key bindings include `Enter` to submit, `Shift+Enter` or `Alt+Enter` for a
+newline, `Ctrl+J` for a newline when the terminal can distinguish it, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
-`Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C` to
-quit.
+`Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C`
+to quit. Outside a Picker, `Ctrl+P`/`Ctrl+N` explicitly recall submitted input;
+plain arrow keys stay with the multiline editor. Kupilot leaves terminal mouse
+reporting disabled so visible text can be selected and copied with the
+terminal's native controls. Mouse-wheel and trackpad gestures are therefore
+terminal-owned and cannot recall composer history. The composer uses an
+unframed `›` prompt and grows from one through eight content rows. Submitted
+user messages retain the same `›` marker, continuous surface, and vertical
+spacing as the composer.
 
 ## Stop safely
 
-Use `/quit`, `/exit`, or `Ctrl+C`. KuPilot cancels owned work, shuts down the
+Use `/quit`, `/exit`, or `Ctrl+C`. Kupilot cancels owned work, shuts down the
 TUI, closes the model and Kubernetes adapters, waits for bounded child work,
 and closes the SQLite database and local log. A run that was durable and still
 marked running at process interruption is classified as interrupted at the

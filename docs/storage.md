@@ -1,7 +1,7 @@
 # Local Storage
 
-KuPilot uses one local SQLite database for eligible Session history, lifecycle
-metadata, Evidence provenance, audit records, and future approval metadata. The
+Kupilot uses one local SQLite database for eligible Session history, lifecycle
+metadata, Evidence provenance, approval state, and audit records. The
 database is a local confidentiality boundary, not an encrypted vault or a
 tamper-resistant ledger.
 
@@ -15,7 +15,7 @@ The storage adapter uses these pinned components:
 - `github.com/jmoiron/sqlx` v1.4.0 as a thin adapter-private mapping and
   transaction helper.
 
-sqlx v1.4.0 does not recognize `sqlite` in its built-in bind table. KuPilot
+sqlx v1.4.0 does not recognize `sqlite` in its built-in bind table. Kupilot
 therefore registers that fixed name as `sqlx.QUESTION` in the SQLite adapter.
 The registration is code-defined and cannot be selected by configuration,
 Session data, Kubernetes data, or model output.
@@ -27,18 +27,18 @@ There is no alternate or CGo fallback driver.
 
 sqlx's upstream module metadata covers compatibility tests for multiple
 database drivers. Their checksum entries may therefore appear in `go.sum`, but
-KuPilot does not import, register, or link those drivers. The build and test
+Kupilot does not import, register, or link those drivers. The build and test
 package closure must contain only `modernc.org/sqlite` as a SQLite driver and
 must not contain `runtime/cgo`.
 
 ## Path and file policy
 
 The database has the fixed path `state/kupilot.db` below the process-frozen
-KuPilot Home. `KUPILOT_HOME` selects that root; otherwise KuPilot uses
+Kupilot Home. `KUPILOT_HOME` selects that root; otherwise Kupilot uses
 `$HOME/.kupilot`. Database names and descendants never come from YAML, a
 Session, Tool, Kubernetes object, working directory, or model value.
 
-On supported Unix platforms, KuPilot assigns `0700` to a newly created state
+On supported Unix platforms, Kupilot assigns `0700` to a newly created state
 directory and `0600` to a newly created database or known journal, WAL, and
 shared-memory sidecar. Existing user-managed modes are preserved and do not
 block storage solely for being wider. Symlinked managed descendants,
@@ -48,7 +48,7 @@ is not deleted, renamed, overwritten, or recreated automatically.
 
 These controls do not provide SQLite encryption or forensic deletion. Operating
 system disk encryption, snapshots, backups, swap, and storage-media lifecycle
-remain outside KuPilot's guarantees.
+remain outside Kupilot's guarantees.
 
 ## Connection policy
 
@@ -83,11 +83,25 @@ checksum, and rejects gaps, changed migration content, and a schema version newe
 than the running binary. A released migration is immutable; corrections use a
 new forward migration.
 
+The `v0.4` migration rebuilds the referenced `agent_runs` and `messages` tables
+on one dedicated connection with foreign-key enforcement temporarily disabled,
+then verifies the complete foreign-key graph before commit and restores
+enforcement before connection reuse. It admits the code-defined runtime hard
+ceilings and 128 KiB final assistant Messages while preserving the 64 KiB user
+and system-notice limit. Any copy, graph, commit, or restoration failure leaves
+the prior schema and migration ledger intact.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
-`audit_events`, and `settings`. The `approvals` table is dormant metadata in a
-read-only composition; its presence does not create an approval coordinator,
-executor, write Tool, or Kubernetes mutation path.
+`audit_events`, and `settings`. Approval rows support the sole supervised
+Deployment restart and remain bound to fixed typed state rather than a generic
+payload or write command.
+
+The `settings` table admits only code-owned typed records. In addition to the
+retention setting, `scope.last_context` schema version 1 stores one strict,
+bounded JSON object containing only the last successfully verified Kubernetes
+Context display name. It contains no Namespace, kubeconfig, endpoint,
+credential, live client, generation, or Session reference.
 
 ## Data boundary
 
@@ -102,9 +116,10 @@ model traffic, raw Tool results, arbitrary patches, or framework objects.
 Token-count metadata is numeric usage information and never authentication
 material. JSON columns are purpose-specific bounded projections; they do not
 make an otherwise prohibited source eligible for storage.
-ResourceRef projections are limited to the fixed `v0.1` direct-target
-API-version and Kind pairs, and their Namespace must match the associated
-historic scope snapshot.
+ResourceRef projections are limited to the current code-owned API-version and
+Kind allowlist. Namespaced Evidence records its exact observed Namespace, which
+may differ from the working Namespace only for a run whose frozen policy
+allowed it; cluster-scoped references contain no Namespace.
 
 ## Repository contracts
 
@@ -122,11 +137,12 @@ foreign-key cascades remove the complete Session-owned graph or the transaction
 rolls back.
 
 The Message repository stores only bounded content that the caller has already
-made eligible and safe. A Message write checks that its Session is active and
-uses standard persistence, inserts the Message, and advances Session activity
-in one short transaction. Minimal-persistence Sessions reject durable Message
-content. Committed history is read in bounded ascending pages ordered by
-`created_at_ms, id`.
+made eligible and safe: user and system-notice content is at most 64 KiB, while
+a final assistant Message is at most 128 KiB. A Message write checks that its
+Session is active and uses standard persistence, inserts the Message, and
+advances Session activity in one short transaction. Minimal-persistence
+Sessions reject durable Message content. Committed history is read in bounded
+ascending pages ordered by `created_at_ms, id`.
 
 The AgentRun repository atomically stores a committed user Message and its
 `running` AgentRun before model or Tool work may begin. The same transaction
@@ -149,11 +165,11 @@ bounded the source data:
 | Durable category | Stored representation and hard bound |
 | --- | --- |
 | Model request | Lifecycle metadata, token counts, latency, model identifier, origin hash, and prompt or response fingerprints only. No prompt, response body, header, stream, or provider object is accepted. Model and prompt-version text are at most 128 bytes, and a provider request identifier is at most 256 bytes. |
-| ToolInvocation | One of the six fixed `v0.1` Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Scope, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments. |
+| ToolInvocation | One of the seven admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
 | Evidence | A project-owned ResourceRef projection, category, concise fact, source path, severity, redaction and truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. |
-| Diagnosis | Separate confirmed facts, hypotheses, missing information, not-executed recommended actions, answer text, validation warnings, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every confirmed fact cites same-run Evidence when written. |
-| AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, and future write-safety event types. |
-| Setting | The current allowlist contains only `retention.operational_detail_days`, encoded as a schema-version-1 integer from 0 through 3,650 with a UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |
+| Diagnosis | Validated free-form Markdown, claim-to-Evidence citations, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every retained confirmed fact cites same-run Evidence when written. |
+| AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, approval, and write-safety event types. |
+| Setting | `retention.operational_detail_days` is a schema-version-1 integer from 0 through 3,650. `scope.last_context` is a schema-version-1 strict JSON object containing one Context display name. Both use injected UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -206,7 +222,7 @@ After audit expiry, cleanup may remove a minimal-persistence Session shell when
 it has no retained AuditEvent or approval and no queued or running AgentRun.
 Standard-persistence Sessions, Messages, AgentRuns, and Diagnoses do not expire
 automatically. Explicit Session deletion removes the complete Session-owned
-graph, including model metadata, ToolInvocations, Evidence, Diagnoses, dormant
+graph, including model metadata, ToolInvocations, Evidence, Diagnoses, terminal
 approval rows, and Session- or AgentRun-linked AuditEvents, through foreign-key
 cascade in one short transaction. Global typed settings are not Session-owned.
 
@@ -215,8 +231,9 @@ canaries outside eligible DTOs, persist safe derivatives, and scan both the
 database and WAL. Static guards keep sqlx imports inside the SQLite adapter and
 reject `SELECT *`, unsafe or panic-style helpers, unbounded selection, generic
 map boundaries, formatted SQL, and non-Context database calls in repositories.
-The read-only composition contains only the dormant approval schema DTO and no
-approval service, approval coordinator, write executor, or restart path.
+Composition tests prove that the only reachable executor is the fixed
+Deployment restarter and that only the Application approval coordinator can
+call it after durable pre-write audit.
 
 ## Resume and startup recovery
 

@@ -8,7 +8,7 @@ import (
 
 const HomeEnvironmentVariable = "KUPILOT_HOME"
 
-// Paths contains the fixed descendants of one process-frozen KuPilot Home.
+// Paths contains the fixed descendants of one process-frozen Kupilot Home.
 // None of these paths is part of the serializable configuration schema.
 type Paths struct {
 	HomeDir              string `mapstructure:"-" yaml:"-" json:"-"`
@@ -22,7 +22,7 @@ type Paths struct {
 // PathInput is the complete deterministic input to lexical Home resolution.
 type PathInput struct {
 	HomeDir     string
-	KuPilotHome string
+	KupilotHome string
 }
 
 // SystemPaths resolves and freezes the current process Home without creating it.
@@ -37,11 +37,11 @@ func SystemPaths() (Paths, error) {
 				ClassConfigurationInvalid,
 				"home_directory_invalid",
 				"resolve_home",
-				"KuPilot could not resolve the current user's home directory.",
+				"Kupilot could not resolve the current user's home directory.",
 			)
 		}
 	}
-	paths, err := ResolvePaths(PathInput{HomeDir: home, KuPilotHome: selected})
+	paths, err := ResolvePaths(PathInput{HomeDir: home, KupilotHome: selected})
 	if err != nil {
 		return Paths{}, err
 	}
@@ -51,14 +51,14 @@ func SystemPaths() (Paths, error) {
 // ResolvePaths derives the one fixed layout without consulting working-directory
 // state or any platform-specific XDG or Library locations.
 func ResolvePaths(input PathInput) (Paths, error) {
-	root := input.KuPilotHome
+	root := input.KupilotHome
 	if root == "" {
 		if !validAbsoluteDirectory(input.HomeDir) {
 			return Paths{}, newSafeError(
 				ClassConfigurationInvalid,
 				"home_directory_invalid",
 				"resolve_home",
-				"KuPilot requires an absolute current-user home directory.",
+				"Kupilot requires an absolute current-user home directory.",
 			)
 		}
 		root = filepath.Join(input.HomeDir, ".kupilot")
@@ -91,7 +91,7 @@ func canonicalizeExistingHome(paths Paths) (Paths, error) {
 }
 
 // canonicalHomeRoot resolves every existing ancestor once, including the
-// parent of a Home that KuPilot has not created yet. Missing suffixes remain
+// parent of a Home that Kupilot has not created yet. Missing suffixes remain
 // lexical descendants of that canonical directory.
 func canonicalHomeRoot(root string) (string, os.FileInfo, bool, error) {
 	current := root
@@ -119,11 +119,11 @@ func canonicalHomeRoot(root string) (string, os.FileInfo, bool, error) {
 			return canonical, info, true, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "KuPilot could not inspect KUPILOT_HOME.")
+			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "Kupilot could not inspect KUPILOT_HOME.")
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "KuPilot could not inspect KUPILOT_HOME.")
+			return "", nil, false, newSafeError(ClassConfigurationInvalid, "kupilot_home_unavailable", "resolve_home", "Kupilot could not inspect KUPILOT_HOME.")
 		}
 		missing = append(missing, filepath.Base(current))
 		current = parent

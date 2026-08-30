@@ -16,7 +16,7 @@ import (
 
 const (
 	// ExportSummarySchemaVersion identifies the only admitted local export projection.
-	ExportSummarySchemaVersion = "kupilot.export-summary.v1"
+	ExportSummarySchemaVersion = "kupilot.export-summary.v2"
 	// MaxExportSummaryBytes is the complete post-redaction Markdown ceiling.
 	MaxExportSummaryBytes = 2 * 1024 * 1024
 	// MaxExportMessages bounds committed conversation records in one export.
@@ -28,6 +28,7 @@ const (
 
 	maxExportTargetBytes         = 4096
 	maxExportMessageBytes        = 4096
+	maxExportAnswerMarkdownBytes = MaxAnswerMarkdownBytes
 	maxExportDiagnosisTextBytes  = 2048
 	maxExportEvidenceFactBytes   = 2048
 	maxExportEvidencePathBytes   = 1024
@@ -132,8 +133,10 @@ type ExportMessageRecord struct {
 	CreatedAt time.Time
 }
 
-// ExportDiagnosisRecord contains only the four structured Diagnosis collections.
+// ExportDiagnosisRecord contains the final free-form answer and its bounded
+// Evidence and proposed-action metadata.
 type ExportDiagnosisRecord struct {
+	AnswerMarkdown     string
 	ConfirmedFacts     []domain.ConfirmedFact
 	Hypotheses         []domain.Hypothesis
 	MissingInformation []domain.MissingInformation
@@ -196,8 +199,10 @@ type ExportSummaryMessage struct {
 	CreatedAt time.Time
 }
 
-// ExportSummaryDiagnosis is one redacted four-part Diagnosis.
+// ExportSummaryDiagnosis is one redacted free-form answer with independently
+// verifiable metadata.
 type ExportSummaryDiagnosis struct {
+	AnswerMarkdown     string
 	ConfirmedFacts     []domain.ConfirmedFact
 	Hypotheses         []domain.Hypothesis
 	MissingInformation []domain.MissingInformation
@@ -365,7 +370,7 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 	}
 	var builder strings.Builder
 	builder.Grow(min(MaxExportSummaryBytes, maxExportMarkdownOverhead+len(summary.Messages)*maxExportMessageBytes))
-	builder.WriteString("# KuPilot Session Summary\n\n")
+	builder.WriteString("# Kupilot Session Summary\n\n")
 	fmt.Fprintf(&builder, "Schema: `%s`\n\n", ExportSummarySchemaVersion)
 	fmt.Fprintf(&builder, "Exported at: `%s`\n\n", exportTimestamp(summary.ExportedAt))
 	fmt.Fprintf(&builder, "Truncated: `%t`\n\n", summary.Truncated)
@@ -398,6 +403,8 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 	for index, diagnosis := range summary.Diagnoses {
 		fmt.Fprintf(&builder, "\n### Diagnosis %d\n\n", index+1)
 		fmt.Fprintf(&builder, "Created at: `%s`\n", exportTimestamp(diagnosis.CreatedAt))
+		builder.WriteString("\n#### Answer\n\n")
+		writeExportQuote(&builder, diagnosis.AnswerMarkdown)
 		writeConfirmedFacts(&builder, diagnosis.ConfirmedFacts)
 		writeHypotheses(&builder, diagnosis.Hypotheses)
 		writeMissingInformation(&builder, diagnosis.MissingInformation)
@@ -477,11 +484,18 @@ func processExportSingleLine(processor ExportTextProcessor, value string, limit 
 }
 
 func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextProcessor) (ExportSummaryDiagnosis, bool, error) {
-	if !validCoordinatorTime(record.CreatedAt) {
+	if !validCoordinatorTime(record.CreatedAt) || !utf8.ValidString(record.AnswerMarkdown) || strings.TrimSpace(record.AnswerMarkdown) == "" {
 		return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
 	}
-	result := ExportSummaryDiagnosis{CreatedAt: record.CreatedAt.UTC().Truncate(time.Millisecond)}
-	truncated := false
+	answer, err := processExportText(processor, record.AnswerMarkdown, maxExportAnswerMarkdownBytes)
+	if err != nil || answer.Value == "" {
+		return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+	}
+	result := ExportSummaryDiagnosis{
+		AnswerMarkdown: answer.Value,
+		CreatedAt:      record.CreatedAt.UTC().Truncate(time.Millisecond),
+	}
+	truncated := answer.Truncated
 
 	factLimit := min(len(record.ConfirmedFacts), maxExportDiagnosisItems)
 	truncated = truncated || len(record.ConfirmedFacts) > factLimit
@@ -546,7 +560,10 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 	actionLimit := min(len(record.RecommendedActions), maxExportDiagnosisItems)
 	truncated = truncated || len(record.RecommendedActions) > actionLimit
 	for _, action := range record.RecommendedActions[:actionLimit] {
-		if action.Executed {
+		if action.Executed || action.Operation == "" && action.Target != nil || action.Operation != "" &&
+			(action.Operation != domain.ApprovalOperationRestartDeployment || action.Target == nil ||
+				action.Target.Validate() != nil || action.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
+				action.Target.Kind != domain.RestartDeploymentTargetKind || action.Target.UID != "" || action.Target.ResourceVersion != "") {
 			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
 		}
 		actionText, err := processExportSingleLine(processor, action.Action, maxExportDiagnosisTextBytes)
@@ -568,9 +585,15 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 			prerequisites = append(prerequisites, value.Value)
 			prerequisitesChanged = prerequisitesChanged || value.Truncated
 		}
-		result.RecommendedActions = append(result.RecommendedActions, domain.RecommendedAction{
-			Action: actionText.Value, Risk: risk.Value, Prerequisites: prerequisites, Executed: false,
-		})
+		projectedAction := domain.RecommendedAction{
+			Operation: action.Operation, Action: actionText.Value, Risk: risk.Value,
+			Prerequisites: prerequisites, Executed: false,
+		}
+		if action.Target != nil {
+			target := *action.Target
+			projectedAction.Target = &target
+		}
+		result.RecommendedActions = append(result.RecommendedActions, projectedAction)
 		truncated = truncated || actionText.Truncated || risk.Truncated || prerequisitesChanged
 	}
 	return result, truncated, nil
@@ -738,6 +761,10 @@ func writeRecommendedActions(builder *strings.Builder, values []domain.Recommend
 	}
 	for index, action := range values {
 		fmt.Fprintf(builder, "\n%d. %s\n", index+1, escapeExportMarkdown(action.Action))
+		if action.Operation != "" && action.Target != nil {
+			fmt.Fprintf(builder, "   - Operation: `%s`\n", action.Operation)
+			fmt.Fprintf(builder, "   - Target: `%s %s/%s`\n", action.Target.Kind, action.Target.Namespace, action.Target.Name)
+		}
 		fmt.Fprintf(builder, "   - Risk: %s\n", escapeExportMarkdown(action.Risk))
 		builder.WriteString("   - Executed: `false`\n")
 		for _, prerequisite := range action.Prerequisites {

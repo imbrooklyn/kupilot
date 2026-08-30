@@ -157,6 +157,11 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 			t.Fatalf("seed preference statement error = %v", err)
 		}
 	}
+	if err := NewScopePreferenceRepository(database).SaveLastContext(context.Background(), application.ScopePreference{
+		Context: "development", UpdatedAt: base.Add(8 * time.Millisecond),
+	}); err != nil {
+		t.Fatalf("seed scope preference error = %v", err)
+	}
 
 	repository := NewSessionRepository(database)
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -176,7 +181,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
 		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
 		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
-		"settings": 1, "privacy_consents": 1, "schema_migrations": 4,
+		"settings": 2, "privacy_consents": 1, "schema_migrations": 5,
 	} {
 		var got int
 		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {

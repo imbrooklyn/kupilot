@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const maxMessageContentBytes = 65536
+const (
+	maxMessageContentBytes          = 64 * 1024
+	maxAssistantMessageContentBytes = 128 * 1024
+)
 
 // ErrInvalidMessage reports a Message invariant failure without echoing data.
 var ErrInvalidMessage = errors.New("Message data is invalid")
@@ -63,12 +66,16 @@ type Message struct {
 
 // Validate checks the complete safe Message persistence contract.
 func (message Message) Validate() error {
+	contentLimit := maxMessageContentBytes
+	if message.Role == MessageRoleAssistant {
+		contentLimit = maxAssistantMessageContentBytes
+	}
 	if !message.ID.Valid() || !message.SessionID.Valid() ||
 		(message.RunID != nil && !message.RunID.Valid()) ||
 		(message.Role != MessageRoleUser && message.Role != MessageRoleAssistant && message.Role != MessageRoleSystemNotice) ||
 		(message.Format != MessageFormatPlain && message.Format != MessageFormatMarkdown) ||
 		(message.Status != MessageStatusCommitted && message.Status != MessageStatusInterrupted && message.Status != MessageStatusRedacted) ||
-		!validBoundedText(message.Content, 1, maxMessageContentBytes) ||
+		!validBoundedText(message.Content, 1, contentLimit) ||
 		message.Hash != MessageContentHash(message.Content) ||
 		!validDurableTime(message.CreatedAt) {
 		return ErrInvalidMessage
@@ -80,7 +87,7 @@ func (message Message) Validate() error {
 	}
 	if message.Resource != nil {
 		if message.Scope == nil ||
-			message.Resource.Namespace != message.Scope.Namespace ||
+			!ReferenceMatchesWorkingNamespace(*message.Resource, message.Scope.Namespace) ||
 			message.Resource.Validate() != nil {
 			return ErrInvalidMessage
 		}

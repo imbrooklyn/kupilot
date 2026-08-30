@@ -173,18 +173,6 @@ func TestDiagnosisRubricRejectsForbiddenUnsupportedAndIncompleteResults(t *testi
 		}
 	})
 
-	t.Run("unrelated hypothesis Evidence", func(t *testing.T) {
-		mutated := fixture
-		mutated.Steps = append([]fixtureStep(nil), fixture.Steps...)
-		mutated.Steps[0] = fixture.Steps[0]
-		mutated.Steps[0].Result.Evidence = append([]fixtureEvidence(nil), fixture.Steps[0].Result.Evidence...)
-		mutated.Steps[0].Result.Evidence[0] = fixture.Steps[0].Result.Evidence[0]
-		mutated.Steps[0].Result.Evidence[0].Supports = []string{"container_imagepull_waiting"}
-		if err := evaluateDiagnosisRubric(policy, mutated, run); err == nil {
-			t.Fatal("rubric accepted hypothesis Evidence unrelated to its reviewed assertion")
-		}
-	})
-
 	t.Run("unknown Evidence reference", func(t *testing.T) {
 		mutated := run
 		mutated.diagnosis = run.diagnosis
@@ -206,22 +194,21 @@ func TestDiagnosisRubricRejectsForbiddenUnsupportedAndIncompleteResults(t *testi
 		}
 	})
 
-	t.Run("executed recommendation", func(t *testing.T) {
+	t.Run("empty answer", func(t *testing.T) {
 		mutated := run
 		mutated.diagnosis = run.diagnosis
-		mutated.diagnosis.RecommendedActions = append([]domain.RecommendedAction(nil), run.diagnosis.RecommendedActions...)
-		mutated.diagnosis.RecommendedActions[0].Executed = true
+		mutated.diagnosis.AnswerMarkdown = ""
 		if err := evaluateDiagnosisRubric(policy, fixture, mutated); err == nil {
-			t.Fatal("rubric accepted a recommendation marked as executed")
+			t.Fatal("rubric accepted an empty answer")
 		}
 	})
 
-	t.Run("missing section", func(t *testing.T) {
+	t.Run("provenance leak", func(t *testing.T) {
 		mutated := run
 		mutated.diagnosis = run.diagnosis
-		mutated.diagnosis.AnswerMarkdown = strings.Replace(mutated.diagnosis.AnswerMarkdown, "## Missing information", "Missing information", 1)
+		mutated.diagnosis.AnswerMarkdown += " " + string(mutated.diagnosis.ConfirmedFacts[0].EvidenceIDs[0])
 		if err := evaluateDiagnosisRubric(policy, fixture, mutated); err == nil {
-			t.Fatal("rubric accepted a Diagnosis without all four rendered sections")
+			t.Fatal("rubric accepted a raw Evidence ID in the visible answer")
 		}
 	})
 }
@@ -467,10 +454,11 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	}
 	clock := newFixtureClock(evalBaseTime)
 	scope := domain.ClusterScope{
-		Context:     "example-context",
-		Namespace:   fixture.Target.Namespace,
-		Generation:  7,
-		ActivatedAt: evalBaseTime,
+		Context:         "example-context",
+		Namespace:       fixture.Target.Namespace,
+		NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation:      7,
+		ActivatedAt:     evalBaseTime,
 	}
 	resource := fixture.Target.resourceRef()
 	input, err := agentcore.NewRunInput(
@@ -529,6 +517,7 @@ func fixedFixtureHandlers(tool agentcore.Tool) agentcore.ToolHandlers {
 		GetPodLogs:          tool,
 		GetPreviousPodLogs:  tool,
 		GetRelatedResources: tool,
+		GetClusterOverview:  tool,
 	}
 }
 
@@ -618,8 +607,8 @@ func (model *scriptedConversationModel) Stream(
 	switch callIndex {
 	case 0:
 		if len(request.Messages) < 2 || request.Messages[0].Role != domain.ModelMessageRoleSystem ||
-			!strings.Contains(request.Messages[0].Content, agentcore.SystemPromptVersion) || len(request.Tools) != 6 {
-			model.t.Errorf("initial ModelRequest does not contain the fixed policy and six Tools")
+			!strings.Contains(request.Messages[0].Content, agentcore.SystemPromptVersion) || len(request.Tools) != 7 {
+			model.t.Errorf("initial ModelRequest does not contain the fixed policy and seven Tools")
 			return fixtureModelError(request.ID)
 		}
 		for index, step := range model.steps {
@@ -705,7 +694,8 @@ func (tool *scriptedKubeTool) Execute(_ context.Context, call agentcore.BoundToo
 	}
 	step := tool.steps[index]
 	if call.Name() != step.Name || call.ModelCallID() != step.CallID || call.Scope().Namespace != tool.target.Namespace ||
-		strings.Contains(call.ArgumentsJSON(), `"namespace"`) || strings.Contains(call.ArgumentsJSON(), `"context"`) {
+		!strings.Contains(call.ArgumentsJSON(), `"namespace":"`+tool.target.Namespace+`"`) ||
+		strings.Contains(call.ArgumentsJSON(), `"context"`) {
 		tool.t.Fatalf("Tool call[%d] does not match the fixed fixture: %#v", index, call)
 	}
 	observedAt := tool.base.Add(time.Duration(step.Result.ObservedOffsetMS) * time.Millisecond)
@@ -812,13 +802,13 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 	if !reflect.DeepEqual(gotToolOrder, policy.ToolOrder) {
 		addProblem("Tool order is %#v, want %#v", gotToolOrder, policy.ToolOrder)
 	}
-	for _, heading := range []string{"## Confirmed facts", "## Hypotheses", "## Missing information", "## Recommended actions"} {
-		if strings.Count(run.diagnosis.AnswerMarkdown, heading) != 1 {
-			addProblem("rendered Diagnosis does not contain exactly one %q section", heading)
-		}
+	if strings.TrimSpace(run.diagnosis.AnswerMarkdown) == "" {
+		addProblem("the visible answer is empty")
 	}
-	if got := strings.Count(run.diagnosis.AnswerMarkdown, "Status: Not executed."); got != len(run.diagnosis.RecommendedActions) {
-		addProblem("unexecuted marker count is %d, want %d", got, len(run.diagnosis.RecommendedActions))
+	for _, id := range run.diagnosis.ReferencedEvidenceIDs() {
+		if strings.Contains(run.diagnosis.AnswerMarkdown, string(id)) {
+			addProblem("the visible answer leaks raw Evidence ID %q", id)
+		}
 	}
 
 	definitions := make(map[domain.EvidenceID]fixtureEvidence)
@@ -920,54 +910,31 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 		addProblem("confirmed assertions are %#v, want %#v", confirmedAssertions, fixture.RequiredConfirmedAssertions)
 	}
 
-	hypothesisAnnotations := annotationIndex(
-		"hypothesis",
-		len(run.diagnosis.Hypotheses),
-		fixture.Annotations.Hypotheses,
-		addProblem,
-	)
+	hypothesisAnnotations := fixture.Annotations.Hypotheses
 	allowedHypotheses := rubricIDSet(policy.AllowedHypotheses)
-	for index, assertion := range hypothesisAnnotations {
-		if _, allowed := allowedHypotheses[assertion]; !allowed {
-			addProblem("hypothesis assertion %q is not allowed by the scenario policy", assertion)
+	for _, annotation := range hypothesisAnnotations {
+		if annotation.Index < 0 || annotation.Assertion == "" {
+			addProblem("answer hypothesis annotation is invalid: %#v", annotation)
+			continue
 		}
-		hypothesis := run.diagnosis.Hypotheses[index]
-		hasSemanticSupport := len(hypothesis.SupportingEvidenceIDs) == 0
-		for _, id := range hypothesis.SupportingEvidenceIDs {
-			if _, exists := accepted[id]; !exists {
-				addProblem("hypothesis %d cites unknown Evidence %q", index, id)
-				continue
-			}
-			definition := definitions[id]
-			if !definition.Truncated && containsString(definition.Supports, assertion) {
-				hasSemanticSupport = true
-			}
-		}
-		if !hasSemanticSupport {
-			addProblem("hypothesis assertion %q lacks direct non-truncated supporting Evidence semantics", assertion)
-		}
-		if confidenceRank(hypothesis.Confidence) > confidenceRank(fixture.MaximumHypothesisConfidence) {
-			addProblem("hypothesis %d confidence %q exceeds fixture maximum %q", index, hypothesis.Confidence, fixture.MaximumHypothesisConfidence)
+		if _, allowed := allowedHypotheses[annotation.Assertion]; !allowed {
+			addProblem("hypothesis assertion %q is not allowed by the scenario policy", annotation.Assertion)
 		}
 	}
 
-	actionAnnotations := annotationIndex(
-		"recommended action",
-		len(run.diagnosis.RecommendedActions),
-		fixture.Annotations.RecommendedActions,
-		addProblem,
-	)
+	actionAnnotations := fixture.Annotations.RecommendedActions
 	allowedActions := rubricIDSet(policy.RecommendedActions)
-	for index, assertion := range actionAnnotations {
-		if _, allowed := allowedActions[assertion]; !allowed {
-			addProblem("recommended action assertion %q is not allowed by the scenario policy", assertion)
+	for _, annotation := range actionAnnotations {
+		if annotation.Index < 0 || annotation.Assertion == "" {
+			addProblem("answer recommendation annotation is invalid: %#v", annotation)
+			continue
 		}
-		if run.diagnosis.RecommendedActions[index].Executed {
-			addProblem("recommended action %d is marked executed", index)
+		if _, allowed := allowedActions[annotation.Assertion]; !allowed {
+			addProblem("recommended action assertion %q is not allowed by the scenario policy", annotation.Assertion)
 		}
 	}
 	if len(actionAnnotations) == 0 {
-		addProblem("the Diagnosis contains no evaluated recommended action")
+		addProblem("the answer contains no evaluated recommendation")
 	}
 
 	for _, kind := range fixture.RequiredMissingKinds {
@@ -1072,17 +1039,4 @@ func sameStringSet(left, right []string) bool {
 		}
 	}
 	return true
-}
-
-func confidenceRank(confidence domain.DiagnosisConfidence) int {
-	switch confidence {
-	case domain.DiagnosisConfidenceLow:
-		return 1
-	case domain.DiagnosisConfidenceMedium:
-		return 2
-	case domain.DiagnosisConfidenceHigh:
-		return 3
-	default:
-		return 4
-	}
 }

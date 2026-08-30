@@ -1,9 +1,9 @@
 # Privacy and Local Data
 
-KuPilot orchestrates locally and connects directly to the selected Kubernetes
+Kupilot orchestrates locally and connects directly to the selected Kubernetes
 API and configured model endpoint. Local orchestration does not mean all
 diagnostic data stays on the workstation. Review both cloud transfer and local
-retention before using KuPilot with a cluster.
+retention before using Kupilot with a cluster.
 
 ## Cloud model categories
 
@@ -59,16 +59,16 @@ The model-content contract excludes:
   stream, header, and endpoint-error contents.
 
 Eligible resource names, Event messages, user text, and application output may
-still be sensitive after processing. KuPilot treats them as cluster data and
+still be sensitive after processing. Kupilot treats them as cluster data and
 blocks high-confidence sensitive values rather than sending originals for
 diagnostic completeness.
 
 ## Local persistence and retention controls
 
 `/privacy` displays the current Session storage as `history saved` or `memory
-only` and shows the effective retention periods. The footer uses `history
-saved` or `memory-only history` for the same state. A standard-persistence
-Session may keep:
+only` and shows the effective retention periods. `/status` reports the same
+safe privacy and local-storage state without external I/O. A
+standard-persistence Session may keep:
 
 - Session and AgentRun metadata.
 - Locally processed committed user Messages and final validated assistant
@@ -88,7 +88,7 @@ Default logical retention is:
 | --- | --- |
 | Safe Session history and Diagnosis | Until explicit deletion of that Session |
 | ToolInvocation, Evidence, and model-request detail | 30 days |
-| Read-only lifecycle audit | 90 days |
+| Run and lifecycle audit | 90 days |
 | Terminal approval and decision records, and approval/write audit | 180 days |
 | Model-transfer consent | Until revoked, cleared, or invalidated |
 
@@ -120,27 +120,28 @@ without sending an export command. To export a historical Session, resume it
 explicitly first and then use `/privacy`. Minimal Sessions have no retained
 conversation to export and do not offer this action.
 
-The deterministic `kupilot.export-summary.v1` Markdown projection may contain:
+The deterministic `kupilot.export-summary.v2` Markdown projection may contain:
 
 - The schema version, export and truncation state, Session ID, sanitized title,
   timestamps, standard persistence mode, and historic display-only Context and
   Namespace.
 - Bounded, redacted committed user and final assistant text.
-- The four structured Diagnosis sections: confirmed facts, hypotheses, missing
-  information, and recommended actions, including their bounded supporting
-  fields and Evidence references.
+- The escaped final free-form answer Markdown, citation-backed compatibility
+  metadata, validation warnings, and typed proposed operation/target display
+  fields. Proposed actions contain no execution authority.
 - Bounded, redacted summaries of referenced accepted Evidence while retained,
   or an explicit expired marker after its detail was removed.
 
 It never includes raw Tool inputs or results, raw or complete container logs,
 raw Events, Kubernetes objects, full prompts, model requests, responses or
 streams, framework payloads, credentials, Secrets, kubeconfig data or paths,
-approval nonces or digests, execution authority, or arbitrary repository JSON.
-KuPilot does not call the model, Kubernetes, a Tool, an approval path, or an
+approval nonces or digests, UID, resource version, internal fingerprint,
+execution authority, or arbitrary repository JSON.
+Kupilot does not call the model, Kubernetes, a Tool, an approval path, or an
 executor to create this summary.
 
 The target parent must already exist as a safe owner-only directory on
-supported platforms. KuPilot rejects relative or unclean targets, symlink path
+supported platforms. Kupilot rejects relative or unclean targets, symlink path
 components, directories, an existing target, and non-sticky ancestor
 directories writable by group or others on supported Unix platforms. It writes
 a `0600` temporary file in the same directory, synchronizes it, and publishes
@@ -164,7 +165,7 @@ a forensic-erasure guarantee.
 
 ## Home, configuration, database, cache, and logs
 
-KuPilot resolves one process-frozen Home from `KUPILOT_HOME`, or uses
+Kupilot resolves one process-frozen Home from `KUPILOT_HOME`, or uses
 `$HOME/.kupilot` by default:
 
 | Local category | Fixed path below Home |
@@ -176,11 +177,11 @@ KuPilot resolves one process-frozen Home from `KUPILOT_HOME`, or uses
 
 Known SQLite sidecars use the database base name with `-journal`, `-wal`, or
 `-shm`; bounded logs use `.1` and `.2` rotations. No version has been released
-with another local layout, so KuPilot performs no legacy discovery or migration.
+with another local layout, so Kupilot performs no legacy discovery or migration.
 
-On supported Unix platforms, newly created KuPilot directories use `0700` and
+On supported Unix platforms, newly created Kupilot directories use `0700` and
 new files use `0600`. Existing user-managed modes are respected and are not an
-availability gate, even when wider. KuPilot may warn about a wider Home or
+availability gate, even when wider. Kupilot may warn about a wider Home or
 configuration file, but it does not chmod or chown it. Managed targets must
 still have the expected file type and must not use a symbolic link below the
 canonical Home.
@@ -190,13 +191,13 @@ Interactive model setup may save a model API key as disclosed plaintext in
 exposed by its permissions, another same-user process, backups, or snapshots.
 The extractor keeps the value out of ordinary typed configuration, TUI history,
 SQLite, logs, audit, model content, and child environments. Choosing `session`
-instead keeps it only in the current KuPilot process.
+instead keeps it only in the current Kupilot process.
 
 The default operational log is limited to code-defined startup, AgentRun
 lifecycle, and admitted model-request lifecycle events with allowlisted scalar
 fields. A model failure may retain its local request ID, stable class and code,
 retryability, observed HTTP status, fixed cause category, and a bounded
-function-name-only KuPilot call chain. It stores no Messages, Tool arguments,
+function-name-only Kupilot call chain. It stores no Messages, Tool arguments,
 resource names, cluster payloads, request or response bodies, headers,
 credentials, raw errors, file paths, line numbers, local values, or database
 rows.
@@ -204,10 +205,10 @@ rows.
 For a short-lived model investigation, `logging.sensitive_diagnostics: true`
 adds the configured endpoint and model, a bounded credential-redacted error
 chain, the first 4 KiB of a failed provider response, and a bounded Go stack
-with local paths and lines. KuPilot warns at startup. Provider errors may echo
+with local paths and lines. Kupilot warns at startup. Provider errors may echo
 operational content, and these local files are not encrypted. Disable the
 setting after reproduction and delete the current log and numbered rotations
-when they are no longer needed. KuPilot does not deliberately attach
+when they are no longer needed. Kupilot does not deliberately attach
 Authorization, the model key, request bodies, successful responses, streams,
 Tool data, or Kubernetes payloads, but an untrusted error may echo operational
 content after fixed sensitive-value handling. Each file is at most 1 MiB; at
@@ -254,41 +255,41 @@ explicitly disclose. A transaction failure reports that history was not
 cleared.
 
 Press `X` in `/privacy`, then `Y`, to delete all local database state. After the
-same run and approval gates, KuPilot validates the fixed Home state directory,
+same run and approval gates, Kupilot validates the fixed Home state directory,
 the exact `kupilot.db` path, and the known `-journal`, `-wal`, and `-shm`
 sidecars. It rejects symlinks and non-regular targets before closing storage.
 It then closes the database and removes only those exact files, including
 stored Session history, settings, and consent. It never recursively removes a
 directory or creates replacement state in the same operation.
 
-A preflight denial leaves the database open and KuPilot running. If any exact
+A preflight denial leaves the database open and Kupilot running. If any exact
 file cannot be removed after storage closes, the UI reports an incomplete
 deletion before exit. A successful result also requires acknowledgement before
-exit. On the next start, KuPilot creates new validated database state and
+exit. On the next start, Kupilot creates new validated database state and
 requires model-transfer consent again.
 
 Clear-history and delete-all database state do not remove `config.yaml`, cache,
 exported summaries, or the local operational log. `kupilot cache clear` removes
 only entries below the fixed cache child and does not load or change the
 configuration, database, or log. To remove a locally saved key, edit or remove
-the exact Home configuration after KuPilot exits. To remove operational logs,
+the exact Home configuration after Kupilot exits. To remove operational logs,
 remove only `kupilot.log`, `kupilot.log.1`, and `kupilot.log.2` below the fixed
 Home log directory. Do not recursively remove an unrelated parent or an
 explicit export directory. User-managed backups retain the same sensitive local
-data and remain outside KuPilot deletion.
+data and remain outside Kupilot deletion.
 
 Per-Session and clear-history deletion are logical operations. Neither logical
 row deletion nor file removal guarantees forensic erasure from SQLite free pages, WAL history,
-filesystem journals, snapshots, backups, swap, or storage media. KuPilot does
+filesystem journals, snapshots, backups, swap, or storage media. Kupilot does
 not run automatic `VACUUM` as a secure-delete claim. Use operating-system disk
 encryption and manage backups and snapshots when stronger protection is
-required. KuPilot cannot delete data a model provider retained under that
+required. Kupilot cannot delete data a model provider retained under that
 provider's policy.
 
 ## No product telemetry
 
-KuPilot has no product telemetry, analytics, remote crash reporting,
-KuPilot-operated account, update checker, or KuPilot control plane. Normal
+Kupilot has no product telemetry, analytics, remote crash reporting,
+Kupilot-operated account, update checker, or Kupilot control plane. Normal
 diagnosis uses only the selected Kubernetes API and configured model endpoint.
 A kubeconfig exec credential program is launched only when declared by the
 selected kubeconfig and permitted by configuration; it runs with the local

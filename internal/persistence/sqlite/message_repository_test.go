@@ -127,6 +127,49 @@ func TestMessageRepositoryRejectsMinimalPersistenceAndBindsExternalText(t *testi
 	}
 }
 
+func TestMessageRepositoryUsesRoleSpecificContentLimits(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "message-role-limits")
+	sessions := NewSessionRepository(db)
+	repository := NewMessageRepository(db)
+	base := time.UnixMilli(45_000).UTC()
+	sessionValue := testSession("00000000-0000-7000-8000-000000000251", "Role limits", domain.PrivacyModeStandard, base)
+	if err := sessions.Create(context.Background(), sessionValue); err != nil {
+		t.Fatalf("Create(Session) error = %v", err)
+	}
+
+	assistant := testMessage(
+		"00000000-0000-7000-8000-000000000252",
+		sessionValue.ID,
+		nil,
+		strings.Repeat("a", 128*1024),
+		base.Add(time.Millisecond),
+	)
+	assistant.Role = domain.MessageRoleAssistant
+	assistant.Format = domain.MessageFormatMarkdown
+	if err := repository.Append(context.Background(), assistant); err != nil {
+		t.Fatalf("Append(assistant at limit) error = %v", err)
+	}
+	stored, err := repository.GetByID(context.Background(), assistant.ID)
+	if err != nil || stored.Content != assistant.Content {
+		t.Fatalf("GetByID(assistant) bytes/error = %d/%v", len(stored.Content), err)
+	}
+
+	user := testMessage(
+		"00000000-0000-7000-8000-000000000253",
+		sessionValue.ID,
+		nil,
+		strings.Repeat("u", 64*1024+1),
+		base.Add(2*time.Millisecond),
+	)
+	if err := repository.Append(context.Background(), user); !errors.Is(err, sessioncontract.ErrInvalidRepositoryRequest) {
+		t.Fatalf("Append(oversized user) error = %v, want ErrInvalidRepositoryRequest", err)
+	}
+	var messageCount int
+	if err := db.handle.GetContext(context.Background(), &messageCount, `SELECT count(id) FROM messages`); err != nil || messageCount != 1 {
+		t.Fatalf("stored Message count/error = %d/%v, want 1/nil", messageCount, err)
+	}
+}
+
 func TestMessageRepositoryRejectsCorruptNullableRowWithoutDisclosure(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "message-row-invalid")
 	sessions := NewSessionRepository(db)

@@ -30,6 +30,18 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	if err := tools.Save(context.Background(), invocation, evidence); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
+	lastInvocation := testToolInvocation(
+		"00000000-0000-7000-8000-000000003007",
+		run,
+		domain.MaxAgentToolCalls,
+		time.UnixMilli(204).UTC(),
+	)
+	lastInvocation.Name = domain.ToolNameGetClusterOverview
+	lastInvocation.ArgumentsJSON = `{}`
+	lastInvocation.ArgumentsDigest = domain.SHA256Hex(lastInvocation.ArgumentsJSON)
+	if err := tools.Save(context.Background(), lastInvocation, nil); err != nil {
+		t.Fatalf("Save(last admitted invocation) error = %v", err)
+	}
 
 	gotInvocation, err := tools.GetByID(context.Background(), invocation.ID)
 	if err != nil {
@@ -42,7 +54,7 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	if err != nil {
 		t.Fatalf("ListByRun() error = %v", err)
 	}
-	if !reflect.DeepEqual(listedInvocations, []domain.ToolInvocation{invocation}) {
+	if !reflect.DeepEqual(listedInvocations, []domain.ToolInvocation{invocation, lastInvocation}) {
 		t.Fatalf("ListByRun() = %#v", listedInvocations)
 	}
 

@@ -1,4 +1,4 @@
-// Package sqlite provides KuPilot's local SQLite persistence adapter.
+// Package sqlite provides Kupilot's local SQLite persistence adapter.
 package sqlite
 
 import (
@@ -61,7 +61,7 @@ type Error struct {
 // Error returns only code-defined safe text and a validated correlation ID.
 func (err *Error) Error() string {
 	if err == nil {
-		return "KuPilot local storage failed. (storage_internal)"
+		return "Kupilot local storage failed. (storage_internal)"
 	}
 	return err.message + " (" + err.code + "; correlation=" + err.correlationID + ")"
 }
@@ -147,7 +147,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 			ClassConfigurationInvalid,
 			"storage_metadata_invalid",
 			"open_storage",
-			"KuPilot storage metadata is invalid.",
+			"Kupilot storage metadata is invalid.",
 			"storage",
 			nil,
 		)
@@ -157,7 +157,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 			ClassConfigurationInvalid,
 			"storage_path_invalid",
 			"validate_storage_path",
-			"The KuPilot state directory is invalid.",
+			"The Kupilot state directory is invalid.",
 			options.CorrelationID,
 			nil,
 		)
@@ -174,7 +174,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 			ClassPersistenceUnavailable,
 			"storage_open_failed",
 			"open_storage",
-			"KuPilot local storage is unavailable.",
+			"Kupilot local storage is unavailable.",
 			options.CorrelationID,
 			err,
 		)
@@ -199,7 +199,7 @@ func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
 			ClassPersistenceUnavailable,
 			"storage_open_failed",
 			"open_storage",
-			"KuPilot local storage is unavailable.",
+			"Kupilot local storage is unavailable.",
 			options.CorrelationID,
 			err,
 		)
@@ -245,7 +245,7 @@ func (db *DB) closeLocked() error {
 			ClassPersistenceUnavailable,
 			"storage_close_failed",
 			"close_storage",
-			"KuPilot could not close local storage cleanly.",
+			"Kupilot could not close local storage cleanly.",
 			db.correlationID,
 			err,
 		)
@@ -261,7 +261,7 @@ func (db *DB) DeleteAllLocalState(ctx context.Context) (application.LocalStateDe
 			ClassConfigurationInvalid,
 			"storage_delete_invalid",
 			"delete_all_local_state",
-			"KuPilot local storage cannot be deleted safely.",
+			"Kupilot local storage cannot be deleted safely.",
 			"storage",
 			nil,
 		)
@@ -273,7 +273,7 @@ func (db *DB) DeleteAllLocalState(ctx context.Context) (application.LocalStateDe
 			ClassPersistenceUnavailable,
 			"storage_already_closed",
 			"delete_all_local_state",
-			"KuPilot local storage is already closed.",
+			"Kupilot local storage is already closed.",
 			db.correlationID,
 			nil,
 		)
@@ -303,7 +303,7 @@ func (db *DB) DeleteAllLocalState(ctx context.Context) (application.LocalStateDe
 			ClassPersistenceUnavailable,
 			"storage_delete_incomplete",
 			"delete_all_local_state",
-			"KuPilot closed local storage but could not remove every database file.",
+			"Kupilot closed local storage but could not remove every database file.",
 			db.correlationID,
 			errors.Join(removalErrors...),
 		)
@@ -356,7 +356,7 @@ func activateJournalMode(ctx context.Context, db *sqlx.DB, correlationID string)
 			ClassPersistenceUnavailable,
 			"storage_pragma_failed",
 			"configure_storage",
-			"KuPilot could not apply its local storage policy.",
+			"Kupilot could not apply its local storage policy.",
 			correlationID,
 			err,
 		)
@@ -366,7 +366,7 @@ func activateJournalMode(ctx context.Context, db *sqlx.DB, correlationID string)
 			ClassPersistenceUnavailable,
 			"storage_pragma_failed",
 			"configure_storage",
-			"KuPilot could not verify its local storage policy.",
+			"Kupilot could not verify its local storage policy.",
 			correlationID,
 			nil,
 		)
@@ -392,7 +392,7 @@ func verifyConnectionPolicy(ctx context.Context, db *sqlx.DB, correlationID stri
 				ClassPersistenceUnavailable,
 				"storage_pragma_failed",
 				"configure_storage",
-				"KuPilot could not apply its local storage policy.",
+				"Kupilot could not apply its local storage policy.",
 				correlationID,
 				err,
 			)
@@ -402,7 +402,7 @@ func verifyConnectionPolicy(ctx context.Context, db *sqlx.DB, correlationID stri
 				ClassPersistenceUnavailable,
 				"storage_pragma_failed",
 				"configure_storage",
-				"KuPilot could not verify its local storage policy.",
+				"Kupilot could not verify its local storage policy.",
 				correlationID,
 				nil,
 			)
@@ -418,7 +418,7 @@ func verifyIntegrity(ctx context.Context, db *sqlx.DB, correlationID string) err
 			ClassPersistenceUnavailable,
 			"storage_integrity_failed",
 			"verify_storage_integrity",
-			"KuPilot could not verify local storage integrity.",
+			"Kupilot could not verify local storage integrity.",
 			correlationID,
 			err,
 		)
@@ -428,7 +428,7 @@ func verifyIntegrity(ctx context.Context, db *sqlx.DB, correlationID string) err
 			ClassPersistenceUnavailable,
 			"storage_integrity_failed",
 			"verify_storage_integrity",
-			"KuPilot local storage failed its integrity check.",
+			"Kupilot local storage failed its integrity check.",
 			correlationID,
 			nil,
 		)
@@ -599,7 +599,7 @@ func contextFailure(ctx context.Context, operation, correlationID string) error 
 			ClassConfigurationInvalid,
 			"storage_context_invalid",
 			operation,
-			"KuPilot requires a valid storage context.",
+			"Kupilot requires a valid storage context.",
 			correlationID,
 			nil,
 		)
@@ -622,7 +622,7 @@ func pathError(correlationID string, cause error) error {
 		ClassPolicyDenied,
 		"storage_path_unsafe",
 		"validate_storage_path",
-		"KuPilot refused an unsafe local storage path.",
+		"Kupilot refused an unsafe local storage path.",
 		correlationID,
 		cause,
 	)
@@ -633,7 +633,7 @@ func permissionError(correlationID string, cause error) error {
 		ClassPersistenceUnavailable,
 		"storage_permissions_failed",
 		"secure_storage_files",
-		"KuPilot could not secure its local storage files.",
+		"Kupilot could not secure its local storage files.",
 		correlationID,
 		cause,
 	)

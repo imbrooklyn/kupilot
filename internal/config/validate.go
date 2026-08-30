@@ -14,7 +14,7 @@ import (
 // Validate checks and canonicalizes a non-sensitive configuration.
 func Validate(config *Config) error {
 	if config == nil {
-		return newSafeError(ClassInternal, "config_internal", "validate_configuration", "KuPilot could not validate its configuration.")
+		return newSafeError(ClassInternal, "config_internal", "validate_configuration", "Kupilot could not validate its configuration.")
 	}
 	if config.Version != CurrentVersion {
 		return newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "validate_configuration", "Configuration version is unsupported; use version 1.")
@@ -23,7 +23,12 @@ func Validate(config *Config) error {
 		return newSafeError(ClassConfigurationInvalid, "config_context_invalid", "validate_configuration", "Kubernetes Context must be valid, bounded text without control characters.")
 	}
 	if config.Namespace != "" && !validNamespace(config.Namespace) {
-		return newSafeError(ClassConfigurationInvalid, "config_namespace_invalid", "validate_configuration", "Kubernetes Namespace must be a single DNS label; all-Namespace scope is not supported.")
+		return newSafeError(ClassConfigurationInvalid, "config_namespace_invalid", "validate_configuration", "Kubernetes working Namespace must be a single DNS label; use kubernetes.namespace_access to control cross-Namespace reads.")
+	}
+	switch config.Runtime.BudgetProfile {
+	case BudgetProfileCompact, BudgetProfileBalanced, BudgetProfileExtended:
+	default:
+		return newSafeError(ClassConfigurationInvalid, "config_budget_profile_invalid", "validate_configuration", "runtime.budget_profile must be compact, balanced, or extended.")
 	}
 	if config.Model.ProviderKind != ProviderOpenAICompatible {
 		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "model.provider_kind must be openai_compatible.")
@@ -38,7 +43,7 @@ func Validate(config *Config) error {
 		return newSafeError(ClassConfigurationInvalid, "config_output_limit_invalid", "validate_configuration", "model.max_output_tokens must be between 1 and 8192.")
 	}
 	if config.Model.RequestTimeoutSeconds < 1 || config.Model.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
-		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "model.request_timeout_seconds must be between 1 and 45.")
+		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "model.request_timeout_seconds must be between 1 and 300.")
 	}
 	if !config.Model.Streaming || !config.Model.ToolCallingRequired {
 		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "Model streaming and structured Tool calling must remain enabled.")
@@ -58,6 +63,9 @@ func Validate(config *Config) error {
 	}
 	if config.Kubernetes.ExecCredentials != ExecCredentialsAllow && config.Kubernetes.ExecCredentials != ExecCredentialsDeny {
 		return newSafeError(ClassConfigurationInvalid, "config_exec_credentials_invalid", "validate_configuration", "kubernetes.exec_credentials must be allow or deny.")
+	}
+	if config.Kubernetes.NamespaceAccess != NamespaceAccessCurrent && config.Kubernetes.NamespaceAccess != NamespaceAccessAll {
+		return newSafeError(ClassConfigurationInvalid, "config_namespace_access_invalid", "validate_configuration", "kubernetes.namespace_access must be current or all.")
 	}
 	switch config.Logging.Level {
 	case "info", "warn", "error":

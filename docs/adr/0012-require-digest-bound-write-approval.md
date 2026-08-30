@@ -16,7 +16,7 @@ deterministic failure behavior, not a prompt instruction or a modal boolean.
 
 ## Decision
 
-Every KuPilot write, beginning with the sole operation admitted by ADR-0029,
+Every Kupilot write, beginning with the sole operation admitted by ADR-0029,
 requires a dedicated Application-owned approval coordinator. The coordinator is
 absent from the `v0.1` composition.
 
@@ -30,7 +30,7 @@ An ApprovalRequest binds a versioned canonical encoding of:
 - Fixed canonical parameters and a human-readable risk summary.
 - Creation time and expiry exactly 60 seconds later.
 
-KuPilot computes a versioned operation digest over that encoding. The digest is
+Kupilot computes a versioned operation digest over that encoding. The digest is
 an integrity identifier, not a secret. Any field change creates a different
 proposal; a proposal is never edited or extended in place. The exact digest
 algorithm and canonical byte representation are versioned and fixed before any
@@ -50,7 +50,7 @@ without leading zeroes, and times are UTC Unix milliseconds. Operation schema,
 target API version, target Kind, and risk summary are code-defined constants.
 The fixed risk summary is `Restarting the Deployment replaces Pods and may
 temporarily reduce availability.` The Pod-template fingerprint covers the
-prior value or absence of the KuPilot restart annotation. Nonce, lifecycle
+prior value or absence of the Kupilot restart annotation. Nonce, lifecycle
 state, and resource version are deliberately excluded and are checked
 separately. The validity interval is half-open: a request is eligible only while
 `requested_at_ms <= now_ms < expires_at_ms`.
@@ -126,7 +126,7 @@ Positive consequences:
 
 - User authorization is tied to one visible immutable operation.
 - Replay, stale scope, changed target, and category-approval paths fail closed.
-- Durable pre-operation state establishes whether KuPilot was authorized before
+- Durable pre-operation state establishes whether Kupilot was authorized before
   an external request.
 - Crash recovery cannot silently repeat a write.
 

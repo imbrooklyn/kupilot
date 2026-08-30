@@ -1,7 +1,12 @@
 {
   "name": "imagepull_events_forbidden",
   "question": "Why can example-pod not start its container image?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Container example-container is waiting, ready=false, restarts=0, reason ImagePullBackOff, image example-image:v2.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_imagepull_waiting", "registry_network_or_authorization_possible"]
+            "supports": [
+              "container_imagepull_waiting",
+              "registry_network_or_authorization_possible"
+            ]
           }
         ]
       }
@@ -37,36 +45,43 @@
     }
   ],
   "diagnosis": {
+    "answer_markdown": "The container is waiting in ImagePullBackOff for image example-image:v2.\n\nThe image reference, registry reachability, or authorization may contribute, but none is confirmed. Confidence: high. To verify: A permitted Event observation or authorized external check identifies a different pull outcome.\n\nRecent image pull Events could not be read. Impact: The specific pull failure is unavailable and registry credentials cannot be assessed.\n\nSuggested next step: Ask an administrator to review Event access or inspect image pull Events independently. Risk: Changing access should remain limited to the required read operation. Before acting: Do not disclose registry credential values.",
+    "evidence_citations": [
+      {
+        "claim": "The container is waiting in ImagePullBackOff for image example-image:v2.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001311"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
     "confirmed_facts": [
-      {"statement": "The container is waiting in ImagePullBackOff for image example-image:v2.", "evidence_ids": ["00000000-0000-7000-8000-000000001311"]}
+      {
+        "index": 0,
+        "assertion": "container_imagepull_waiting"
+      }
     ],
     "hypotheses": [
       {
-        "statement": "The image reference, registry reachability, or authorization may contribute, but none is confirmed.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001311", "00000000-0000-7000-8000-000000009903"],
-        "confidence": "high",
-        "falsifier": "A permitted Event observation or authorized external check identifies a different pull outcome."
+        "index": 0,
+        "assertion": "registry_network_or_authorization_possible"
       }
-    ],
-    "missing_information": [
-      {"kind": "forbidden", "detail": "Recent image pull Events could not be read.", "impact": "The specific pull failure is unavailable and registry credentials cannot be assessed."}
     ],
     "recommended_actions": [
       {
-        "action": "Ask an administrator to review Event access or inspect image pull Events independently.",
-        "risk": "Changing access should remain limited to the required read operation.",
-        "prerequisites": ["Do not disclose registry credential values."],
-        "executed": false
+        "index": 0,
+        "assertion": "obtain_event_access"
       }
     ]
   },
-  "annotations": {
-    "confirmed_facts": [{"index": 0, "assertion": "container_imagepull_waiting"}],
-    "hypotheses": [{"index": 0, "assertion": "registry_network_or_authorization_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "obtain_event_access"}]
-  },
-  "required_confirmed_assertions": ["container_imagepull_waiting"],
-  "required_missing_kinds": ["forbidden", "unsupported"],
+  "required_confirmed_assertions": [
+    "container_imagepull_waiting"
+  ],
+  "required_missing_kinds": [
+    "forbidden"
+  ],
   "maximum_hypothesis_confidence": "low",
   "expected_evidence_detail_state": "available"
 }

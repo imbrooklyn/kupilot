@@ -60,7 +60,7 @@ current Context.
 
 The detail query reads only accepted Domain Evidence and Diagnosis values. It
 reuses the fixed source allowlist, text normalizer, sensitive-value filter, and
-byte ceiling before creating the TUI ViewModel. KuPilot never reconstructs a
+byte ceiling before creating the TUI ViewModel. Kupilot never reconstructs a
 detail from a raw Kubernetes object or raw persistence payload.
 
 Raw Tool results, complete container logs, YAML, Secret data, annotations, IP

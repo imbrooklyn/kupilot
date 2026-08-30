@@ -446,7 +446,7 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
 	}
 	if !model.run.PersistenceDegraded || model.run.Status != "completed" ||
-		!strings.Contains(model.footerView(), "diagnosis complete · storage degraded") {
+		strings.Contains(model.footerView(), "storage") || strings.Contains(model.footerView(), "diagnosis") {
 		t.Fatalf("degraded terminal run = %#v; footer=%q", model.run, model.footerView())
 	}
 	entries := model.transcript.Entries()
@@ -458,6 +458,39 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 	}
 	if !found {
 		t.Fatalf("degraded notice entries = %#v", entries)
+	}
+}
+
+func TestAnswerValidationWarningRemainsVisibleWithoutChangingStorageState(t *testing.T) {
+	t.Parallel()
+	model := newTestModel()
+	answer := strings.Repeat("a", application.MaxQuestionBytes+1)
+	stream := []application.UIEvent{
+		runStartedEvent(1),
+		{
+			Kind: application.UIEventValidationWarning, RunID: testRunID,
+			ScopeGeneration: 7, Sequence: 2,
+			Text: "Kupilot removed unsupported final-answer metadata.",
+		},
+		{
+			Kind: application.UIEventRunCompleted, RunID: testRunID,
+			ScopeGeneration: 7, Sequence: 3, Text: answer,
+		},
+	}
+	for _, event := range stream {
+		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
+	}
+	if model.run.PersistenceDegraded || model.run.Status != "completed" || model.run.StreamedText != answer {
+		t.Fatalf("warning terminal run = %#v", model.run)
+	}
+	found := false
+	for _, entry := range model.transcript.Entries() {
+		if strings.Contains(entry.Text, "unsupported final-answer metadata") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("validation warning entries = %#v", model.transcript.Entries())
 	}
 }
 

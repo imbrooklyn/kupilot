@@ -17,18 +17,18 @@ become a general command Tool or a model-selected capability.
 
 ## Decision
 
-KuPilot will support the standard kubeconfig exec credential mechanism only when
+Kupilot will support the standard kubeconfig exec credential mechanism only when
 it is required by the explicitly selected local Context. Kubeconfig resolution,
 ExecCredential schemas and codecs, and Kubernetes transport construction use
 client-go. The Kubernetes adapter owns the bounded process invocation so that
 Context cancellation and environment filtering do not depend on client-go's
 process-global exec authenticator.
 
-Typed configuration provides a strict-deny mode. When enabled, KuPilot rejects a
+Typed configuration provides a strict-deny mode. When enabled, Kupilot rejects a
 Context that requires exec authentication before launching the program. The
 model, Agent, Tool, Session history, and TUI cannot disable or bypass this mode.
 When strict deny is off, the explicitly selected kubeconfig is the source of the
-exec configuration; KuPilot does not create a second approval or command system.
+exec configuration; Kupilot does not create a second approval or command system.
 
 Runtime requirements are:
 
@@ -39,7 +39,7 @@ Runtime requirements are:
 - Take executable, arguments, protocol API version, and declared exec environment
   only from the selected kubeconfig after local validation. The model, user
   question, Session, Tool, and Kubernetes data cannot modify them.
-- Remove KuPilot's model API-key environment variable and other KuPilot-only
+- Remove Kupilot's model API-key environment variable and other Kupilot-only
   sensitive variables from the child environment. Do not add cluster or model
   content.
 - Honor the owning Context, use a bounded deadline, terminate the child on
@@ -53,9 +53,9 @@ Runtime requirements are:
 - Never provide interactive terminal access unless client-go and TUI behavior
   can remain bounded, cancellable, and deterministic on supported platforms.
 
-KuPilot cannot guarantee or audit network activity performed inside the
+Kupilot cannot guarantee or audit network activity performed inside the
 user-configured external program. Safe status and documentation must state that
-it is part of Kubernetes authentication, not a KuPilot Tool.
+it is part of Kubernetes authentication, not a Kupilot Tool.
 
 ## Consequences
 
@@ -71,7 +71,7 @@ Costs and constraints:
 
 - Context activation may fail when strict deny is enabled, the program is
   unavailable, or the required interactive behavior is unsupported.
-- KuPilot cannot sandbox an arbitrary external program portably under the
+- Kupilot cannot sandbox an arbitrary external program portably under the
   accepted platform scope.
 - Environment filtering and child-process ownership require platform tests.
 - Allowing standard exec authentication does not make a malicious kubeconfig

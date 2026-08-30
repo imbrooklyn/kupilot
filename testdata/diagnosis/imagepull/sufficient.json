@@ -1,7 +1,12 @@
 {
   "name": "imagepull_sufficient",
   "question": "Why can example-pod not start its container image?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,9 @@
             "fact": "Container example-container is waiting, ready=false, restarts=0, reason ImagePullBackOff, image example-image:v2.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["container_imagepull_waiting"]
+            "supports": [
+              "container_imagepull_waiting"
+            ]
           }
         ]
       }
@@ -38,7 +45,10 @@
             "fact": "Warning Event FailedPull for Pod example-pod reported that the image manifest was unavailable.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["failed_pull_event_observed", "image_reference_unavailable_possible"]
+            "supports": [
+              "failed_pull_event_observed",
+              "image_reference_unavailable_possible"
+            ]
           },
           {
             "id": "00000000-0000-7000-8000-000000001303",
@@ -46,49 +56,72 @@
             "fact": "Warning Event BackOff for Pod example-pod reported image pull backoff.",
             "source_path": "projected.events",
             "severity": "warning",
-            "supports": ["image_backoff_event_observed"]
+            "supports": [
+              "image_backoff_event_observed"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "The container is waiting in ImagePullBackOff for image example-image:v2.", "evidence_ids": ["00000000-0000-7000-8000-000000001301"]},
-      {"statement": "A recent Event reported a failed image pull.", "evidence_ids": ["00000000-0000-7000-8000-000000001302"]},
-      {"statement": "A recent Event reported image pull backoff.", "evidence_ids": ["00000000-0000-7000-8000-000000001303"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- The container is waiting in ImagePullBackOff for image example-image:v2.\n- A recent Event reported a failed image pull.\n- A recent Event reported image pull backoff.\n\nThe configured image reference may not identify an available manifest. Confidence: medium. To verify: An authorized external check resolves the same image reference successfully or a later pull succeeds.\n\nNo registry-side response or network observation was collected. Impact: Authorization and connectivity explanations remain unconfirmed.\n\nSuggested next step: Verify the image reference and registry availability through an authorized external workflow. Risk: Changing the image reference may replace Pods with different software. Before acting: Do not expose credential values while checking registry access.",
+    "evidence_citations": [
       {
-        "statement": "The configured image reference may not identify an available manifest.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001302"],
-        "confidence": "medium",
-        "falsifier": "An authorized external check resolves the same image reference successfully or a later pull succeeds."
+        "claim": "The container is waiting in ImagePullBackOff for image example-image:v2.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001301"
+        ]
+      },
+      {
+        "claim": "A recent Event reported a failed image pull.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001302"
+        ]
+      },
+      {
+        "claim": "A recent Event reported image pull backoff.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001303"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "absent", "detail": "No registry-side response or network observation was collected.", "impact": "Authorization and connectivity explanations remain unconfirmed."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Verify the image reference and registry availability through an authorized external workflow.",
-        "risk": "Changing the image reference may replace Pods with different software.",
-        "prerequisites": ["Do not expose credential values while checking registry access."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "container_imagepull_waiting"},
-      {"index": 1, "assertion": "failed_pull_event_observed"},
-      {"index": 2, "assertion": "image_backoff_event_observed"}
+      {
+        "index": 0,
+        "assertion": "container_imagepull_waiting"
+      },
+      {
+        "index": 1,
+        "assertion": "failed_pull_event_observed"
+      },
+      {
+        "index": 2,
+        "assertion": "image_backoff_event_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "image_reference_unavailable_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "verify_image_reference"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "image_reference_unavailable_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "verify_image_reference"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["container_imagepull_waiting", "failed_pull_event_observed", "image_backoff_event_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "container_imagepull_waiting",
+    "failed_pull_event_observed",
+    "image_backoff_event_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

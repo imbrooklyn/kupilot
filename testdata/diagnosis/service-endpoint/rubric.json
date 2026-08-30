@@ -23,10 +23,10 @@
     {"id": "service_existence_proves_backend", "meaning": "The Service object by itself proves that a ready backend exists."},
     {"id": "endpoint_address_known", "meaning": "An EndpointSlice address, topology value, or backend network identity is known or inferred."},
     {"id": "missing_endpoint_count_proves_no_backend", "meaning": "A missing or forbidden EndpointSlice count proves that no ready backend exists."},
-    {"id": "action_executed", "meaning": "KuPilot changed the Service, selector, Pod, or endpoint state."}
+    {"id": "action_executed", "meaning": "Kupilot changed the Service, selector, Pod, or endpoint state."}
   ],
   "recommended_actions": [
-    {"id": "inspect_matching_pod_readiness", "meaning": "Collect bounded readiness Evidence for matching Pods and review probe configuration outside KuPilot."},
+    {"id": "inspect_matching_pod_readiness", "meaning": "Collect bounded readiness Evidence for matching Pods and review probe configuration outside Kupilot."},
     {"id": "obtain_service_relationship_access", "meaning": "Obtain permission for the fixed Pod and EndpointSlice relationship read."}
   ],
   "permission_or_missing_paths": [

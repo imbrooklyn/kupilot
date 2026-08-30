@@ -1,190 +1,172 @@
-# KuPilot Product Contract
+# Kupilot Product Contract
 
 ## Product definition
 
-KuPilot is a local, single-process Kubernetes TUI Agent. It reads a narrowly
-bound Kubernetes ClusterScope through constrained, structured Tools, turns the
-safe observations into Evidence, and uses a configured cloud model to produce a
-cautious Diagnosis.
+Kupilot is a local, single-process Kubernetes operations Agent with a
+conversational terminal interface. A user asks an operational question in
+natural language, Kupilot chooses typed Kubernetes capabilities, shows the work
+inline, and returns the Markdown answer that best fits the question.
 
-KuPilot is Agent-first: natural-language diagnostic intent is the primary
-interaction, and the Agent decides which bounded Evidence to gather. The TUI
-helps the user provide context and supervise ToolInvocations. It does not become
-a parallel resource management interface.
+Kupilot is designed for everyday cluster investigation and carefully supervised
+actions. It is not a resource browser with an assistant attached. The primary
+interaction remains a conversation, not a resource tree, dashboard, command
+palette, YAML editor, or embedded shell.
 
-The core value of `v0.1` is to make the common diagnostic sequence - decide what
-to inspect, collect the minimum useful facts, and explain uncertainty - available
-in one interaction without giving the model general cluster access.
+The current product line is `v0.4`. It replaces the original diagnostic MVP's
+permanent six-Tool, five-Kind, current-Namespace, four-section answer, and
+90-second execution boundaries. The original security mechanisms are retained
+where they protect authority or data rather than merely restricting usefulness.
 
 ## Product principles
 
-1. **Evidence before Diagnosis.** Confirmed facts must be traceable to Evidence
-   from the current AgentRun. Model text cannot create Evidence.
-2. **Narrow, immutable scope.** Each AgentRun is bound to one ClusterScope. A
-   scope change invalidates the active AgentRun instead of mixing observations.
-3. **Read-only means read-only.** `v0.1` has no Kubernetes write path and no
-   Approval Dialog. Recommendations are clearly described as not executed.
-4. **Minimum necessary access.** Tools use fixed resource kinds, relationships,
-   and hard budgets. They do not expose Kubernetes as a generic API.
-5. **Visible uncertainty.** Missing, denied, stale, conflicting, or truncated
-   information remains a visible gap. KuPilot may conclude that there is not
-   enough Evidence.
-6. **Snapshot diagnosis, not monitoring.** Evidence describes an observation at
-   a recorded time. KuPilot does not claim that the cluster remains unchanged.
-7. **Local credential isolation.** Kubernetes and model credentials are not
-   model content. A model key may be kept process-only or explicitly saved as
-   disclosed plaintext under the user-managed KuPilot Home, but it never enters
-   Session history, logs, audit, SQLite, or ordinary model-facing values.
-   Cluster data is projected and redacted locally before any permitted cloud
-   transfer.
+1. **Agent-first interaction.** The user states intent and supervises visible
+   capability and action steps. Browsing Kubernetes objects is not a second
+   product center.
+2. **Typed authority, natural answers.** Model-visible capabilities and actions
+   use strict versioned schemas. The visible answer is free-form Markdown, not a
+   fixed report template.
+3. **Exact operational context.** Every run has one verified Context, one
+   working Namespace, one namespace-access policy, and one generation. The
+   footer keeps the Context and working Namespace visible; `/status` explains
+   the complete authority and budget snapshot.
+4. **Evidence remains runtime-owned.** Only deterministic local capability
+   handling creates Evidence. Model and user text cannot invent observations,
+   scope, approval, or execution state.
+5. **Broader access is explicit.** The `all` namespace policy admits explicitly
+   targeted cross-Namespace and bounded all-Namespace reads in the same
+   Context. It never means cross-cluster access, hidden background scans, or a
+   different Kubernetes identity.
+6. **Sensitive sources stay closed.** Kubernetes credentials, Secret objects
+   and data, ConfigMap values, environment values, raw objects, raw model
+   traffic, and unbounded output are not model content.
+7. **Writes are supervised transactions.** A model may propose only a
+   code-defined operation. Every write requires an exact target, local
+   digest-bound approval, fresh revalidation, durable pre-operation audit, one
+   execution attempt, and separate verification.
+8. **Budgets are visible operating controls.** Runs use an immutable compact,
+   balanced, or extended profile. Limits remain finite and locally enforced,
+   but the balanced default is sized for multi-resource investigations.
+9. **Local ownership and deletion.** Kupilot has no hosted control plane or
+   telemetry. Eligible local history follows the accepted retention and
+   deletion contract.
 
-## Intended `v0.1` user journey
+## Intended user journey
 
-1. The user starts a new Session. A bare `kupilot` invocation always creates a
-   new Session; only an explicit `resume` action queries local Session history.
-2. If the model profile or key is missing, the user completes masked setup in
-   the single-screen TUI and chooses disclosed local plaintext storage or
-   process-only use. No configuration file is required merely to open KuPilot.
-3. The user selects and verifies a kubeconfig Context and Namespace. KuPilot
-   forms the active ClusterScope without copying or persisting kubeconfig
-   contents.
-4. The user can optionally attach one ResourceRef from the fixed target kinds:
-   Pod, Deployment, ReplicaSet, Job, or Service.
-5. The user submits a diagnostic question in natural language. That submission
-   creates one AgentRun with an immutable ClusterScope.
-6. The Agent selects from the six read-only Tools. The TUI shows each
-   ToolInvocation and its safe status or summary, and the user can cancel the
-   AgentRun.
-7. Tool results are projected, bounded, and redacted before they become Evidence
-   or eligible model context.
-8. KuPilot returns a Diagnosis with confirmed facts, hypotheses, missing
-   information, recommended actions, the observed ClusterScope, and observation
-   times.
-9. The user evaluates and performs any desired action independently. `v0.1`
-   never presents a recommendation as an action KuPilot executed.
+1. The user starts `kupilot` for a new Session, or explicitly resumes safe local
+   history. A new start resolves the configured, remembered, or kubeconfig
+   current Context and verifies the `default` Namespace unless one was
+   configured explicitly.
+2. If needed, the single-screen TUI collects the model endpoint, model name,
+   and masked API key and discloses plaintext local storage before saving it.
+3. The user verifies a kubeconfig Context and working Namespace. The footer
+   keeps both visible.
+4. Before the first eligible model transfer, the user reviews the exact model
+   origin and data categories and grants or rejects consent.
+5. The user asks a question such as "which Nodes are under pressure?", "compare
+   failing workloads across Namespaces", or "why is checkout unavailable?".
+6. Kupilot creates one AgentRun with a frozen Context, working Namespace,
+   namespace-access policy, capability catalog, consent, and budget profile.
+7. Inline steps show bounded reads and any proposed action. The user may cancel
+   the run at any time and may inspect `/status` without causing external I/O.
+8. Kupilot returns a validated free-form Markdown answer. Evidence detail and
+   gaps remain inspectable without forcing every response into a fixed layout.
+9. If the Agent proposes an admitted mutation, Kupilot displays a default-reject
+   approval bound to the exact target and operation. Request acceptance and
+   post-operation verification remain distinct.
 
-## Diagnosis contract
+## Operational read contract
 
-Every completed Diagnosis is organized into four distinct parts:
+The versioned read catalog uses typed client-go operations and project-owned
+projections. The first `v0.4` source allowlist is:
 
-- **Confirmed facts:** observations supported by Evidence from the current
-  AgentRun. Each fact refers to its Evidence and observation time.
-- **Hypotheses:** possible explanations, with uncertainty and a way to confirm or
-  disprove them. A hypothesis is not promoted to fact by fluent wording.
-- **Missing information:** facts KuPilot could not obtain because they were
-  absent, forbidden, unsupported, stale, conflicting, or outside a hard limit.
-- **Recommended actions:** steps the user may consider. They include relevant
-  risks or prerequisites and are explicitly marked as not executed in `v0.1`.
+- Namespace, Node, Pod, Service, PersistentVolumeClaim, PersistentVolume, and
+  ConfigMap metadata from core `v1`;
+- Deployment, ReplicaSet, StatefulSet, and DaemonSet from `apps/v1`;
+- Job and CronJob from `batch/v1`;
+- Ingress from `networking.k8s.io/v1`;
+- HorizontalPodAutoscaler from `autoscaling/v2`; and
+- PodDisruptionBudget from `policy/v1`.
 
-A successful AgentRun means that KuPilot followed the Evidence and safety
-contract. It does not mean that KuPilot necessarily found the root cause.
+Capabilities cover exact resource reads, bounded lists, recent Events, current
+and previous Pod log tails, code-defined relationships, and a bounded cluster
+overview for Namespace and Node health. Namespaced calls default to the working
+Namespace. Under the frozen `all` policy, the model may supply an explicit
+Namespace or request a bounded all-Namespace list. The runtime validates and
+canonicalizes that choice before Kubernetes I/O.
 
-## Eight MVP diagnostic categories
+No capability accepts a kubeconfig, credential, endpoint, Context, arbitrary
+GVR, raw selector, raw HTTP request, shell command, YAML document, pagination
+token, or unlimited result size. Kubernetes RBAC is still enforced by the API
+server and every denial remains visible.
 
-These categories define the `v0.1` coverage target. They are product acceptance
-boundaries, not promises that every real-world incident has a single discoverable
-cause.
+## Answer and Evidence contract
 
-### 1. CrashLoopBackOff
+The visible result is bounded Markdown. Kupilot does not prepend scope text or
+append `Confirmed facts`, `Hypotheses`, `Missing information`, and
+`Recommended actions` sections to every answer.
 
-- **User intent:** understand why a Pod container repeatedly starts and exits.
-- **Permitted Evidence:** projected Pod and container state, restart and last
-  termination details, recent related Events, bounded current or previous
-  container log excerpts, and bounded owner relationships.
-- **Successful Diagnosis:** identifies the observed restart behavior, correlates
-  relevant state, Events, and log excerpts, and separates supported facts from
-  possible causes.
-- **Boundary:** a single log line is not sufficient to claim a root cause.
+The internal final-response envelope separately carries:
 
-### 2. OOMKilled
+- the candidate Markdown answer;
+- claim-to-Evidence references; and
+- typed proposed actions.
 
-- **User intent:** investigate a container whose previous instance was reported
-  as OOMKilled.
-- **Permitted Evidence:** projected termination reason and exit details, restart
-  count, bounded previous container log excerpts, and owning workload status.
-- **Successful Diagnosis:** confirms whether Kubernetes reported OOMKilled,
-  describes the affected container and observed restart state, and identifies
-  what additional resource context is missing.
-- **Boundary:** a memory-related phrase in a log excerpt alone does not confirm
-  OOMKilled or its underlying cause.
+Runtime validates current-run Evidence IDs and action schemas before accepting
+the result. Invalid citations are removed and produce a visible warning. A
+permission denial, truncation, sensitive-output block, stale result, budget
+stop, or unsupported source is stated honestly rather than hidden behind a
+confident answer.
 
-### 3. ImagePullBackOff
+Evidence is a time-bounded projection, not a complete cluster truth. A
+successful AgentRun means that Kupilot followed its local authority, data, and
+protocol checks. It does not guarantee that a model identified the root cause.
 
-- **User intent:** understand why a Pod cannot obtain a container image.
-- **Permitted Evidence:** projected container waiting reasons and sanitized,
-  recent Events such as image pull failures or backoff reports.
-- **Successful Diagnosis:** reports the observed pull state and Event details,
-  then distinguishes supported findings from possible registry, image, network,
-  or authorization explanations.
-- **Boundary:** KuPilot does not read Kubernetes Secrets and must not guess that
-  a registry credential is wrong without Evidence.
+## Supervised action contract
 
-### 4. Pod Pending
+`restart_deployment` is the first admitted `v0.4` action. It changes only the
+Kupilot-owned Pod-template restart annotation for one exact `apps/v1`
+Deployment. It accepts no patch, YAML, annotation key, timestamp, resource
+version, or arbitrary parameter from the model.
 
-- **User intent:** understand why a Pod remains Pending.
-- **Permitted Evidence:** projected Pod conditions, safe scheduling constraint
-  summaries, recent scheduling Events, and bounded owner relationships.
-- **Successful Diagnosis:** states whether the Pod is unscheduled or blocked at
-  another stage, cites the available scheduling Evidence, and exposes missing
-  Event or permission data.
-- **Boundary:** absent scheduling Events are not proof of resource shortage.
+An action proposal is not approval. Approval is local, defaults to rejection,
+expires after 60 seconds, is single-use, and binds the operation, policy,
+Context, Namespace, generation, target identity, target fingerprint, reason,
+and expiry. Kupilot re-reads the target, persists the consumed approval and
+pre-operation audit, performs one write attempt, and reports API acceptance and
+rollout verification separately.
 
-### 5. Readiness probe failure
+Additional actions may be added only as independently reviewed typed
+transactions. Kupilot does not expose generic apply, patch, delete, exec, or
+command execution as an extension mechanism.
 
-- **User intent:** understand why a container or Pod is not Ready.
-- **Permitted Evidence:** projected readiness conditions and container state,
-  sanitized health-related Events, and bounded current container log excerpts.
-- **Successful Diagnosis:** correlates the readiness state with probe Events or
-  application observations and distinguishes the symptom from a possible cause.
-- **Boundary:** service unavailability by itself does not prove a readiness probe
-  failure.
+## Product identity and non-goals
 
-### 6. Deployment with no available replicas
+Kupilot is intentionally not:
 
-- **User intent:** understand why a Deployment has no available replicas.
-- **Permitted Evidence:** projected Deployment replica counts and conditions,
-  bounded related ReplicaSet and Pod status, and relevant sanitized Events or
-  bounded log excerpts.
-- **Successful Diagnosis:** traces the availability gap from the Deployment to
-  affected ReplicaSets or Pods and identifies the strongest supported failure
-  layer.
-- **Boundary:** a Deployment condition alone is not a complete root-cause
-  explanation.
+- k9s, a Kubernetes Dashboard, or a resource inventory application;
+- a kubectl wrapper, shell, terminal multiplexer, IDE, or YAML editor;
+- a controller, operator, daemon, scheduled scanner, or autonomous remediation
+  service;
+- a hosted service, cluster-resident component, multi-user control plane, or
+  telemetry collector;
+- a plugin host, MCP client, RAG system, arbitrary network agent, or Multi-Agent
+  orchestrator.
 
-### 7. Failed Job
+These non-goals constrain interaction and authority, not the usefulness of
+typed Kubernetes investigation. A new built-in resource or operation is
+admitted through explicit product, permission, privacy, budget, and test review
+rather than through a permanent low feature ceiling.
 
-- **User intent:** understand why a Job has failed or cannot complete.
-- **Permitted Evidence:** projected Job counts and conditions, bounded related
-  Pod termination state, recent sanitized Events, and bounded log excerpts.
-- **Successful Diagnosis:** correlates Job status with the relevant Pod outcome
-  and separates controller state, container failure, and application-level
-  hypotheses.
-- **Boundary:** a nonzero failed count alone does not prove an application error.
+## References
 
-### 8. Service with no ready Endpoint
-
-- **User intent:** understand why a Service has no ready backend Endpoint.
-- **Permitted Evidence:** projected Service selector information, bounded related
-  Pod matches and readiness, and EndpointSlice ready and not-ready counts without
-  addresses.
-- **Successful Diagnosis:** distinguishes no selector match, matched but unready
-  Pods, and incomplete or forbidden relationship Evidence.
-- **Boundary:** the existence of a Service object does not prove that a working
-  backend exists.
-
-## Product identity and adjacent tools
-
-KuPilot is not:
-
-- k9s or a Kubernetes Dashboard. It does not make resource navigation or direct
-  manipulation the primary interaction.
-- a kubectl wrapper. The model cannot generate or execute shell or kubectl
-  commands through KuPilot.
-- a generic chat bot. KuPilot gathers bounded, time-stamped Evidence instead of
-  relying only on text pasted by the user.
-- an IDE, monitoring system, cluster controller, or general DevOps Agent.
-
-The detailed version boundary and feature admission gate are defined in
-[Scope](./scope.md). Data handling is summarized in
-[Privacy Overview](./privacy-overview.md). Canonical terms are defined in the
-[Glossary](./glossary.md).
+- [Version Scope](scope.md)
+- [Architecture](architecture.md)
+- [Security Threat Model](security.md)
+- [Privacy Overview](privacy-overview.md)
+- [Data Retention Contract](data-retention.md)
+- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
+- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
+- [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0041: Export Free-Form Session Summaries](adr/0041-export-free-form-session-summaries.md)
+- [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)

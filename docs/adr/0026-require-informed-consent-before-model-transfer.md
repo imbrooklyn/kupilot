@@ -5,7 +5,7 @@
 
 ## Context
 
-KuPilot sends selected local questions and projected Kubernetes observations to
+Kupilot sends selected local questions and projected Kubernetes observations to
 a user-configured cloud model endpoint. Even after credentials and Secret data
 are excluded, resource names, status fields, Events, and optional redacted
 container output may be sensitive operational data.
@@ -17,7 +17,7 @@ content have no policy authority.
 
 ## Decision
 
-KuPilot requires explicit informed consent before the first model-content
+Kupilot requires explicit informed consent before the first model-content
 transfer. Consent is enforced by Application and the model-egress gate, not by
 the TUI, Agent, Prompt, Tool result, or model adapter alone.
 

@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestDefaultsUseDefaultWorkingNamespaceWithoutChoosingContext(t *testing.T) {
+	t.Parallel()
+
+	config := Defaults()
+	if config.Context != "" || config.Namespace != DefaultNamespace {
+		t.Fatalf("scope defaults = Context %q Namespace %q", config.Context, config.Namespace)
+	}
+}
+
 func TestValidateModelEndpointPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -99,6 +108,7 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "context too long", mutate: func(c *Config) { c.Context = strings.Repeat("c", MaxContextBytes+1) }, code: "config_context_invalid"},
 		{name: "namespace uppercase", mutate: func(c *Config) { c.Namespace = "Default" }, code: "config_namespace_invalid"},
 		{name: "namespace all", mutate: func(c *Config) { c.Namespace = "*" }, code: "config_namespace_invalid"},
+		{name: "budget profile", mutate: func(c *Config) { c.Runtime.BudgetProfile = "unlimited" }, code: "config_budget_profile_invalid"},
 		{name: "provider kind", mutate: func(c *Config) { c.Model.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
 		{name: "reasoning effort", mutate: func(c *Config) { c.Model.ReasoningEffort = "medium" }, code: "config_reasoning_effort_invalid"},
 		{name: "temperature below zero", mutate: func(c *Config) { c.Model.Temperature = -0.01 }, code: "config_temperature_invalid"},

@@ -1,7 +1,12 @@
 {
   "name": "oomkilled_sufficient",
   "question": "Was example-pod terminated because of memory pressure?",
-  "target": {"api_version": "v1", "kind": "Pod", "namespace": "example-namespace", "name": "example-pod"},
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
   "steps": [
     {
       "call_id": "call-1",
@@ -18,7 +23,10 @@
             "fact": "Container example-container is running, ready=false, restarts=2; previous state terminated, reason OOMKilled, exit_code=137.",
             "source_path": "projected.status.container_statuses",
             "severity": "critical",
-            "supports": ["kubernetes_oomkill_reported", "memory_limit_or_peak_possible"]
+            "supports": [
+              "kubernetes_oomkill_reported",
+              "memory_limit_or_peak_possible"
+            ]
           }
         ]
       }
@@ -38,7 +46,10 @@
             "fact": "A bounded previous log excerpt was returned for container example-container.",
             "source_path": "projected.log_excerpt",
             "severity": "warning",
-            "supports": ["previous_log_excerpt_available", "memory_limit_or_peak_possible"]
+            "supports": [
+              "previous_log_excerpt_available",
+              "memory_limit_or_peak_possible"
+            ]
           }
         ]
       }
@@ -58,47 +69,61 @@
             "fact": "Pod example-pod is controlled by ReplicaSet example-owner.",
             "source_path": "projected.metadata.controller_owner",
             "severity": "info",
-            "supports": ["pod_owner_observed"]
+            "supports": [
+              "pod_owner_observed"
+            ]
           }
         ]
       }
     }
   ],
   "diagnosis": {
-    "confirmed_facts": [
-      {"statement": "Kubernetes reported OOMKilled with exit code 137 for the previous container instance.", "evidence_ids": ["00000000-0000-7000-8000-000000001201"]},
-      {"statement": "The Pod has a projected ReplicaSet owner relationship.", "evidence_ids": ["00000000-0000-7000-8000-000000001203"]}
-    ],
-    "hypotheses": [
+    "answer_markdown": "- Kubernetes reported OOMKilled with exit code 137 for the previous container instance.\n- The Pod has a projected ReplicaSet owner relationship.\n\nA workload memory limit or a usage peak may have contributed to the termination. Confidence: medium. To verify: Workload configuration and external memory observations show adequate headroom at the termination time.\n\nWorkload memory requests, limits, and usage history were not collected. Impact: The underlying reason for the OOMKilled termination is not established.\n\nSuggested next step: Review workload memory configuration and external memory trends around the observation time. Risk: Changing resource configuration may replace Pods or alter scheduling. Before acting: Validate the proposed values outside Kupilot.",
+    "evidence_citations": [
       {
-        "statement": "A workload memory limit or a usage peak may have contributed to the termination.",
-        "supporting_evidence_ids": ["00000000-0000-7000-8000-000000001201", "00000000-0000-7000-8000-000000001202"],
-        "confidence": "medium",
-        "falsifier": "Workload configuration and external memory observations show adequate headroom at the termination time."
+        "claim": "Kubernetes reported OOMKilled with exit code 137 for the previous container instance.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001201"
+        ]
+      },
+      {
+        "claim": "The Pod has a projected ReplicaSet owner relationship.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000001203"
+        ]
       }
     ],
-    "missing_information": [
-      {"kind": "absent", "detail": "Workload memory requests, limits, and usage history were not collected.", "impact": "The underlying reason for the OOMKilled termination is not established."}
-    ],
-    "recommended_actions": [
-      {
-        "action": "Review workload memory configuration and external memory trends around the observation time.",
-        "risk": "Changing resource configuration may replace Pods or alter scheduling.",
-        "prerequisites": ["Validate the proposed values outside KuPilot."],
-        "executed": false
-      }
-    ]
+    "proposed_actions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "kubernetes_oomkill_reported"},
-      {"index": 1, "assertion": "pod_owner_observed"}
+      {
+        "index": 0,
+        "assertion": "kubernetes_oomkill_reported"
+      },
+      {
+        "index": 1,
+        "assertion": "pod_owner_observed"
+      }
     ],
-    "hypotheses": [{"index": 0, "assertion": "memory_limit_or_peak_possible"}],
-    "recommended_actions": [{"index": 0, "assertion": "inspect_memory_configuration"}]
+    "hypotheses": [
+      {
+        "index": 0,
+        "assertion": "memory_limit_or_peak_possible"
+      }
+    ],
+    "recommended_actions": [
+      {
+        "index": 0,
+        "assertion": "inspect_memory_configuration"
+      }
+    ]
   },
-  "required_confirmed_assertions": ["kubernetes_oomkill_reported", "pod_owner_observed"],
-  "required_missing_kinds": ["absent"],
+  "required_confirmed_assertions": [
+    "kubernetes_oomkill_reported",
+    "pod_owner_observed"
+  ],
+  "required_missing_kinds": [],
   "maximum_hypothesis_confidence": "medium",
   "expected_evidence_detail_state": "available"
 }

@@ -62,7 +62,7 @@ func (id ApprovalID) Valid() bool {
 type ApprovalOperation string
 
 const (
-	// ApprovalOperationRestartDeployment is the sole operation admitted in v0.2.
+	// ApprovalOperationRestartDeployment is the sole currently admitted operation.
 	ApprovalOperationRestartDeployment ApprovalOperation = "restart_deployment"
 )
 
@@ -98,13 +98,15 @@ func (intent OperationIntent) Validate() error {
 		!validSHA256Hex(intent.TemplateFingerprint) ||
 		intent.DeploymentGeneration < 1 ||
 		intent.PolicyVersion != RestartDeploymentApprovalPolicyVersion ||
-		!validApprovalReasonSummary(intent.ReasonSummary) {
+		!ValidApprovalReasonSummary(intent.ReasonSummary) {
 		return ErrInvalidOperationIntent
 	}
 	return nil
 }
 
-func validApprovalReasonSummary(value string) bool {
+// ValidApprovalReasonSummary reports whether model-visible proposal text is
+// safe and bounded for the local approval contract.
+func ValidApprovalReasonSummary(value string) bool {
 	return value != "" && len(value) <= MaxApprovalReasonSummaryBytes &&
 		strings.TrimSpace(value) == value && validSafeOptionalText(value, MaxApprovalReasonSummaryBytes)
 }

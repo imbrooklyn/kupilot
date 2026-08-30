@@ -42,6 +42,8 @@ func newPickerList[T any](emptyText string, render func(T) string, styles Picker
 	}
 }
 
+func (picker *pickerList[T]) setStyles(styles PickerStyles) { picker.styles = styles }
+
 func (picker *pickerList[T]) setLoading() {
 	picker.open = true
 	picker.loading = true
