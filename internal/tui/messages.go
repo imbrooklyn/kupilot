@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -28,6 +29,16 @@ type ApprovalExpiryMsg struct {
 	ScopeGeneration int64
 	Sequence        int64
 	Digest          domain.ApprovalDigest
+}
+
+// WorkingTickMsg is a delivery-only animation frame correlated to one live
+// run projection. It never creates Application time, progress, or authority.
+type WorkingTickMsg struct {
+	RunID           domain.AgentRunID
+	ScopeGeneration int64
+	Sequence        int64
+	Terminal        bool
+	At              time.Time
 }
 
 // ApplicationCommandMsg is the deferred typed intent emitted by a TUI Cmd.

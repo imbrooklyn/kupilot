@@ -48,7 +48,6 @@ type TranscriptStyles struct {
 	AgentText   lipgloss.Style
 	Markdown    MarkdownStyles
 	NoticeText  lipgloss.Style
-	Placeholder lipgloss.Style
 	Evidence    lipgloss.Style
 	Selected    lipgloss.Style
 	Separator   lipgloss.Style
@@ -58,14 +57,18 @@ type TranscriptStyles struct {
 // Transcript is a continuous scrollable conversation projection.
 type Transcript struct {
 	entries     []Entry
+	committed   int
 	activeAgent int
 	viewport    viewport.Model
 	width       int
 	height      int
+	maxHeight   int
 	styles      TranscriptStyles
 	toolSteps   ToolSteps
 	selecting   bool
 	selected    int
+	reviewing   bool
+	visible     bool
 }
 
 // NewTranscript creates an empty viewport. The root reducer owns mouse routing.
@@ -79,6 +82,7 @@ func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcrip
 		viewport:    view,
 		width:       80,
 		height:      12,
+		maxHeight:   12,
 		styles:      styles,
 		toolSteps:   NewToolSteps(toolStyles),
 	}
@@ -100,9 +104,8 @@ func (transcript *Transcript) SetSize(width, height int) {
 		transcript.invalidateMarkdownCaches()
 	}
 	transcript.width = nextWidth
-	transcript.height = max(1, height)
+	transcript.maxHeight = max(1, height)
 	transcript.viewport.SetWidth(transcript.width)
-	transcript.viewport.SetHeight(transcript.height)
 	transcript.refresh(false)
 }
 
@@ -110,7 +113,9 @@ func (transcript *Transcript) SetSize(width, height int) {
 func (transcript *Transcript) AppendUser(text string) {
 	transcript.entries = append(transcript.entries, Entry{Kind: EntryUser, Text: text})
 	transcript.activeAgent = -1
-	transcript.refresh(true)
+	transcript.reviewing = false
+	transcript.refresh(false)
+	transcript.viewport.GotoBottom()
 }
 
 // AppendNotice adds muted typed status or failure text.
@@ -124,12 +129,14 @@ func (transcript *Transcript) StartAgent() {
 	transcript.entries = append(transcript.entries, Entry{Kind: EntryAgent, Streaming: true})
 	transcript.activeAgent = len(transcript.entries) - 1
 	transcript.toolSteps.Reset()
-	transcript.refresh(true)
+	transcript.reviewing = false
+	transcript.refresh(false)
+	transcript.viewport.GotoBottom()
 }
 
 // AppendAgent appends one accepted ordered delta to the active Agent item.
 func (transcript *Transcript) AppendAgent(delta string) {
-	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) {
+	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) {
 		return
 	}
 	transcript.entries[transcript.activeAgent].Text += delta
@@ -149,7 +156,7 @@ func (transcript *Transcript) FinishAgentWithDuration(text string, workedFor tim
 }
 
 func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, showWorkedFor bool) {
-	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) {
+	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) {
 		return
 	}
 	if workedFor < 0 {
@@ -165,7 +172,7 @@ func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, 
 
 // SetAgentEvidence adds bounded citations to the current terminal Agent item.
 func (transcript *Transcript) SetAgentEvidence(references []EvidenceReference) {
-	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) || len(references) > 100 {
+	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) || len(references) > 100 {
 		return
 	}
 	transcript.entries[transcript.activeAgent].EvidenceReferences = append([]EvidenceReference(nil), references...)
@@ -180,7 +187,9 @@ func (transcript *Transcript) BeginEvidenceSelection() bool {
 		}
 		transcript.selecting = true
 		transcript.selected = transcript.entries[entryIndex].EvidenceReferences[0].Index
+		transcript.reviewing = true
 		transcript.refresh(false)
+		transcript.viewport.GotoBottom()
 		return true
 	}
 	return false
@@ -190,7 +199,8 @@ func (transcript *Transcript) BeginEvidenceSelection() bool {
 func (transcript *Transcript) EndEvidenceSelection() {
 	transcript.selecting = false
 	transcript.selected = 0
-	transcript.refresh(false)
+	transcript.reviewing = false
+	transcript.refresh(true)
 }
 
 // EvidenceSelecting reports whether citation navigation owns arrow keys.
@@ -229,7 +239,7 @@ func (transcript Transcript) SelectedEvidence() (int, bool) {
 
 // UpsertToolStep adds one step beneath the active Agent prose.
 func (transcript *Transcript) UpsertToolStep(step ToolStep) {
-	if transcript.activeAgent < 0 {
+	if transcript.activeAgent < transcript.committed {
 		return
 	}
 	transcript.toolSteps.Upsert(step)
@@ -253,35 +263,107 @@ func (transcript Transcript) Entries() []Entry {
 // ToolSteps returns a defensive copy of inline step state.
 func (transcript Transcript) ToolSteps() []ToolStep { return transcript.toolSteps.Items() }
 
-// PageUp scrolls transcript history without moving the composer.
-func (transcript *Transcript) PageUp() { transcript.viewport.PageUp() }
+// CommitReady advances the immutable scrollback boundary and returns exactly
+// one terminal-safe rendered block. A trailing user question waits until a
+// following item proves that submission has left the composer, and a streaming
+// Agent item blocks every later entry until its final state is complete.
+func (transcript *Transcript) CommitReady() string {
+	end := transcript.committed
+	for end < len(transcript.entries) {
+		entry := transcript.entries[end]
+		if entry.Kind == EntryAgent && entry.Streaming {
+			break
+		}
+		if entry.Kind == EntryUser && end == len(transcript.entries)-1 {
+			break
+		}
+		end++
+	}
+	if end == transcript.committed {
+		return ""
+	}
+	block := transcript.renderRange(transcript.committed, end, false)
+	transcript.committed = end
+	transcript.refresh(true)
+	return block
+}
 
-// PageDown scrolls transcript history without moving the composer.
-func (transcript *Transcript) PageDown() { transcript.viewport.PageDown() }
+// PageUp opens the retained in-memory transcript and scrolls it without moving
+// the composer. Normal rendering still keeps committed rows terminal-owned.
+func (transcript *Transcript) PageUp() {
+	transcript.beginReview()
+	transcript.viewport.PageUp()
+}
+
+// PageDown scrolls retained history and returns to the live projection at the
+// bottom boundary.
+func (transcript *Transcript) PageDown() {
+	transcript.viewport.PageDown()
+	if transcript.reviewing && transcript.viewport.AtBottom() && !transcript.selecting {
+		transcript.reviewing = false
+		transcript.refresh(true)
+	}
+}
 
 // ScrollUp moves the transcript by a bounded number of rows.
-func (transcript *Transcript) ScrollUp(rows int) { transcript.viewport.ScrollUp(max(1, rows)) }
+func (transcript *Transcript) ScrollUp(rows int) {
+	transcript.beginReview()
+	transcript.viewport.ScrollUp(max(1, rows))
+}
 
 // ScrollDown moves the transcript by a bounded number of rows.
-func (transcript *Transcript) ScrollDown(rows int) { transcript.viewport.ScrollDown(max(1, rows)) }
+func (transcript *Transcript) ScrollDown(rows int) {
+	transcript.viewport.ScrollDown(max(1, rows))
+	if transcript.reviewing && transcript.viewport.AtBottom() && !transcript.selecting {
+		transcript.reviewing = false
+		transcript.refresh(true)
+	}
+}
 
 // ScrollOffset reports transcript position for deterministic reducer tests.
 func (transcript Transcript) ScrollOffset() int { return transcript.viewport.YOffset() }
 
-// View returns the current bounded transcript viewport.
-func (transcript Transcript) View() string { return transcript.viewport.View() }
+// View returns the current bounded live or explicitly reviewed transcript.
+func (transcript Transcript) View() string {
+	if !transcript.visible {
+		return ""
+	}
+	return transcript.viewport.View()
+}
 
 func (transcript *Transcript) refresh(follow bool) {
 	wasAtBottom := transcript.viewport.AtBottom()
-	transcript.viewport.SetContent(transcript.renderContent())
+	content := transcript.renderVisibleContent()
+	transcript.visible = content != ""
+	contentHeight := lipgloss.Height(content)
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	transcript.height = min(transcript.maxHeight, contentHeight)
+	transcript.viewport.SetHeight(transcript.height)
+	transcript.viewport.SetContent(content)
 	if follow && wasAtBottom {
 		transcript.viewport.GotoBottom()
 	}
 }
 
 func (transcript *Transcript) renderContent() string {
-	parts := make([]string, 0, len(transcript.entries))
-	for entryIndex := range transcript.entries {
+	return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
+}
+
+func (transcript *Transcript) renderVisibleContent() string {
+	start := transcript.committed
+	if transcript.reviewing || transcript.selecting {
+		start = 0
+	}
+	return transcript.renderRange(start, len(transcript.entries), transcript.selecting)
+}
+
+func (transcript *Transcript) renderRange(start, end int, includeSelection bool) string {
+	start = max(0, min(start, len(transcript.entries)))
+	end = max(start, min(end, len(transcript.entries)))
+	parts := make([]string, 0, end-start)
+	for entryIndex := start; entryIndex < end; entryIndex++ {
 		entry := &transcript.entries[entryIndex]
 		var rendered string
 		switch entry.Kind {
@@ -300,29 +382,36 @@ func (transcript *Transcript) renderContent() string {
 			if steps != "" {
 				blocks = append(blocks, steps)
 			}
-			text := entry.Text
-			if text == "" && entry.Streaming {
-				text = transcript.styles.Placeholder.Render("Working…")
-			}
-			if text != "" {
+			if entry.Text != "" {
 				if steps != "" && !entry.Streaming {
 					blocks = append(blocks, transcript.styles.Separator.Render(strings.Repeat("─", max(1, transcript.width))))
 				}
 				blocks = append(blocks, transcript.renderMarkdown(entry))
 			}
-			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences); references != "" {
+			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences, includeSelection); references != "" {
 				blocks = append(blocks, references)
 			}
 			if entry.ShowWorkedFor && !entry.Streaming {
-				blocks = append(blocks, transcript.styles.Timing.Render("Worked for "+formatWorkedFor(entry.WorkedFor)))
+				blocks = append(blocks, renderWorkedFor(entry.WorkedFor, transcript.width, transcript.styles.Timing))
 			}
 			rendered = strings.Join(blocks, "\n\n")
 		case EntryNotice:
 			rendered = transcript.styles.NoticeText.Render(entry.Text)
 		}
-		parts = append(parts, rendered)
+		if rendered != "" {
+			parts = append(parts, rendered)
+		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (transcript *Transcript) beginReview() {
+	if transcript.reviewing || transcript.committed == 0 {
+		return
+	}
+	transcript.reviewing = true
+	transcript.refresh(false)
+	transcript.viewport.GotoBottom()
 }
 
 func (transcript *Transcript) renderMarkdown(entry *Entry) string {
@@ -349,11 +438,42 @@ func formatWorkedFor(duration time.Duration) string {
 	if duration < time.Second {
 		return "<1s"
 	}
-	return duration.Truncate(time.Second).String()
+	return formatElapsedCompact(duration)
 }
 
-func (transcript Transcript) renderEvidenceReferences(references []EvidenceReference) string {
-	if len(references) == 0 || !transcript.selecting {
+// FormatElapsedCompact formats a local display duration like Codex's runtime
+// status: seconds, minutes plus two-digit seconds, or hours plus both fields.
+func FormatElapsedCompact(duration time.Duration) string {
+	return formatElapsedCompact(duration)
+}
+
+func formatElapsedCompact(duration time.Duration) string {
+	seconds := int64(duration / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	if seconds < 3600 {
+		return fmt.Sprintf("%dm %02ds", seconds/60, seconds%60)
+	}
+	return fmt.Sprintf("%dh %02dm %02ds", seconds/3600, seconds%3600/60, seconds%60)
+}
+
+func renderWorkedFor(duration time.Duration, width int, style lipgloss.Style) string {
+	width = max(1, width)
+	label := "─ Worked for " + formatWorkedFor(duration) + " ─"
+	if labelWidth := lipgloss.Width(label); labelWidth < width {
+		label += strings.Repeat("─", width-labelWidth)
+	} else if labelWidth > width {
+		label = string([]rune(label)[:width])
+	}
+	return style.Render(label)
+}
+
+func (transcript Transcript) renderEvidenceReferences(references []EvidenceReference, includeSelection bool) string {
+	if len(references) == 0 || !includeSelection || !transcript.selecting {
 		return ""
 	}
 	for position, reference := range references {

@@ -23,6 +23,10 @@ func TestTerminalMarkdownRendersReadableTablesAtWideAndNarrowWidths(t *testing.T
 		!strings.Contains(wide, "install-0") || strings.Count(wide, "\n") < 4 {
 		t.Fatalf("wide Markdown table is not readable:\n%s", wide)
 	}
+	if !strings.Contains(wide, "━━━") || !strings.Contains(wide, "───") ||
+		strings.ContainsAny(wide, "│┌┐└┘") {
+		t.Fatalf("wide Markdown table does not use the borderless Codex-style grid:\n%s", wide)
+	}
 	if lipglossLineWidth(wide) > 72 {
 		t.Fatalf("wide Markdown table exceeded 72 cells:\n%s", wide)
 	}

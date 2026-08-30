@@ -9,6 +9,8 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/application"
 )
 
+const workingFrameInterval = 100 * time.Millisecond
+
 // ApplicationConsumer is the minimal delivery-owned command/query surface.
 // It contains no persistence, Kubernetes, model, Tool, or framework type.
 type ApplicationConsumer interface {
@@ -140,6 +142,16 @@ func approvalExpiry(request application.UIApprovalRequest, now time.Time) tea.Cm
 		return ApprovalExpiryMsg{
 			RequestID: request.RequestID, RunID: request.RunID,
 			ScopeGeneration: request.Scope.Generation, Sequence: request.Sequence, Digest: request.Digest,
+		}
+	})
+}
+
+func workingTick(run RunView) tea.Cmd {
+	return tea.Tick(workingFrameInterval, func(at time.Time) tea.Msg {
+		return WorkingTickMsg{
+			RunID: run.RunID, ScopeGeneration: run.ScopeGeneration,
+			Sequence: run.LastSequence, Terminal: run.Terminal,
+			At: at.UTC().Truncate(time.Millisecond),
 		}
 	})
 }

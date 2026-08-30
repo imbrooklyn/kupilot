@@ -58,6 +58,10 @@ func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	)
 	input.KeyMap.Paste = key.Binding{}
 	input.SetStyles(styles.Textarea)
+	// A real terminal cursor gives the operating system input method the exact
+	// insertion point. A virtual cursor is only painted into text and causes IME
+	// candidate windows and placeholder composition to use stale coordinates.
+	input.SetVirtualCursor(false)
 	input.SetHeight(MinComposerRows)
 	input.SetWidth(40)
 	_ = input.Focus()
@@ -239,16 +243,36 @@ func (composer *Composer) Focus() tea.Cmd { return composer.input.Focus() }
 // Blur removes keyboard focus from the textarea.
 func (composer *Composer) Blur() { composer.input.Blur() }
 
+// Cursor returns the real cursor position relative to the rendered composer.
+// The root view adds the composer's vertical layout offset.
+func (composer Composer) Cursor() *tea.Cursor {
+	composer.prepareRenderInput()
+	cursor := composer.input.Cursor()
+	if cursor == nil {
+		return nil
+	}
+	style := composer.styles.BlurredSurface
+	if composer.input.Focused() {
+		style = composer.styles.FocusedSurface
+	}
+	cursor.Position.X += style.GetMarginLeft() + style.GetBorderLeftSize() + style.GetPaddingLeft()
+	cursor.Position.Y += style.GetMarginTop() + style.GetBorderTopSize() + style.GetPaddingTop()
+	return cursor
+}
+
 // View renders the active user-input surface.
 func (composer Composer) View() string {
 	style := composer.styles.BlurredSurface
 	if composer.input.Focused() {
 		style = composer.styles.FocusedSurface
 	}
-	input := composer.input
-	if composer.secretMode && input.Value() != "" {
-		input.SetValue(strings.Repeat("•", utf8.RuneCountInString(input.Value())))
-		input.MoveToEnd()
+	composer.prepareRenderInput()
+	return style.Width(max(1, composer.width-2)).Render(composer.input.View())
+}
+
+func (composer *Composer) prepareRenderInput() {
+	if composer.secretMode && composer.input.Value() != "" {
+		composer.input.SetValue(strings.Repeat("•", utf8.RuneCountInString(composer.input.Value())))
+		composer.input.MoveToEnd()
 	}
-	return style.Width(max(1, composer.width-2)).Render(input.View())
 }

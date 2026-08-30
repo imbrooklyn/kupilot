@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"strings"
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -10,8 +13,18 @@ import (
 
 // View deterministically renders transcript, composer, suggestions, then footer.
 func (model Model) View() tea.View {
-	view := tea.NewView(model.render())
-	view.AltScreen = true
+	content, composerY, composerVisible := model.renderLayout()
+	view := tea.NewView(content)
+	if composerVisible {
+		if cursor := model.composer.Cursor(); cursor != nil {
+			cursor.Position.Y += composerY
+			view.Cursor = cursor
+		}
+	}
+	// The primary buffer keeps committed conversation blocks in terminal
+	// scrollback after Kupilot exits. Dialogs remain managed overlays inside
+	// the same bounded inline frame.
+	view.AltScreen = false
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
 	// Mouse reporting prevents ordinary terminal drag-selection. Keep it off
@@ -28,9 +41,23 @@ func (model Model) View() tea.View {
 }
 
 func (model Model) render() string {
-	sections := []string{model.transcript.View()}
+	content, _, _ := model.renderLayout()
+	return content
+}
+
+func (model Model) renderLayout() (content string, composerY int, composerVisible bool) {
+	sections := make([]string, 0, 6)
+	if transcript := model.transcript.View(); transcript != "" {
+		sections = append(sections, transcript)
+	}
 	if prompt := model.modelSetupView(); prompt != "" {
 		sections = append(sections, prompt)
+	}
+	if working := model.workingView(); working != "" {
+		sections = append(sections, working)
+	}
+	for _, section := range sections {
+		composerY += lipgloss.Height(section)
 	}
 	sections = append(sections, model.composer.View())
 	if model.pickerOpen() {
@@ -40,7 +67,7 @@ func (model Model) render() string {
 	}
 	sections = append(sections, model.footerView())
 	main := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	main = lipgloss.Place(model.width, model.height, lipgloss.Left, lipgloss.Top, main)
+	main = lipgloss.NewStyle().Width(model.width).Render(main)
 
 	overlay := ""
 	switch {
@@ -54,14 +81,65 @@ func (model Model) render() string {
 		overlay = model.dialog.View(model.width)
 	}
 	if overlay == "" {
-		return main
+		return main, composerY, true
 	}
 
 	x := max(0, (model.width-lipgloss.Width(overlay))/2)
 	y := max(0, (model.height-lipgloss.Height(overlay))/2)
 	baseLayer := lipgloss.NewLayer(main).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
-	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
+	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
+}
+
+func (model Model) workingView() string {
+	if !model.run.Active || model.run.Terminal {
+		return ""
+	}
+	bullet := "•"
+	bulletStyle := model.styles.working.Normal
+	if model.workingFrame/6%2 == 1 {
+		bullet = "◦"
+		bulletStyle = model.styles.working.Muted
+	}
+	line := bulletStyle.Render(bullet) + " " + model.shimmerText("Working")
+	line += model.styles.working.Muted.Render(" (" + components.FormatElapsedCompact(model.workingElapsed()) + " • ")
+	line += model.styles.working.Normal.Render("esc")
+	line += model.styles.working.Muted.Render(" to interrupt)")
+	return lipgloss.NewStyle().MaxWidth(max(1, model.width)).Render(line)
+}
+
+func (model Model) workingElapsed() time.Duration {
+	if model.run.StartedAt.IsZero() || model.workingAt.IsZero() || model.workingAt.Before(model.run.StartedAt) {
+		return 0
+	}
+	return model.workingAt.Sub(model.run.StartedAt)
+}
+
+func (model Model) shimmerText(value string) string {
+	const shimmerFrames = 20
+	const padding = 10
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
+	}
+	period := len(runes) + padding*2
+	position := int(model.workingFrame%shimmerFrames) * period / shimmerFrames
+	var result strings.Builder
+	for index, current := range runes {
+		distance := index + padding - position
+		if distance < 0 {
+			distance = -distance
+		}
+		style := model.styles.working.Muted
+		switch {
+		case distance <= 1:
+			style = model.styles.working.Highlight
+		case distance <= 3:
+			style = model.styles.working.Normal
+		}
+		result.WriteString(style.Render(string(current)))
+	}
+	return result.String()
 }
 
 func (model Model) footerView() string {

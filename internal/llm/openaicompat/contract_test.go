@@ -133,8 +133,9 @@ type streamDecoder struct {
 	completed     bool
 	pendingFinish *domain.ModelFinishReason
 	usageSeen     bool
-	sawText       bool
 	sawTool       bool
+	textBytes     int
+	textFragments []string
 	tools         map[int]*toolAssembly
 }
 
@@ -419,17 +420,8 @@ func (decoder *streamDecoder) consumeLine(raw []byte) *domain.ModelError {
 	if choice.Index != 0 || choice.Delta.Role != "" && choice.Delta.Role != "assistant" {
 		return decoder.modelError(domain.ModelErrorCodeUnsupportedResponse)
 	}
-	if choice.Delta.Content != "" && len(choice.Delta.ToolCalls) != 0 ||
-		choice.Delta.Content != "" && decoder.sawTool ||
-		len(choice.Delta.ToolCalls) != 0 && decoder.sawText {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
-	}
 	if choice.Delta.Content != "" {
-		decoder.sawText = true
-		if modelError := decoder.emit(domain.ModelStreamEvent{
-			Kind:      domain.ModelStreamEventTextDelta,
-			TextDelta: choice.Delta.Content,
-		}); modelError != nil {
+		if modelError := decoder.bufferText(choice.Delta.Content); modelError != nil {
 			return modelError
 		}
 	}
@@ -446,8 +438,51 @@ func (decoder *streamDecoder) consumeLine(raw []byte) *domain.ModelError {
 		if !ok {
 			return decoder.modelError(domain.ModelErrorCodeUnsupportedResponse)
 		}
+		switch finishReason {
+		case domain.ModelFinishReasonToolCalls:
+			decoder.textFragments = nil
+			decoder.textBytes = 0
+		case domain.ModelFinishReasonStop, domain.ModelFinishReasonLength:
+			if decoder.sawTool {
+				return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			}
+			if modelError := decoder.flushText(); modelError != nil {
+				return modelError
+			}
+		}
 		decoder.pendingFinish = &finishReason
 	}
+	return nil
+}
+
+func (decoder *streamDecoder) bufferText(fragment string) *domain.ModelError {
+	candidate := domain.ModelStreamEvent{
+		Sequence:  1,
+		Kind:      domain.ModelStreamEventTextDelta,
+		TextDelta: fragment,
+	}
+	if candidate.Validate() != nil {
+		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+	}
+	if decoder.textBytes > domain.MaxModelMessageBytes-len(fragment) {
+		return decoder.modelError(domain.ModelErrorCodeStreamLimitExceeded)
+	}
+	decoder.textBytes += len(fragment)
+	decoder.textFragments = append(decoder.textFragments, strings.Clone(fragment))
+	return nil
+}
+
+func (decoder *streamDecoder) flushText() *domain.ModelError {
+	for _, fragment := range decoder.textFragments {
+		if modelError := decoder.emit(domain.ModelStreamEvent{
+			Kind:      domain.ModelStreamEventTextDelta,
+			TextDelta: fragment,
+		}); modelError != nil {
+			return modelError
+		}
+	}
+	decoder.textFragments = nil
+	decoder.textBytes = 0
 	return nil
 }
 
@@ -494,7 +529,7 @@ func (decoder *streamDecoder) complete() *domain.ModelError {
 	}
 	switch *decoder.pendingFinish {
 	case domain.ModelFinishReasonToolCalls:
-		if !decoder.sawTool || decoder.sawText {
+		if !decoder.sawTool {
 			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
 		}
 		for index := 0; index < len(decoder.tools); index++ {
@@ -692,6 +727,13 @@ func TestCompatibilityFixturesProduceNeutralStreamEvents(t *testing.T) {
 			wantKinds:    []domain.ModelStreamEventKind{domain.ModelStreamEventMetadata, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventCompleted},
 			wantFinish:   domain.ModelFinishReasonToolCalls,
 			wantToolArgs: map[int]string{0: `{"kind":"Pod","name":"sample-pod"}`, 1: `{"kind":"Pod","name":"sample-pod"}`},
+		},
+		{
+			name:          "commentary is discarded before a Tool selection",
+			scenario:      "commentary-tool-call",
+			wantKinds:     []domain.ModelStreamEventKind{domain.ModelStreamEventMetadata, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventToolCallFragment, domain.ModelStreamEventCompleted},
+			wantFinish:    domain.ModelFinishReasonToolCalls,
+			wantArguments: `{"kind":"Pod","name":"sample-pod"}`,
 		},
 		{
 			name:       "usage and DONE omitted",

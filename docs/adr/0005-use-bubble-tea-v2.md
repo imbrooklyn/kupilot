@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended: 2026-08-31
 
 ## Context
 
@@ -28,12 +29,16 @@ The TUI will:
   needed to reject stale or duplicate messages.
 - Treat framework commands as delivery scheduling only; Application owns every
   long-running task and cancellation function.
+- Publish the one textarea's real terminal cursor for operating-system input
+  methods. Placeholder text remains presentation and is never draft content.
+- Correlate local animation ticks to the active run projection and discard them
+  after a sequence, scope, or terminal-state mismatch.
 - Render only normalized, bounded text using styles selected by local code.
 - Leave and restore terminal state on normal completion, cancellation, panic
   recovery at the composition boundary, and supported termination signals.
 
 No Bubble Tea model, message, command, callback, renderer, or key type crosses
-an Application port. The TUI design itself is constrained further by ADR-0023.
+an Application port. The TUI design itself is constrained further by ADR-0040.
 
 The compatibility set is `charm.land/bubbletea/v2 v2.0.8`,
 `charm.land/bubbles/v2 v2.1.1`, and `charm.land/lipgloss/v2 v2.0.5`. These
@@ -79,9 +84,11 @@ normalized and stripped of unsafe terminal control sequences before it becomes
 a framework message or rendered view.
 
 The TUI must not include raw adapter errors, credentials, model protocol bodies,
-or raw Kubernetes data in debug output. Alternate-screen and terminal-state
-cleanup are availability and terminal-integrity requirements, not cosmetic
-behavior.
+or raw Kubernetes data in debug output. ADR-0040 uses Bubble Tea's primary-
+screen insertion for ordinary conversation and confines any future alternate-
+screen use to an explicitly reviewed temporary overlay. Primary-screen frame
+cleanup, optional alternate-screen cleanup, and terminal-mode restoration are
+availability and terminal-integrity requirements, not cosmetic behavior.
 
 ## Validation
 
@@ -96,6 +103,10 @@ Compatibility and lifecycle tests must verify:
 4. Race-free shutdown when Application cancels a run while UI messages remain
    queued.
 5. Supported-platform behavior for macOS and Linux terminals.
+6. Primary-screen transcript insertion persists after graceful exit without
+   duplicate rows or alternate-screen control sequences.
+7. Real-cursor coordinates remain correct for empty placeholder and Unicode
+   input, and local animation ticks cannot revive a stale or terminal run.
 
 The selected versions and APIs remain recorded in dependency metadata and must
 continue to satisfy these requirements after an upgrade.
@@ -113,3 +124,4 @@ continue to satisfy these requirements after an upgrade.
 - [Security Threat Model](../security.md)
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
+- [ADR-0040: Use a Codex-Style Conversational TUI](0040-use-a-codex-style-conversational-tui.md)

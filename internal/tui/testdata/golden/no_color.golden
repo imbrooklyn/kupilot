@@ -9,8 +9,8 @@ palette enabled=false base=none muted=none surface=none border=none accent=none 
 <blank rows=1>
 The Deployment has no available replicas.
 <blank rows=1>
-Worked for 20s
-<blank rows=5>
+─ Worked for 20s ───────────────────────────────────────────────────────
+<blank rows=1>
  › /resource pay
 <blank rows=1>
 › Deployment/payment-api · Unavailable

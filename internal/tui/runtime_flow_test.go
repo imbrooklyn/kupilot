@@ -304,7 +304,8 @@ func TestPrivacyClearHistoryAndDeleteAllRequireExplicitConfirmation(t *testing.T
 			Command: application.UICommandClearHistory, RequestID: command.RequestID,
 			HistoryDeletion: &application.HistoryDeletionResult{SessionsCleared: true, PreferencesPreserved: true},
 		}})
-		if cmd != nil || model.session.ID != "" || model.localDeletion != nil ||
+		if !commandPrintsAbove(cmd) || model.session.ID != "" || model.localDeletion != nil ||
+			!transcriptContains(model, "All Session history was deleted") ||
 			!strings.Contains(model.render(), "Session history cleared") {
 			t.Fatalf("clear-history result state = %#v", model.session)
 		}
@@ -514,7 +515,7 @@ func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
-	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "next question" {
+	if !commandPrintsAbove(cmd) || model.run.Status != "cancelled" || model.composer.Value() != "next question" {
 		t.Fatal("ordinary cancellation exited or discarded the draft")
 	}
 }
@@ -535,7 +536,7 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
-	if !commandQuits(cmd) || model.quitAfterCancel {
+	if !commandSequencesPrintBeforeNext(cmd) || model.quitAfterCancel {
 		t.Fatal("terminal cancellation did not complete bounded exit")
 	}
 }
@@ -565,8 +566,8 @@ func TestFocusResizeAndSmallTerminalPreserveKeyboardSafety(t *testing.T) {
 		t.Fatalf("small-terminal editor state = count %d, height %d", model.EditorCount(), model.composer.Height())
 	}
 	view := model.View()
-	if !view.ReportFocus || !view.AltScreen || containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
-		t.Fatal("small-terminal View lost focus reporting, alternate screen, or terminal safety")
+	if !view.ReportFocus || view.AltScreen || containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
+		t.Fatal("small-terminal View lost focus reporting, primary-screen mode, or terminal safety")
 	}
 	model.run = RunView{}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})

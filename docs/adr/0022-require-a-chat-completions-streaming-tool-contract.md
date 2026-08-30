@@ -38,8 +38,13 @@ and reject ambiguous, malformed, non-contiguous, duplicate-terminal, or
 unsupported events. Bounded empty deltas are inert no-ops. Fragments belonging
 to distinct bounded Tool indexes may interleave, but assembly preserves arrival
 order within each index and every complete indexed call still passes the fixed
-catalog and strict-schema gates. Text that resembles JSON, a Tool name,
-approval, command, or execution claim remains text and never dispatches a Tool.
+catalog and strict-schema gates. Some compatible models emit commentary content
+before or alongside a structured Tool selection. The adapter buffers that text
+under the ordinary response limits and, only when the same response terminates
+with `tool_calls`, discards it without emitting a neutral text event. A
+`stop` or `length` response containing a Tool fragment remains invalid. Text
+that resembles JSON, a Tool name, approval, command, or execution claim remains
+text and never dispatches a Tool.
 
 Kupilot does not downgrade to prompt-parsed Tool calls, a prose-only diagnostic
 mode, or an endpoint-selected Tool schema. If required capabilities are absent,
@@ -107,8 +112,9 @@ Local fake-endpoint and Eino adapter tests must prove:
 1. Required structured Tool schema and streaming event representation.
 2. Cancellation and exactly one terminal outcome at every chunk boundary.
 3. Bounded fragmented argument assembly, inert empty deltas, interleaved
-   distinct Tool indexes, and rejection of malformed, duplicate,
-   non-contiguous, unknown, oversized, and mixed text/Tool events.
+   distinct Tool indexes, discard of non-authoritative commentary attached to
+   a valid `tool_calls` response, and rejection of malformed, duplicate,
+   non-contiguous, unknown, oversized, and finish-inconsistent events.
 4. No Tool dispatch from prose or unsupported fallback behavior.
 5. Safe mapping of finish reasons, optional usage, authentication, permission,
    throttling, timeout, unavailable, and malformed responses.

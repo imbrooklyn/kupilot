@@ -84,6 +84,7 @@ func SemanticPaletteFor(mode ThemeMode, darkBackground bool) SemanticPalette {
 type styleSet struct {
 	palette       SemanticPalette
 	composer      components.ComposerStyles
+	working       workingStyles
 	transcript    components.TranscriptStyles
 	toolSteps     components.ToolStepStyles
 	slashMenu     components.SlashMenuStyles
@@ -93,6 +94,12 @@ type styleSet struct {
 	approval      components.ApprovalDialogStyles
 	scopeConflict components.ScopeConflictStyles
 	footer        components.FooterStyles
+}
+
+type workingStyles struct {
+	Normal    lipgloss.Style
+	Muted     lipgloss.Style
+	Highlight lipgloss.Style
 }
 
 func newStyleSet(mode ThemeMode, darkBackground bool) styleSet {
@@ -168,9 +175,11 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 	}
 	evidenceSelected := lipgloss.NewStyle()
 	evidenceTitle := lipgloss.NewStyle()
+	workingHighlight := base
 	if palette.ColorEnabled {
 		evidenceSelected = accent
 		evidenceTitle = accent
+		workingHighlight = base.Bold(true)
 	}
 
 	return styleSet{
@@ -180,6 +189,7 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 			BlurredSurface: blurredSurface,
 			Textarea:       textareaStyles,
 		},
+		working: workingStyles{Normal: base, Muted: muted, Highlight: workingHighlight},
 		transcript: components.TranscriptStyles{
 			UserSurface: userSurface,
 			UserPrompt:  accentSurface,
@@ -198,12 +208,11 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 				TableHeader:   base.Bold(true),
 				TableBorder:   muted,
 			},
-			NoticeText:  muted,
-			Placeholder: muted,
-			Evidence:    muted,
-			Selected:    evidenceSelected,
-			Separator:   muted,
-			Timing:      muted,
+			NoticeText: muted,
+			Evidence:   muted,
+			Selected:   evidenceSelected,
+			Separator:  muted,
+			Timing:     muted,
 		},
 		toolSteps: components.ToolStepStyles{
 			Normal: base, Muted: muted, Success: success,

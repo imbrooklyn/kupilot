@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -189,6 +190,7 @@ func TestNativeMouseSelectionAndWheelEventsCannotRecallInputHistory(t *testing.T
 	model.composer.RecordSubmission("first question")
 	model.composer.RecordSubmission("second question")
 	model.transcript.SetSize(40, 4)
+	model.transcript.StartAgent()
 	for index := range 24 {
 		model.transcript.AppendNotice(strings.Repeat("x", index+1))
 	}
@@ -561,6 +563,20 @@ func commandFromCmd(t *testing.T, cmd tea.Cmd) application.UICommand {
 		t.Fatalf("command validation error = %v", err)
 	}
 	return intent.Command
+}
+
+func commandPrintsAbove(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	return fmt.Sprintf("%T", cmd()) == "tea.printLineMessage"
+}
+
+func commandSequencesPrintBeforeNext(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	return fmt.Sprintf("%T", cmd()) == "tea.sequenceMsg"
 }
 
 func assertSingleEditor(t *testing.T, model Model) {

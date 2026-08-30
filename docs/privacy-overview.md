@@ -112,6 +112,34 @@ an action phrase is authority.
 Model output may still be incomplete or wrong. Evidence is a time-bounded
 projection and not a guarantee that cluster state is unchanged.
 
+Some compatible models emit commentary before or alongside a structured Tool
+selection. Kupilot bounds and validates that content while resolving the
+response mode, then discards it when the response terminates with
+`tool_calls`. It is not shown, persisted, cited, or treated as Tool or action
+authority. Ordinary text responses continue through the normal answer and
+safety pipeline.
+
+## Terminal output and scrollback
+
+Ordinary conversation uses the terminal's primary screen. Once a user message,
+safe notice, or final assistant block is immutable, Kupilot writes its bounded
+terminal-safe rendering once above the live composer. It may therefore remain
+in terminal-emulator scrollback after Kupilot exits.
+
+Terminal scrollback is not SQLite or a second Kupilot-created history store;
+its capture, lifetime, search, copy, and deletion behavior belong to the
+terminal emulator, multiplexer, remote-session recorder, and operating system.
+Minimal persistence prevents cross-process Session resume but does not retract
+text already displayed. `/new`, Session deletion, clear-history, and
+delete-all-local-state likewise do not clear terminal-owned scrollback. Users
+handling sensitive operational data must use their terminal's own clearing and
+retention controls.
+
+Only the same normalized, bounded projection eligible for visible rendering
+enters scrollback. Kupilot does not emit raw Kubernetes objects, credentials,
+provider bodies, model-selected escape sequences, clipboard controls, or
+device-control content through this path.
+
 ## Local persistence and deletion
 
 Kupilot manages configuration, SQLite state, cache, and operational logs below

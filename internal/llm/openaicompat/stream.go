@@ -23,6 +23,34 @@ type toolCallAssembly struct {
 	arguments string
 }
 
+type streamDecodeFailure string
+
+const (
+	streamFailureMessageShape      streamDecodeFailure = "message_shape"
+	streamFailureAfterFinish       streamDecodeFailure = "event_after_finish"
+	streamFailureCredentialText    streamDecodeFailure = "credential_in_text"
+	streamFailureDuplicateFinish   streamDecodeFailure = "duplicate_finish"
+	streamFailureUnsupportedFinish streamDecodeFailure = "unsupported_finish"
+	streamFailureUsageOrder        streamDecodeFailure = "usage_order"
+	streamFailureUsageValue        streamDecodeFailure = "usage_value"
+	streamFailureTextLimit         streamDecodeFailure = "text_limit"
+	streamFailureToolIndex         streamDecodeFailure = "tool_index"
+	streamFailureToolType          streamDecodeFailure = "tool_type"
+	streamFailureToolFragment      streamDecodeFailure = "tool_fragment"
+	streamFailureToolCredential    streamDecodeFailure = "credential_in_tool"
+	streamFailureMissingFinish     streamDecodeFailure = "missing_finish"
+	streamFailureFinishContent     streamDecodeFailure = "finish_content_mismatch"
+	streamFailureToolIndexGap      streamDecodeFailure = "tool_index_gap"
+	streamFailureToolAssembly      streamDecodeFailure = "tool_assembly"
+	streamFailureUnsupportedState  streamDecodeFailure = "unsupported_state"
+	streamFailureEventLimit        streamDecodeFailure = "event_limit"
+	streamFailureNeutralEvent      streamDecodeFailure = "neutral_event"
+)
+
+func (failure streamDecodeFailure) Error() string {
+	return "model stream decoder rejected " + string(failure)
+}
+
 type responseDecoder struct {
 	ctx           context.Context
 	requestID     domain.ModelRequestID
@@ -32,8 +60,9 @@ type responseDecoder struct {
 	sequence      int
 	pendingFinish *domain.ModelFinishReason
 	usageSeen     bool
-	sawText       bool
 	sawTool       bool
+	textBytes     int
+	textFragments [][]byte
 	tools         map[int]*toolCallAssembly
 	rawFailure    error
 }
@@ -68,6 +97,7 @@ func validateResponseChunk(
 }
 
 func (decoder *responseDecoder) decode(stream *schema.StreamReader[*schema.Message]) *domain.ModelError {
+	defer decoder.discardText()
 	for {
 		if code, cancelled := contextModelErrorCode(decoder.ctx); cancelled {
 			return decoder.modelError(code)
@@ -95,7 +125,7 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 		len(message.AssistantGenMultiContent) != 0 || message.Name != "" ||
 		message.ToolCallID != "" || message.ToolName != "" || message.ReasoningContent != "" ||
 		message.ResponseMeta != nil && message.ResponseMeta.LogProbs != nil {
-		return decoder.modelError(domain.ModelErrorCodeUnsupportedResponse)
+		return decoder.reject(domain.ModelErrorCodeUnsupportedResponse, streamFailureMessageShape)
 	}
 
 	finishReason := ""
@@ -106,19 +136,13 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 	}
 	if decoder.pendingFinish != nil &&
 		(message.Content != "" || len(message.ToolCalls) != 0 || finishReason != "" || usage == nil) {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
-	}
-	if message.Content != "" && len(message.ToolCalls) != 0 ||
-		message.Content != "" && decoder.sawTool ||
-		len(message.ToolCalls) != 0 && decoder.sawText {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureAfterFinish)
 	}
 	if message.Content != "" {
 		if decoder.textScanner.Contains(message.Content) {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureCredentialText)
 		}
-		decoder.sawText = true
-		if modelError := decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventTextDelta, TextDelta: message.Content}); modelError != nil {
+		if modelError := decoder.bufferText(message.Content); modelError != nil {
 			return modelError
 		}
 	}
@@ -129,17 +153,28 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 	}
 	if finishReason != "" {
 		if decoder.pendingFinish != nil {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureDuplicateFinish)
 		}
 		mapped, ok := mapFinishReason(finishReason)
 		if !ok {
-			return decoder.modelError(domain.ModelErrorCodeUnsupportedResponse)
+			return decoder.reject(domain.ModelErrorCodeUnsupportedResponse, streamFailureUnsupportedFinish)
+		}
+		switch mapped {
+		case domain.ModelFinishReasonToolCalls:
+			decoder.discardText()
+		case domain.ModelFinishReasonStop, domain.ModelFinishReasonLength:
+			if decoder.sawTool {
+				return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureFinishContent)
+			}
+			if modelError := decoder.flushText(); modelError != nil {
+				return modelError
+			}
 		}
 		decoder.pendingFinish = &mapped
 	}
 	if usage != nil {
 		if decoder.pendingFinish == nil || decoder.usageSeen {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureUsageOrder)
 		}
 		neutral := domain.ModelUsage{
 			InputTokens:  int64(usage.PromptTokens),
@@ -147,7 +182,7 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 			TotalTokens:  int64(usage.TotalTokens),
 		}
 		if neutral.Validate() != nil {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureUsageValue)
 		}
 		decoder.usageSeen = true
 		if modelError := decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventUsage, Usage: &neutral}); modelError != nil {
@@ -163,9 +198,57 @@ func (decoder *responseDecoder) consumeMessage(message *schema.Message) *domain.
 	return nil
 }
 
+func (decoder *responseDecoder) bufferText(fragment string) *domain.ModelError {
+	candidate := domain.ModelStreamEvent{
+		Sequence:  1,
+		Kind:      domain.ModelStreamEventTextDelta,
+		TextDelta: fragment,
+	}
+	if candidate.Validate() != nil {
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureNeutralEvent)
+	}
+	if decoder.textBytes > domain.MaxModelMessageBytes-len(fragment) {
+		return decoder.reject(domain.ModelErrorCodeStreamLimitExceeded, streamFailureTextLimit)
+	}
+	decoder.textBytes += len(fragment)
+	decoder.textFragments = append(decoder.textFragments, append([]byte(nil), fragment...))
+	return nil
+}
+
+func (decoder *responseDecoder) flushText() *domain.ModelError {
+	fragments := decoder.textFragments
+	decoder.textFragments = nil
+	decoder.textBytes = 0
+	defer func() {
+		for _, fragment := range fragments {
+			clear(fragment)
+		}
+	}()
+	for _, fragment := range fragments {
+		if modelError := decoder.emit(domain.ModelStreamEvent{
+			Kind:      domain.ModelStreamEventTextDelta,
+			TextDelta: string(fragment),
+		}); modelError != nil {
+			return modelError
+		}
+	}
+	return nil
+}
+
+func (decoder *responseDecoder) discardText() {
+	for _, fragment := range decoder.textFragments {
+		clear(fragment)
+	}
+	decoder.textFragments = nil
+	decoder.textBytes = 0
+}
+
 func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *domain.ModelError {
-	if fragment.Index == nil || fragment.Type != "" && fragment.Type != "function" {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+	if fragment.Index == nil {
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolIndex)
+	}
+	if fragment.Type != "" && fragment.Type != "function" {
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolType)
 	}
 	index := *fragment.Index
 	neutral := domain.ModelToolCallFragment{
@@ -175,7 +258,7 @@ func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *d
 		ArgumentsFragment: fragment.Function.Arguments,
 	}
 	if neutral.Validate() != nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolFragment)
 	}
 	decoder.sawTool = true
 	assembly := decoder.tools[index]
@@ -191,7 +274,7 @@ func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *d
 		return decoder.modelError(domain.ModelErrorCodeStreamLimitExceeded)
 	}
 	if credentialAppearsInStrings(decoder.credential, assembly.id, assembly.name, assembly.arguments) {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolCredential)
 	}
 
 	return decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventToolCallFragment, ToolCallFragment: &neutral})
@@ -199,29 +282,29 @@ func (decoder *responseDecoder) consumeToolFragment(fragment schema.ToolCall) *d
 
 func (decoder *responseDecoder) complete() *domain.ModelError {
 	if decoder.pendingFinish == nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureMissingFinish)
 	}
 	switch *decoder.pendingFinish {
 	case domain.ModelFinishReasonToolCalls:
-		if !decoder.sawTool || decoder.sawText {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		if !decoder.sawTool {
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureFinishContent)
 		}
 		for index := 0; index < len(decoder.tools); index++ {
 			assembly := decoder.tools[index]
 			if assembly == nil {
-				return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+				return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolIndexGap)
 			}
 			call := domain.ModelToolCall{ID: assembly.id, Name: domain.ToolName(assembly.name), ArgumentsJSON: assembly.arguments}
 			if call.Validate() != nil {
-				return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+				return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureToolAssembly)
 			}
 		}
 	case domain.ModelFinishReasonStop, domain.ModelFinishReasonLength:
 		if decoder.sawTool {
-			return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+			return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureFinishContent)
 		}
 	default:
-		return decoder.modelError(domain.ModelErrorCodeUnsupportedResponse)
+		return decoder.reject(domain.ModelErrorCodeUnsupportedResponse, streamFailureUnsupportedState)
 	}
 	completion := domain.ModelCompletion{FinishReason: *decoder.pendingFinish}
 	if modelError := decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventCompleted, Completion: &completion}); modelError != nil {
@@ -236,12 +319,12 @@ func (decoder *responseDecoder) emit(event domain.ModelStreamEvent) *domain.Mode
 		return decoder.modelError(code)
 	}
 	if decoder.sequence >= domain.MaxModelStreamEvents {
-		return decoder.modelError(domain.ModelErrorCodeStreamLimitExceeded)
+		return decoder.reject(domain.ModelErrorCodeStreamLimitExceeded, streamFailureEventLimit)
 	}
 	decoder.sequence++
 	event.Sequence = decoder.sequence
 	if event.Validate() != nil {
-		return decoder.modelError(domain.ModelErrorCodeMalformedStream)
+		return decoder.reject(domain.ModelErrorCodeMalformedStream, streamFailureNeutralEvent)
 	}
 	decoder.consume(event)
 	return nil
@@ -249,6 +332,13 @@ func (decoder *responseDecoder) emit(event domain.ModelStreamEvent) *domain.Mode
 
 func (decoder *responseDecoder) modelError(code domain.ModelErrorCode) *domain.ModelError {
 	return domain.NewModelError(code, domain.ModelOperationStream, string(decoder.requestID))
+}
+
+func (decoder *responseDecoder) reject(code domain.ModelErrorCode, failure streamDecodeFailure) *domain.ModelError {
+	if decoder.rawFailure == nil {
+		decoder.rawFailure = failure
+	}
+	return decoder.modelError(code)
 }
 
 func mapModelStreamError(ctx context.Context, cause error) domain.ModelErrorCode {

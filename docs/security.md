@@ -155,7 +155,11 @@ unknown capability, fabricate Evidence, approve a restart, or claim execution.
 state machines, not prompt compliance, control authority. Only local Tool
 handling creates Evidence. Only typed Application action state can create a
 proposal, approval, request attempt, or verification event. Markdown and Tool
-text are inert data.
+text are inert data. Model commentary attached to a structured Tool response is
+bounded and validated inside the model adapter, then discarded when the same
+response finishes with `tool_calls`; it cannot become visible text, Tool
+authority, Evidence, or action state. Indexed Tool assembly and every runtime
+authorization check remain mandatory.
 
 ### T05: Model transfer without valid consent
 
@@ -189,7 +193,14 @@ device-control, bidirectional, invalid UTF-8, or oversized terminal content.
 replaces unsafe control sequences before render state. `Update` and `View` have
 no business I/O. Scope, policy, approval, and execution states include text and
 do not rely on color. Unknown terminal backgrounds prefer default foreground
-and dim styling rather than low-contrast hard-coded colors.
+and dim styling rather than low-contrast hard-coded colors. Only that safe
+render projection can cross the monotonic commit boundary into primary-screen
+scrollback; streaming drafts, duplicate commits, model-selected styling,
+clipboard controls, and device controls cannot. The composer exposes one real
+cursor for operating-system input-method positioning; its placeholder is never
+editable state. Working animation messages are local, bounded, correlated to
+the active run and scope generation, and rejected after terminal or stale
+state. They cannot affect budgets, Evidence, authority, or external calls.
 
 ### T08: Credential leakage
 
@@ -318,7 +329,8 @@ barriers, and temporary databases. Required proof includes:
   replay denial;
 - no credential or prohibited canary in model, TUI, error, log, audit, SQLite,
   child-process, or export sinks;
-- terminal-safe rendering across dark, light, ANSI-16, and `NO_COLOR`; and
+- terminal-safe rendering across dark, light, ANSI-16, and `NO_COLOR`, including
+  real-cursor Unicode input and stale Working-frame rejection; and
 - restart recovery that never restores a run, stream, live generation,
   approval authority, or write retry.
 
@@ -330,6 +342,8 @@ barriers, and temporary databases. Required proof includes:
 - `all` namespace policy can expose more metadata when RBAC also permits it.
 - Longer profiles can increase spend and API load within their finite limits.
 - Local SQLite, logs, configuration, and exports are not encrypted.
+- Visible conversation may remain in terminal-emulator scrollback after
+  Kupilot exits, changes Session, or deletes its own stored history.
 - The local user or another process with the same file permissions can alter
   local state.
 - A Kubernetes mutation can have workload impact even after correct approval.

@@ -183,6 +183,154 @@ func TestResponseDecoderRejectsNonContiguousToolIndexesBeforeCompletion(t *testi
 	}
 }
 
+func TestAdapterDiscardsCommentaryWhenStreamCompletesWithToolCalls(t *testing.T) {
+	t.Parallel()
+
+	server := newFixtureServer(t, "provider-rejection")
+	adapter := newFixtureAdapter(
+		t,
+		fixtureConfiguration(server.endpoint("commentary-tool-call"), time.Second),
+		strings.Repeat("m", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+	)
+	var events []domain.ModelStreamEvent
+	modelError := adapter.Stream(context.Background(), fixtureModelRequest(), func(event domain.ModelStreamEvent) {
+		events = append(events, event)
+	})
+	if modelError != nil {
+		t.Fatalf("model error = %v", modelError)
+	}
+	var arguments string
+	for _, event := range events {
+		if event.Kind == domain.ModelStreamEventTextDelta {
+			t.Fatalf("non-authoritative commentary reached the neutral stream: %#v", events)
+		}
+		if event.ToolCallFragment != nil {
+			arguments += event.ToolCallFragment.ArgumentsFragment
+		}
+	}
+	if arguments != `{"kind":"Pod","name":"sample-pod"}` ||
+		len(events) != 4 || events[len(events)-1].Kind != domain.ModelStreamEventCompleted ||
+		events[len(events)-1].Completion.FinishReason != domain.ModelFinishReasonToolCalls {
+		t.Fatalf("commentary Tool stream events = %#v", events)
+	}
+}
+
+func TestResponseDecoderRejectsStopAfterCommentaryAndToolCall(t *testing.T) {
+	t.Parallel()
+
+	credential := newFixtureCredential(t, strings.Repeat("q", 41)+"-generated")
+	defer credential.Destroy()
+	var events []domain.ModelStreamEvent
+	decoder := responseDecoder{
+		ctx:        context.Background(),
+		requestID:  fixtureModelRequest().ID,
+		consume:    func(event domain.ModelStreamEvent) { events = append(events, event) },
+		credential: credential,
+		textScanner: credentialScanner{
+			credential: credential,
+		},
+		tools: make(map[int]*toolCallAssembly),
+	}
+	if modelError := decoder.consumeMessage(&schema.Message{Role: schema.Assistant, Content: "I will inspect first."}); modelError != nil {
+		t.Fatalf("buffer commentary: %v", modelError)
+	}
+	index := 0
+	if modelError := decoder.consumeMessage(&schema.Message{
+		Role: schema.Assistant,
+		ToolCalls: []schema.ToolCall{{
+			Index: &index,
+			ID:    "call-mismatch",
+			Type:  "function",
+			Function: schema.FunctionCall{
+				Name:      "get_resource",
+				Arguments: `{"kind":"Pod","name":"sample-pod"}`,
+			},
+		}},
+	}); modelError != nil {
+		t.Fatalf("buffer Tool call: %v", modelError)
+	}
+	modelError := decoder.consumeMessage(&schema.Message{
+		Role:         schema.Assistant,
+		ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"},
+	})
+	if modelError == nil || modelError.Code() != domain.ModelErrorCodeMalformedStream ||
+		decoder.rawFailure != streamFailureFinishContent {
+		t.Fatalf("mismatched finish error = %#v / %v", modelError, decoder.rawFailure)
+	}
+	for _, event := range events {
+		if event.Kind == domain.ModelStreamEventTextDelta || event.Terminal() {
+			t.Fatalf("mismatched stream exposed commentary or completion: %#v", events)
+		}
+	}
+}
+
+func TestResponseDecoderClearsDiscardedCommentaryBuffer(t *testing.T) {
+	t.Parallel()
+
+	decoder := responseDecoder{requestID: fixtureModelRequest().ID}
+	commentary := "non-authoritative-model-commentary"
+	if modelError := decoder.bufferText(commentary); modelError != nil {
+		t.Fatalf("buffer commentary: %v", modelError)
+	}
+	buffered := decoder.textFragments[0]
+	decoder.discardText()
+	if decoder.textBytes != 0 || decoder.textFragments != nil {
+		t.Fatalf("discarded commentary state = %d / %#v", decoder.textBytes, decoder.textFragments)
+	}
+	if bytes.Contains(buffered, []byte(commentary)) {
+		t.Fatal("discarded commentary remains in the adapter-owned buffer")
+	}
+}
+
+func TestSensitiveDiagnosticsRecordOnlyTheDecoderFailureStage(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Replace(
+		string(readFixtureFile(t, "commentary-tool-call.sse")),
+		`"finish_reason":"tool_calls"`,
+		`"finish_reason":"stop"`,
+		1,
+	)
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	credential := newFixtureCredential(t, strings.Repeat("d", 43)+"-generated")
+	var logBuffer bytes.Buffer
+	adapter, modelError := newAdapterWithDiagnostics(
+		fixtureConfiguration("http://127.0.0.1:8080/v1", time.Second),
+		credential,
+		fixtureLogger(&logBuffer),
+		transport,
+		DiagnosticOptions{Sensitive: true},
+	)
+	if modelError != nil {
+		credential.Destroy()
+		t.Fatalf("new adapter: %v", modelError)
+	}
+	defer adapter.Close()
+
+	modelError = adapter.Stream(context.Background(), fixtureModelRequest(), func(domain.ModelStreamEvent) {})
+	if modelError == nil || modelError.Code() != domain.ModelErrorCodeMalformedStream {
+		t.Fatalf("model error = %#v", modelError)
+	}
+	logContent := logBuffer.String()
+	if !strings.Contains(logContent, "finish_content_mismatch") ||
+		!strings.Contains(logContent, `"sensitive_error_chain"`) {
+		t.Fatalf("decoder failure stage is absent from sensitive diagnostics: %s", logContent)
+	}
+	for _, prohibited := range []string{"I will inspect", "Checking its current state", "sample-pod"} {
+		if strings.Contains(logContent, prohibited) {
+			t.Fatalf("sensitive diagnostic contains discarded stream content %q", prohibited)
+		}
+	}
+}
+
 func TestAdapterConstructionIsLocalAndCloseOwnsCredential(t *testing.T) {
 	t.Parallel()
 

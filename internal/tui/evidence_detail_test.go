@@ -11,7 +11,6 @@ import (
 
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
-	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
 
 const testEvidenceID domain.EvidenceID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a12"
@@ -102,11 +101,7 @@ func TestEvidenceDetailKeyboardNavigationAndCancellation(t *testing.T) {
 	model, first := modelWithEvidenceReference(t)
 	second := first
 	second.EvidenceID = testEvidenceIDTwo
-	model.evidenceReferences = append(model.evidenceReferences, second)
-	model.transcript.SetAgentEvidence([]components.EvidenceReference{
-		{Index: 0, ID: string(first.EvidenceID), State: string(first.State)},
-		{Index: 1, ID: string(second.EvidenceID), State: string(second.State)},
-	})
+	model = modelWithEvidenceReferences(t, []application.UIEvidenceReference{first, second})
 
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/r"})
 	if !model.slashMenu.Open() {
@@ -233,7 +228,6 @@ func TestEvidenceDetailReferencesSurviveSafeHistoryRestore(t *testing.T) {
 
 func modelWithEvidenceReference(t *testing.T) (Model, application.UIEvidenceReference) {
 	t.Helper()
-	model := newTestModel()
 	reference := application.UIEvidenceReference{
 		EvidenceID: testEvidenceID,
 		RunID:      testRunID,
@@ -243,6 +237,12 @@ func modelWithEvidenceReference(t *testing.T) (Model, application.UIEvidenceRefe
 		Sequence: 2,
 		State:    application.UIEvidenceDetailAvailable,
 	}
+	return modelWithEvidenceReferences(t, []application.UIEvidenceReference{reference}), reference
+}
+
+func modelWithEvidenceReferences(t *testing.T, references []application.UIEvidenceReference) Model {
+	t.Helper()
+	model := newTestModel()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind:               application.UIEventRunCompleted,
@@ -250,9 +250,9 @@ func modelWithEvidenceReference(t *testing.T) (Model, application.UIEvidenceRefe
 		ScopeGeneration:    7,
 		Sequence:           2,
 		Text:               "Final diagnosis.",
-		EvidenceReferences: []application.UIEvidenceReference{reference},
+		EvidenceReferences: references,
 	}})
-	return model, reference
+	return model
 }
 
 func evidenceDetailQueryFromCmd(t *testing.T, cmd tea.Cmd) application.UIEvidenceDetailQuery {

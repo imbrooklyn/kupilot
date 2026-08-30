@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
 	"github.com/yuin/goldmark"
 	goldmarkast "github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -234,37 +233,153 @@ func (renderer terminalMarkdownRenderer) renderTable(markdownTable *extensionast
 		return renderer.renderTableRecords(headers, rows, width)
 	}
 
-	terminalTable := table.New().
-		Headers(headers...).
-		Rows(rows...).
-		Width(width).
-		Wrap(true).
-		Border(lipgloss.NormalBorder()).
-		BorderTop(false).
-		BorderBottom(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderColumn(false).
-		BorderRow(true).
-		BorderHeader(true).
-		BorderStyle(renderer.styles.TableBorder).
-		BaseStyle(renderer.styles.Text)
-	terminalTable.StyleFunc(func(row, column int) lipgloss.Style {
-		style := renderer.styles.Text.Padding(0, 1)
-		if row == table.HeaderRow {
-			style = renderer.styles.TableHeader.Padding(0, 1)
+	columnWidths, ok := tableColumnWidths(headers, rows, width)
+	if !ok {
+		return renderer.renderTableRecords(headers, rows, width)
+	}
+	lines := renderer.renderAlignedTableRow(headers, columnWidths, markdownTable.Alignments, renderer.styles.TableHeader)
+	lines = append(lines, renderer.renderTableSeparator(columnWidths, "━"))
+	for rowIndex, row := range rows {
+		lines = append(lines, renderer.renderAlignedTableRow(row, columnWidths, markdownTable.Alignments, renderer.styles.Text)...)
+		if rowIndex+1 < len(rows) {
+			lines = append(lines, renderer.renderTableSeparator(columnWidths, "─"))
 		}
-		if column >= 0 && column < len(markdownTable.Alignments) {
-			switch markdownTable.Alignments[column] {
-			case extensionast.AlignRight:
-				style = style.Align(lipgloss.Right)
-			case extensionast.AlignCenter:
-				style = style.Align(lipgloss.Center)
+	}
+	return strings.Join(lines, "\n")
+}
+
+const (
+	tableCellPadding = 1
+	tableColumnGap   = 2
+	tableMinColumn   = 3
+)
+
+func tableColumnWidths(headers []string, rows [][]string, width int) ([]int, bool) {
+	columns := len(headers)
+	if columns == 0 {
+		return nil, false
+	}
+	reserved := columns*tableCellPadding*2 + (columns-1)*tableColumnGap
+	available := width - reserved
+	if available < columns*tableMinColumn {
+		return nil, false
+	}
+	natural := make([]int, columns)
+	for column, header := range headers {
+		natural[column] = max(tableMinColumn, maximumLineWidth(header))
+	}
+	for _, row := range rows {
+		for column := range natural {
+			if column < len(row) {
+				natural[column] = max(natural[column], maximumLineWidth(row[column]))
 			}
 		}
-		return style
-	})
-	return strings.Trim(terminalTable.Render(), "\n")
+	}
+	total := 0
+	for _, columnWidth := range natural {
+		total += columnWidth
+	}
+	if total <= available {
+		return natural, true
+	}
+
+	result := make([]int, columns)
+	remaining := available
+	active := make([]int, columns)
+	for column := range active {
+		active[column] = column
+	}
+	for len(active) > 0 {
+		share := remaining / len(active)
+		fixed := false
+		next := make([]int, 0, len(active))
+		for _, column := range active {
+			if natural[column] <= share {
+				result[column] = natural[column]
+				remaining -= result[column]
+				fixed = true
+				continue
+			}
+			next = append(next, column)
+		}
+		active = next
+		if fixed {
+			continue
+		}
+		share = remaining / len(active)
+		extra := remaining % len(active)
+		for position, column := range active {
+			result[column] = share
+			if position < extra {
+				result[column]++
+			}
+		}
+		break
+	}
+	return result, true
+}
+
+func maximumLineWidth(value string) int {
+	maximum := 0
+	for _, line := range strings.Split(value, "\n") {
+		maximum = max(maximum, lipgloss.Width(line))
+	}
+	return maximum
+}
+
+func (renderer terminalMarkdownRenderer) renderAlignedTableRow(
+	values []string,
+	widths []int,
+	alignments []extensionast.Alignment,
+	style lipgloss.Style,
+) []string {
+	cells := make([][]string, len(widths))
+	height := 1
+	for column, columnWidth := range widths {
+		value := ""
+		if column < len(values) {
+			value = values[column]
+		}
+		wrapped := renderer.wrap(value, columnWidth)
+		if wrapped == "" {
+			cells[column] = []string{""}
+		} else {
+			cells[column] = strings.Split(wrapped, "\n")
+		}
+		height = max(height, len(cells[column]))
+	}
+
+	lines := make([]string, 0, height)
+	for rowLine := 0; rowLine < height; rowLine++ {
+		segments := make([]string, len(widths))
+		for column, columnWidth := range widths {
+			value := ""
+			if rowLine < len(cells[column]) {
+				value = cells[column][rowLine]
+			}
+			alignment := lipgloss.Left
+			if column < len(alignments) {
+				switch alignments[column] {
+				case extensionast.AlignRight:
+					alignment = lipgloss.Right
+				case extensionast.AlignCenter:
+					alignment = lipgloss.Center
+				}
+			}
+			cell := style.Width(columnWidth).Align(alignment).Render(value)
+			segments[column] = " " + cell + " "
+		}
+		lines = append(lines, strings.Join(segments, strings.Repeat(" ", tableColumnGap)))
+	}
+	return lines
+}
+
+func (renderer terminalMarkdownRenderer) renderTableSeparator(widths []int, character string) string {
+	segments := make([]string, len(widths))
+	for column, columnWidth := range widths {
+		segments[column] = strings.Repeat(character, columnWidth+tableCellPadding*2)
+	}
+	return renderer.styles.TableBorder.Render(strings.Join(segments, strings.Repeat(" ", tableColumnGap)))
 }
 
 func (renderer terminalMarkdownRenderer) renderTableRow(row goldmarkast.Node) []string {

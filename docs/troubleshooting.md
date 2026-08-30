@@ -145,10 +145,12 @@ HTTP 200 with `cause: stream_protocol`, `error_class:
 invalid_external_response`, and `error_code: model_stream_invalid` means the
 endpoint returned SSE but the decoded stream violated the bounded contract.
 Kupilot accepts inert empty deltas and interleaving between distinct bounded
-Tool indexes; it still rejects mixed prose and Tool selection, missing or
-non-contiguous indexes, incomplete calls, unsupported finish states, and data
-after terminal state. Default logs intentionally do not retain the raw chunk or
-its content.
+Tool indexes. It also accepts bounded commentary before or alongside a Tool
+selection when that response terminates with `tool_calls`; the commentary is
+discarded and cannot authorize a Tool. Kupilot still rejects missing or
+non-contiguous indexes, incomplete calls, Tool fragments completed with
+`stop` or `length`, unsupported finish states, and data after terminal state.
+Default logs intentionally do not retain the raw chunk or its content.
 
 For a private, short-lived reproduction, add:
 
@@ -166,6 +168,11 @@ model credential and Authorization remain excluded, but a provider error may
 still echo user or cluster content. Do not post this log publicly. Disable the
 setting after reproduction and remove `kupilot.log` plus numbered rotations
 when the diagnostic copy is no longer needed.
+
+For adapter-owned validation failures, `sensitive_error_chain` may contain a
+code-defined stage such as `tool_index`, `finish_content_mismatch`, or
+`tool_assembly`. These labels identify the rejected structure without logging
+the SSE payload.
 
 ## The model returned an invalid Agent response
 

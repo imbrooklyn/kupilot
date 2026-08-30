@@ -28,12 +28,29 @@ const helpText = `/help                 Show commands and key bindings
 
 Enter sends. Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Tab completes a command.
 Ctrl+P and Ctrl+N recall submitted input. Page Up and Page Down scroll the transcript.
-Ctrl+E opens supporting observation details.`
+Ctrl+E opens supporting observation details. Esc interrupts an active run when no dialog or suggestion is open.`
 
 const transcriptWheelRows = 3
 
-// Update reduces one message into pure UI state and deferred typed commands.
+// Update reduces one message into pure UI state and commits newly immutable
+// transcript blocks to terminal-owned scrollback when no command is competing
+// for delivery. Run start explicitly sequences its commit before animation.
+// Live Agent output remains in the managed frame.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := model.update(msg)
+	updated, ok := next.(Model)
+	if !ok || cmd != nil {
+		return next, cmd
+	}
+	block := updated.transcript.CommitReady()
+	if block == "" {
+		return updated, nil
+	}
+	updated.reflow()
+	return updated, tea.Println(block)
+}
+
+func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
 	case tea.BackgroundColorMsg:
 		if message.Color == nil || model.theme == ThemeANSI16 || model.theme == ThemeNoColor {
@@ -57,13 +74,29 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ApplicationEventMsg:
 		cmd := model.acceptApplicationEvent(message.Event)
 		model.reflow()
+		if message.Event.Kind == application.UIEventRunStarted && cmd != nil {
+			block := model.transcript.CommitReady()
+			model.reflow()
+			if block != "" {
+				return model, tea.Sequence(tea.Println(block), cmd)
+			}
+		}
 		if model.quitAfterCancel && !model.run.Active && model.run.Terminal {
 			model.quitAfterCancel = false
+			block := model.transcript.CommitReady()
+			model.reflow()
+			if block != "" {
+				return model, tea.Sequence(tea.Println(block), quitCommand())
+			}
 			return model, quitCommand()
 		}
 		return model, cmd
 	case ApprovalExpiryMsg:
 		cmd := model.acceptApprovalExpiry(message)
+		model.reflow()
+		return model, cmd
+	case WorkingTickMsg:
+		cmd := model.acceptWorkingTick(message)
 		model.reflow()
 		return model, cmd
 	case CompletionResultMsg:
@@ -438,6 +471,10 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if model.slashMenu.Open() {
 			model.slashMenu.Close()
 			model.reflow()
+			return model, nil
+		}
+		if model.run.Active {
+			return model, model.cancelRunCommand()
 		}
 		return model, nil
 	}
@@ -1690,6 +1727,9 @@ func (model Model) currentRunElapsed() time.Duration {
 		return 0
 	}
 	now := model.now().UTC().Truncate(time.Millisecond)
+	if model.workingAt.After(now) {
+		now = model.workingAt
+	}
 	if now.IsZero() || now.UnixMilli() < 0 || now.Before(model.run.StartedAt) {
 		return 0
 	}
@@ -1805,14 +1845,17 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		if event.Sequence != 1 || model.run.Active || !model.startup.Ready || !model.scope.ReadOnly {
 			return nil
 		}
+		startedAt := model.now().UTC().Truncate(time.Millisecond)
 		model.run = RunView{
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
-			LastSequence: event.Sequence, StartedAt: model.now().UTC().Truncate(time.Millisecond),
+			LastSequence: event.Sequence, StartedAt: startedAt,
 			Active: true, Status: "active",
 		}
+		model.workingAt = startedAt
+		model.workingFrame = 0
 		model.closeEvidenceInteraction()
 		model.transcript.StartAgent()
-		return nil
+		return workingTick(model.run)
 	}
 	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
 		event.ScopeGeneration != model.run.ScopeGeneration || event.Sequence != model.run.LastSequence+1 {
@@ -1935,6 +1978,22 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	}
 	model.run.LastSequence = event.Sequence
 	return nil
+}
+
+func (model *Model) acceptWorkingTick(message WorkingTickMsg) tea.Cmd {
+	if !model.run.Active || model.run.Terminal || message.Terminal ||
+		message.RunID != model.run.RunID || message.ScopeGeneration != model.run.ScopeGeneration ||
+		message.Sequence < 1 || message.Sequence > model.run.LastSequence {
+		return nil
+	}
+	at := message.At.UTC().Truncate(time.Millisecond)
+	if at.IsZero() || at.UnixMilli() < 0 || at.Before(model.run.StartedAt) ||
+		(!model.workingAt.IsZero() && !at.After(model.workingAt)) {
+		return nil
+	}
+	model.workingAt = at
+	model.workingFrame++
+	return workingTick(model.run)
 }
 
 func approvalOperationLabel(operation domain.ApprovalOperation) string {

@@ -38,6 +38,10 @@ disk encryption, and backup lifecycle remain the user's controls.
 8. A storage failure can degrade an already-started investigation, but it
    cannot enable a model call before the required run-start transaction or a
    supervised write before durable pre-operation audit.
+9. Primary-terminal scrollback is a terminal-owned display consequence, not a
+   Kupilot-created durable store. Kupilot deletion controls cannot retract
+   already displayed text from a terminal emulator, multiplexer, recorder,
+   backup, or remote session.
 
 ## 2. Standard-persistence defaults
 
@@ -268,6 +272,13 @@ a crash bundle, or another Kupilot-created durable store:
 - Live clients, HTTP transports, database handles, transactions, Contexts,
   cancellation functions, callbacks, channels, goroutines, framework messages,
   and live scope authority.
+
+The terminal-byte exclusion means Kupilot does not copy terminal output into
+SQLite, logs, exports, crash bundles, or another generic durable sink. It does
+not mean displayed text vanishes: the primary terminal, multiplexer, or session
+recorder may keep safe rendered conversation in its own scrollback after
+process exit. Session deletion, clear-history, delete-all-local-state, and
+minimal persistence do not control that external retention.
 
 Kubeconfig paths are not stored in SQLite or ordinary logs. A user-requested
 local diagnostic view may show a safely resolved path without making it model or

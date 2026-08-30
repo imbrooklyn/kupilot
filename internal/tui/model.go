@@ -108,6 +108,8 @@ type Model struct {
 	session         SessionView
 	startup         StartupView
 	run             RunView
+	workingAt       time.Time
+	workingFrame    uint64
 	modelName       string
 	modelEndpoint   string
 	modelConfigured bool
@@ -348,7 +350,11 @@ func (model *Model) reflow() {
 	model.resourcePicker.SetWidth(model.width)
 	model.sessionPicker.SetWidth(model.width)
 	footerHeight := 1 + strings.Count(model.footerView(), "\n")
-	availableSuggestions := max(1, model.height-model.composer.FrameHeight()-footerHeight-1)
+	workingHeight := 0
+	if model.run.Active && !model.run.Terminal {
+		workingHeight = 1
+	}
+	availableSuggestions := max(1, model.height-model.composer.FrameHeight()-footerHeight-workingHeight-1)
 	visible := min(MaxPickerCandidates, availableSuggestions)
 	model.slashMenu.SetMaxVisible(visible)
 	model.contextPicker.SetMaxVisible(visible)
@@ -359,6 +365,6 @@ func (model *Model) reflow() {
 	if prompt := model.modelSetupView(); prompt != "" {
 		setupHeight = 1 + strings.Count(prompt, "\n")
 	}
-	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight - setupHeight
+	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight - setupHeight - workingHeight
 	model.transcript.SetSize(model.width, max(1, transcriptHeight))
 }

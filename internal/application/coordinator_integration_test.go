@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
@@ -532,6 +534,8 @@ func renderIntegrationUI(events []application.UIEvent) string {
 		updated, _ := model.Update(tui.ApplicationEventMsg{Event: event})
 		model = updated.(tui.Model)
 	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	model = updated.(tui.Model)
 	return model.View().Content
 }
 

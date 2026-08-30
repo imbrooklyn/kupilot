@@ -30,7 +30,10 @@ The neutral event kinds are:
 Fragments never authorize a Tool. A complete Tool call is accepted only after
 ordered assembly, fixed-name validation, canonical strict arguments, the
 `tool_calls` finish reason, and the independent Agent runtime checks for schema,
-scope, generation, budgets, and dispatch.
+scope, generation, budgets, and dispatch. Commentary content that precedes or
+accompanies that Tool selection is bounded and validated but discarded inside
+the model adapter; it does not become a neutral text event, Message, Tool
+authority, Evidence, or Diagnosis.
 
 ## Transport implementation and lifecycle
 
@@ -115,7 +118,8 @@ The response must have the `text/event-stream` media type and use single-line
 SSE `data:` records. Empty lines and SSE comment lines are allowed. Each JSON
 chunk may provide:
 
-- Choice index zero with `delta.content` text.
+- Choice index zero with `delta.content` text. Content may precede or accompany
+  indexed Tool fragments in the same response as described below.
 - Choice index zero with indexed `delta.tool_calls` fragments. The only
   supported Tool-call type is `function`. Fragments for different bounded
   indexes may interleave; arrival order within each index is preserved.
@@ -124,16 +128,21 @@ chunk may provide:
 
 A choice-index-zero assistant role marker or otherwise empty delta before the
 finish reason is a bounded no-op. It emits no neutral event and cannot authorize
-a Tool. Every Tool index must remain in range, the completed index set must be
-contiguous from zero, and every per-index assembly must validate as one complete
-fixed-catalog Tool call before the `tool_calls` finish state is accepted.
+a Tool. Text is buffered until the finish reason resolves the response mode. A
+`stop` or `length` response emits its validated text normally. For a
+`tool_calls` response, any buffered commentary is discarded and only indexed
+Tool fragments enter the neutral stream. Every Tool index must remain in range,
+the completed index set must be contiguous from zero, and every per-index
+assembly must validate as one complete fixed-catalog Tool call before the
+`tool_calls` finish state is accepted.
 
 `data: [DONE]` is accepted after a supported finish reason. EOF is also accepted
 after a supported finish reason, so usage and `[DONE]` are optional. EOF before
 a finish reason, data after a finish reason other than one optional usage chunk,
-duplicate usage, duplicate terminal state, mixed text and Tool selection,
-an invalid or non-contiguous Tool index, a nonzero choice index, or malformed
-JSON is rejected.
+duplicate usage, duplicate terminal state, an invalid or non-contiguous Tool
+index, a nonzero choice index, or malformed JSON is rejected. A response
+containing Tool fragments but terminating with `stop` or `length` is also
+rejected.
 
 The response header `X-Request-ID` is optional. When present, its value is
 validated and bounded before becoming neutral metadata. Other response headers
@@ -167,6 +176,7 @@ successful result.
 | Structured function Tool calls | Required |
 | Strict JSON object Tool schemas | Required |
 | Indexed, fragmented Tool arguments | Required; distinct indexes may interleave |
+| Commentary accompanying a Tool selection | Accepted only with `tool_calls`; bounded and discarded |
 | Usage chunk | Optional |
 | `X-Request-ID` response header | Optional |
 | `[DONE]` after a finish reason | Optional; terminal EOF is accepted |

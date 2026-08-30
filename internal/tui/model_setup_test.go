@@ -50,11 +50,12 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		t.Fatal("submitted credential entered render state")
 	}
 	message.Request.Secret.Destroy()
-	model, _ = updateModel(t, model, ModelSetupResultMsg{Result: application.ModelSetupResult{
+	model, cmd = updateModel(t, model, ModelSetupResultMsg{Result: application.ModelSetupResult{
 		RequestID: message.Request.RequestID, Model: "diagnostic-model",
 		Origin: "https://model.example.test", Persisted: true,
 	}})
-	if !model.modelConfigured || model.modelSetup != nil || !strings.Contains(model.render(), "Model configured.") ||
+	if !model.modelConfigured || model.modelSetup != nil || !commandPrintsAbove(cmd) ||
+		!transcriptContains(model, "Model configured.") ||
 		strings.Contains(model.footerView(), "model") ||
 		strings.Contains(model.render(), canary) {
 		t.Fatalf("configured model state = configured=%v setup=%#v footer=%q", model.modelConfigured, model.modelSetup, model.footerView())
@@ -62,6 +63,15 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 	if model.composer.PreviousHistory() {
 		t.Fatal("credential was retained in composer history")
 	}
+}
+
+func transcriptContains(model Model, value string) bool {
+	for _, entry := range model.transcript.Entries() {
+		if strings.Contains(entry.Text, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestUnconfiguredModelDoesNotPreemptExplicitResumeStartup(t *testing.T) {

@@ -78,6 +78,21 @@ control plane. "Local" describes orchestration and credential ownership, not
 where the configured model runs. The model has no direct Kubernetes, SQLite,
 filesystem, shell, approval, or executor connection.
 
+The TUI renders ordinary conversation in the primary terminal buffer. Its
+delivery state retains the complete bounded transcript for review, advances a
+monotonic boundary only across immutable entries, and schedules each newly
+committed rendered block once above the compact live Bubble Tea frame. The
+terminal emulator then owns scrollback retention. This delivery projection is
+independent of SQLite Message commitment and explicit Session resume.
+
+The composer publishes a real terminal cursor at the textarea insertion point;
+the placeholder remains separate rendered content. This gives operating-system
+input methods a stable candidate-window anchor without adding another editor.
+While a run is active, a TUI-only timer schedules animation frames for the
+`Working` row. Each frame carries the run ID, scope generation, sequence, and
+terminal snapshot and is discarded when stale. It changes no Application time,
+budget, progress, Evidence, scope, approval, or cancellation authority.
+
 ## 3. Dependency direction
 
 ```mermaid
@@ -133,7 +148,7 @@ Kubernetes, Tool, persistence, approval-service, or executor implementations.
 | Agent | Single-Agent loop, immutable policy, model and capability contracts, Evidence-reference validation | Live scope mutation, client-go, SQLite, TUI state, executor calls |
 | Tools | Strict schemas, canonical arguments, projected results, Evidence construction | Generic Kubernetes access, repositories, TUI, approval authority |
 | Infrastructure | Kubeconfig and client lifecycle, typed Kubernetes calls, model transport, storage mappings | End-to-end product decisions or policy widening |
-| Delivery | CLI intent, Bubble Tea state, rendering, keyboard input | Business I/O or authorization |
+| Delivery | CLI intent, Bubble Tea state, rendering, keyboard input, terminal scrollback projection | Business I/O or authorization |
 | Composition | Concrete construction and lifecycle | Hidden globals, policy dispatch, service lookup |
 
 <!-- markdownlint-enable MD013 -->
@@ -381,6 +396,13 @@ channel closure. Every goroutine has one owner, cancellation path, and bounded
 termination path. Tests use barriers, fake clocks, and channels rather than
 long sleeps.
 
+The model adapter also resolves the response modality before exposing text.
+Bounded commentary that precedes or accompanies an indexed Tool selection is
+discarded only after the same response terminates with `tool_calls`; only the
+validated Tool fragments cross the neutral port. Text from a `stop` or
+`length` response crosses normally. A Tool fragment with either of those finish
+reasons remains an invalid response.
+
 ## 12. Persistence and retention
 
 SQLite stores only the explicit safe fields admitted by the Data Retention
@@ -412,8 +434,9 @@ Required deterministic checks include:
 7. compact, balanced, extended, and hard-ceiling budget tests with fake clocks;
 8. approval mismatch, expiry, replay, target-change, pre-audit failure,
    ambiguous outcome, and verification-state tests;
-9. dark, light, ANSI-16, and `NO_COLOR` TUI goldens plus one-editor and local
-   `/status` zero-I/O checks; and
+9. dark, light, ANSI-16, and `NO_COLOR` TUI goldens, real-cursor Unicode input,
+   correlated Working-frame rejection, primary-screen scrollback, one-editor,
+   and local `/status` zero-I/O checks; and
 10. temporary-file SQLite migration, retention, deletion, and degraded-storage
     tests.
 

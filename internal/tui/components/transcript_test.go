@@ -60,9 +60,13 @@ func TestTranscriptMatchesUserSurfaceAndFinalRunTimeline(t *testing.T) {
 	detailAt := strings.Index(content, "    └ Count the current cluster nodes.")
 	separatorAt := strings.Index(content, strings.Repeat("─", 48))
 	answerAt := strings.Index(content, "The cluster has three Ready nodes.")
-	timingAt := strings.Index(content, "Worked for 20s")
+	timingAt := strings.Index(content, "─ Worked for 20s ─")
 	if !(toolAt >= 0 && toolAt < detailAt && detailAt < separatorAt && separatorAt < answerAt && answerAt < timingAt) {
 		t.Fatalf("terminal run timeline order is invalid: %q", content)
+	}
+	timingLine := lineContainingText(content, "Worked for 20s")
+	if lipgloss.Width(timingLine) != 48 {
+		t.Fatalf("Worked separator width = %d, want 48: %q", lipgloss.Width(timingLine), timingLine)
 	}
 }
 
@@ -103,6 +107,99 @@ func TestTranscriptCollapsesBulkEvidenceWithoutLosingSelection(t *testing.T) {
 	if !strings.Contains(selected, "Observation 2/9 · ready") || strings.Contains(selected, references[1].ID) {
 		t.Fatalf("second bulk Evidence selection = %q", selected)
 	}
+}
+
+func TestTranscriptCommitsOnlyImmutablePrefixAndRetainsReviewableHistory(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(48, 30)
+	transcript.AppendUser("How many Nodes are Ready?")
+	if block := transcript.CommitReady(); block != "" {
+		t.Fatalf("trailing user entry committed before the run started: %q", block)
+	}
+
+	transcript.StartAgent()
+	userBlock := transcript.CommitReady()
+	if !strings.Contains(userBlock, "› How many Nodes are Ready?") || strings.Contains(userBlock, "Working") {
+		t.Fatalf("user scrollback block = %q", userBlock)
+	}
+	if view := transcript.View(); strings.Contains(view, "How many Nodes") || view != "" {
+		t.Fatalf("live projection after user commit = %q", view)
+	}
+
+	transcript.UpsertToolStep(ToolStep{
+		InvocationID: "invocation-1",
+		Name:         "get_cluster_overview",
+		Purpose:      "Count Ready Nodes.",
+		Status:       "succeeded",
+	})
+	transcript.AppendAgent("A provisional answer.")
+	if block := transcript.CommitReady(); block != "" {
+		t.Fatalf("streaming Agent draft entered scrollback: %q", block)
+	}
+	transcript.FinishAgentWithDuration("Three Nodes are Ready.", 20*time.Second)
+	transcript.SetAgentEvidence([]EvidenceReference{{Index: 0, ID: "internal-evidence-id", State: "available"}})
+	agentBlock := transcript.CommitReady()
+	for _, want := range []string{"Inspect cluster overview · done", "Count Ready Nodes.", "Three Nodes are Ready.", "Worked for 20s"} {
+		if !strings.Contains(agentBlock, want) {
+			t.Fatalf("Agent scrollback block missing %q: %q", want, agentBlock)
+		}
+	}
+	if strings.Contains(agentBlock, "internal-evidence-id") || transcript.View() != "" {
+		t.Fatalf("committed Agent block exposed an internal ID or remained live: block=%q view=%q", agentBlock, transcript.View())
+	}
+	if duplicate := transcript.CommitReady(); duplicate != "" {
+		t.Fatalf("immutable entries were committed twice: %q", duplicate)
+	}
+	transcript.AppendAgent(" late mutation")
+	transcript.FinishAgent("replacement")
+	if entries := transcript.Entries(); entries[1].Text != "Three Nodes are Ready." {
+		t.Fatalf("committed Agent entry accepted a late mutation: %#v", entries[1])
+	}
+
+	transcript.PageUp()
+	review := transcript.View()
+	if !strings.Contains(review, "How many Nodes are Ready?") || !strings.Contains(review, "Three Nodes are Ready.") {
+		t.Fatalf("retained transcript review = %q", review)
+	}
+	transcript.PageDown()
+	if transcript.reviewing || transcript.View() != "" {
+		t.Fatalf("PageDown did not return to the live projection: reviewing=%v view=%q", transcript.reviewing, transcript.View())
+	}
+
+	transcript.PageUp()
+	transcript.AppendUser("What changed?")
+	transcript.StartAgent()
+	if transcript.reviewing || !strings.Contains(transcript.View(), "What changed?") ||
+		strings.Contains(transcript.View(), "Working") {
+		t.Fatalf("new run did not return history review to the live projection: %q", transcript.View())
+	}
+}
+
+func TestWorkedDurationUsesCompactCodexFormatting(t *testing.T) {
+	t.Parallel()
+
+	tests := map[time.Duration]string{
+		59 * time.Second:                      "59s",
+		time.Minute:                           "1m 00s",
+		4*time.Minute + 43*time.Second:        "4m 43s",
+		time.Hour + time.Minute + time.Second: "1h 01m 01s",
+	}
+	for duration, want := range tests {
+		if got := formatElapsedCompact(duration); got != want {
+			t.Fatalf("formatElapsedCompact(%s) = %q, want %q", duration, got, want)
+		}
+	}
+}
+
+func lineContainingText(content, text string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, text) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestToolStepNamesCoverTheFixedCatalogWithoutProtocolIdentifiers(t *testing.T) {

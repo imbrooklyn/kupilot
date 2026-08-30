@@ -11,6 +11,34 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
+func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	view := model.View()
+	if view.Cursor == nil || view.Cursor.Position.X != 3 || view.Cursor.Position.Y != 1 {
+		t.Fatalf("empty composer cursor = %#v, want terminal position (3,1)", view.Cursor)
+	}
+	if !strings.Contains(view.Content, "Ask a question, or type / for commands") {
+		t.Fatalf("empty composer truncated its placeholder: %q", view.Content)
+	}
+
+	committed := "\u4f60\u597d"
+	model, command := updateModel(t, model, keyText(committed))
+	if command != nil || model.composer.Value() != committed || strings.ContainsRune(model.composer.Value(), ' ') {
+		t.Fatalf("system input commit changed text: value=%q command=%T", model.composer.Value(), command)
+	}
+	view = model.View()
+	if view.Cursor == nil || view.Cursor.Position.X != 7 || view.Cursor.Position.Y != 1 {
+		t.Fatalf("Unicode composer cursor = %#v, want terminal position (7,1)", view.Cursor)
+	}
+
+	model.showDialog("Unavailable", "Close this dialog.")
+	if cursor := model.View().Cursor; cursor != nil {
+		t.Fatalf("modal left the background composer cursor visible: %#v", cursor)
+	}
+}
+
 func TestViewStructureKeepsTranscriptComposerSuggestionsAndFooterOrder(t *testing.T) {
 	t.Parallel()
 
@@ -116,6 +144,43 @@ func TestSemanticPaletteModesKeepMeaningIndependentOfColor(t *testing.T) {
 	}
 }
 
+func TestCompletedConversationLeavesManagedFrameAndUsesPrimaryScreen(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "How many Nodes are Ready?"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = commandFromCmd(t, cmd)
+	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	if !commandSequencesPrintBeforeNext(cmd) || strings.Contains(model.View().Content, "How many Nodes are Ready?") {
+		t.Fatal("accepted user history was not committed exactly outside the managed frame")
+	}
+	terminalEvent := application.UIEvent{
+		Kind: application.UIEventRunCompleted, RunID: testRunID,
+		ScopeGeneration: 7, Sequence: 2, Text: "Three Nodes are Ready.",
+	}
+	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
+	if !commandPrintsAbove(cmd) || strings.Contains(model.View().Content, "Three Nodes are Ready.") {
+		t.Fatal("terminal Agent history was not committed exactly outside the managed frame")
+	}
+	if model.View().AltScreen {
+		t.Fatal("conversation view still uses the alternate screen")
+	}
+	model, duplicate := updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
+	if duplicate != nil {
+		t.Fatal("duplicate terminal event recommitted conversation history")
+	}
+	model, duplicate = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	if duplicate != nil {
+		t.Fatal("resize attempted to commit terminal history a second time")
+	}
+	model.transcript.PageUp()
+	if review := model.View().Content; !strings.Contains(review, "How many Nodes are Ready?") ||
+		!strings.Contains(review, "Three Nodes are Ready.") {
+		t.Fatalf("retained in-memory review = %q", review)
+	}
+}
+
 func populatedViewModel(t *testing.T) Model {
 	t.Helper()
 	model := newTestModel()
@@ -137,6 +202,8 @@ func populatedViewModel(t *testing.T) Model {
 		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, Sequence: 4, Text: "Final diagnosis.",
 	}})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/r"})
+	model.transcript.PageUp()
+	model.reflow()
 	return model
 }
 
@@ -174,8 +241,8 @@ func semanticViewSnapshot(content string) string {
 			snapshot = append(snapshot, "<tool> Inspect resource · done")
 		case strings.HasPrefix(trimmed, "────────"):
 			snapshot = append(snapshot, "<separator>")
-		case strings.HasPrefix(trimmed, "Worked for "):
-			snapshot = append(snapshot, "<timing> "+trimmed)
+		case strings.HasPrefix(trimmed, "─ Worked for "):
+			snapshot = append(snapshot, "<timing> "+strings.Trim(trimmed, "─ "))
 		case trimmed == "› /r":
 			snapshot = append(snapshot, "<composer> › /r")
 		case strings.HasPrefix(trimmed, "› /resource"):

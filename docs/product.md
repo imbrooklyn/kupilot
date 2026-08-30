@@ -66,10 +66,15 @@ where they protect authority or data rather than merely restricting usefulness.
    failing workloads across Namespaces", or "why is checkout unavailable?".
 6. Kupilot creates one AgentRun with a frozen Context, working Namespace,
    namespace-access policy, capability catalog, consent, and budget profile.
-7. Inline steps show bounded reads and any proposed action. The user may cancel
-   the run at any time and may inspect `/status` without causing external I/O.
+7. Inline steps show bounded reads and any proposed action. While work is
+   active, a live row shows compact elapsed time and the `Esc` interrupt hint.
+   The user may cancel the run at any time and may inspect `/status` without
+   causing external I/O.
 8. Kupilot returns a validated free-form Markdown answer. Evidence detail and
    gaps remain inspectable without forcing every response into a fixed layout.
+   The final answer ends with a full-width `Worked for` duration separator.
+   Completed conversation blocks remain in the primary terminal scrollback
+   after the managed composer exits.
 9. If the Agent proposes an admitted mutation, Kupilot displays a default-reject
    approval bound to the exact target and operation. Request acceptance and
    post-operation verification remain distinct.
@@ -120,6 +125,11 @@ confident answer.
 Evidence is a time-bounded projection, not a complete cluster truth. A
 successful AgentRun means that Kupilot followed its local authority, data, and
 protocol checks. It does not guarantee that a model identified the root cause.
+
+Terminal scrollback is owned by the user's terminal emulator, not by Kupilot's
+Session store. Starting a new Session, clearing history, deleting a Session, or
+using minimal persistence does not erase text that the terminal has already
+displayed.
 
 ## Supervised action contract
 
