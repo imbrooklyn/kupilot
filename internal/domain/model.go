@@ -16,14 +16,20 @@ import (
 )
 
 const (
+	// MaxModelOutputTokens is the accepted per-request output-token ceiling.
+	MaxModelOutputTokens = 8192
 	// MaxModelRequestBytes bounds the serialized request at the transport boundary.
 	MaxModelRequestBytes = 256 * 1024
 	// MaxModelStreamBytes bounds all wire bytes consumed for one response stream.
-	MaxModelStreamBytes = 256 * 1024
+	// It leaves bounded room for SSE and JSON framing at the output-token ceiling;
+	// the assembled assistant response remains subject to its narrower limit.
+	MaxModelStreamBytes = 8 * 1024 * 1024
 	// MaxModelStreamChunkBytes bounds one decoded provider stream chunk.
 	MaxModelStreamChunkBytes = 64 * 1024
-	// MaxModelStreamChunks bounds decoded provider chunks in one response stream.
-	MaxModelStreamChunks = 1024
+	// MaxModelStreamChunks bounds SSE data records and decoded provider chunks in
+	// one response stream. Tokens and stream chunks are not one-to-one, so this
+	// ceiling leaves finite fragmentation headroom above MaxModelOutputTokens.
+	MaxModelStreamChunks = 32 * 1024
 	// MaxModelInputMessageBytes bounds system, user, and Tool content sent to a model.
 	MaxModelInputMessageBytes = maxMessageContentBytes
 	// MaxModelMessageBytes bounds one assembled assistant response. The parsed
@@ -40,21 +46,14 @@ const (
 	// MaxModelRequestTimeout is the accepted per-request ceiling.
 	MaxModelRequestTimeout = 300 * time.Second
 
-	// A maximum-size conversation contains the two initial messages, one
-	// assistant turn per model call, and one result per admitted Tool call.
-	maxModelMessages             = 2 + MaxAgentModelCalls + MaxAgentToolCalls
-	maxModelToolSpecifications   = 7
-	maxModelToolSchemaBytes      = 16 * 1024
-	maxModelToolDescriptionBytes = 1024
-	maxModelCorrelationIDBytes   = 128
-	maxModelErrorMessageBytes    = 1024
+	maxModelToolSchemaBytes    = 16 * 1024
+	maxModelCorrelationIDBytes = 128
+	maxModelErrorMessageBytes  = 1024
 )
 
 var (
 	// ErrInvalidModelConfiguration reports a non-secret configuration invariant failure.
 	ErrInvalidModelConfiguration = errors.New("ModelConfiguration data is invalid")
-	// ErrInvalidModelRequest reports an invalid neutral request without echoing content.
-	ErrInvalidModelRequest = errors.New("model request data is invalid")
 	// ErrInvalidModelError reports an invalid safe model error projection.
 	ErrInvalidModelError = errors.New("model error data is invalid")
 )
@@ -115,139 +114,9 @@ func (configuration ModelConfiguration) Validate() error {
 		configuration.ReasoningEffort != ModelReasoningEffortOmitted && configuration.ReasoningEffort != ModelReasoningEffortNone ||
 		math.IsNaN(configuration.Temperature) || math.IsInf(configuration.Temperature, 0) ||
 		configuration.Temperature < 0 || configuration.Temperature > 0.2 ||
-		configuration.MaxOutputTokens < 1 || configuration.MaxOutputTokens > 8192 ||
+		configuration.MaxOutputTokens < 1 || configuration.MaxOutputTokens > MaxModelOutputTokens ||
 		configuration.RequestTimeout <= 0 || configuration.RequestTimeout > MaxModelRequestTimeout {
 		return ErrInvalidModelConfiguration
-	}
-	return nil
-}
-
-// ModelMessageRole is a neutral request role, not a provider SDK role.
-type ModelMessageRole string
-
-const (
-	ModelMessageRoleSystem    ModelMessageRole = "system"
-	ModelMessageRoleUser      ModelMessageRole = "user"
-	ModelMessageRoleAssistant ModelMessageRole = "assistant"
-	ModelMessageRoleTool      ModelMessageRole = "tool"
-)
-
-// ModelMessage is bounded content that has already passed the model-egress
-// safety pipeline. Structured assistant calls and Tool results remain typed.
-type ModelMessage struct {
-	Role       ModelMessageRole
-	Content    string
-	ToolCallID string
-	ToolCalls  []ModelToolCall
-}
-
-// Validate checks one neutral model request message.
-func (message ModelMessage) Validate() error {
-	switch message.Role {
-	case ModelMessageRoleSystem, ModelMessageRoleUser:
-		if !validModelText(message.Content, MaxModelInputMessageBytes, true) || message.Content == "" || message.ToolCallID != "" || len(message.ToolCalls) != 0 {
-			return ErrInvalidModelRequest
-		}
-	case ModelMessageRoleAssistant:
-		if !validModelText(message.Content, MaxModelMessageBytes, true) || message.ToolCallID != "" ||
-			(message.Content == "") == (len(message.ToolCalls) == 0) {
-			return ErrInvalidModelRequest
-		}
-		seen := make(map[string]struct{}, len(message.ToolCalls))
-		for _, call := range message.ToolCalls {
-			if call.Validate() != nil {
-				return ErrInvalidModelRequest
-			}
-			if _, exists := seen[call.ID]; exists {
-				return ErrInvalidModelRequest
-			}
-			seen[call.ID] = struct{}{}
-		}
-	case ModelMessageRoleTool:
-		if !validModelText(message.Content, MaxModelInputMessageBytes, true) || message.Content == "" || !validModelToken(message.ToolCallID, MaxModelToolCallIDBytes) || len(message.ToolCalls) != 0 {
-			return ErrInvalidModelRequest
-		}
-	default:
-		return ErrInvalidModelRequest
-	}
-	return nil
-}
-
-// ModelToolCall is one complete neutral structured selection used when a Tool
-// result is sent in a later request.
-type ModelToolCall struct {
-	ID            string
-	Name          ToolName
-	ArgumentsJSON string
-}
-
-// Validate checks a complete provider Tool selection without accepting scope
-// or limits. Provider JSON remains neutral here; the Tool binder applies the
-// strict schema and produces canonical project-owned arguments before use.
-func (call ModelToolCall) Validate() error {
-	if !validModelToken(call.ID, MaxModelToolCallIDBytes) ||
-		!call.Name.Valid() ||
-		!validModelToolArguments(call.ArgumentsJSON) {
-		return ErrInvalidModelRequest
-	}
-	return nil
-}
-
-// ModelToolSpecification is one fixed, versioned, strict Tool definition.
-type ModelToolSpecification struct {
-	Name            ToolName
-	Version         string
-	Description     string
-	InputSchemaJSON string
-}
-
-// Validate checks a strict canonical object schema without exposing a generic map.
-func (specification ModelToolSpecification) Validate() error {
-	if !specification.Name.Valid() ||
-		!validModelToken(specification.Version, maxToolVersionBytes) ||
-		!validModelText(specification.Description, maxModelToolDescriptionBytes, false) ||
-		!validStrictModelToolSchema(specification.InputSchemaJSON) {
-		return ErrInvalidModelRequest
-	}
-	return nil
-}
-
-// ModelRequest is one bounded neutral request. Endpoint, credential, Context,
-// Namespace, deadlines, and transport controls cannot be supplied through it.
-type ModelRequest struct {
-	ID       ModelRequestID
-	Messages []ModelMessage
-	Tools    []ModelToolSpecification
-}
-
-// Validate checks the complete fixed-catalog request contract.
-func (request ModelRequest) Validate() error {
-	if !request.ID.Valid() || len(request.Messages) == 0 || len(request.Messages) > maxModelMessages ||
-		len(request.Tools) != maxModelToolSpecifications {
-		return ErrInvalidModelRequest
-	}
-	for _, message := range request.Messages {
-		if message.Validate() != nil {
-			return ErrInvalidModelRequest
-		}
-	}
-	wanted := map[ToolName]bool{
-		ToolNameGetResource:         true,
-		ToolNameListResources:       true,
-		ToolNameGetEvents:           true,
-		ToolNameGetPodLogs:          true,
-		ToolNameGetPreviousPodLogs:  true,
-		ToolNameGetRelatedResources: true,
-		ToolNameGetClusterOverview:  true,
-	}
-	for _, specification := range request.Tools {
-		if specification.Validate() != nil || !wanted[specification.Name] {
-			return ErrInvalidModelRequest
-		}
-		delete(wanted, specification.Name)
-	}
-	if len(wanted) != 0 {
-		return ErrInvalidModelRequest
 	}
 	return nil
 }
@@ -299,7 +168,7 @@ func NewModelError(code ModelErrorCode, operation ModelOperation, correlationID 
 		class, retryable, message, _ = modelErrorDefinition(code)
 		operation = ModelOperationRequest
 	}
-	if !validModelToken(correlationID, maxModelCorrelationIDBytes) {
+	if !ValidModelToken(correlationID, maxModelCorrelationIDBytes) {
 		correlationID = "model-request"
 	}
 	return &ModelError{
@@ -380,8 +249,8 @@ func (modelError *ModelError) Validate() error {
 	class, retryable, message, ok := modelErrorDefinition(modelError.code)
 	if !ok || modelError.class != class || modelError.retryable != retryable || modelError.safeMessage != message ||
 		!validModelOperation(modelError.operation) ||
-		!validModelToken(modelError.correlationID, maxModelCorrelationIDBytes) ||
-		!validModelText(modelError.safeMessage, maxModelErrorMessageBytes, false) {
+		!ValidModelToken(modelError.correlationID, maxModelCorrelationIDBytes) ||
+		!ValidModelText(modelError.safeMessage, maxModelErrorMessageBytes, false) {
 		return ErrInvalidModelError
 	}
 	return nil
@@ -483,7 +352,9 @@ func validModelIdentifier(value string) bool {
 	return true
 }
 
-func validModelToken(value string, maximumBytes int) bool {
+// ValidModelToken reports whether a model-bound correlation token is bounded
+// printable ASCII. It carries no provider or transport semantics.
+func ValidModelToken(value string, maximumBytes int) bool {
 	if value == "" || len(value) > maximumBytes || !utf8.ValidString(value) {
 		return false
 	}
@@ -495,7 +366,9 @@ func validModelToken(value string, maximumBytes int) bool {
 	return true
 }
 
-func validModelText(value string, maximumBytes int, allowEmpty bool) bool {
+// ValidModelText reports whether model-bound text is valid, bounded, and free
+// of terminal control and bidirectional override characters.
+func ValidModelText(value string, maximumBytes int, allowEmpty bool) bool {
 	if len(value) > maximumBytes || !utf8.ValidString(value) || !allowEmpty && value == "" {
 		return false
 	}
@@ -515,7 +388,9 @@ func isModelBidirectionalControl(value rune) bool {
 		value >= '\u202a' && value <= '\u202e' || value >= '\u2066' && value <= '\u2069'
 }
 
-func validStrictModelToolSchema(value string) bool {
+// ValidStrictModelToolSchema reports whether a code-owned Tool schema is one
+// canonical, closed JSON object schema accepted by the model boundary.
+func ValidStrictModelToolSchema(value string) bool {
 	if !validBoundedText(value, 2, maxModelToolSchemaBytes) || !json.Valid([]byte(value)) {
 		return false
 	}

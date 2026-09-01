@@ -94,7 +94,7 @@ func sessionExportConfirmationText(state sessionExportState) string {
 	builder.WriteString("- the final Markdown answer and its Evidence and proposed-action metadata after redaction and caps\n")
 	builder.WriteString("- referenced observation summaries or expired markers\n\n")
 	builder.WriteString("Excluded categories include raw cluster-read requests and results, raw logs, complete prompts and model payloads, credentials, Secrets, and approval nonce or digest authority.\n\n")
-	builder.WriteString("The export uses an owner-only file, will not overwrite an existing target, and is not encrypted. Deleting it does not guarantee forensic erasure.\n\nY confirms export. Esc or Enter cancels.")
+	builder.WriteString("The export uses an owner-only file, will not overwrite an existing target, and is not encrypted. Deleting it does not guarantee forensic erasure.\n\nY confirms export. Esc, Ctrl+C, or Enter cancels.")
 	return builder.String()
 }
 
@@ -110,6 +110,10 @@ func (model *Model) showSessionExportTargetError(message string) {
 
 func (model Model) updateSessionExportTargetErrorKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.sessionExport == nil || model.sessionExport.Stage != sessionExportTargetError {
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Quit) {
+		model.cancelSessionExport()
 		return model, nil
 	}
 	if !key.Matches(message, model.keymap.Close) && !key.Matches(message, model.keymap.Submit) {
@@ -129,9 +133,6 @@ func (model Model) updateSessionExportTargetErrorKey(message tea.KeyPressMsg) (t
 
 func (model Model) updateSessionExportTargetKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.sessionExport == nil || model.sessionExport.Stage != sessionExportTargetEntry || model.pendingExportID != 0 {
-		return model, nil
-	}
-	if key.Matches(message, model.keymap.Quit) && model.clearComposerForInterrupt() {
 		return model, nil
 	}
 	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Quit) {
@@ -173,7 +174,8 @@ func (model Model) updateSessionExportConfirmationKey(message tea.KeyPressMsg) (
 	if model.sessionExport == nil || model.sessionExport.Stage != sessionExportConfirmation || model.pendingExportID != 0 {
 		return model, nil
 	}
-	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
+		key.Matches(message, model.keymap.Quit) {
 		model.cancelSessionExport()
 		return model, nil
 	}
@@ -266,7 +268,7 @@ func sessionDeleteConfirmationText(state sessionDeleteState) string {
 	if state.ExpectedCurrent {
 		builder.WriteString("An active diagnostic run and any pending or approved-but-not-executed approval must be cancelled first.\n\n")
 	}
-	builder.WriteString("Logical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
+	builder.WriteString("Logical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc, Ctrl+C, or Enter cancels.")
 	return builder.String()
 }
 
@@ -274,7 +276,8 @@ func (model Model) updateSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, t
 	if model.sessionDelete == nil || model.pendingDeleteID != 0 {
 		return model, nil
 	}
-	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
+		key.Matches(message, model.keymap.Quit) {
 		origin := model.sessionDelete.Origin
 		model.sessionDelete = nil
 		if origin == deleteFromPrivacy && model.privacyReview != nil && model.lifecycleReview != nil {
@@ -311,17 +314,18 @@ func (model *Model) beginLocalDeletion(kind localDeletionKind) {
 	}
 	model.localDeletion = &localDeletionState{Kind: kind}
 	if kind == clearLocalHistory {
-		model.showDialog("Clear all Session history?", "This removes every Session graph and all associated read/write audit in bounded transactions. Settings and valid model data-sharing consent remain. An active diagnostic run and every pending or approved-but-not-executed approval must be cancelled first.\n\nLogical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc or Enter cancels.")
+		model.showDialog("Clear all Session history?", "This removes every Session graph and all associated read/write audit in bounded transactions. Settings and valid model data-sharing consent remain. An active diagnostic run and every pending or approved-but-not-executed approval must be cancelled first.\n\nLogical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc, Ctrl+C, or Enter cancels.")
 		return
 	}
-	model.showDialog("Delete all local database state?", "This closes Kupilot local storage and removes only the validated database plus known SQLite journal, WAL, and shared-memory sidecars. Session history, settings, and model data-sharing consent are removed. Exported summaries, operational log files, backups, snapshots, swap, and storage media are outside this operation.\n\nKupilot exits after storage closes, including after a partial file-removal failure. This does not guarantee forensic erasure.\n\nY confirms deletion and exit. Esc or Enter cancels.")
+	model.showDialog("Delete all local database state?", "This closes Kupilot local storage and removes only the validated database plus known SQLite journal, WAL, and shared-memory sidecars. Session history, settings, and model data-sharing consent are removed. Exported summaries, operational log files, backups, snapshots, swap, and storage media are outside this operation.\n\nKupilot exits after storage closes, including after a partial file-removal failure. This does not guarantee forensic erasure.\n\nY confirms deletion and exit. Esc, Ctrl+C, or Enter cancels.")
 }
 
 func (model Model) updateLocalDeletionKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.localDeletion == nil || model.pendingDeleteID != 0 {
 		return model, nil
 	}
-	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
+	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
+		key.Matches(message, model.keymap.Quit) {
 		model.localDeletion = nil
 		if model.privacyReview != nil && model.lifecycleReview != nil {
 			model.showDialog("Privacy and local data", privacyReviewText(*model.privacyReview, model.lifecycleReview))

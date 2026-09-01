@@ -43,8 +43,8 @@ func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
 		unsupportedMessageFields(message) {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
-	neutral := domain.ModelMessage{Role: domain.ModelMessageRoleAssistant, Content: message.Content}
-	if neutral.Validate() != nil || rejectDuplicateJSONKeys(message.Content) != nil {
+	if !domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, false) ||
+		rejectDuplicateJSONKeys(message.Content) != nil {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
 	decoder := json.NewDecoder(strings.NewReader(message.Content))

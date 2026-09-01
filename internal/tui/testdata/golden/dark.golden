@@ -10,7 +10,9 @@ palette enabled=true base=default muted=default surface=#1e1e1e border=default a
 The Deployment has no available replicas.
 <blank rows=1>
 ─ Worked for 20s ──────────────────────────────────────────────────────
-<blank rows=4>
+<blank rows=2>
+Resource · type to filter
+<blank rows=1>
 › /resource pay
 <blank rows=1>
 › Deployment/payment-api · Unavailable

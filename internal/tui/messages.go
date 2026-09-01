@@ -52,6 +52,12 @@ type ApplicationModelSetupMsg struct {
 	Request application.ModelSetupRequest
 }
 
+// ApplicationModelSetupCancelMsg cancels only the matching in-flight setup
+// request. It carries no credential or provider value.
+type ApplicationModelSetupCancelMsg struct {
+	RequestID uint64
+}
+
 // ApplicationQueryMsg is a deferred typed completion query for an adapter.
 type ApplicationQueryMsg struct {
 	Query application.UICompletionQuery
@@ -100,6 +106,12 @@ type CommandResultMsg struct {
 // ModelSetupResultMsg carries only the non-sensitive configured projection.
 type ModelSetupResultMsg struct {
 	Result application.ModelSetupResult
+}
+
+// ModelSetupCancelRejectedMsg reports that delivery could not enqueue the
+// cancellation request. The original setup remains correlated and active.
+type ModelSetupCancelRejectedMsg struct {
+	RequestID uint64
 }
 
 // ApplicationFailureMsg carries code-authored delivery-safe text and the

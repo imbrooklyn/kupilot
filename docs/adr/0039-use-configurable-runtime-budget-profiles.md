@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-30
+- Amended: 2026-09-01
 - Supersedes: ADR-0016
 
 ## Context
@@ -36,11 +37,26 @@ and traversal ceilings. Profiles may be tightened by code-defined adapter or
 privacy policy. They cannot be changed during a run, raised by model output, or
 set to unlimited.
 
-The model request admits at most 322 neutral messages, derived from two initial
-messages plus the model-call and Tool-call hard ceilings; its serialized body
-still cannot exceed 256 KiB. The ordered internal Agent event stream is capped
+The model request admits at most 322 Eino conversation messages, derived from
+two initial messages plus the model-call and Tool-call hard ceilings; its
+serialized body still cannot exceed 256 KiB. The ordered internal Agent event
+stream is capped
 at 32,768 events so the maximum Tool/Evidence profile fits without becoming an
 unbounded event channel.
+
+`model.max_output_tokens` defaults to the existing per-request hard ceiling of
+8,192. A lower implicit default would add a second truncation budget without a
+separate safety boundary and can cut off a Tool call or final diagnosis while
+the bounded byte, request-time, call-count, and run budgets still have room.
+Operators may explicitly tighten the token value for a chosen endpoint or cost
+policy, but configuration cannot raise it above 8,192.
+
+The independent model-stream hard ceilings are 8 MiB of raw wire data and
+32,768 SSE data records or decoded chunks. Those values provide finite SSE and
+JSON framing headroom at the output-token ceiling without treating tokens and
+stream fragments as equivalent. One record remains capped at 64 KiB and one
+assembled assistant response, including discarded reasoning, remains capped at
+128 KiB.
 
 Reservation remains atomic and occurs before external I/O. Per-request
 deadlines are capped by the remaining run duration. Cancellation, generation
@@ -73,8 +89,8 @@ independent gates.
 Fake-clock and counting tests must cover every profile, exact limits, one-over
 values, remaining-time deadline caps, cancellation, stale scope, concurrent
 reservation, byte accounting, and `/status` snapshots. Tests must also prove
-that unknown profiles and any value above a hard ceiling fail before model or
-Kubernetes I/O.
+that the output-token default equals its fixed ceiling, unknown profiles, and
+any value above a hard ceiling fail before model or Kubernetes I/O.
 
 ## References
 

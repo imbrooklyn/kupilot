@@ -158,16 +158,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 		return state.finishFailure(runCtx, err)
 	}
 
-	firstRequestID, err := adapter.identifiers.NewModelRequestID()
-	if err != nil || !firstRequestID.Valid() {
-		return state.finishFailure(runCtx, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err))
-	}
-	initialRequest, err := agent.BuildInitialModelRequest(input, firstRequestID)
-	if err != nil {
-		return state.finishFailure(runCtx, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err))
-	}
-	state.firstModelRequestID = firstRequestID
-	initialMessages, err := einoMessages(initialRequest.Messages)
+	initialMessages, err := newInitialMessages(input)
 	if err != nil {
 		return state.finishFailure(runCtx, err)
 	}
@@ -177,7 +168,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 		return state.finishFailure(runCtx, err)
 	}
 	productionAgent, err := react.NewAgent(runCtx, &react.AgentConfig{
-		ToolCallingModel: &modelBridge{state: state},
+		ToolCallingModel: &guardedChatModel{state: state},
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools:               tools,
 			ExecuteSequentially: true,

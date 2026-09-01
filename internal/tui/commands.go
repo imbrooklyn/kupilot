@@ -133,6 +133,12 @@ func applicationModelSetup(request application.ModelSetupRequest) tea.Cmd {
 	}
 }
 
+func applicationModelSetupCancel(requestID uint64) tea.Cmd {
+	return func() tea.Msg {
+		return ApplicationModelSetupCancelMsg{RequestID: requestID}
+	}
+}
+
 func approvalExpiry(request application.UIApprovalRequest, now time.Time) tea.Cmd {
 	delay := request.ExpiresAt.Sub(now)
 	if delay < 0 {

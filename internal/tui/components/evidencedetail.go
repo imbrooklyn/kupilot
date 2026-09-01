@@ -104,7 +104,7 @@ func (dialog EvidenceDetailDialog) View(width, height int) string {
 	}
 	lines := []string{
 		dialog.styles.Title.Render("Observation detail"),
-		dialog.styles.Muted.Render("Esc or Enter to close"),
+		dialog.styles.Muted.Render("Esc, Ctrl+C, or Enter to close"),
 	}
 	switch dialog.state {
 	case evidenceDialogLoading:

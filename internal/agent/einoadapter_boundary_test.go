@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -13,6 +14,45 @@ import (
 
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 )
+
+func TestDomainDoesNotReintroduceNeutralModelProtocolDTOs(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() did not return the test path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	domainRoot := filepath.Join(repositoryRoot, "internal", "domain")
+	forbidden := map[string]bool{
+		"ModelMessage":           true,
+		"ModelMessageRole":       true,
+		"ModelRequest":           true,
+		"ModelToolCall":          true,
+		"ModelToolSpecification": true,
+	}
+	err := filepath.WalkDir(domainRoot, func(path string, entry os.DirEntry, walkError error) error {
+		if walkError != nil {
+			return walkError
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			specification, ok := node.(*ast.TypeSpec)
+			if ok && forbidden[specification.Name.Name] {
+				t.Errorf("%s reintroduces neutral model protocol DTO %s", path, specification.Name.Name)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir() error = %v", err)
+	}
+}
 
 func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)

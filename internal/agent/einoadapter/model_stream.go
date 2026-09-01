@@ -16,6 +16,11 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
+const (
+	einoReasoningContentKey = "reasoning-content"
+	einoRequestIDKey        = "openai-request-id"
+)
+
 type responseEnvelope struct {
 	Choices []struct {
 		Index *int `json:"index"`
@@ -62,7 +67,7 @@ func collectModelMessage(
 	defer stream.Close()
 
 	chunks := make([]*schema.Message, 0, 16)
-	scanner := credentialScanner{credential: credential}
+	validator := modelStreamValidator{scanner: credentialScanner{credential: credential}}
 	finishSeen := false
 	usageSeen := false
 	for {
@@ -79,7 +84,7 @@ func collectModelMessage(
 		if len(chunks) >= domain.MaxModelStreamChunks {
 			return nil, errModelResponseLimitReached
 		}
-		if err := validateModelChunk(chunk, &scanner, finishSeen); err != nil {
+		if err := validator.validateChunk(chunk, finishSeen); err != nil {
 			return nil, err
 		}
 		if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
@@ -100,18 +105,19 @@ func collectModelMessage(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errMalformedProviderChunk, err)
 	}
-	if !assembledModelMessageWithinLimits(message) {
+	if !assembledModelMessageWithinLimits(message, validator.discardedReasoningBytes) {
 		return nil, errModelResponseLimitReached
 	}
 	return message, nil
 }
 
-func assembledModelMessageWithinLimits(message *schema.Message) bool {
+func assembledModelMessageWithinLimits(message *schema.Message, discardedReasoningBytes int) bool {
 	if message == nil || len(message.Content) > domain.MaxModelMessageBytes ||
-		len(message.ToolCalls) > domain.MaxAgentToolCalls {
+		len(message.ToolCalls) > domain.MaxAgentToolCalls || discardedReasoningBytes < 0 ||
+		discardedReasoningBytes > domain.MaxModelMessageBytes-len(message.Content) {
 		return false
 	}
-	total := len(message.Content)
+	total := len(message.Content) + discardedReasoningBytes
 	for _, call := range message.ToolCalls {
 		if len(call.ID) > domain.MaxModelToolCallIDBytes ||
 			len(call.Function.Name) > domain.MaxModelToolNameBytes ||
@@ -126,13 +132,22 @@ func assembledModelMessageWithinLimits(message *schema.Message) bool {
 	return total <= domain.MaxModelMessageBytes
 }
 
-func validateModelChunk(chunk *schema.Message, scanner *credentialScanner, afterFinish bool) error {
-	if chunk == nil || chunk.Role != "" && chunk.Role != schema.Assistant ||
+type modelStreamValidator struct {
+	scanner                 credentialScanner
+	discardedReasoningBytes int
+}
+
+func (validator *modelStreamValidator) validateChunk(chunk *schema.Message, afterFinish bool) error {
+	if validator == nil || chunk == nil || chunk.Role != "" && chunk.Role != schema.Assistant ||
 		len(chunk.MultiContent) != 0 || len(chunk.UserInputMultiContent) != 0 ||
 		len(chunk.AssistantGenMultiContent) != 0 || chunk.Name != "" ||
-		chunk.ToolCallID != "" || chunk.ToolName != "" || chunk.ReasoningContent != "" ||
-		chunk.ResponseMeta != nil && chunk.ResponseMeta.LogProbs != nil || !admitAndClearEinoMetadata(chunk, scanner) {
+		chunk.ToolCallID != "" || chunk.ToolName != "" ||
+		chunk.ResponseMeta != nil && chunk.ResponseMeta.LogProbs != nil {
 		return errUnsupportedProviderChunk
+	}
+	reasoningBytes, err := validator.admitAndClearEinoMetadata(chunk)
+	if err != nil {
+		return err
 	}
 	if !utf8.ValidString(chunk.Content) {
 		return errMalformedProviderChunk
@@ -143,7 +158,7 @@ func validateModelChunk(chunk *schema.Message, scanner *credentialScanner, after
 		finishReason = chunk.ResponseMeta.FinishReason
 		usage = chunk.ResponseMeta.Usage
 	}
-	if afterFinish && (chunk.Content != "" || len(chunk.ToolCalls) != 0 || finishReason != "" || usage == nil) {
+	if afterFinish && (chunk.Content != "" || reasoningBytes != 0 || len(chunk.ToolCalls) != 0 || finishReason != "" || usage == nil) {
 		return errMalformedProviderChunk
 	}
 	if finishReason != "" && finishReason != "stop" && finishReason != "tool_calls" && finishReason != "length" {
@@ -153,8 +168,12 @@ func validateModelChunk(chunk *schema.Message, scanner *credentialScanner, after
 		return errMalformedProviderChunk
 	}
 
-	chunkBytes := len(chunk.Content)
-	if scanner.Contains(chunk.Content) {
+	if reasoningBytes > domain.MaxModelMessageBytes-validator.discardedReasoningBytes {
+		return errModelResponseLimitReached
+	}
+	validator.discardedReasoningBytes += reasoningBytes
+	chunkBytes := len(chunk.Content) + reasoningBytes
+	if validator.scanner.Contains(chunk.Content) {
 		return errMalformedProviderChunk
 	}
 	if len(chunk.ToolCalls) > domain.MaxAgentToolCalls {
@@ -172,8 +191,8 @@ func validateModelChunk(chunk *schema.Message, scanner *credentialScanner, after
 			len(call.Function.Arguments) > domain.MaxModelToolArgumentsBytes {
 			return errModelResponseLimitReached
 		}
-		if scanner.Contains(call.ID) || scanner.Contains(call.Type) ||
-			scanner.Contains(call.Function.Name) || scanner.Contains(call.Function.Arguments) {
+		if validator.scanner.Contains(call.ID) || validator.scanner.Contains(call.Type) ||
+			validator.scanner.Contains(call.Function.Name) || validator.scanner.Contains(call.Function.Arguments) {
 			return errMalformedProviderChunk
 		}
 		chunkBytes += len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments)
@@ -192,21 +211,47 @@ func validateModelChunk(chunk *schema.Message, scanner *credentialScanner, after
 	return nil
 }
 
-func admitAndClearEinoMetadata(message *schema.Message, scanner *credentialScanner) bool {
-	if message == nil || len(message.Extra) == 0 {
-		return true
+func (validator *modelStreamValidator) admitAndClearEinoMetadata(message *schema.Message) (int, error) {
+	if validator == nil || message == nil {
+		return 0, errUnsupportedProviderChunk
 	}
-	value, exists := message.Extra["openai-request-id"]
-	reflected := reflect.ValueOf(value)
-	if len(message.Extra) != 1 || !exists || !reflected.IsValid() || reflected.Kind() != reflect.String {
-		return false
+	reasoning := message.ReasoningContent
+	reasoningValue, hasReasoningMetadata := message.Extra[einoReasoningContentKey]
+	if (reasoning == "" && hasReasoningMetadata) || (reasoning != "" && !hasReasoningMetadata) ||
+		!utf8.ValidString(reasoning) {
+		return 0, errUnsupportedProviderChunk
 	}
-	requestID := reflected.String()
-	if !validProviderRequestIDText(requestID) || requestID != "" && scanner.Contains(requestID) {
-		return false
+	expectedMetadata := 0
+	if hasReasoningMetadata {
+		expectedMetadata++
+		reflected := reflect.ValueOf(reasoningValue)
+		if !reflected.IsValid() || reflected.Kind() != reflect.String || reflected.String() != reasoning {
+			return 0, errUnsupportedProviderChunk
+		}
+		if validator.scanner.Contains(reasoning) {
+			return 0, errMalformedProviderChunk
+		}
 	}
+
+	requestIDValue, hasRequestID := message.Extra[einoRequestIDKey]
+	if hasRequestID {
+		expectedMetadata++
+		reflected := reflect.ValueOf(requestIDValue)
+		if !reflected.IsValid() || reflected.Kind() != reflect.String {
+			return 0, errUnsupportedProviderChunk
+		}
+		requestID := reflected.String()
+		if !validProviderRequestIDText(requestID) || requestID != "" && validator.scanner.Contains(requestID) {
+			return 0, errMalformedProviderChunk
+		}
+	}
+	if len(message.Extra) != expectedMetadata {
+		return 0, errUnsupportedProviderChunk
+	}
+
+	message.ReasoningContent = ""
 	message.Extra = nil
-	return true
+	return len(reasoning), nil
 }
 
 func validProviderRequestIDText(requestID string) bool {

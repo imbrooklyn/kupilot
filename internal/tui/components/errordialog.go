@@ -48,6 +48,6 @@ func (dialog ErrorDialog) View(width int) string {
 	}
 	content := dialog.styles.Title.Render(dialog.title) + "\n\n" +
 		dialog.styles.Body.Render(dialog.body) + "\n\n" +
-		dialog.styles.Hint.Render("Esc or Enter to close")
+		dialog.styles.Hint.Render("Esc, Ctrl+C, or Enter to close")
 	return dialog.styles.Frame.Width(max(1, min(width-6, 72))).Render(content)
 }

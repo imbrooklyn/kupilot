@@ -16,7 +16,7 @@ model:
   model: diagnostic-model
   # reasoning_effort: none
   temperature: 0.1
-  max_output_tokens: 2048
+  max_output_tokens: 8192
   request_timeout_seconds: 300
   streaming: true
   tool_calling_required: true

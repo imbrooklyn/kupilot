@@ -264,7 +264,7 @@ type ToolResult struct {
 // can be decided without the owning AgentRun registry.
 func (result ToolResult) Validate() error {
 	if !result.InvocationID.Valid() || !result.Name.Valid() ||
-		!validModelToken(result.Version, maxToolVersionBytes) ||
+		!ValidModelToken(result.Version, maxToolVersionBytes) ||
 		!validToolScopeSnapshot(result.Scope) || !validPersistenceTime(result.ObservedAt) ||
 		!validCanonicalSafeJSONObject(result.DataJSON, MaxToolResultBytes) ||
 		len(result.Evidence) > MaxEvidenceItemsPerResult || len(result.Warnings) > maxToolResultWarnings ||
@@ -341,7 +341,7 @@ func (invocation ToolInvocation) Validate() error {
 	if !invocation.ID.Valid() || !invocation.RunID.Valid() ||
 		invocation.Sequence < 1 || invocation.Sequence > maxToolCalls ||
 		!invocation.Name.Valid() ||
-		!validModelToken(invocation.Version, maxToolVersionBytes) ||
+		!ValidModelToken(invocation.Version, maxToolVersionBytes) ||
 		!validToolScopeSnapshot(invocation.Scope) ||
 		!validCanonicalToolArguments(invocation.ArgumentsJSON) ||
 		invocation.ArgumentsDigest != SHA256Hex(invocation.ArgumentsJSON) ||
@@ -350,9 +350,9 @@ func (invocation ToolInvocation) Validate() error {
 		invocation.StartedAt == nil || !validPersistenceTime(*invocation.StartedAt) {
 		return ErrInvalidToolInvocation
 	}
-	if invocation.Purpose != nil && !validModelText(*invocation.Purpose, maxToolPurposeBytes, false) ||
-		invocation.SafeError != nil && !validModelText(*invocation.SafeError, maxSafeErrorBytes, false) ||
-		invocation.ResultSummary != nil && !validModelText(*invocation.ResultSummary, maxSafeSummaryBytes, false) ||
+	if invocation.Purpose != nil && !ValidModelText(*invocation.Purpose, maxToolPurposeBytes, false) ||
+		invocation.SafeError != nil && !ValidModelText(*invocation.SafeError, maxSafeErrorBytes, false) ||
+		invocation.ResultSummary != nil && !ValidModelText(*invocation.ResultSummary, maxSafeSummaryBytes, false) ||
 		invocation.ErrorClass != nil && !invocation.ErrorClass.Valid() {
 		return ErrInvalidToolInvocation
 	}
@@ -497,7 +497,7 @@ func validSHA256Hex(value string) bool {
 }
 
 func validCanonicalToolArguments(value string) bool {
-	if !validModelToolArguments(value) {
+	if !ValidModelToolArguments(value) {
 		return false
 	}
 	decoder := json.NewDecoder(strings.NewReader(value))
@@ -510,11 +510,11 @@ func validCanonicalToolArguments(value string) bool {
 	return err == nil && string(canonical) == value
 }
 
-// validModelToolArguments accepts a bounded neutral JSON object from a model
+// ValidModelToolArguments accepts a bounded neutral JSON object from a model
 // provider without requiring provider-specific whitespace or key ordering. It
 // still rejects duplicate keys and every field that could carry runtime
 // authority before the Tool binder sees the selection.
-func validModelToolArguments(value string) bool {
+func ValidModelToolArguments(value string) bool {
 	if !validBoundedText(value, 2, maxToolArgumentsBytes) || !json.Valid([]byte(value)) || !validJSONWithoutDuplicateKeys(value) {
 		return false
 	}
@@ -656,7 +656,7 @@ func validSafeJSONValue(value any, depth int, items *int) bool {
 	case nil, bool, json.Number:
 		return true
 	case string:
-		return validModelText(typed, MaxToolResultBytes, true)
+		return ValidModelText(typed, MaxToolResultBytes, true)
 	case []any:
 		for _, item := range typed {
 			if !validSafeJSONValue(item, depth+1, items) {
@@ -666,7 +666,7 @@ func validSafeJSONValue(value any, depth int, items *int) bool {
 		return true
 	case map[string]any:
 		for key, item := range typed {
-			if !validModelText(key, 256, false) || !validSafeJSONValue(item, depth+1, items) {
+			if !ValidModelText(key, 256, false) || !validSafeJSONValue(item, depth+1, items) {
 				return false
 			}
 		}
@@ -677,7 +677,7 @@ func validSafeJSONValue(value any, depth int, items *int) bool {
 }
 
 func validSafeToolText(value string, maximumBytes int) bool {
-	return validModelText(value, maximumBytes, false)
+	return ValidModelText(value, maximumBytes, false)
 }
 
 func validSafeToolToken(value string, maximumBytes int) bool {

@@ -14,8 +14,8 @@ const (
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
-	DefaultMaxModelOutputTokens       = 2048
 	MaxModelOutputTokens              = 8192
+	DefaultMaxModelOutputTokens       = MaxModelOutputTokens
 	DefaultModelRequestTimeoutSeconds = 300
 	MaxModelRequestTimeoutSeconds     = 300
 	MaxContextBytes                   = 253

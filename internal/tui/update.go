@@ -27,8 +27,9 @@ const helpText = `/help                 Show commands and key bindings
 /quit                 Exit Kupilot
 
 Enter sends. Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Tab completes a command.
-Ctrl+P and Ctrl+N recall submitted input. Page Up and Page Down scroll the transcript.
-Ctrl+E opens supporting observation details. Esc interrupts an active run when no dialog or suggestion is open.`
+Up and Down recall submitted input at composer boundaries; Ctrl+P and Ctrl+N recall it explicitly. Page Up and Page Down scroll the transcript.
+Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
+Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
 const transcriptWheelRows = 3
 
@@ -104,7 +105,17 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.acceptModelSetupResult(message.Result)
 		model.reflow()
 		return model, nil
+	case ModelSetupCancelRejectedMsg:
+		if model.rejectModelSetupCancellation(message) {
+			model.showDialog("Cancellation unavailable", "The model setup cancellation request could not be queued. The current setup operation is still running.")
+			model.reflow()
+		}
+		return model, nil
 	case ApplicationFailureMsg:
+		if model.acceptCancelledModelSetupFailure(message) {
+			model.reflow()
+			return model, nil
+		}
 		if model.acceptModelSetupFailure(message) {
 			model.showDialog("Model setup unavailable", "The model settings were not applied and no replacement runtime was activated. Review the endpoint and model, then enter the API key again.")
 			model.reflow()
@@ -314,6 +325,9 @@ func (model *Model) acceptEvidenceFailure(message ApplicationFailureMsg) bool {
 
 func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	message.Content = sanitizeExternalText(message.Content, 0)
+	if model.modelSetup != nil && model.modelSetup.Stage == modelSetupApplying {
+		return model, nil
+	}
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
 		if strings.ContainsRune(message.Content, '\n') || len(model.composer.Value())+len(message.Content) > 4096 {
 			model.showSessionExportTargetError("The export target must be one bounded single-line path.")
@@ -346,10 +360,46 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.approvalDialog.Open() {
 		return model.updateApprovalDialogKey(message)
 	}
-	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
-		return model.updateSessionExportTargetKey(message)
-	}
 	if key.Matches(message, model.keymap.Quit) {
+		if command, handled := model.interruptModelSetup(); handled {
+			return model, command
+		}
+		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
+			model.cancelSessionExport()
+			return model, nil
+		}
+		if model.scopeConflict.Open() {
+			return model.updateScopeConflictKey(message)
+		}
+		if model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
+			model.closeEvidenceInteraction()
+			return model, nil
+		}
+		if model.dialog.Open() {
+			if model.quitAfterLocalDeletion {
+				model.quitAfterLocalDeletion = false
+				model.closeDialog()
+				return model, model.prepareQuit()
+			}
+			switch {
+			case model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetError:
+				return model.updateSessionExportTargetErrorKey(message)
+			case model.sessionExport != nil && model.sessionExport.Stage == sessionExportConfirmation:
+				return model.updateSessionExportConfirmationKey(message)
+			case model.sessionDelete != nil:
+				return model.updateSessionDeleteKey(message)
+			case model.localDeletion != nil:
+				return model.updateLocalDeletionKey(message)
+			case model.privacyReview != nil:
+				return model.updatePrivacyDialogKey(message)
+			default:
+				model.closeDialog()
+				return model, nil
+			}
+		}
+		if model.pickerOpen() {
+			return model.cancelPicker()
+		}
 		if model.clearComposerForInterrupt() {
 			return model, nil
 		}
@@ -358,6 +408,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return model, model.cancelRunCommand()
 		}
 		return model, model.prepareQuit()
+	}
+	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
+		return model.updateSessionExportTargetKey(message)
 	}
 	if model.scopeConflict.Open() {
 		return model.updateScopeConflictKey(message)
@@ -442,8 +495,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if key.Matches(message, model.keymap.Close) {
-		if model.cancelOptionalModelSetup() {
-			return model, nil
+		if model.modelSetup != nil {
+			command, _ := model.interruptModelSetup()
+			return model, command
 		}
 		if model.pickerOpen() {
 			return model.cancelPicker()
@@ -501,6 +555,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return model, queryCmd
 		}
 	}
+	if model.modelSetup != nil && model.modelSetup.Stage == modelSetupApplying {
+		return model, nil
+	}
 	if key.Matches(message, model.keymap.Complete) {
 		return model, nil
 	}
@@ -515,13 +572,28 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.transcript.PageDown()
 		return model, nil
 	}
-	if key.Matches(message, model.keymap.PreviousAlt) && model.composer.HistoryEligible() {
+	ordinaryComposer := model.modelSetup == nil && model.sessionExport == nil
+	if ordinaryComposer &&
+		key.Matches(message, model.keymap.Previous) && model.composer.ArrowHistoryEligible() {
 		model.composer.PreviousHistory()
 		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
 		return model, queryCmd
 	}
-	if key.Matches(message, model.keymap.NextAlt) && model.composer.NextHistory() {
+	if ordinaryComposer &&
+		key.Matches(message, model.keymap.Next) && model.composer.ArrowHistoryEligible() {
+		model.composer.NextHistory()
+		queryCmd := model.syncSuggestionsAfterEdit()
+		model.reflow()
+		return model, queryCmd
+	}
+	if ordinaryComposer && key.Matches(message, model.keymap.PreviousAlt) && model.composer.HistoryEligible() {
+		model.composer.PreviousHistory()
+		queryCmd := model.syncSuggestionsAfterEdit()
+		model.reflow()
+		return model, queryCmd
+	}
+	if ordinaryComposer && key.Matches(message, model.keymap.NextAlt) && model.composer.NextHistory() {
 		queryCmd := model.syncSuggestionsAfterEdit()
 		model.reflow()
 		return model, queryCmd
@@ -1007,7 +1079,7 @@ func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
 
 func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(message, model.keymap.Close):
+	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Quit):
 		topLevel := model.resumeOrigin == resumeOriginTopLevel
 		requestID := uint64(0)
 		if model.pendingResumed != nil {
@@ -1252,10 +1324,10 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.resetAfterHistoryDeletion()
 			model.quitAfterLocalDeletion = true
 			if result.Failure != "" {
-				model.showDialog("Local database deletion incomplete", "Kupilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the fixed KUPILOT_HOME/state directory and known database sidecars after exit.\n\nPress Esc or Enter to exit.")
+				model.showDialog("Local database deletion incomplete", "Kupilot closed local storage but could not remove every validated database file. The application cannot continue. Inspect only the fixed KUPILOT_HOME/state directory and known database sidecars after exit.\n\nPress Esc, Ctrl+C, or Enter to exit.")
 				return
 			}
-			model.showDialog("Local database state deleted", "Kupilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc or Enter to exit.")
+			model.showDialog("Local database state deleted", "Kupilot closed local storage and removed the validated database plus known SQLite sidecars. Exported summaries, operational logs, backups, snapshots, swap, and storage media were not removed. This is not forensic erasure.\n\nPress Esc, Ctrl+C, or Enter to exit.")
 			return
 		}
 		model.showDialog("Local data not deleted", "Storage path validation or preflight failed before the database was closed. Kupilot remains open and no complete deletion was reported.")
@@ -1484,9 +1556,9 @@ func privacyReviewText(review application.PrivacyReview, lifecycle *application.
 			builder.WriteString(" | D delete current Session")
 		}
 		builder.WriteString(" | H clear history | X delete all database state")
-		builder.WriteString(" | Esc cancel")
+		builder.WriteString(" | Esc or Ctrl+C cancel")
 	} else {
-		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc cancel")
+		builder.WriteString("\nA accept | L toggle container output | R reject/revoke | Esc or Ctrl+C cancel")
 	}
 	return builder.String()
 }
@@ -1532,7 +1604,8 @@ func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, t
 		RequestID: model.pendingPrivacyID, PrivacyRevision: review.Revision,
 	}
 	switch {
-	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Submit):
+	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Submit),
+		key.Matches(message, model.keymap.Quit):
 		command.Kind = application.UICommandCancelPrivacy
 		model.dialog.Close()
 		model.privacyReview = nil

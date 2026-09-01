@@ -94,9 +94,9 @@ func TestGetResourceReturnsSafeDiagnosticDTOAndDeterministicEvidence(t *testing.
 	if !reflect.DeepEqual(gotCategories, wantCategories) {
 		t.Fatalf("Evidence categories = %#v, want %#v", gotCategories, wantCategories)
 	}
-	_, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+	_, measured, err := agent.BuildToolResultContent(result)
 	if err != nil {
-		t.Fatalf("BuildToolResultMessage() error = %v", err)
+		t.Fatalf("BuildToolResultContent() error = %v", err)
 	}
 	if result.Truncation.ReturnedBytes != measured || measured > call.Ceilings().MaxResultBytes {
 		t.Fatalf("returned bytes = %d, measured = %d, ceiling = %d", result.Truncation.ReturnedBytes, measured, call.Ceilings().MaxResultBytes)
@@ -388,9 +388,9 @@ func TestGetResourceOversizeAndSensitiveBlockBecomeBoundedPartialResults(t *test
 		result.Truncation.Reason != "output_limit" || strings.Contains(result.DataJSON, privateKey) {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
 	}
-	_, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+	_, measured, err := agent.BuildToolResultContent(result)
 	if err != nil {
-		t.Fatalf("BuildToolResultMessage() error = %v", err)
+		t.Fatalf("BuildToolResultContent() error = %v", err)
 	}
 	if measured > 4096 || result.Truncation.ReturnedBytes != measured {
 		t.Fatalf("measured bytes = %d, truncation = %#v", measured, result.Truncation)
@@ -423,7 +423,7 @@ func TestGetResourceModelAuthorityDenialsOccurBeforeHandlerOrReader(t *testing.T
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+			_, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 				ID:            "call-denied",
 				Name:          domain.ToolNameGetResource,
 				ArgumentsJSON: test.arguments,

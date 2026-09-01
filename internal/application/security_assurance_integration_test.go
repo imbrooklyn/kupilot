@@ -263,7 +263,7 @@ func prepareToolAssuranceBoundary(t *testing.T) assuranceBoundary {
 	}
 	call, err := agent.BindToolCall(input,
 		domain.ToolInvocationID("00000000-0000-7000-8000-000000000914"),
-		domain.ModelToolCall{
+		agent.ToolSelection{
 			ID: "assurance-call", Name: domain.ToolNameGetResource,
 			ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
 		},
@@ -349,7 +349,7 @@ func prepareCancelledToolBoundary(t *testing.T, ctx context.Context) assuranceBo
 	}
 	call, err := agent.BindToolCall(input,
 		domain.ToolInvocationID("00000000-0000-7000-8000-000000000924"),
-		domain.ModelToolCall{
+		agent.ToolSelection{
 			ID: "assurance-cancelled-call", Name: domain.ToolNameGetResource,
 			ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
 		},
@@ -399,14 +399,24 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	if toolResult.Validate() != nil {
 		t.Fatal("safe Tool sink projection is invalid")
 	}
-	toolMessage, _, err := agent.BuildToolResultMessage("assurance-tool-call", *toolResult)
+	toolMessage, _, err := agent.BuildToolResultContent(*toolResult)
 	if err != nil {
-		t.Fatalf("agent.BuildToolResultMessage() error = %v", err)
+		t.Fatalf("agent.BuildToolResultContent() error = %v", err)
 	}
 	modelRequest := assuranceModelRequest()
 	modelRequest.Messages = append(modelRequest.Messages, toolMessage)
-	if modelRequest.Validate() != nil {
+	if len(modelRequest.Tools) != 7 || len(modelRequest.Messages) != 2 {
 		t.Fatal("safe model sink projection is invalid")
+	}
+	for _, message := range modelRequest.Messages {
+		if !domain.ValidModelText(message, domain.MaxModelInputMessageBytes, false) {
+			t.Fatal("safe model sink projection is invalid")
+		}
+	}
+	for _, specification := range modelRequest.Tools {
+		if specification.Validate() != nil {
+			t.Fatal("safe model Tool projection is invalid")
+		}
 	}
 
 	runID := domain.AgentRunID("00000000-0000-7000-8000-000000000932")
@@ -525,13 +535,15 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	}
 }
 
-func assuranceModelRequest() domain.ModelRequest {
-	return domain.ModelRequest{
-		ID: domain.ModelRequestID("00000000-0000-7000-8000-000000000934"),
-		Messages: []domain.ModelMessage{{
-			Role: domain.ModelMessageRoleUser, Content: "Report the bounded diagnostic result.",
-		}},
-		Tools: agent.ToolSpecifications(),
+type assuranceModelSink struct {
+	Messages []string
+	Tools    []agent.ToolSpecification
+}
+
+func assuranceModelRequest() assuranceModelSink {
+	return assuranceModelSink{
+		Messages: []string{"Report the bounded diagnostic result."},
+		Tools:    agent.ToolSpecifications(),
 	}
 }
 

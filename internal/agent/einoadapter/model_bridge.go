@@ -10,26 +10,28 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-type modelBridge struct {
+// guardedChatModel is the run-scoped policy interceptor required by ReAct. It
+// delegates serialization and stream semantics to the concrete Eino model.
+type guardedChatModel struct {
 	state *runState
 	model einomodel.ToolCallingChatModel
 }
 
-var _ einomodel.ToolCallingChatModel = (*modelBridge)(nil)
+var _ einomodel.ToolCallingChatModel = (*guardedChatModel)(nil)
 
-func (bridge *modelBridge) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if bridge == nil || bridge.state == nil || bridge.state.client == nil || validateBoundToolInfos(tools) != nil {
+func (model *guardedChatModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
+	if model == nil || model.state == nil || model.state.client == nil || validateBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	bound, err := bridge.state.client.withTools(tools)
+	bound, err := model.state.client.withTools(tools)
 	if err != nil {
 		return nil, err
 	}
-	return &modelBridge{state: bridge.state, model: bound}, nil
+	return &guardedChatModel{state: model.state, model: bound}, nil
 }
 
-func (bridge *modelBridge) Generate(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.Message, error) {
-	stream, err := bridge.Stream(ctx, input, options...)
+func (model *guardedChatModel) Generate(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.Message, error) {
+	stream, err := model.Stream(ctx, input, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -40,11 +42,11 @@ func (bridge *modelBridge) Generate(ctx context.Context, input []*schema.Message
 	return message, nil
 }
 
-func (bridge *modelBridge) Stream(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
-	if bridge == nil || bridge.state == nil || bridge.model == nil || ctx == nil || len(options) != 0 {
+func (model *guardedChatModel) Stream(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
+	if model == nil || model.state == nil || model.model == nil || ctx == nil || len(options) != 0 {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	message, err := bridge.state.callModel(ctx, bridge.model, input)
+	message, err := model.state.callModel(ctx, model.model, input)
 	if err != nil {
 		return nil, err
 	}
@@ -73,13 +75,8 @@ func (state *runState) callModel(
 	if err != nil {
 		return nil, err
 	}
-	neutralMessages, err := state.neutralMessages(messages)
-	if err != nil {
+	if err := state.validateConversation(messages); err != nil {
 		return nil, err
-	}
-	request := domain.ModelRequest{ID: requestID, Messages: neutralMessages, Tools: agent.ToolSpecifications()}
-	if request.Validate() != nil {
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
 	if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID}); err != nil {
 		return nil, err
@@ -115,14 +112,15 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 
 	switch message.ResponseMeta.FinishReason {
 	case "stop":
-		neutral := domain.ModelMessage{Role: domain.ModelMessageRoleAssistant, Content: message.Content}
-		if len(message.ToolCalls) != 0 || neutral.Validate() != nil {
+		if len(message.ToolCalls) != 0 || !domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, false) {
 			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
 		if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: safeModelProgress}); err != nil {
 			return nil, err
 		}
-		return schema.AssistantMessage(message.Content, nil), nil
+		message.Role = schema.Assistant
+		message.ResponseMeta = nil
+		return message, nil
 	case "length":
 		if len(message.ToolCalls) != 0 {
 			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
@@ -137,13 +135,13 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 		if len(message.ToolCalls) == 0 || len(message.ToolCalls) > domain.MaxAgentToolCalls {
 			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
-		calls := make([]domain.ModelToolCall, len(message.ToolCalls))
+		calls := make([]agent.ToolSelection, len(message.ToolCalls))
 		for index, call := range message.ToolCalls {
 			if call.Extra != nil || call.Type != "" && call.Type != "function" ||
 				call.Index == nil || *call.Index != index {
 				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 			}
-			calls[index] = domain.ModelToolCall{
+			calls[index] = agent.ToolSelection{
 				ID:            call.ID,
 				Name:          domain.ToolName(call.Function.Name),
 				ArgumentsJSON: call.Function.Arguments,
@@ -155,20 +153,20 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 		if err := state.bindToolCalls(ctx, calls); err != nil {
 			return nil, err
 		}
-		einoCalls := make([]schema.ToolCall, len(calls))
 		for index, call := range calls {
 			position := index
-			einoCalls[index] = schema.ToolCall{
-				Index: &position,
-				ID:    call.ID,
-				Type:  "function",
-				Function: schema.FunctionCall{
-					Name:      string(call.Name),
-					Arguments: call.ArgumentsJSON,
-				},
+			message.ToolCalls[index].Index = &position
+			message.ToolCalls[index].ID = call.ID
+			message.ToolCalls[index].Type = "function"
+			message.ToolCalls[index].Function = schema.FunctionCall{
+				Name:      string(call.Name),
+				Arguments: call.ArgumentsJSON,
 			}
 		}
-		return schema.AssistantMessage("", einoCalls), nil
+		message.Role = schema.Assistant
+		message.Content = ""
+		message.ResponseMeta = nil
+		return message, nil
 	default:
 		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}

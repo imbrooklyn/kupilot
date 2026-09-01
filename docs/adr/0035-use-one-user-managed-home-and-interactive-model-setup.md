@@ -63,7 +63,10 @@ flow. The flow collects endpoint, model identifier, credential, and one of two
 explicit storage choices: `Save locally` or `Use for this run`. The former
 discloses that the key is plaintext and not encrypted, then atomically publishes
 the Home configuration with a `0600` mode for a newly created file. The latter
-keeps the key only in the current runtime. `/model` repeats this flow.
+keeps the key only in the current runtime. `/model` repeats this flow. Every
+step renders a code-authored field label immediately above the sole composer;
+the label remains visible after input replaces the placeholder. API-key input
+remains masked and the label never contains the key.
 
 Application owns model setup and replacement. A question cannot reserve or
 start a run until one model runtime is ready. Reconfiguration cancels and joins
@@ -73,6 +76,15 @@ consent binding. At every point there is at most one active provider runtime;
 there is no provider discovery, fallback, routing, or simultaneous provider
 support. Model and Tool call counts remain zero until model configuration,
 verified scope, consent, and durable run start have all succeeded.
+
+`Ctrl+C` or `Esc` cancels any editable setup step without replacing the current
+runtime. While construction is in flight, the TUI sends one request-ID-bound
+cancellation to the delivery-owned operation Context and waits for its terminal
+result. Cancellation before the setup commit point closes a constructed
+replacement, destroys the transient credential, and keeps the prior runtime.
+If a successful durable profile save has already crossed the commit point, the
+origin and runtime swap completes so process and disk state do not diverge; the
+correlated success is reported instead of a false cancellation.
 
 The fixed `kupilot cache clear` command resolves Home and removes only directory
 entries beneath the canonical `cache` child. It does not initialize Viper,
@@ -120,8 +132,10 @@ Deterministic tests must cover:
    precedence, one-shot unsetting, plaintext local extraction, serialization
    denial, atomic write failure, and distinct sensitive canaries.
 3. Bare unconfigured startup, masked setup input, both save choices, `/model`,
-   invalid settings, construction failure, active-run cancellation and join,
-   single-runtime swap, origin consent invalidation, and zero forbidden calls.
+   persistent field labels, cancellation at every editable step, correlated
+   in-flight cancellation and commit races, invalid settings, construction
+   failure, active-run cancellation and join, single-runtime swap, origin
+   consent invalidation, and zero forbidden calls.
 4. `cache clear` success, absent cache, nested entries, root and cache symlinks,
    path replacement, partial failure, short-circuit initialization counts, and
    proof that configuration, state, logs, and Home remain intact.

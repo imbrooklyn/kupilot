@@ -55,7 +55,7 @@ func TestGetPreviousPodLogsDoesNotFallBackWhenNoPreviousInstanceExists(t *testin
 }
 
 func TestCurrentAndPreviousLogsExposeSeparateFixedSchemas(t *testing.T) {
-	var current, previous *domain.ModelToolSpecification
+	var current, previous *agent.ToolSpecification
 	for _, specification := range agent.ToolSpecifications() {
 		specification := specification
 		switch specification.Name {
@@ -82,7 +82,7 @@ func TestPodLogBindingDeniesScopeSubresourceAndExpandedLimitsBeforeReader(t *tes
 		`{"pod_name":"sample-pod","previous":true,"purpose":"Inspect logs."}`,
 		`{"pod_name":"sample-pod","purpose":"Inspect logs.","tail_lines":201}`,
 	} {
-		_, err := agent.BindToolCall(testRunInput(t, 0), testInvocationID, domain.ModelToolCall{
+		_, err := agent.BindToolCall(testRunInput(t, 0), testInvocationID, agent.ToolSelection{
 			ID: "call-log-denied", Name: domain.ToolNameGetPodLogs, ArgumentsJSON: arguments,
 		})
 		if err == nil || reader.count() != 0 {

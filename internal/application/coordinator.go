@@ -393,6 +393,9 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 	if err := coordinator.stopRunForModelSetup(ctx); err != nil {
 		return ModelSetupResult{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return ModelSetupResult{}, err
+	}
 
 	coordinator.mu.Lock()
 	factory := coordinator.modelFactory
@@ -413,6 +416,10 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 		}
 		return ModelSetupResult{}, ErrModelSetupFailed
 	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		replacement.Close()
+		return ModelSetupResult{}, contextErr
+	}
 	if request.Persist {
 		if err := profiles.SaveModelProfile(ctx, request); err != nil {
 			replacement.Close()
@@ -422,6 +429,9 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 			return ModelSetupResult{}, ErrModelSetupFailed
 		}
 	}
+	// A successful durable save is the commit point for persisted setup. Finish
+	// the privacy-origin and runtime swap after it so disk and process state do
+	// not diverge when cancellation races that commit.
 	if err := coordinator.privacy.ReconfigureOrigin(replacement.Origin()); err != nil {
 		replacement.Close()
 		return ModelSetupResult{}, ErrModelSetupFailed

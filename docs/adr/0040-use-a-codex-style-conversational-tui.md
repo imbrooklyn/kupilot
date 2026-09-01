@@ -32,7 +32,9 @@ these presentation rules:
   placeholder text is rendered separately. Operating-system input methods
   therefore receive a stable candidate-window position, and committed Unicode
   text is inserted exactly without placeholder overpainting or delivery-added
-  spaces.
+  spaces. When the composer is repurposed for a multi-step command or bounded
+  Picker, a short code-authored field label is rendered directly above it and
+  remains visible after typing; placeholders remain hints rather than labels.
 - User messages retain the `›` marker and use the same quiet surface and
   vertical spacing as the composer. Assistant Markdown is unframed and rendered
   into width-aware prose, lists, inert code, and readable tables. Wide tables
@@ -91,10 +93,20 @@ these presentation rules:
   so visible text remains available to native drag-selection and copy. Mouse
   wheel and trackpad gestures remain terminal-owned and are never interpreted
   as composer-history actions. `Page Up` and `Page Down` scroll the retained
-  transcript; `Ctrl+P` and `Ctrl+N` explicitly recall submitted input. Plain
-  arrow keys remain available to the multiline editor and bounded Pickers.
-  `Ctrl+C` clears a non-empty composer first; only a later `Ctrl+C` with no
-  draft follows the quit or active-run cancellation path.
+  transcript. In the ordinary composer, `Up` enters submitted-input history
+  from an empty draft. After recall, `Up` and `Down` continue history navigation
+  only while the recalled text is unchanged and the cursor is at the beginning
+  or end of the complete input; otherwise they retain normal multiline cursor
+  behavior. Bounded Pickers own their arrow keys, and repurposed fields such as
+  model setup and export never read ordinary input history. `Ctrl+P` and
+  `Ctrl+N` remain explicit history shortcuts.
+  `Ctrl+C` is routed to the active local interaction before the ordinary
+  composer or process. Model setup, bounded Pickers, observation detail,
+  privacy, export, deletion, resume-scope conflict, and approval interactions
+  therefore cancel or reject safely without first clearing their field or
+  exiting. With no child interaction, `Ctrl+C` clears a non-empty ordinary
+  composer first; only a later `Ctrl+C` with no draft follows the quit or
+  active-run cancellation path.
 - `Page Up` scrolls the retained in-memory transcript at the current width, and
   `Page Down` returns to the live projection at the bottom. This review state
   and the post-exit terminal transcript do not restore an AgentRun,
@@ -153,11 +165,14 @@ Golden and reducer tests must cover dark, light, ANSI-16, and `NO_COLOR` modes;
 narrow and resized terminals; one-to-eight-row composer growth; tool and action
 states and final ordering; multiline key aliases; real-cursor position with an
 empty placeholder and committed Unicode input; exact absence of delivery-added
-spaces; disabled mouse reporting, native-selection compatibility, and explicit
+spaces; disabled mouse reporting, native-selection compatibility,
+boundary-aware arrow history, isolated repurposed fields, and explicit
 input-history shortcuts; borderless wide and record-fallback narrow Markdown
 tables; compact duration formatting; stale and post-terminal Working-frame
-rejection; `Esc` cancellation; inert links; status width; terminal controls;
-and proof that `/status`, `Update`, and `View` cause no business I/O. Runtime
+rejection; persistent labels for repurposed composer fields; local-first `Esc`
+and `Ctrl+C` cancellation, including request correlation and stale results;
+inert links; status width; terminal controls; and proof that `/status`,
+`Update`, and `View` cause no business I/O. Runtime
 tests must also prove exactly one alternate-screen enter and leave pair, no
 unmanaged transcript writes while the runtime frame is active, retained
 keyboard review, and one post-restore completed transcript containing no
@@ -170,6 +185,8 @@ or unsafe terminal control.
 - [Codex TUI style guide](https://github.com/openai/codex/blob/main/codex-rs/tui/styles.md)
 - [Codex TUI semantic styles](https://github.com/openai/codex/blob/main/codex-rs/tui/src/style.rs)
 - [Codex chat composer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs)
+- [Codex chat composer history](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer_history.rs)
+- [Codex bottom-pane input routing](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/mod.rs)
 - [Codex status indicator](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status_indicator_widget.rs)
 - [Codex Markdown renderer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/markdown_render.rs)
 - [Codex final-message separators](https://github.com/openai/codex/blob/main/codex-rs/tui/src/history_cell/separators.rs)

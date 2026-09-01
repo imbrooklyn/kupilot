@@ -10,8 +10,10 @@ func TestDefaultsUseDefaultWorkingNamespaceWithoutChoosingContext(t *testing.T) 
 	t.Parallel()
 
 	config := Defaults()
-	if config.Context != "" || config.Namespace != DefaultNamespace {
-		t.Fatalf("scope defaults = Context %q Namespace %q", config.Context, config.Namespace)
+	if config.Context != "" || config.Namespace != DefaultNamespace ||
+		config.Model.MaxOutputTokens != MaxModelOutputTokens {
+		t.Fatalf("defaults = Context %q Namespace %q max output tokens %d",
+			config.Context, config.Namespace, config.Model.MaxOutputTokens)
 	}
 }
 

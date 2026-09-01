@@ -934,7 +934,7 @@ func failedResult(call BoundToolCall, observed time.Time, class domain.SafeError
 func measureResult(call BoundToolCall, result ToolResult) (ToolResult, error) {
 	previous := -1
 	for attempts := 0; attempts < 8; attempts++ {
-		_, current, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+		_, current, err := agent.BuildToolResultContent(result)
 		if err != nil {
 			return ToolResult{}, fmt.Errorf("measure ToolResult: %w", ErrToolOutputLimit)
 		}

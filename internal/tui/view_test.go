@@ -175,7 +175,7 @@ func TestViewHelpAndErrorCopyIsEnglishAndModalIsNonEditable(t *testing.T) {
 	if model.composer.Value() != "/unknown" {
 		t.Fatal("modal leaked printable input to the background composer")
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if model.dialog.Open() || model.FocusedEditorCount() != 1 || model.composer.Value() != "/unknown" {
 		t.Fatal("closing the modal did not restore the sole composer and draft")
 	}

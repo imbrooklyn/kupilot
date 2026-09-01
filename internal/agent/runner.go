@@ -64,9 +64,9 @@ func NewRunInput(
 
 // Validate checks the complete frozen input without consulting live state.
 func (input RunInput) Validate() error {
-	question := domain.ModelMessage{Role: domain.ModelMessageRoleUser, Content: input.question}
 	if !input.runID.Valid() || !input.sessionID.Valid() || !input.requestMessageID.Valid() ||
-		input.scope.Validate() != nil || question.Validate() != nil || input.budgetLimits.Validate() != nil ||
+		input.scope.Validate() != nil || !domain.ValidModelText(input.question, domain.MaxModelInputMessageBytes, false) ||
+		input.budgetLimits.Validate() != nil ||
 		input.promptVersion != SystemPromptVersion || input.catalogVersion != ToolCatalogVersion {
 		return ErrInvalidRunInput
 	}
@@ -156,7 +156,7 @@ func (outcome RunOutcome) Validate(input RunInput) error {
 		return nil
 	}
 	if outcome.Diagnosis != nil || outcome.ErrorClass == nil || !outcome.ErrorClass.Valid() ||
-		(domain.ModelMessage{Role: domain.ModelMessageRoleSystem, Content: outcome.SafeMessage}).Validate() != nil {
+		!domain.ValidModelText(outcome.SafeMessage, domain.MaxModelInputMessageBytes, false) {
 		return ErrInvalidRunOutcome
 	}
 	switch outcome.Status {

@@ -355,12 +355,12 @@ func (model *Model) reflow() {
 	if model.run.Active && !model.run.Terminal {
 		workingHeight = 1
 	}
-	setupHeight := 0
-	if prompt := model.modelSetupView(); prompt != "" {
-		setupHeight = 1 + strings.Count(prompt, "\n")
+	inputLabelHeight := 0
+	if label := model.inputLabelView(); label != "" {
+		inputLabelHeight = 1 + strings.Count(label, "\n")
 	}
 	gap := model.layoutGap()
-	reservedWithoutSuggestions := model.composer.FrameHeight() + footerHeight + setupHeight + workingHeight + gap
+	reservedWithoutSuggestions := model.composer.FrameHeight() + footerHeight + inputLabelHeight + workingHeight + gap
 	availableSuggestions := max(1, model.height-reservedWithoutSuggestions-1)
 	visible := min(MaxPickerCandidates, availableSuggestions)
 	model.slashMenu.SetMaxVisible(visible)
@@ -372,9 +372,6 @@ func (model *Model) reflow() {
 	if model.transcript.Visible() {
 		topSections++
 	}
-	if setupHeight > 0 {
-		topSections++
-	}
 	if workingHeight > 0 {
 		topSections++
 	}
@@ -384,7 +381,7 @@ func (model *Model) reflow() {
 		beforeComposer = gap
 	}
 	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight -
-		setupHeight - workingHeight - gap - topGaps - beforeComposer
+		inputLabelHeight - workingHeight - gap - topGaps - beforeComposer
 	model.transcript.SetSize(contentWidth, max(1, transcriptHeight))
 }
 

@@ -56,6 +56,27 @@ func TestApprovalDialogDefaultsRejectAndEmitsOneBoundDecision(t *testing.T) {
 	}
 }
 
+func TestCtrlCRejectsAnActiveApprovalInsteadOfQuitting(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_700_000_650_000).UTC()
+	model := newTestModel()
+	model.now = func() time.Time { return now }
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	request := testUIApprovalRequest(t, now, 2)
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventApprovalRequested, RunID: testRunID,
+		ScopeGeneration: 7, Sequence: 2, Approval: &request,
+	}})
+	model, command := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	decision := commandFromCmd(t, command)
+	if decision.Kind != application.UICommandRejectRestart || !model.approvalDialog.Open() ||
+		!model.approvalDialog.Submitted() || model.pendingApprovalID != decision.RequestID {
+		t.Fatalf("Ctrl+C approval decision/state = %#v open=%v submitted=%v pending=%d",
+			decision, model.approvalDialog.Open(), model.approvalDialog.Submitted(), model.pendingApprovalID)
+	}
+}
+
 func TestApprovalDialogRendersOrderedPatchAndRolloutResults(t *testing.T) {
 	now := time.UnixMilli(1_700_000_750_000).UTC()
 	model := newTestModel()

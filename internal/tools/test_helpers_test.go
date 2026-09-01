@@ -269,7 +269,7 @@ func testRunInput(t *testing.T, resultBytes int) agent.RunInput {
 
 func boundGetCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-get-1",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: arguments,
@@ -282,7 +282,7 @@ func boundGetCall(t *testing.T, input agent.RunInput, arguments string) agent.Bo
 
 func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-list-1",
 		Name:          domain.ToolNameListResources,
 		ArgumentsJSON: arguments,
@@ -295,7 +295,7 @@ func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.B
 
 func boundEventCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-events-1",
 		Name:          domain.ToolNameGetEvents,
 		ArgumentsJSON: arguments,
@@ -308,7 +308,7 @@ func boundEventCall(t *testing.T, input agent.RunInput, arguments string) agent.
 
 func boundLogCall(t *testing.T, input agent.RunInput, name domain.ToolName, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-logs-1",
 		Name:          name,
 		ArgumentsJSON: arguments,
@@ -321,7 +321,7 @@ func boundLogCall(t *testing.T, input agent.RunInput, name domain.ToolName, argu
 
 func boundRelatedCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-related-1",
 		Name:          domain.ToolNameGetRelatedResources,
 		ArgumentsJSON: arguments,
@@ -334,7 +334,7 @@ func boundRelatedCall(t *testing.T, input agent.RunInput, arguments string) agen
 
 func boundClusterOverviewCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	call, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-cluster-overview-1",
 		Name:          domain.ToolNameGetClusterOverview,
 		ArgumentsJSON: arguments,

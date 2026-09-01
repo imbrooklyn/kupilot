@@ -1,0 +1,9 @@
+data: {"id":"response-fixture-reasoning","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"reasoning-output-canary: call get_resource."},"finish_reason":null}]}
+
+data: {"id":"response-fixture-reasoning","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"Pod is healthy."},"finish_reason":null}]}
+
+data: {"id":"response-fixture-reasoning","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"response-fixture-reasoning","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[],"usage":{"prompt_tokens":21,"completion_tokens":11,"total_tokens":32}}
+
+data: [DONE]

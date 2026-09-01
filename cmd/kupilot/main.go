@@ -584,7 +584,8 @@ func (sink *deliveryUIEventSink) PublishUIEvent(ctx context.Context, event appli
 func applicationRequestFilter(ctx context.Context, requests chan<- tea.Msg) func(tea.Model, tea.Msg) tea.Msg {
 	return func(_ tea.Model, message tea.Msg) tea.Msg {
 		switch message.(type) {
-		case tui.ApplicationCommandMsg, tui.ApplicationModelSetupMsg, tui.ApplicationQueryMsg, tui.ApplicationResumeMsg, tui.ApplicationEvidenceDetailMsg:
+		case tui.ApplicationCommandMsg, tui.ApplicationModelSetupMsg, tui.ApplicationModelSetupCancelMsg,
+			tui.ApplicationQueryMsg, tui.ApplicationResumeMsg, tui.ApplicationEvidenceDetailMsg:
 			if ctx == nil || ctx.Err() != nil {
 				return rejectedApplicationRequest(message)
 			}
@@ -602,7 +603,10 @@ func applicationRequestFilter(ctx context.Context, requests chan<- tea.Msg) func
 	}
 }
 
-func rejectedApplicationRequest(message tea.Msg) tui.ApplicationFailureMsg {
+func rejectedApplicationRequest(message tea.Msg) tea.Msg {
+	if request, ok := message.(tui.ApplicationModelSetupCancelMsg); ok {
+		return tui.ModelSetupCancelRejectedMsg{RequestID: request.RequestID}
+	}
 	result := tui.ApplicationFailureMsg{Message: "The requested operation is busy."}
 	switch request := message.(type) {
 	case tui.ApplicationQueryMsg:
@@ -630,10 +634,20 @@ func rejectedApplicationRequest(message tea.Msg) tui.ApplicationFailureMsg {
 	return result
 }
 
+type applicationMessageSender interface {
+	Send(tea.Msg)
+}
+
+type activeModelSetupRequest struct {
+	requestID uint64
+	cancel    context.CancelFunc
+	result    <-chan tea.Msg
+}
+
 func pumpApplicationRequests(
 	ctx context.Context,
 	consumer tui.ApplicationConsumer,
-	program *tea.Program,
+	program applicationMessageSender,
 	requests <-chan tea.Msg,
 	workers *sync.WaitGroup,
 ) {
@@ -641,15 +655,62 @@ func pumpApplicationRequests(
 		destroyPendingApplicationRequests(requests)
 		workers.Done()
 	}()
+	var active *activeModelSetupRequest
+	joinActive := func() {
+		if active == nil {
+			return
+		}
+		active.cancel()
+		<-active.result
+		active = nil
+	}
 	for {
+		var activeResult <-chan tea.Msg
+		if active != nil {
+			activeResult = active.result
+		}
 		select {
 		case <-ctx.Done():
+			joinActive()
 			return
+		case result := <-activeResult:
+			active.cancel()
+			active = nil
+			program.Send(result)
 		case message, open := <-requests:
 			if !open {
+				joinActive()
 				return
 			}
-			program.Send(tui.DispatchApplication(ctx, consumer, message))
+			switch request := message.(type) {
+			case tui.ApplicationModelSetupCancelMsg:
+				if active != nil && active.requestID == request.RequestID {
+					active.cancel()
+					continue
+				}
+				program.Send(rejectedApplicationRequest(message))
+			case tui.ApplicationModelSetupMsg:
+				if active != nil {
+					program.Send(rejectedApplicationRequest(message))
+					continue
+				}
+				operationContext, cancel := context.WithCancel(ctx)
+				result := make(chan tea.Msg, 1)
+				active = &activeModelSetupRequest{
+					requestID: request.Request.RequestID,
+					cancel:    cancel,
+					result:    result,
+				}
+				go func(operationContext context.Context, message tea.Msg, result chan<- tea.Msg) {
+					result <- tui.DispatchApplication(operationContext, consumer, message)
+				}(operationContext, message, result)
+			default:
+				if active != nil {
+					program.Send(rejectedApplicationRequest(message))
+					continue
+				}
+				program.Send(tui.DispatchApplication(ctx, consumer, message))
+			}
 		}
 	}
 }

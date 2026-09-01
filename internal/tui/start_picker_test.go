@@ -198,6 +198,35 @@ func TestTopLevelResumeBindsUnverifiedLocalScopeChoice(t *testing.T) {
 	}
 }
 
+func TestCtrlCCancelsInTUIResumeScopeConflict(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	request := resumeRequestFromCmd(t, model.beginResume(application.UIResumeExact, testSessionID, resumeOriginInTUI))
+	resumed := application.UIResumedSession{
+		ResumeRequestID: request.RequestID,
+		Session: application.UISessionCandidate{
+			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "saved-context", Namespace: "saved-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		SavedScope: &domain.ScopeCandidate{Context: "saved-context", Namespace: "saved-namespace"},
+	}
+	model, command := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
+	}})
+	if command != nil || !model.scopeConflict.Open() {
+		t.Fatal("resume did not enter the scope-conflict interaction")
+	}
+	model, command = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	cancel := applicationCommandFromCmd(t, command)
+	if cancel.Kind != application.UICommandCancelResume || cancel.RequestID != request.RequestID ||
+		model.scopeConflict.Open() || model.pendingResumed != nil || model.session.ID != testSessionID || !model.startup.Ready {
+		t.Fatalf("Ctrl+C scope-conflict cancellation = %#v conflict=%v pending=%v session=%q ready=%v",
+			cancel, model.scopeConflict.Open(), model.pendingResumed != nil, model.session.ID, model.startup.Ready)
+	}
+}
+
 func TestResumeFailureDismissalExitsOnlyTopLevelFlow(t *testing.T) {
 	t.Parallel()
 

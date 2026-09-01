@@ -81,7 +81,7 @@ func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) 
 	}
 	for index := 0; index < input.BudgetLimits().LogCalls; index++ {
 		invocationID := domain.ToolInvocationID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 20_000+index))
-		call, bindErr := agent.BindToolCall(input, invocationID, domain.ModelToolCall{
+		call, bindErr := agent.BindToolCall(input, invocationID, agent.ToolSelection{
 			ID:            fmt.Sprintf("call-log-budget-%d", index),
 			Name:          domain.ToolNameGetPodLogs,
 			ArgumentsJSON: fmt.Sprintf(`{"pod_name":"sample-pod-%d","purpose":"Inspect one bounded log tail."}`, index),
@@ -96,7 +96,7 @@ func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) 
 			t.Fatalf("CompleteToolCall(%d) error = %v", index, completeErr)
 		}
 	}
-	excess, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000020099", domain.ModelToolCall{
+	excess, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000020099", agent.ToolSelection{
 		ID:            "call-log-budget-excess",
 		Name:          domain.ToolNameGetPreviousPodLogs,
 		ArgumentsJSON: `{"pod_name":"sample-pod-third","purpose":"Inspect one bounded previous log tail."}`,

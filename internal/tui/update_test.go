@@ -208,21 +208,39 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
-	if got := model.composer.Value(); got != "" {
-		t.Fatalf("plain Up recalled input history: %q", got)
+	if got := model.composer.Value(); got != "second" {
+		t.Fatalf("plain Up did not recall the newest input: %q", got)
 	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "one\ntwo\nthree\nfour\nfive" {
+		t.Fatalf("second plain-arrow history item = %q", got)
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "one\ntwo\nthree\nfour\nfive" {
+		t.Fatalf("plain Up moved or changed the oldest history item: %q", got)
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := model.composer.Value(); got != "second" {
+		t.Fatalf("plain Down did not recall the newer input: %q", got)
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("plain-arrow history did not return to an empty draft: %q", got)
+	}
+
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "draft line one\ndraft line two"})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "draft line one\ndraft line two" {
+		t.Fatalf("plain Up replaced an ordinary multiline draft: %q", got)
+	}
+	model.composer.Reset()
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "second" {
-		t.Fatalf("first history item = %q", got)
+		t.Fatalf("explicit previous-history shortcut = %q", got)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if got := model.composer.Value(); got != "one\ntwo\nthree\nfour\nfive" {
-		t.Fatalf("second history item = %q", got)
-	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "" {
-		t.Fatalf("history did not return to empty draft: %q", got)
+		t.Fatalf("explicit next-history shortcut did not return to empty draft: %q", got)
 	}
 
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: strings.Repeat("line\n", 11) + "last"})
@@ -270,12 +288,8 @@ func TestNativeMouseSelectionAndWheelEventsCannotRecallInputHistory(t *testing.T
 	}
 
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
-	if got := model.composer.Value(); got != "" {
-		t.Fatalf("plain Up recalled input history after a wheel event: %q", got)
-	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "second question" {
-		t.Fatalf("explicit keyboard history was not kept separate from wheel scrolling: %q", got)
+		t.Fatalf("keyboard history did not remain independent from wheel scrolling: %q", got)
 	}
 }
 

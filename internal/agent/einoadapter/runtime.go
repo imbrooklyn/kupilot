@@ -11,11 +11,12 @@ import (
 )
 
 type boundExecution struct {
-	call      agent.BoundToolCall
-	requested domain.ToolInvocation
-	executed  bool
-	toolName  domain.ToolName
-	modelCall domain.ModelToolCall
+	call           agent.BoundToolCall
+	requested      domain.ToolInvocation
+	executed       bool
+	toolName       domain.ToolName
+	modelCall      agent.ToolSelection
+	policyFeedback string
 }
 
 type runState struct {
@@ -31,15 +32,13 @@ type runState struct {
 	registry    *agent.EvidenceRegistry
 	publisher   *agent.EventPublisher
 
-	firstModelRequestID domain.ModelRequestID
-	firstModelUsed      bool
-	stepPending         bool
-	stepEvidence        int
-	toolSequence        int
-	boundCalls          map[string]*boundExecution
-	modelRequestIDs     map[domain.ModelRequestID]struct{}
-	toolInvocationIDs   map[domain.ToolInvocationID]struct{}
-	toolBatchFailure    error
+	stepPending       bool
+	stepEvidence      int
+	toolSequence      int
+	boundCalls        map[string]*boundExecution
+	modelRequestIDs   map[domain.ModelRequestID]struct{}
+	toolInvocationIDs map[domain.ToolInvocationID]struct{}
+	toolBatchFailure  error
 }
 
 func (state *runState) toolBatchAbort() error {
@@ -90,23 +89,6 @@ func (state *runState) checkScope(ctx context.Context) error {
 }
 
 func (state *runState) nextModelRequestID() (domain.ModelRequestID, error) {
-	state.mu.Lock()
-	if !state.firstModelUsed {
-		state.firstModelUsed = true
-		id := state.firstModelRequestID
-		if !id.Valid() {
-			state.mu.Unlock()
-			return "", failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
-		}
-		if _, duplicate := state.modelRequestIDs[id]; duplicate {
-			state.mu.Unlock()
-			return "", failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
-		}
-		state.modelRequestIDs[id] = struct{}{}
-		state.mu.Unlock()
-		return id, nil
-	}
-	state.mu.Unlock()
 	id, err := state.identifiers.NewModelRequestID()
 	if err != nil || !id.Valid() {
 		return "", failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)

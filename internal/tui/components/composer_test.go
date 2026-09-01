@@ -93,6 +93,46 @@ func TestComposerShowsPromptOnlyOnceAndKeepsContinuationIndent(t *testing.T) {
 	}
 }
 
+func TestComposerArrowHistoryRequiresAnUnchangedWholeInputBoundary(t *testing.T) {
+	t.Parallel()
+
+	composer := NewComposer(ComposerStyles{}, 1024)
+	composer.RecordSubmission("older question")
+	composer.RecordSubmission("newer line\n\u4f60\u597d")
+	if !composer.ArrowHistoryEligible() || !composer.PreviousHistory() {
+		t.Fatal("empty composer could not enter submitted-input history")
+	}
+	if got := composer.Value(); got != "newer line\n\u4f60\u597d" || !composer.ArrowHistoryEligible() {
+		t.Fatalf("recalled Unicode multiline entry = %q, eligible=%v", got, composer.ArrowHistoryEligible())
+	}
+
+	updated, _, err := composer.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if err != nil {
+		t.Fatalf("move inside recalled entry: %v", err)
+	}
+	composer = updated
+	if composer.ArrowHistoryEligible() {
+		t.Fatal("interior cursor position stole an arrow from multiline editing")
+	}
+	updated, _, err = composer.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if err != nil {
+		t.Fatalf("return to recalled-entry boundary: %v", err)
+	}
+	composer = updated
+	if !composer.ArrowHistoryEligible() {
+		t.Fatal("cursor-only movement discarded unchanged history navigation state")
+	}
+
+	updated, _, err = composer.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if err != nil {
+		t.Fatalf("edit recalled entry: %v", err)
+	}
+	composer = updated
+	if composer.ArrowHistoryEligible() {
+		t.Fatal("edited recalled entry remained eligible for arrow history")
+	}
+}
+
 func visualTextColumn(line, value string) int {
 	index := strings.Index(line, value)
 	if index < 0 {

@@ -105,15 +105,15 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 		return composer, nil, ErrComposerLimit
 	}
 
-	if _, historyKey := msg.(tea.KeyPressMsg); historyKey {
-		composer.closeHistory()
-	}
 	var cmd tea.Cmd
 	composer.input, cmd = composer.input.Update(msg)
 	if additional > 0 && len(composer.input.Value()) != len(original)+additional {
 		composer.input.SetValue(original)
 		composer.input.MoveToEnd()
 		return composer, nil, ErrComposerLimit
+	}
+	if composer.input.Value() != original {
+		composer.closeHistory()
 	}
 	return composer, cmd, nil
 }
@@ -144,6 +144,7 @@ func (composer Composer) Value() string { return composer.input.Value() }
 func (composer *Composer) SetValue(value string) {
 	composer.input.SetValue(value)
 	composer.input.MoveToEnd()
+	composer.closeHistory()
 }
 
 // Reset clears the draft without changing the retained history.
@@ -198,7 +199,9 @@ func (composer *Composer) PreviousHistory() bool {
 	}
 	if composer.historyAt > 0 {
 		composer.historyAt--
+		historyAt := composer.historyAt
 		composer.SetValue(composer.history[composer.historyAt])
+		composer.historyAt = historyAt
 		composer.historyOpen = true
 		return true
 	}
@@ -212,7 +215,9 @@ func (composer *Composer) NextHistory() bool {
 	}
 	if composer.historyAt < len(composer.history)-1 {
 		composer.historyAt++
+		historyAt := composer.historyAt
 		composer.SetValue(composer.history[composer.historyAt])
+		composer.historyAt = historyAt
 		composer.historyOpen = true
 		return true
 	}
@@ -225,6 +230,30 @@ func (composer *Composer) NextHistory() bool {
 // submitted draft without exposing secret-mode input.
 func (composer Composer) HistoryEligible() bool {
 	return !composer.secretMode && (composer.historyOpen || composer.input.Value() == "" && composer.input.LineCount() == 1)
+}
+
+// ArrowHistoryEligible reports whether Up or Down may navigate submitted
+// input without stealing ordinary multiline cursor movement. Empty input may
+// enter history. Once history is open, its unchanged value must be at the
+// beginning or end of the complete input before another arrow is consumed.
+func (composer Composer) ArrowHistoryEligible() bool {
+	if composer.secretMode || len(composer.history) == 0 {
+		return false
+	}
+	value := composer.input.Value()
+	if value == "" {
+		return true
+	}
+	if !composer.historyOpen || composer.historyAt < 0 || composer.historyAt >= len(composer.history) ||
+		value != composer.history[composer.historyAt] {
+		return false
+	}
+	if composer.input.Line() == 0 && composer.input.Column() == 0 {
+		return true
+	}
+	lines := strings.Split(value, "\n")
+	lastLine := len(lines) - 1
+	return composer.input.Line() == lastLine && composer.input.Column() == utf8.RuneCountInString(lines[lastLine])
 }
 
 func (composer *Composer) closeHistory() {

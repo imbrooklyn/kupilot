@@ -122,7 +122,7 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 		t.Fatalf("NewReadOnlyToolCatalog() error = %v", err)
 	}
 	input := testRunInput(t, 0)
-	tests := []domain.ModelToolCall{
+	tests := []agent.ToolSelection{
 		{ID: "denied-get", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"namespace":"other","purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`},
 		{ID: "denied-list", Name: domain.ToolNameListResources, ArgumentsJSON: `{"kind":"Pod","purpose":"List.","raw_selector":"app=all"}`},
 		{ID: "denied-events", Name: domain.ToolNameGetEvents, ArgumentsJSON: `{"purpose":"Events.","resource":{"kind":"Secret","name":"sample-secret"}}`},

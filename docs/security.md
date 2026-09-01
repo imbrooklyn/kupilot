@@ -118,6 +118,10 @@ unknown, duplicate, wrong-type, extra, and oversized fields. Context and access
 policy are runtime-injected. Namespace arguments are canonicalized and checked
 against the frozen `current` or `all` policy. Kubernetes uses typed task-specific
 ports with no dynamic client, REST builder, discovery fallback, or shell.
+One atomic batch of known, structurally safe selections that fails semantic
+binding receives only fixed local policy feedback; rejected arguments are not
+echoed and Tool handler and Kubernetes call counts remain zero. Unknown,
+malformed, authority-bearing, and sensitive selections still fail terminally.
 
 ### T02: Cross-Namespace or cross-Context confusion
 

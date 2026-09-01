@@ -101,12 +101,17 @@ func (guard *testScopeGuard) Checks() int {
 	return guard.checks
 }
 
-type modelScript func(context.Context, domain.ModelRequest) ([]*schema.Message, error)
+type recordedModelRequest struct {
+	ID       domain.ModelRequestID
+	Messages []*schema.Message
+}
+
+type modelScript func(context.Context, recordedModelRequest) ([]*schema.Message, error)
 
 type recordingModel struct {
 	mu        sync.Mutex
 	scripts   []modelScript
-	requests  []domain.ModelRequest
+	requests  []recordedModelRequest
 	active    int
 	maxActive int
 }
@@ -159,10 +164,14 @@ func (model *recordingModel) Stream(
 	return schema.StreamReaderFromArray(chunks), nil
 }
 
-func (model *recordingModel) Requests() []domain.ModelRequest {
+func (model *recordingModel) Requests() []recordedModelRequest {
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	return append([]domain.ModelRequest(nil), model.requests...)
+	requests := make([]recordedModelRequest, len(model.requests))
+	for index, request := range model.requests {
+		requests[index] = recordedModelRequest{ID: request.ID, Messages: cloneMessages(request.Messages)}
+	}
+	return requests
 }
 
 func (model *recordingModel) MaxActive() int {
@@ -294,40 +303,34 @@ func testAdapter(t *testing.T, clock *testClock, model einomodel.ToolCallingChat
 	return adapter
 }
 
-func testModelRequest(call int, messages []*schema.Message) domain.ModelRequest {
-	mapped := make([]domain.ModelMessage, len(messages))
+func testModelRequest(call int, messages []*schema.Message) recordedModelRequest {
+	return recordedModelRequest{
+		ID:       domain.ModelRequestID(fmt.Sprintf("00000000-0000-7000-8000-%012x", 0x8200+call)),
+		Messages: cloneMessages(messages),
+	}
+}
+
+func cloneMessages(messages []*schema.Message) []*schema.Message {
+	cloned := make([]*schema.Message, len(messages))
 	for index, message := range messages {
 		if message == nil {
 			continue
 		}
-		mapped[index] = domain.ModelMessage{Content: message.Content, ToolCallID: message.ToolCallID}
-		switch message.Role {
-		case schema.System:
-			mapped[index].Role = domain.ModelMessageRoleSystem
-		case schema.User:
-			mapped[index].Role = domain.ModelMessageRoleUser
-		case schema.Assistant:
-			mapped[index].Role = domain.ModelMessageRoleAssistant
-			for _, toolCall := range message.ToolCalls {
-				mapped[index].ToolCalls = append(mapped[index].ToolCalls, domain.ModelToolCall{
-					ID:            toolCall.ID,
-					Name:          domain.ToolName(toolCall.Function.Name),
-					ArgumentsJSON: toolCall.Function.Arguments,
-				})
+		copy := *message
+		copy.ToolCalls = append([]schema.ToolCall(nil), message.ToolCalls...)
+		for callIndex := range copy.ToolCalls {
+			if message.ToolCalls[callIndex].Index != nil {
+				position := *message.ToolCalls[callIndex].Index
+				copy.ToolCalls[callIndex].Index = &position
 			}
-		case schema.Tool:
-			mapped[index].Role = domain.ModelMessageRoleTool
 		}
+		cloned[index] = &copy
 	}
-	return domain.ModelRequest{
-		ID:       domain.ModelRequestID(fmt.Sprintf("00000000-0000-7000-8000-%012x", 0x8200+call)),
-		Messages: mapped,
-		Tools:    agent.ToolSpecifications(),
-	}
+	return cloned
 }
 
 func scriptedChunks(chunks ...*schema.Message) modelScript {
-	return func(ctx context.Context, request domain.ModelRequest) ([]*schema.Message, error) {
+	return func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
 		}
@@ -335,7 +338,7 @@ func scriptedChunks(chunks ...*schema.Message) modelScript {
 	}
 }
 
-func toolCallChunks(calls ...domain.ModelToolCall) []*schema.Message {
+func toolCallChunks(calls ...agent.ToolSelection) []*schema.Message {
 	chunks := make([]*schema.Message, 0, len(calls)+1)
 	for index, call := range calls {
 		position := index
@@ -366,16 +369,16 @@ func diagnosisChunks(content string) []*schema.Message {
 	}
 }
 
-func resourceCall(id, podName string) domain.ModelToolCall {
-	return domain.ModelToolCall{
+func resourceCall(id, podName string) agent.ToolSelection {
+	return agent.ToolSelection{
 		ID:            id,
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"` + podName + `"}}`,
 	}
 }
 
-func eventsCall(id, podName string) domain.ModelToolCall {
-	return domain.ModelToolCall{
+func eventsCall(id, podName string) agent.ToolSelection {
+	return agent.ToolSelection{
 		ID:            id,
 		Name:          domain.ToolNameGetEvents,
 		ArgumentsJSON: `{"purpose":"Inspect recent Events.","resource":{"kind":"Pod","name":"` + podName + `"}}`,

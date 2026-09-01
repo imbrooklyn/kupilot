@@ -116,7 +116,9 @@ policy is frozen into each run and is visible through `/status`.
 ## Complete the first-run flow
 
 1. If model configuration is incomplete, complete the four-step endpoint,
-   model, storage, and masked-key flow. `/model` can reconfigure it later.
+   model, storage, and masked-key flow. Each field has a persistent label above
+   the composer. `/model` can reconfigure it later, and `Ctrl+C` or `Esc`
+   cancels any current setup step without silently replacing the active model.
 2. Confirm the footer shows the intended verified Context, working Namespace,
    and `supervised` state. Use `/status` to check namespace policy and budget;
    use `/context` and `/namespace` when scope is unavailable.
@@ -163,17 +165,25 @@ newline, `Ctrl+J` for a newline when the terminal can distinguish it, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
 `Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C`
-to clear a non-empty draft first and to quit when the composer is already
-empty. During an active run, an empty-composer `Ctrl+C` cancels the run before
-the bounded exit. Outside a Picker, `Ctrl+P`/`Ctrl+N` explicitly recall
-submitted input; plain arrow keys stay with the multiline editor. Kupilot
+to cancel the active local interaction first. Model setup, Pickers, observation
+detail, privacy, export, deletion, resume-scope, and approval interactions own
+that first `Ctrl+C`. With no child interaction, `Ctrl+C` clears a non-empty
+ordinary draft first and quits when the composer is already empty. During an
+active run, an empty-composer `Ctrl+C` cancels the run before the bounded exit.
+Outside a Picker, `Up` recalls the newest submitted input from an empty
+composer. `Up`/`Down` continue through history while the recalled text is
+unchanged and the cursor is at the beginning or end of the complete input;
+otherwise they move within the multiline editor. `Ctrl+P`/`Ctrl+N` remain
+explicit history shortcuts. Model setup and other repurposed composer fields
+cannot recall ordinary question history. Kupilot
 leaves terminal mouse reporting disabled so visible text can be selected and
 copied with the terminal's native controls. Mouse-wheel and trackpad gestures
 are therefore terminal-owned and cannot recall composer history. The composer
 uses an unframed `›` prompt and grows from one through eight content rows. Only
 its first visual row shows `›`; continuation rows retain the same two-column
 indent. Submitted user messages retain the same marker, continuous surface,
-and vertical spacing as the composer.
+and vertical spacing as the composer. Multi-step command and Picker inputs keep
+a short field label immediately above the same composer after typing begins.
 
 ## Stop safely
 

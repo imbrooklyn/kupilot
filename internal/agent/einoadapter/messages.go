@@ -3,94 +3,77 @@ package einoadapter
 import (
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func einoMessages(messages []domain.ModelMessage) ([]*schema.Message, error) {
-	result := make([]*schema.Message, len(messages))
-	for index, message := range messages {
-		if message.Validate() != nil {
-			return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
-		}
-		switch message.Role {
-		case domain.ModelMessageRoleSystem:
-			result[index] = schema.SystemMessage(message.Content)
-		case domain.ModelMessageRoleUser:
-			result[index] = schema.UserMessage(message.Content)
-		case domain.ModelMessageRoleAssistant:
-			calls := make([]schema.ToolCall, len(message.ToolCalls))
-			for callIndex, call := range message.ToolCalls {
-				position := callIndex
-				calls[callIndex] = schema.ToolCall{
-					Index: &position,
-					ID:    call.ID,
-					Type:  "function",
-					Function: schema.FunctionCall{
-						Name:      string(call.Name),
-						Arguments: call.ArgumentsJSON,
-					},
-				}
-			}
-			result[index] = schema.AssistantMessage(message.Content, calls)
-		case domain.ModelMessageRoleTool:
-			result[index] = schema.ToolMessage(message.Content, message.ToolCallID)
-		default:
-			return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
-		}
+const maxConversationMessages = 2 + domain.MaxAgentModelCalls + domain.MaxAgentToolCalls
+
+func newInitialMessages(input agent.RunInput) ([]*schema.Message, error) {
+	prompt, err := agent.BuildSystemPrompt(input)
+	if err != nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 	}
-	return result, nil
+	return []*schema.Message{
+		schema.SystemMessage(prompt),
+		schema.UserMessage(input.Question()),
+	}, nil
 }
 
-func (state *runState) neutralMessages(messages []*schema.Message) ([]domain.ModelMessage, error) {
-	result := make([]domain.ModelMessage, len(messages))
-	for index, message := range messages {
+// validateConversation validates the Eino-owned ReAct conversation in place.
+// It deliberately does not translate the messages into a second protocol DTO.
+func (state *runState) validateConversation(messages []*schema.Message) error {
+	if len(messages) == 0 || len(messages) > maxConversationMessages {
+		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	}
+	for _, message := range messages {
 		if message == nil || unsupportedMessageFields(message) {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
-		neutral := domain.ModelMessage{Content: message.Content, ToolCallID: message.ToolCallID}
 		switch message.Role {
-		case schema.System:
-			neutral.Role = domain.ModelMessageRoleSystem
-			if message.ToolName != "" || len(message.ToolCalls) != 0 {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-			}
-		case schema.User:
-			neutral.Role = domain.ModelMessageRoleUser
-			if message.ToolName != "" || len(message.ToolCalls) != 0 {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		case schema.System, schema.User:
+			if !domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) ||
+				message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 {
+				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 			}
 		case schema.Assistant:
-			neutral.Role = domain.ModelMessageRoleAssistant
-			if message.ToolName != "" {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			if message.ToolCallID != "" || message.ToolName != "" ||
+				!domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, true) ||
+				(message.Content == "") == (len(message.ToolCalls) == 0) ||
+				len(message.ToolCalls) > domain.MaxAgentToolCalls {
+				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 			}
-			neutral.ToolCalls = make([]domain.ModelToolCall, len(message.ToolCalls))
-			for callIndex, call := range message.ToolCalls {
+			seen := make(map[string]struct{}, len(message.ToolCalls))
+			for index, call := range message.ToolCalls {
 				if call.Extra != nil || call.Type != "" && call.Type != "function" ||
-					call.Index != nil && *call.Index != callIndex {
-					return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+					call.Index != nil && *call.Index != index {
+					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 				}
-				neutral.ToolCalls[callIndex] = domain.ModelToolCall{
+				selection := agent.ToolSelection{
 					ID:            call.ID,
 					Name:          domain.ToolName(call.Function.Name),
 					ArgumentsJSON: call.Function.Arguments,
 				}
+				if selection.Validate() != nil {
+					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				}
+				if _, duplicate := seen[selection.ID]; duplicate {
+					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				}
+				seen[selection.ID] = struct{}{}
 			}
 		case schema.Tool:
-			neutral.Role = domain.ModelMessageRoleTool
-			if len(message.ToolCalls) != 0 || !domain.ToolName(message.ToolName).Valid() ||
-				!state.boundToolName(message.ToolCallID, domain.ToolName(message.ToolName)) {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			name := domain.ToolName(message.ToolName)
+			if !domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) ||
+				!domain.ValidModelToken(message.ToolCallID, domain.MaxModelToolCallIDBytes) ||
+				len(message.ToolCalls) != 0 || !name.Valid() || !state.boundToolName(message.ToolCallID, name) {
+				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 			}
 		default:
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
-		if neutral.Validate() != nil {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		result[index] = neutral
 	}
-	return result, nil
+	return nil
 }
 
 func unsupportedMessageFields(message *schema.Message) bool {

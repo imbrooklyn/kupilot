@@ -5,76 +5,25 @@ import (
 	"testing"
 )
 
-func TestModelMessageValidationUsesDirectionalContentLimits(t *testing.T) {
-	assistant := ModelMessage{
-		Role:    ModelMessageRoleAssistant,
-		Content: strings.Repeat("a", MaxModelMessageBytes),
+func TestValidModelTextEnforcesCallerSelectedBoundsAndTerminalSafety(t *testing.T) {
+	if !ValidModelText(strings.Repeat("a", MaxModelMessageBytes), MaxModelMessageBytes, false) {
+		t.Fatal("ValidModelText() rejected assistant text at the exact limit")
 	}
-	if err := assistant.Validate(); err != nil {
-		t.Fatalf("Validate(assistant at limit) error = %v", err)
+	if ValidModelText(strings.Repeat("a", MaxModelMessageBytes+1), MaxModelMessageBytes, false) {
+		t.Fatal("ValidModelText() accepted assistant text over the limit")
 	}
-	assistant.Content += "a"
-	if err := assistant.Validate(); err == nil {
-		t.Fatal("Validate(assistant over limit) error = nil")
-	}
-
-	for _, role := range []ModelMessageRole{ModelMessageRoleSystem, ModelMessageRoleUser} {
-		message := ModelMessage{Role: role, Content: strings.Repeat("a", MaxModelInputMessageBytes+1)}
-		if err := message.Validate(); err == nil {
-			t.Fatalf("Validate(%s over input limit) error = nil", role)
-		}
-	}
-	tool := ModelMessage{
-		Role: ModelMessageRoleTool, Content: strings.Repeat("a", MaxModelInputMessageBytes+1), ToolCallID: "call-1",
-	}
-	if err := tool.Validate(); err == nil {
-		t.Fatal("Validate(Tool over input limit) error = nil")
+	if ValidModelText("unsafe\x1btext", MaxModelInputMessageBytes, false) ||
+		ValidModelText("unsafe"+string(rune(0x202e))+"text", MaxModelInputMessageBytes, false) {
+		t.Fatal("ValidModelText() accepted terminal or bidirectional control text")
 	}
 }
 
-func TestModelRequestMessageCountCoversTheHardRunBudget(t *testing.T) {
-	messages := make([]ModelMessage, maxModelMessages)
-	for index := range messages {
-		messages[index] = ModelMessage{Role: ModelMessageRoleUser, Content: "bounded"}
-	}
-	names := []ToolName{
-		ToolNameGetResource,
-		ToolNameListResources,
-		ToolNameGetEvents,
-		ToolNameGetPodLogs,
-		ToolNameGetPreviousPodLogs,
-		ToolNameGetRelatedResources,
-		ToolNameGetClusterOverview,
-	}
-	tools := make([]ModelToolSpecification, len(names))
-	for index, name := range names {
-		tools[index] = ModelToolSpecification{
-			Name: name, Version: "test-v1", Description: "Exercise the fixed model request boundary.",
-			InputSchemaJSON: `{"additionalProperties":false,"properties":{},"required":[],"type":"object"}`,
-		}
-	}
-	request := ModelRequest{
-		ID: "00000000-0000-7000-8000-000000000111", Messages: messages, Tools: tools,
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate(at derived message limit) error = %v", err)
-	}
-	request.Messages = append(request.Messages, ModelMessage{Role: ModelMessageRoleUser, Content: "one over"})
-	if err := request.Validate(); err == nil {
-		t.Fatal("Validate(over derived message limit) error = nil")
-	}
-}
-
-func TestModelToolCallAcceptsNeutralJSONAndRejectsUnsafeShapes(t *testing.T) {
+func TestValidModelToolArgumentsAcceptsNeutralJSONAndRejectsUnsafeShapes(t *testing.T) {
 	t.Parallel()
 
-	call := ModelToolCall{
-		ID:            "call-1",
-		Name:          ToolNameGetResource,
-		ArgumentsJSON: " { \"resource\": {\"name\": \"sample-pod\", \"kind\": \"Pod\"}, \"purpose\": \"Inspect the selected Pod.\" } ",
-	}
-	if err := call.Validate(); err != nil {
-		t.Fatalf("Validate(noncanonical provider JSON) error = %v", err)
+	valid := " { \"resource\": {\"name\": \"sample-pod\", \"kind\": \"Pod\"}, \"purpose\": \"Inspect the selected Pod.\" } "
+	if !ValidModelToolArguments(valid) {
+		t.Fatal("ValidModelToolArguments() rejected noncanonical provider JSON")
 	}
 
 	tests := []struct {
@@ -89,16 +38,14 @@ func TestModelToolCallAcceptsNeutralJSONAndRejectsUnsafeShapes(t *testing.T) {
 		current := current
 		t.Run(current.name, func(t *testing.T) {
 			t.Parallel()
-			invalid := call
-			invalid.ArgumentsJSON = current.arguments
-			if err := invalid.Validate(); err == nil {
-				t.Fatal("Validate() error = nil")
+			if ValidModelToolArguments(current.arguments) {
+				t.Fatal("ValidModelToolArguments() accepted an unsafe shape")
 			}
 		})
 	}
 }
 
-func TestModelToolSpecificationRequiresStrictObjectSchema(t *testing.T) {
+func TestValidStrictModelToolSchemaRequiresClosedObjects(t *testing.T) {
 	tests := []struct {
 		name   string
 		schema string
@@ -142,14 +89,8 @@ func TestModelToolSpecificationRequiresStrictObjectSchema(t *testing.T) {
 
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
-			specification := ModelToolSpecification{
-				Name:            ToolNameGetResource,
-				Version:         "test-v1",
-				Description:     "Exercise strict model Tool schema validation.",
-				InputSchemaJSON: current.schema,
-			}
-			if got := specification.Validate() == nil; got != current.valid {
-				t.Fatalf("ModelToolSpecification.Validate() success = %t, want %t", got, current.valid)
+			if got := ValidStrictModelToolSchema(current.schema); got != current.valid {
+				t.Fatalf("ValidStrictModelToolSchema() = %t, want %t", got, current.valid)
 			}
 		})
 	}

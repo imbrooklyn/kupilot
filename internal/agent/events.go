@@ -60,8 +60,7 @@ const (
 )
 
 func (failure RunEventFailure) valid() bool {
-	message := domain.ModelMessage{Role: domain.ModelMessageRoleSystem, Content: failure.SafeMessage}
-	return failure.Class.Valid() && message.Validate() == nil
+	return failure.Class.Valid() && domain.ValidModelText(failure.SafeMessage, domain.MaxModelInputMessageBytes, false)
 }
 
 // RunEvent contains one typed payload plus publisher-owned ordering metadata.
@@ -130,8 +129,7 @@ func (event RunEvent) Validate() error {
 			return ErrInvalidRunEvent
 		}
 	case RunEventTextDelta:
-		message := domain.ModelMessage{Role: domain.ModelMessageRoleAssistant, Content: event.TextDelta}
-		if payloads != 1 || message.Validate() != nil {
+		if payloads != 1 || !domain.ValidModelText(event.TextDelta, domain.MaxModelMessageBytes, false) {
 			return ErrInvalidRunEvent
 		}
 	case RunEventToolCallRequested, RunEventToolCallStarted, RunEventToolCallCompleted, RunEventToolCallFailed, RunEventToolCallDenied:

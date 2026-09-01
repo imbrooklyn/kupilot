@@ -437,7 +437,7 @@ func fetchedRelatedNode(observation ResourceObservation, hop int) RelatedNodeObs
 }
 
 func bindRelatedSelection(input agent.RunInput, arguments string) (agent.BoundToolCall, error) {
-	return agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	return agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID: "call-related-denied", Name: domain.ToolNameGetRelatedResources, ArgumentsJSON: arguments,
 	})
 }

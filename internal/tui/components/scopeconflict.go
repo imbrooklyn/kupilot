@@ -76,7 +76,7 @@ func (dialog ScopeConflictDialog) View(width int) string {
 		dialog.styles.Muted.Render("Saved:   " + dialog.saved),
 		keepStyle.Render(keepMarker + "Keep current scope"),
 		savedStyle.Render(savedMarker + "Use saved scope"),
-		dialog.styles.Muted.Render("Enter confirms. Esc cancels resume."),
+		dialog.styles.Muted.Render("Enter confirms. Esc or Ctrl+C cancels resume."),
 	}
 	return dialog.styles.Frame.Width(max(1, min(width-6, 72))).Render(strings.Join(content, "\n"))
 }

@@ -15,7 +15,7 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		ModelConfiguredSet: true, ModelConfigured: false,
 	})
 	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
-		!strings.Contains(model.modelSetupView(), "Model setup 1/4") ||
+		!strings.Contains(model.modelSetupView(), "Endpoint · model setup 1/4") ||
 		strings.Contains(model.footerView(), "model") {
 		t.Fatalf("initial model setup state = %#v prompt=%q footer=%q", model.modelSetup, model.modelSetupView(), model.footerView())
 	}
@@ -62,6 +62,171 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 	}
 	if model.composer.PreviousHistory() {
 		t.Fatal("credential was retained in composer history")
+	}
+}
+
+func TestModelSetupKeepsAFieldLabelVisibleAfterTypingAtEveryStep(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		ModelConfiguredSet: true, ModelConfigured: false,
+	})
+	steps := []struct {
+		label string
+		value string
+		want  modelSetupStage
+	}{
+		{label: "Endpoint · model setup 1/4", value: "https://model.example.test/v1", want: modelSetupName},
+		{label: "Model · model setup 2/4", value: "diagnostic-model", want: modelSetupStorage},
+		{label: "Storage · model setup 3/4", value: "session", want: modelSetupCredential},
+	}
+	for _, step := range steps {
+		model.composer.SetValue(step.value)
+		if label := model.inputLabelView(); !strings.Contains(label, step.label) ||
+			!strings.Contains(model.render(), step.label) {
+			t.Fatalf("typed %s field lost its persistent label: label=%q", step.label, label)
+		}
+		var cmd tea.Cmd
+		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != step.want {
+			t.Fatalf("stage after %s = %#v command=%v", step.label, model.modelSetup, cmd != nil)
+		}
+	}
+	model.composer.SetValue("generated-labelled-key")
+	if label := model.inputLabelView(); !strings.Contains(label, "API key · model setup 4/4 · masked") ||
+		!strings.Contains(model.render(), "API key · model setup 4/4 · masked") ||
+		strings.Contains(model.render(), "generated-labelled-key") {
+		t.Fatalf("credential label or masking = label %q render %q", label, model.render())
+	}
+}
+
+func TestModelSetupArrowKeysCannotRecallOrdinaryInputHistory(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.composer.RecordSubmission("ordinary diagnostic question")
+	model.beginModelSetup()
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
+		model.composer.Value() != "" {
+		t.Fatalf("model setup recalled ordinary history: setup=%#v draft=%q command=%v", model.modelSetup, model.composer.Value(), cmd != nil)
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if cmd != nil || model.composer.Value() != "" {
+		t.Fatalf("explicit history shortcut reached model setup: draft=%q command=%v", model.composer.Value(), cmd != nil)
+	}
+}
+
+func TestCtrlCCancelsModelSetupDraftAtEveryStepWithoutChangingRuntime(t *testing.T) {
+	t.Parallel()
+
+	for _, stage := range []modelSetupStage{modelSetupEndpoint, modelSetupName, modelSetupStorage, modelSetupCredential} {
+		t.Run(modelSetupStageName(stage), func(t *testing.T) {
+			model := NewModel(Config{
+				Width: 80, Height: 24, Theme: ThemeNoColor,
+				ModelEndpoint: "https://old.example.test/v1", ModelName: "old-model",
+				ModelConfiguredSet: true, ModelConfigured: true,
+			})
+			model.beginModelSetup()
+			model.modelSetup.Stage = stage
+			model.composer.SetValue("generated-abandoned-value")
+			if stage == modelSetupCredential {
+				model.composer.SetSecretMode(true)
+			}
+			model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+			if cmd != nil || model.modelSetup != nil || !model.modelConfigured || model.modelName != "old-model" ||
+				model.modelEndpoint != "https://old.example.test/v1" || model.composer.Value() != "" ||
+				strings.Contains(model.render(), "generated-abandoned-value") {
+				t.Fatalf("Ctrl+C at %s = setup %#v configured=%v endpoint=%q name=%q draft=%q command=%v",
+					modelSetupStageName(stage), model.modelSetup, model.modelConfigured, model.modelEndpoint,
+					model.modelName, model.composer.Value(), cmd != nil)
+			}
+		})
+	}
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		ModelConfiguredSet: true, ModelConfigured: false,
+	})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil || model.modelSetup != nil || model.modelConfigured {
+		t.Fatalf("initial setup cancellation = setup %#v configured=%v command=%v", model.modelSetup, model.modelConfigured, cmd != nil)
+	}
+}
+
+func TestCtrlCCancelsApplyingModelSetupWithCorrelationAndStaleSafety(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		ModelEndpoint: "https://old.example.test/v1", ModelName: "old-model",
+		ModelConfiguredSet: true, ModelConfigured: true,
+	})
+	model.beginModelSetup()
+	model.modelSetup.Stage = modelSetupApplying
+	model.pendingModelSetupID = 44
+	model.composer.SetPlaceholder("Configuring model…")
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || model.modelSetup == nil || !model.modelSetup.Cancelling ||
+		model.pendingModelSetupID != 44 || !strings.Contains(model.inputLabelView(), "cancelling") {
+		t.Fatalf("applying cancellation state = setup %#v pending=%d command=%v", model.modelSetup, model.pendingModelSetupID, cmd != nil)
+	}
+	message, ok := cmd().(ApplicationModelSetupCancelMsg)
+	if !ok || message.RequestID != 44 {
+		t.Fatalf("applying cancellation request = %#v", message)
+	}
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "must-not-edit"})
+	model, _ = updateModel(t, model, keyText("x"))
+	if model.composer.Value() != "" {
+		t.Fatalf("applying setup accepted edits: %q", model.composer.Value())
+	}
+	model, _ = updateModel(t, model, ApplicationFailureMsg{RequestID: 43, ModelSetup: true})
+	if model.modelSetup == nil || !model.modelSetup.Cancelling || model.pendingModelSetupID != 44 {
+		t.Fatal("stale setup failure cleared the correlated cancellation")
+	}
+	model, _ = updateModel(t, model, ApplicationFailureMsg{RequestID: 44, ModelSetup: true})
+	if model.modelSetup != nil || model.pendingModelSetupID != 0 || model.dialog.Open() ||
+		!model.modelConfigured || model.modelName != "old-model" {
+		t.Fatalf("cancelled setup completion = setup %#v pending=%d dialog=%v configured=%v name=%q",
+			model.modelSetup, model.pendingModelSetupID, model.dialog.Open(), model.modelConfigured, model.modelName)
+	}
+}
+
+func TestRejectedModelSetupCancellationRemainsRetryable(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.beginModelSetup()
+	model.modelSetup.Stage = modelSetupApplying
+	model.pendingModelSetupID = 45
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, ModelSetupCancelRejectedMsg{RequestID: 45})
+	if model.modelSetup == nil || model.modelSetup.Cancelling || model.pendingModelSetupID != 45 ||
+		!model.dialog.Open() || !strings.Contains(model.render(), "Cancellation unavailable") {
+		t.Fatalf("rejected cancellation state = setup %#v pending=%d dialog=%v", model.modelSetup, model.pendingModelSetupID, model.dialog.Open())
+	}
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || model.modelSetup == nil || !model.modelSetup.Cancelling ||
+		cmd().(ApplicationModelSetupCancelMsg).RequestID != 45 {
+		t.Fatal("rejected setup cancellation could not be retried")
+	}
+}
+
+func modelSetupStageName(stage modelSetupStage) string {
+	switch stage {
+	case modelSetupEndpoint:
+		return "endpoint"
+	case modelSetupName:
+		return "model"
+	case modelSetupStorage:
+		return "storage"
+	case modelSetupCredential:
+		return "credential"
+	case modelSetupApplying:
+		return "applying"
+	default:
+		return "unknown"
 	}
 }
 

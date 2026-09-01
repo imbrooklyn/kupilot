@@ -86,7 +86,7 @@ type toolInfoWire struct {
 	JSONSchema     json.RawMessage `json:"json_schema"`
 }
 
-func toolInfo(specification domain.ModelToolSpecification) (*schema.ToolInfo, error) {
+func toolInfo(specification agent.ToolSpecification) (*schema.ToolInfo, error) {
 	if specification.Validate() != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
@@ -144,7 +144,7 @@ func sameJSON(left, right string) bool {
 	return leftError == nil && rightError == nil && reflect.DeepEqual(leftValue, rightValue)
 }
 
-func (state *runState) bindToolCalls(ctx context.Context, selections []domain.ModelToolCall) error {
+func (state *runState) bindToolCalls(ctx context.Context, selections []agent.ToolSelection) error {
 	if len(selections) == 0 {
 		return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested an empty cluster-read batch.", nil)
 	}
@@ -159,6 +159,8 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 		return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model requested more cluster reads than the diagnostic run can represent.", nil)
 	}
 	entries := make([]*boundExecution, len(selections))
+	canonicalSelections := make([]agent.ToolSelection, len(selections))
+	policyFeedbackNeeded := false
 	seen := make(map[string]struct{}, len(selections))
 	seenInvocationIDs := make(map[domain.ToolInvocationID]struct{}, len(selections))
 	for index, selection := range selections {
@@ -179,12 +181,19 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 			if errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
 				return failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 			}
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", err)
+			if errors.Is(err, agent.ErrToolArgumentsRejected) {
+				return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", err)
+			}
+			if errors.Is(err, agent.ErrToolPolicyDenied) {
+				policyFeedbackNeeded = true
+				continue
+			}
+			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 		}
-		safeSelection := domain.ModelToolCall{
+		safeSelection := agent.ToolSelection{
 			ID: selection.ID, Name: call.Name(), ArgumentsJSON: call.ArgumentsJSON(),
 		}
-		selections[index] = safeSelection
+		canonicalSelections[index] = safeSelection
 		requestedAt := state.now()
 		if !validRuntimeTime(requestedAt) {
 			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
@@ -214,6 +223,36 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []domain.Mo
 			modelCall: safeSelection,
 		}
 	}
+	if policyFeedbackNeeded {
+		feedback, err := agent.BuildToolPolicyFeedback()
+		if err != nil {
+			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
+		}
+		for index, selection := range selections {
+			entries[index] = &boundExecution{
+				toolName:       selection.Name,
+				modelCall:      selection,
+				policyFeedback: feedback,
+			}
+		}
+		state.mu.Lock()
+		if state.toolSequence != startSequence {
+			state.mu.Unlock()
+			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+		}
+		for _, execution := range entries {
+			if _, exists := state.boundCalls[execution.modelCall.ID]; exists {
+				state.mu.Unlock()
+				return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
+			}
+		}
+		for _, execution := range entries {
+			state.boundCalls[execution.modelCall.ID] = execution
+		}
+		state.mu.Unlock()
+		return state.checkScope(ctx)
+	}
+	copy(selections, canonicalSelections)
 
 	state.mu.Lock()
 	if state.toolSequence != startSequence {
@@ -253,9 +292,20 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 		return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The cluster-read request is not bound to this diagnostic run.", nil)
 	}
 	execution.executed = true
+	policyFeedback := execution.policyFeedback
+	modelCall := execution.modelCall
 	state.mu.Unlock()
+	if policyFeedback != "" {
+		if modelCall.ID != callID || modelCall.Name != name || modelCall.ArgumentsJSON != arguments {
+			return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The rejected cluster-read arguments changed before local policy feedback.", nil)
+		}
+		if err := state.checkScope(ctx); err != nil {
+			return "", err
+		}
+		return policyFeedback, nil
+	}
 
-	rebound, err := agent.BindToolCall(state.input, execution.call.InvocationID(), domain.ModelToolCall{
+	rebound, err := agent.BindToolCall(state.input, execution.call.InvocationID(), agent.ToolSelection{
 		ID:            callID,
 		Name:          name,
 		ArgumentsJSON: arguments,
@@ -298,7 +348,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 		result.Version != execution.call.Version() || result.Scope != execution.call.Scope().Snapshot() {
 		return "", state.failTool(ctx, execution, domain.SafeErrorClassInvalidExternalResponse, safeInvalidToolResult, nil)
 	}
-	message, resultBytes, err := agent.BuildToolResultMessage(callID, result)
+	content, resultBytes, err := agent.BuildToolResultContent(result)
 	if err != nil {
 		return "", state.failTool(ctx, execution, domain.SafeErrorClassInvalidExternalResponse, safeInvalidToolResult, err)
 	}
@@ -326,7 +376,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	if err := state.addStepEvidence(newEvidence); err != nil {
 		return "", err
 	}
-	return message.Content, nil
+	return content, nil
 }
 
 func (state *runState) completedToolInvocation(execution *boundExecution, result domain.ToolResult, resultBytes int) (domain.ToolInvocation, agent.RunEventKind, error) {

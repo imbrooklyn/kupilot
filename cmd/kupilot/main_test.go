@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,6 +253,93 @@ func TestApplicationRequestFilterAndDrainDestroyRejectedModelSecrets(t *testing.
 	if queuedSecret.IsSet() {
 		t.Fatal("queued model setup secret survived request drain")
 	}
+}
+
+func TestApplicationRequestFilterRoutesAndCorrelatesModelSetupCancellation(t *testing.T) {
+	t.Parallel()
+
+	requests := make(chan tea.Msg, 1)
+	filter := applicationRequestFilter(context.Background(), requests)
+	cancellation := tui.ApplicationModelSetupCancelMsg{RequestID: 17}
+	if result := filter(nil, cancellation); result != nil {
+		t.Fatalf("routed cancellation result = %#v", result)
+	}
+	if routed := (<-requests).(tui.ApplicationModelSetupCancelMsg); routed != cancellation {
+		t.Fatalf("routed cancellation = %#v", routed)
+	}
+	requests <- tui.ApplicationQueryMsg{}
+	rejected, ok := filter(nil, cancellation).(tui.ModelSetupCancelRejectedMsg)
+	if !ok || rejected.RequestID != cancellation.RequestID {
+		t.Fatalf("overflow cancellation rejection = %#v", rejected)
+	}
+}
+
+func TestApplicationRequestPumpCancelsInFlightModelSetupAndDestroysSecret(t *testing.T) {
+	t.Parallel()
+
+	consumer := &cancellableSetupConsumer{started: make(chan struct{}), cancelled: make(chan struct{})}
+	sender := &recordingApplicationSender{messages: make(chan tea.Msg, 1)}
+	requests := make(chan tea.Msg, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go pumpApplicationRequests(ctx, consumer, sender, requests, &workers)
+
+	secret, err := application.NewModelSetupSecret("generated-pump-cancel-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests <- tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
+		RequestID: 18, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
+	}}
+	<-consumer.started
+	requests <- tui.ApplicationModelSetupCancelMsg{RequestID: 18}
+	<-consumer.cancelled
+	message := <-sender.messages
+	failure, ok := message.(tui.ApplicationFailureMsg)
+	if !ok || !failure.ModelSetup || failure.RequestID != 18 || secret.IsSet() {
+		t.Fatalf("cancelled setup result = %#v secret set=%v", message, secret.IsSet())
+	}
+
+	cancel()
+	close(requests)
+	workers.Wait()
+}
+
+type recordingApplicationSender struct {
+	messages chan tea.Msg
+}
+
+func (sender *recordingApplicationSender) Send(message tea.Msg) {
+	sender.messages <- message
+}
+
+type cancellableSetupConsumer struct {
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+func (consumer *cancellableSetupConsumer) ConfigureModel(ctx context.Context, _ application.ModelSetupRequest) (application.ModelSetupResult, error) {
+	close(consumer.started)
+	<-ctx.Done()
+	close(consumer.cancelled)
+	return application.ModelSetupResult{}, ctx.Err()
+}
+
+func (*cancellableSetupConsumer) QueryUI(context.Context, application.UICompletionQuery) (application.UICompletionResult, error) {
+	return application.UICompletionResult{}, errors.New("unexpected query")
+}
+
+func (*cancellableSetupConsumer) QueryEvidenceDetail(context.Context, application.UIEvidenceDetailQuery) (application.UIEvidenceDetailResult, error) {
+	return application.UIEvidenceDetailResult{}, errors.New("unexpected Evidence query")
+}
+
+func (*cancellableSetupConsumer) ResumeUI(context.Context, application.UIResumeRequest) (application.UIResumeResult, error) {
+	return application.UIResumeResult{}, errors.New("unexpected resume")
+}
+
+func (*cancellableSetupConsumer) ExecuteUICommand(context.Context, application.UICommand) (application.UICommandOutcome, error) {
+	return application.UICommandOutcome{}, errors.New("unexpected command")
 }
 
 func TestApplicationStartIntentPreservesOnlyExplicitScopeAuthority(t *testing.T) {

@@ -13,7 +13,6 @@ const (
 	testRunID        domain.AgentRunID       = "00000000-0000-7000-8000-000000004001"
 	testSessionID    domain.SessionID        = "00000000-0000-7000-8000-000000004002"
 	testMessageID    domain.MessageID        = "00000000-0000-7000-8000-000000004003"
-	testModelID      domain.ModelRequestID   = "00000000-0000-7000-8000-000000004004"
 	testInvocationID domain.ToolInvocationID = "00000000-0000-7000-8000-000000004005"
 	testEvidenceID   domain.EvidenceID       = "00000000-0000-7000-8000-000000004006"
 	testDiagnosisID  domain.DiagnosisID      = "00000000-0000-7000-8000-000000004007"
@@ -71,7 +70,7 @@ func testRunInput(t *testing.T, question string) RunInput {
 
 func testBoundCall(t *testing.T, input RunInput, invocationID domain.ToolInvocationID, podName string) BoundToolCall {
 	t.Helper()
-	call, err := BindToolCall(input, invocationID, domain.ModelToolCall{
+	call, err := BindToolCall(input, invocationID, ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"` + podName + `"}}`,

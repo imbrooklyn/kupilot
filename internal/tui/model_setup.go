@@ -19,10 +19,11 @@ const (
 )
 
 type modelSetupState struct {
-	Stage    modelSetupStage
-	Endpoint string
-	Model    string
-	Persist  bool
+	Stage      modelSetupStage
+	Endpoint   string
+	Model      string
+	Persist    bool
+	Cancelling bool
 }
 
 func (model *Model) beginModelSetup() {
@@ -33,7 +34,7 @@ func (model *Model) beginModelSetup() {
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
 	model.composer.SetMaxBytes(application.MaxModelSetupEndpointBytes)
-	model.composer.SetPlaceholder("OpenAI-compatible endpoint")
+	model.composer.SetPlaceholder("Enter an OpenAI-compatible endpoint")
 	if model.modelEndpoint != "" {
 		model.composer.SetValue(model.modelEndpoint)
 	}
@@ -49,17 +50,35 @@ func (model *Model) beginMissingModelSetup() {
 	}
 }
 
-func (model *Model) cancelOptionalModelSetup() bool {
-	if model.modelSetup == nil || model.pendingModelSetupID != 0 || !model.modelConfigured {
-		return false
+func (model *Model) interruptModelSetup() (tea.Cmd, bool) {
+	if model.modelSetup == nil {
+		return nil, false
 	}
+	if model.pendingModelSetupID == 0 {
+		model.clearModelSetupState()
+		return nil, true
+	}
+	if model.modelSetup.Cancelling {
+		return nil, true
+	}
+	model.modelSetup.Cancelling = true
+	model.composer.Reset()
+	model.composer.SetSecretMode(false)
+	model.composer.SetMaxBytes(application.MaxQuestionBytes)
+	model.composer.SetPlaceholder("Cancelling model setup…")
+	model.reflow()
+	return applicationModelSetupCancel(model.pendingModelSetupID), true
+}
+
+func (model *Model) clearModelSetupState() {
 	model.modelSetup = nil
+	model.pendingModelSetupID = 0
+	model.closeDialog()
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
 	model.composer.ResetPlaceholder()
 	model.reflow()
-	return true
 }
 
 func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
@@ -77,7 +96,7 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 		model.modelSetup.Stage = modelSetupName
 		model.composer.Reset()
 		model.composer.SetMaxBytes(application.MaxModelSetupNameBytes)
-		model.composer.SetPlaceholder("Model identifier")
+		model.composer.SetPlaceholder("Enter the model identifier")
 		if model.modelName != "" {
 			model.composer.SetValue(model.modelName)
 		}
@@ -104,7 +123,7 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 		model.modelSetup.Stage = modelSetupCredential
 		model.composer.Reset()
 		model.composer.SetMaxBytes(application.MaxModelSetupSecretBytes)
-		model.composer.SetPlaceholder("Model API key (masked)")
+		model.composer.SetPlaceholder("Enter the model API key")
 		model.composer.SetSecretMode(true)
 	case modelSetupCredential:
 		secret, err := application.NewModelSetupSecret(model.composer.Value())
@@ -146,6 +165,7 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	model.modelConfigured = true
 	model.pendingModelSetupID = 0
 	model.modelSetup = nil
+	model.closeDialog()
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
@@ -157,6 +177,25 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	}
 }
 
+func (model *Model) acceptCancelledModelSetupFailure(message ApplicationFailureMsg) bool {
+	if !message.ModelSetup || model.modelSetup == nil || !model.modelSetup.Cancelling ||
+		model.pendingModelSetupID == 0 || message.RequestID != model.pendingModelSetupID {
+		return false
+	}
+	model.clearModelSetupState()
+	return true
+}
+
+func (model *Model) rejectModelSetupCancellation(message ModelSetupCancelRejectedMsg) bool {
+	if model.modelSetup == nil || !model.modelSetup.Cancelling || model.pendingModelSetupID == 0 ||
+		message.RequestID != model.pendingModelSetupID {
+		return false
+	}
+	model.modelSetup.Cancelling = false
+	model.composer.SetPlaceholder("Configuring model…")
+	return true
+}
+
 func (model *Model) acceptModelSetupFailure(message ApplicationFailureMsg) bool {
 	if !message.ModelSetup || model.modelSetup == nil || model.pendingModelSetupID == 0 || message.RequestID != model.pendingModelSetupID {
 		return false
@@ -166,7 +205,7 @@ func (model *Model) acceptModelSetupFailure(message ApplicationFailureMsg) bool 
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
 	model.composer.SetMaxBytes(application.MaxModelSetupEndpointBytes)
-	model.composer.SetPlaceholder("OpenAI-compatible endpoint")
+	model.composer.SetPlaceholder("Enter an OpenAI-compatible endpoint")
 	model.composer.SetValue(model.modelSetup.Endpoint)
 	return true
 }
@@ -177,15 +216,18 @@ func (model Model) modelSetupView() string {
 	}
 	switch model.modelSetup.Stage {
 	case modelSetupEndpoint:
-		return "Model setup 1/4 — Enter the OpenAI-compatible endpoint."
+		return "Endpoint · model setup 1/4"
 	case modelSetupName:
-		return "Model setup 2/4 — Enter the model identifier."
+		return "Model · model setup 2/4"
 	case modelSetupStorage:
-		return "Model setup 3/4 — Type save (default, plaintext and not encrypted) or session."
+		return "Storage · model setup 3/4"
 	case modelSetupCredential:
-		return "Model setup 4/4 — Enter the API key. Input is masked and is not added to history."
+		return "API key · model setup 4/4 · masked"
 	case modelSetupApplying:
-		return "Model setup — Validating and constructing the single model runtime…"
+		if model.modelSetup.Cancelling {
+			return "Model setup · cancelling…"
+		}
+		return "Model setup · applying…"
 	default:
 		return ""
 	}

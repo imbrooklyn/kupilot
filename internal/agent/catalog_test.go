@@ -42,12 +42,16 @@ func TestToolCatalogIsExactStrictAndPolicyBound(t *testing.T) {
 	listDescription := specifications[1].Description
 	for _, required := range []string{
 		"code-allowlisted Kubernetes Kind",
+		"Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume",
 		"namespace=*",
 		"frozen namespace-access policy",
 	} {
 		if !strings.Contains(listDescription, required) {
 			t.Fatalf("list_resources description missing %q", required)
 		}
+	}
+	if !strings.Contains(specifications[6].Description, "which Nodes and/or Namespaces exist") {
+		t.Fatalf("get_cluster_overview description = %q", specifications[6].Description)
 	}
 
 	copyOfCatalog := ToolSpecifications()
@@ -111,7 +115,7 @@ func TestToolCatalogNullableDefaultsCanonicalizeLocally(t *testing.T) {
 
 	for index, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
-			bound, err := BindToolCall(input, invocationID(index+20), domain.ModelToolCall{
+			bound, err := BindToolCall(input, invocationID(index+20), ToolSelection{
 				ID:            "nullable-call",
 				Name:          current.tool,
 				ArgumentsJSON: current.arguments,
@@ -139,16 +143,16 @@ func TestToolCallPolicyRejectsUnknownForbiddenAndInvalidBeforeHandler(t *testing
 	handlers := testToolHandlers(tool)
 	tests := []struct {
 		name string
-		call domain.ModelToolCall
+		call ToolSelection
 	}{
-		{name: "unknown Tool", call: domain.ModelToolCall{ID: "call-1", Name: "run_shell", ArgumentsJSON: `{}`}},
-		{name: "scope field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"context":"other","purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`}},
-		{name: "hard limit field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"max_bytes":999999,"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`}},
-		{name: "duplicate nested field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Pod","kind":"Secret","name":"sample-pod"}}`}},
-		{name: "extra field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"},"surprise":true}`}},
-		{name: "Secret Kind", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Secret","name":"sample-secret"}}`}},
-		{name: "wrong type", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":7,"resource":{"kind":"Pod","name":"sample-pod"}}`}},
-		{name: "null required field", call: domain.ModelToolCall{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"detail":null,"purpose":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod"}}`}},
+		{name: "unknown Tool", call: ToolSelection{ID: "call-1", Name: "run_shell", ArgumentsJSON: `{}`}},
+		{name: "scope field", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"context":"other","purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`}},
+		{name: "hard limit field", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"max_bytes":999999,"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"}}`}},
+		{name: "duplicate nested field", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Pod","kind":"Secret","name":"sample-pod"}}`}},
+		{name: "extra field", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"},"surprise":true}`}},
+		{name: "Secret Kind", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":"Inspect.","resource":{"kind":"Secret","name":"sample-secret"}}`}},
+		{name: "wrong type", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"purpose":7,"resource":{"kind":"Pod","name":"sample-pod"}}`}},
+		{name: "null required field", call: ToolSelection{ID: "call-1", Name: domain.ToolNameGetResource, ArgumentsJSON: `{"detail":null,"purpose":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod"}}`}},
 	}
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
@@ -164,6 +168,27 @@ func TestToolCallPolicyRejectsUnknownForbiddenAndInvalidBeforeHandler(t *testing
 				t.Fatalf("handler calls = %d, want 0", tool.Calls())
 			}
 		})
+	}
+}
+
+func TestToolBindingClassifiesMalformedArgumentsSeparatelyFromCorrectablePolicyDenial(t *testing.T) {
+	input := testRunInput(t, "Inspect cluster resources.")
+	_, malformedErr := BindToolCall(input, invocationID(30), ToolSelection{
+		ID:            "call-malformed-known-tool",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"},"surprise":true}`,
+	})
+	if !errors.Is(malformedErr, ErrToolPolicyDenied) || !errors.Is(malformedErr, ErrToolArgumentsRejected) {
+		t.Fatalf("malformed known-Tool error = %v", malformedErr)
+	}
+
+	_, policyErr := BindToolCall(input, invocationID(31), ToolSelection{
+		ID:            "call-correctable-policy",
+		Name:          domain.ToolNameListResources,
+		ArgumentsJSON: `{"health_filter":"any","kind":"Node","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Nodes."}`,
+	})
+	if !errors.Is(policyErr, ErrToolPolicyDenied) || errors.Is(policyErr, ErrToolArgumentsRejected) {
+		t.Fatalf("correctable policy error = %v", policyErr)
 	}
 }
 
@@ -189,7 +214,7 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 		t.Fatalf("bound ceilings = %#v", ceilings)
 	}
 
-	boundedList, err := BindToolCall(input, invocationID(1), domain.ModelToolCall{
+	boundedList, err := BindToolCall(input, invocationID(1), ToolSelection{
 		ID:            "call-2",
 		Name:          domain.ToolNameListResources,
 		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":5,"purpose":"Find bounded Pod candidates."}`,
@@ -206,7 +231,7 @@ func TestToolCallBindingCanonicalizesNeutralProviderJSON(t *testing.T) {
 	t.Parallel()
 
 	input := testRunInput(t, "Inspect the selected Pod.")
-	selection := domain.ModelToolCall{
+	selection := ToolSelection{
 		ID:            "call-noncanonical",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: ` { "resource": { "name": "sample-pod", "kind": "Pod" }, "purpose": "Inspect the selected Pod." } `,
@@ -225,7 +250,7 @@ func TestToolCallBindingCanonicalizesNeutralProviderJSON(t *testing.T) {
 
 func TestToolCallBindingPreservesSingleItemListsAndRequiresTwoItemOverview(t *testing.T) {
 	input := testRunInput(t, "Inspect Kubernetes resources.")
-	list, err := BindToolCall(input, invocationID(1), domain.ModelToolCall{
+	list, err := BindToolCall(input, invocationID(1), ToolSelection{
 		ID:   "call-list-one",
 		Name: domain.ToolNameListResources,
 		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":1,"name_query":null,` +
@@ -234,7 +259,7 @@ func TestToolCallBindingPreservesSingleItemListsAndRequiresTwoItemOverview(t *te
 	if err != nil || !strings.Contains(list.ArgumentsJSON(), `"limit":1`) {
 		t.Fatalf("BindToolCall(single list) = %#v, %v", list, err)
 	}
-	if _, err = BindToolCall(input, invocationID(2), domain.ModelToolCall{
+	if _, err = BindToolCall(input, invocationID(2), ToolSelection{
 		ID:            "call-overview-one",
 		Name:          domain.ToolNameGetClusterOverview,
 		ArgumentsJSON: `{"limit":1,"purpose":"Inspect cluster health."}`,
@@ -250,7 +275,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	if err != nil {
 		t.Fatalf("json.Marshal(purpose) error = %v", err)
 	}
-	bound, err := BindToolCall(input, testInvocationID, domain.ModelToolCall{
+	bound, err := BindToolCall(input, testInvocationID, ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: `{"purpose":` + string(purposeJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
@@ -267,7 +292,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	if err != nil {
 		t.Fatalf("json.Marshal(control purpose) error = %v", err)
 	}
-	_, err = BindToolCall(input, invocationID(4), domain.ModelToolCall{
+	_, err = BindToolCall(input, invocationID(4), ToolSelection{
 		ID:            "call-4",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: `{"purpose":` + string(controlJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
@@ -280,7 +305,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	if err != nil {
 		t.Fatalf("json.Marshal(name query) error = %v", err)
 	}
-	listed, err := BindToolCall(input, invocationID(2), domain.ModelToolCall{
+	listed, err := BindToolCall(input, invocationID(2), ToolSelection{
 		ID:            "call-2",
 		Name:          domain.ToolNameListResources,
 		ArgumentsJSON: `{"kind":"Pod","name_query":` + string(queryJSON) + `,"purpose":"Find matching Pods."}`,
@@ -296,7 +321,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	if err != nil {
 		t.Fatalf("json.Marshal(blocked purpose) error = %v", err)
 	}
-	_, err = BindToolCall(input, invocationID(3), domain.ModelToolCall{
+	_, err = BindToolCall(input, invocationID(3), ToolSelection{
 		ID:            "call-3",
 		Name:          domain.ToolNameGetResource,
 		ArgumentsJSON: `{"purpose":` + string(blockedJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
@@ -327,7 +352,7 @@ func FuzzBindToolCallStrictSchema(f *testing.F) {
 			return
 		}
 		input := testRunInput(t, "Inspect the selected Pod.")
-		selection := domain.ModelToolCall{
+		selection := ToolSelection{
 			ID: "fuzz-call", Name: domain.ToolName(name), ArgumentsJSON: arguments,
 		}
 		bound, err := BindToolCall(input, testInvocationID, selection)
@@ -347,7 +372,7 @@ func FuzzBindToolCallStrictSchema(f *testing.F) {
 				t.Fatalf("canonical Tool arguments contain prohibited authority %s: %s", prohibited, canonical)
 			}
 		}
-		if validation := (domain.ModelToolCall{
+		if validation := (ToolSelection{
 			ID: selection.ID, Name: bound.Name(), ArgumentsJSON: canonical,
 		}).Validate(); validation != nil {
 			t.Fatalf("bound canonical Tool arguments are invalid: %v", validation)

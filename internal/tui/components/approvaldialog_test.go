@@ -64,7 +64,7 @@ func TestApprovalDialogSelectionSubmissionAndExpiryAreFailClosed(t *testing.T) {
 	if dialog.SetExecutionStatus(1, "Duplicate.", false) ||
 		!dialog.SetExecutionStatus(2, "Rollout verified.", true) || !dialog.Terminal() ||
 		dialog.ExecutionIndex() != 2 ||
-		!strings.Contains(dialog.View(100), "Enter or Esc closes this result.") {
+		!strings.Contains(dialog.View(100), "Enter, Esc, or Ctrl+C closes this result.") {
 		t.Fatal("terminal execution result is not visible")
 	}
 	if dialog.SetExecutionStatus(3, "Late progress.", false) {

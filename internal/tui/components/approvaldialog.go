@@ -157,7 +157,7 @@ func (dialog ApprovalDialog) View(width int) string {
 	if dialog.submitted {
 		content = append(content, dialog.styles.Body.Render("Status: "+dialog.status))
 		if dialog.terminal {
-			content = append(content, dialog.styles.Muted.Render("Enter or Esc closes this result."))
+			content = append(content, dialog.styles.Muted.Render("Enter, Esc, or Ctrl+C closes this result."))
 		} else {
 			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The restart request will not be retried."))
 		}
@@ -165,7 +165,7 @@ func (dialog ApprovalDialog) View(width int) string {
 		content = append(content,
 			rejectStyle.Render(rejectMarker+"Reject"),
 			approveStyle.Render(approveMarker+"Approve"),
-			dialog.styles.Muted.Render("Enter confirms the selected choice. Tab or arrows change it. Esc rejects."),
+			dialog.styles.Muted.Render("Enter confirms the selected choice. Tab or arrows change it. Esc or Ctrl+C rejects."),
 		)
 	}
 	return dialog.styles.Frame.Width(max(1, min(width-6, 96))).Render(strings.Join(content, "\n"))

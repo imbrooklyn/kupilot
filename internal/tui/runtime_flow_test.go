@@ -45,7 +45,7 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 		!strings.Contains(blocked.render(), "https://model.example") {
 		t.Fatal("first transfer was not blocked on the exact privacy review")
 	}
-	blocked, cmd = updateModel(t, blocked, tea.KeyPressMsg{Code: tea.KeyEscape})
+	blocked, cmd = updateModel(t, blocked, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	cancelReview := applicationCommandFromCmd(t, cmd)
 	if cancelReview.Kind != application.UICommandCancelPrivacy || cancelReview.RequestID != submit.RequestID {
 		t.Fatalf("privacy cancellation command = %#v", cancelReview)
@@ -184,7 +184,7 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 	if cmd != nil || !model.dialog.Open() || model.sessionDelete == nil || !strings.Contains(model.render(), "Delete current Session?") {
 		t.Fatal("delete key did not open an explicit current-Session confirmation")
 	}
-	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil || model.sessionDelete != nil || !model.dialog.Open() {
 		t.Fatal("delete cancellation dispatched or failed to restore privacy review")
 	}
@@ -290,7 +290,7 @@ func TestPrivacyClearHistoryAndDeleteAllRequireExplicitConfirmation(t *testing.T
 			!strings.Contains(model.render(), "Clear all Session history?") {
 			t.Fatal("clear-history confirmation did not disclose preserved preferences")
 		}
-		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 		if cmd != nil || model.localDeletion != nil || !strings.Contains(model.render(), "Privacy and local data") {
 			t.Fatal("clear-history cancellation dispatched or did not restore privacy review")
 		}

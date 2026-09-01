@@ -119,6 +119,20 @@ response mode, then discards it when the response terminates with
 authority. Ordinary text responses continue through the normal answer and
 safety pipeline.
 
+When a known, structurally safe Tool selection fails strict semantic binding,
+the next bounded model decision may receive fixed local policy feedback. The
+feedback states only code-owned schema and Namespace rules; it does not echo
+the rejected arguments, live scope values, Kubernetes data, credentials, or a
+claimed Tool result. The rejected batch creates no ToolInvocation, persistence
+record, or Evidence.
+
+Some compatible endpoints expose reasoning fragments separately from answer
+text. Kupilot accepts only the matching bounded representation produced by the
+pinned Eino component, checks it for credential reflection, counts it against
+the assistant-response ceiling, and discards it before message assembly. It is
+not shown, persisted, cited, logged, returned to the model, or treated as Tool
+or action authority.
+
 ## Terminal output and scrollback
 
 Ordinary conversation runs in one alternate-screen frame. On graceful exit,

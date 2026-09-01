@@ -15,7 +15,7 @@ import (
 
 const (
 	// ToolCatalogVersion versions the complete built-in model-visible catalog.
-	ToolCatalogVersion = "kupilot-operational-tools-v1"
+	ToolCatalogVersion = "kupilot-operational-tools-v2"
 
 	maxToolPurposeBytes = 1024
 	maxNameQueryBytes   = 128
@@ -26,6 +26,10 @@ const (
 var (
 	// ErrToolPolicyDenied reports a local fixed-catalog or strict-schema denial.
 	ErrToolPolicyDenied = errors.New("tool call was denied by the fixed runtime policy")
+	// ErrToolArgumentsRejected distinguishes malformed known-Tool arguments
+	// from a structurally safe selection that can receive bounded policy
+	// feedback. It never contains provider-controlled content.
+	ErrToolArgumentsRejected = errors.New("model Tool arguments were rejected")
 	// ErrInvalidBoundToolCall reports an invalid runtime-injected Tool call.
 	ErrInvalidBoundToolCall = errors.New("BoundToolCall data is invalid")
 	// ErrInvalidToolHandlers reports an incomplete fixed handler table.
@@ -33,6 +37,9 @@ var (
 	// ErrInvalidToolResultMessage reports an invalid or oversized model-bound
 	// ToolResult derivative.
 	ErrInvalidToolResultMessage = errors.New("the safe ToolResult message is invalid")
+	// ErrInvalidToolPolicyFeedback reports an invalid code-owned local policy
+	// message before it can re-enter the bounded model conversation.
+	ErrInvalidToolPolicyFeedback = errors.New("the local Tool policy feedback is invalid")
 	// ErrSensitiveModelTextBlocked reports model-provided free text that the
 	// fixed local sensitive-value policy cannot safely replace.
 	ErrSensitiveModelTextBlocked = errors.New("sensitive model-provided text was blocked")
@@ -49,15 +56,15 @@ const (
 )
 
 // ToolSpecifications returns a defensive copy of the exact ordered catalog.
-func ToolSpecifications() []domain.ModelToolSpecification {
-	return []domain.ModelToolSpecification{
-		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one code-allowlisted Kubernetes resource through a bounded safe projection. Namespaced targets default to the working Namespace and may use an explicit Namespace only when the frozen access policy allows it.", InputSchemaJSON: getResourceSchema},
-		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one code-allowlisted Kubernetes Kind with bounded local filtering. Use namespace=* only for an explicit all-Namespace list; the runtime enforces the frozen namespace-access policy.", InputSchemaJSON: listResourcesSchema},
+func ToolSpecifications() []ToolSpecification {
+	return []ToolSpecification{
+		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one code-allowlisted Kubernetes resource through a bounded safe projection. Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume. Namespaced targets use null for the working Namespace and may use an exact Namespace only when the frozen access policy is all.", InputSchemaJSON: getResourceSchema},
+		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one code-allowlisted Kubernetes Kind with bounded local filtering. Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume. For namespaced Kinds, null means the working Namespace; use an exact Namespace or namespace=* only when the frozen namespace-access policy is all.", InputSchemaJSON: listResourcesSchema},
 		{Name: domain.ToolNameGetEvents, Version: ToolCatalogVersion, Description: "Read bounded, normalized recent Kubernetes Events related to one exact allowlisted resource.", InputSchemaJSON: getEventsSchema},
 		{Name: domain.ToolNameGetPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized current Pod container log tail without follow mode.", InputSchemaJSON: getPodLogsSchema},
 		{Name: domain.ToolNameGetPreviousPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized previous Pod container log tail when a previous instance exists.", InputSchemaJSON: getPodLogsSchema},
 		{Name: domain.ToolNameGetRelatedResources, Version: ToolCatalogVersion, Description: "Follow only code-defined, bounded same-Namespace relationships from one allowlisted resource.", InputSchemaJSON: getRelatedResourcesSchema},
-		{Name: domain.ToolNameGetClusterOverview, Version: ToolCatalogVersion, Description: "Read bounded Namespace and Node health projections for a concise cluster overview; it never performs discovery or returns addresses, provider identifiers, images, system information, or capacity maps.", InputSchemaJSON: getClusterOverviewSchema},
+		{Name: domain.ToolNameGetClusterOverview, Version: ToolCatalogVersion, Description: "Use this for requests asking which Nodes and/or Namespaces exist or for their health. It reads both bounded projections in one concise cluster overview and never performs discovery or returns addresses, provider identifiers, images, system information, or capacity maps.", InputSchemaJSON: getClusterOverviewSchema},
 	}
 }
 
@@ -168,7 +175,7 @@ type BoundToolCall struct {
 
 // Validate checks the complete runtime-bound call.
 func (call BoundToolCall) Validate() error {
-	selection := domain.ModelToolCall{ID: call.modelCallID, Name: call.name, ArgumentsJSON: call.argumentsJSON}
+	selection := ToolSelection{ID: call.modelCallID, Name: call.name, ArgumentsJSON: call.argumentsJSON}
 	if !call.invocationID.Valid() || !call.runID.Valid() || selection.Validate() != nil ||
 		call.version != ToolCatalogVersion || call.argumentsDigest != domain.SHA256Hex(call.argumentsJSON) ||
 		call.scope.Validate() != nil || !validAgentText(call.purpose, maxToolPurposeBytes, false) || !call.ceilings.valid() {
@@ -296,9 +303,9 @@ type getRelatedResourcesArguments struct {
 	Resource      resourceArgument `json:"resource"`
 }
 
-// BindToolCall strictly decodes a neutral structured selection, canonicalizes
+// BindToolCall strictly decodes a complete structured selection, canonicalizes
 // defaults, and injects scope and ceilings from RunInput.
-func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selection domain.ModelToolCall) (BoundToolCall, error) {
+func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selection ToolSelection) (BoundToolCall, error) {
 	if input.Validate() != nil || !invocationID.Valid() || selection.Validate() != nil {
 		return BoundToolCall{}, ErrToolPolicyDenied
 	}
@@ -336,7 +343,7 @@ func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selectio
 	return call, nil
 }
 
-func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToolCall) (string, string, error) {
+func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) (string, string, error) {
 	switch selection.Name {
 	case domain.ToolNameGetResource:
 		var wire struct {
@@ -344,8 +351,8 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Purpose  string           `json:"purpose"`
 			Resource resourceArgument `json:"resource"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
-			return "", "", ErrToolPolicyDenied
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
 		if err != nil {
@@ -372,7 +379,10 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Namespace    string `json:"namespace"`
 			Purpose      string `json:"purpose"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil || !domain.ResourceKind(wire.Kind).Valid() {
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		if !domain.ResourceKind(wire.Kind).Valid() {
 			return "", "", ErrToolPolicyDenied
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
@@ -409,8 +419,8 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Resource     resourceArgument `json:"resource"`
 			SinceSeconds *int             `json:"since_seconds"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
-			return "", "", ErrToolPolicyDenied
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
 		if err != nil {
@@ -440,8 +450,10 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			SinceSeconds *int   `json:"since_seconds"`
 			TailLines    *int   `json:"tail_lines"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil ||
-			!validAgentText(wire.Container, 253, true) || wire.Container != "" && !domain.ValidResourceName(wire.Container) {
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		if !validAgentText(wire.Container, 253, true) || wire.Container != "" && !domain.ValidResourceName(wire.Container) {
 			return "", "", ErrToolPolicyDenied
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
@@ -474,8 +486,8 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			RelationDepth *int             `json:"relation_depth"`
 			Resource      resourceArgument `json:"resource"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
-			return "", "", ErrToolPolicyDenied
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
 		if err != nil {
@@ -502,8 +514,8 @@ func canonicalToolArguments(scope domain.ClusterScope, selection domain.ModelToo
 			Limit   *int   `json:"limit"`
 			Purpose string `json:"purpose"`
 		}
-		if strictDecode(selection.ArgumentsJSON, &wire) != nil {
-			return "", "", ErrToolPolicyDenied
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
 		if err != nil {
@@ -562,13 +574,17 @@ func strictDecode[T any](value string, target *T) error {
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return err
+		return rejectedToolArguments()
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return ErrToolPolicyDenied
+		return rejectedToolArguments()
 	}
 	return nil
+}
+
+func rejectedToolArguments() error {
+	return errors.Join(ErrToolPolicyDenied, ErrToolArgumentsRejected)
 }
 
 func marshalCanonical(value any, purpose string) (string, string, error) {
@@ -589,10 +605,10 @@ func safeToolPurpose(value string) (string, error) {
 		if errors.Is(err, ErrSensitiveModelTextBlocked) {
 			return "", err
 		}
-		return "", ErrToolPolicyDenied
+		return "", rejectedToolArguments()
 	}
 	if !validPurpose(processed) {
-		return "", ErrToolPolicyDenied
+		return "", rejectedToolArguments()
 	}
 	return processed, nil
 }
@@ -603,10 +619,10 @@ func safeOptionalToolText(value string, maximumBytes int) (string, error) {
 		if errors.Is(err, ErrSensitiveModelTextBlocked) {
 			return "", err
 		}
-		return "", ErrToolPolicyDenied
+		return "", rejectedToolArguments()
 	}
 	if !validAgentText(processed, maximumBytes, true) {
-		return "", ErrToolPolicyDenied
+		return "", rejectedToolArguments()
 	}
 	return processed, nil
 }
@@ -626,14 +642,7 @@ func processModelText(value string, maximumBytes int) (string, error) {
 }
 
 func validAgentText(value string, maximumBytes int, allowEmpty bool) bool {
-	if len(value) > maximumBytes || !allowEmpty && value == "" {
-		return false
-	}
-	if value == "" {
-		return true
-	}
-	message := domain.ModelMessage{Role: domain.ModelMessageRoleUser, Content: value}
-	return message.Validate() == nil
+	return domain.ValidModelText(value, maximumBytes, allowEmpty)
 }
 
 type modelToolScope struct {
@@ -683,11 +692,34 @@ type modelToolEnvelope struct {
 	Result      modelToolResult `json:"result"`
 }
 
-// BuildToolResultMessage creates the only model-bound ToolResult envelope. The
-// explicit data class and instruction keep external text separate from policy.
-func BuildToolResultMessage(toolCallID string, result domain.ToolResult) (domain.ModelMessage, int, error) {
+type modelToolPolicyFeedback struct {
+	Code        string `json:"code"`
+	DataClass   string `json:"data_class"`
+	Instruction string `json:"instruction"`
+}
+
+// BuildToolPolicyFeedback creates the fixed model-bound response for a known,
+// structurally safe Tool batch that strict local binding denied. It contains no
+// rejected arguments, live scope values, provider text, or execution result.
+func BuildToolPolicyFeedback() (string, error) {
+	encoded, err := json.Marshal(modelToolPolicyFeedback{
+		Code:        "tool_selection_denied",
+		DataClass:   "local_runtime_policy",
+		Instruction: "The local runtime rejected the whole requested batch before any Tool handler or Kubernetes call. Submit a new batch using the exact supplied schema. Use namespace:null for Node, Namespace, and PersistentVolume. For namespaced Kinds, null means the working Namespace; an exact Namespace or '*' is permitted only when namespace_access is all. If the requested scope is not allowed, explain that limitation instead of substituting another scope.",
+	})
+	if err != nil || len(encoded) > domain.MaxToolResultBytes ||
+		!domain.ValidModelText(string(encoded), domain.MaxModelInputMessageBytes, false) {
+		return "", ErrInvalidToolPolicyFeedback
+	}
+	return string(encoded), nil
+}
+
+// BuildToolResultContent creates the only model-bound ToolResult envelope. The
+// Eino boundary owns the Tool message and correlation fields; this function
+// owns only the project-defined safe content and its measured byte count.
+func BuildToolResultContent(result domain.ToolResult) (string, int, error) {
 	if result.Validate() != nil {
-		return domain.ModelMessage{}, 0, ErrInvalidToolResultMessage
+		return "", 0, ErrInvalidToolResultMessage
 	}
 	evidence := make([]modelEvidence, len(result.Evidence))
 	for index, item := range result.Evidence {
@@ -734,12 +766,9 @@ func BuildToolResultMessage(toolCallID string, result domain.ToolResult) (domain
 		},
 	}
 	encoded, err := json.Marshal(envelope)
-	if err != nil || len(encoded) > domain.MaxToolResultBytes {
-		return domain.ModelMessage{}, 0, ErrInvalidToolResultMessage
+	if err != nil || len(encoded) > domain.MaxToolResultBytes ||
+		!domain.ValidModelText(string(encoded), domain.MaxModelInputMessageBytes, false) {
+		return "", 0, ErrInvalidToolResultMessage
 	}
-	message := domain.ModelMessage{Role: domain.ModelMessageRoleTool, Content: string(encoded), ToolCallID: toolCallID}
-	if message.Validate() != nil {
-		return domain.ModelMessage{}, 0, ErrInvalidToolResultMessage
-	}
-	return message, len(encoded), nil
+	return string(encoded), len(encoded), nil
 }

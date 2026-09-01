@@ -234,6 +234,76 @@ func TestModelClientAcceptsOptionalUsageAndTerminalEOF(t *testing.T) {
 	}
 }
 
+func TestModelClientAcceptsOutputCeilingSizedFragmentedStream(t *testing.T) {
+	t.Parallel()
+
+	const (
+		formerWireLimit  = 256 * 1024
+		formerEventLimit = 1024
+	)
+	firstChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","content":"x"},"finish_reason":null}]}` + "\n\n"
+	contentChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}` + "\n\n"
+	finishChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+	streamBody := firstChunk + strings.Repeat(contentChunk, domain.MaxModelOutputTokens-1) + finishChunk + "data: [DONE]\n\n"
+	if len(streamBody) <= formerWireLimit || domain.MaxModelOutputTokens <= formerEventLimit {
+		t.Fatal("long-stream fixture does not cross both former transport ceilings")
+	}
+	if len(streamBody) > domain.MaxModelStreamBytes || domain.MaxModelOutputTokens+2 > domain.MaxModelStreamChunks {
+		t.Fatal("long-stream fixture exceeds the current bounded transport contract")
+	}
+
+	body := &trackingBody{Reader: strings.NewReader(streamBody)}
+	configuration := fixtureConfiguration("https://model.example.test/v1", time.Second)
+	configuration.MaxOutputTokens = domain.MaxModelOutputTokens
+	client, model := newFixtureModelClientWithTransport(
+		t,
+		configuration,
+		strings.Repeat("l", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+		roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       body,
+			}, nil
+		}),
+	)
+	message, modelError := streamFixture(client, model, context.Background())
+	if modelError != nil || message == nil || message.Content != strings.Repeat("x", domain.MaxModelOutputTokens) ||
+		message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "stop" {
+		t.Fatalf("long fragmented message/error = %#v / %#v", message, modelError)
+	}
+	if !body.closed.Load() {
+		t.Fatal("long fragmented response body was not closed")
+	}
+}
+
+func TestModelClientDiscardsBoundedReasoningContent(t *testing.T) {
+	t.Parallel()
+
+	server := newFixtureServer(t, "")
+	var logBuffer bytes.Buffer
+	client, model := newFixtureModelClient(
+		t,
+		fixtureConfiguration(server.endpoint("reasoning-content"), time.Second),
+		strings.Repeat("r", 43)+"-generated",
+		fixtureLogger(&logBuffer),
+	)
+	message, modelError := streamFixture(client, model, context.Background())
+	if modelError != nil {
+		t.Fatalf("stream error = %v", modelError)
+	}
+	if message == nil || message.Content != "Pod is healthy." || len(message.ToolCalls) != 0 || message.ReasoningContent != "" ||
+		message.Extra != nil || message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "stop" ||
+		message.ResponseMeta.Usage == nil || message.ResponseMeta.Usage.TotalTokens != 32 {
+		t.Fatalf("reasoning-content message = %#v", message)
+	}
+	if strings.Contains(message.Content, "reasoning-output-canary") ||
+		strings.Contains(logBuffer.String(), "reasoning-output-canary") {
+		t.Fatal("discarded reasoning reached an answer, Tool, or log sink")
+	}
+}
+
 func TestModelClientConstructionIsLocalAndCancelledContextMakesZeroHTTPCalls(t *testing.T) {
 	t.Parallel()
 
@@ -866,6 +936,79 @@ func TestCollectModelMessageBlocksSplitCredential(t *testing.T) {
 	if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 		t.Fatalf("credential stream message/error = %#v / %v", message, err)
 	}
+}
+
+func TestModelClientRejectsUnsafeReasoningContent(t *testing.T) {
+	t.Parallel()
+
+	newValidator := func(t *testing.T, secret string) *modelStreamValidator {
+		t.Helper()
+		credential, err := config.NewSecretValue(secret)
+		if err != nil {
+			t.Fatalf("NewSecretValue() error = %v", err)
+		}
+		t.Cleanup(credential.Destroy)
+		return &modelStreamValidator{scanner: credentialScanner{credential: &credential}}
+	}
+	reasoningChunk := func(value string) *schema.Message {
+		return &schema.Message{
+			Role:             schema.Assistant,
+			ReasoningContent: value,
+			Extra:            map[string]any{einoReasoningContentKey: value},
+		}
+	}
+
+	t.Run("metadata missing", func(t *testing.T) {
+		validator := newValidator(t, "test-model-credential")
+		chunk := reasoningChunk("bounded reasoning")
+		chunk.Extra = nil
+		if err := validator.validateChunk(chunk, false); !errors.Is(err, errUnsupportedProviderChunk) {
+			t.Fatalf("missing metadata error = %v", err)
+		}
+	})
+	t.Run("metadata mismatch", func(t *testing.T) {
+		validator := newValidator(t, "test-model-credential")
+		chunk := reasoningChunk("bounded reasoning")
+		chunk.Extra[einoReasoningContentKey] = "different reasoning"
+		if err := validator.validateChunk(chunk, false); !errors.Is(err, errUnsupportedProviderChunk) {
+			t.Fatalf("mismatched metadata error = %v", err)
+		}
+	})
+	t.Run("unknown metadata", func(t *testing.T) {
+		validator := newValidator(t, "test-model-credential")
+		chunk := reasoningChunk("bounded reasoning")
+		chunk.Extra["unknown-provider-field"] = "untrusted"
+		if err := validator.validateChunk(chunk, false); !errors.Is(err, errUnsupportedProviderChunk) {
+			t.Fatalf("unknown metadata error = %v", err)
+		}
+	})
+	t.Run("after finish", func(t *testing.T) {
+		validator := newValidator(t, "test-model-credential")
+		if err := validator.validateChunk(reasoningChunk("late reasoning"), true); !errors.Is(err, errMalformedProviderChunk) {
+			t.Fatalf("post-finish reasoning error = %v", err)
+		}
+	})
+	t.Run("split credential", func(t *testing.T) {
+		validator := newValidator(t, "reasoning-secret")
+		if err := validator.validateChunk(reasoningChunk("reasoning-"), false); err != nil {
+			t.Fatalf("first reasoning fragment error = %v", err)
+		}
+		if err := validator.validateChunk(reasoningChunk("secret"), false); !errors.Is(err, errMalformedProviderChunk) {
+			t.Fatalf("credential reasoning error = %v", err)
+		}
+	})
+	t.Run("cumulative limit", func(t *testing.T) {
+		validator := newValidator(t, "test-model-credential")
+		fragment := strings.Repeat("r", domain.MaxModelStreamChunkBytes/2)
+		for index := 0; index < domain.MaxModelMessageBytes/len(fragment); index++ {
+			if err := validator.validateChunk(reasoningChunk(fragment), false); err != nil {
+				t.Fatalf("bounded reasoning fragment %d error = %v", index, err)
+			}
+		}
+		if err := validator.validateChunk(reasoningChunk("x"), false); !errors.Is(err, errModelResponseLimitReached) {
+			t.Fatalf("reasoning limit error = %v", err)
+		}
+	})
 }
 
 func TestCollectModelMessageRejectsInvalidUTF8(t *testing.T) {

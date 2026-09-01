@@ -248,7 +248,7 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 		limits := DefaultRunBudgetLimits()
 		budget, _ := NewRunBudget(limits, clock.Now(), clock.Now)
 		for index := 0; index < limits.LogCalls; index++ {
-			call, err := BindToolCall(input, invocationID(index), domain.ModelToolCall{
+			call, err := BindToolCall(input, invocationID(index), ToolSelection{
 				ID:            fmt.Sprintf("call-%d", index+1),
 				Name:          domain.ToolNameGetPodLogs,
 				ArgumentsJSON: fmt.Sprintf(`{"pod_name":"sample-pod-%d","purpose":"Inspect bounded current logs."}`, index),
@@ -263,7 +263,7 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 				t.Fatalf("CompleteToolCall(log %d) error = %v", index, err)
 			}
 		}
-		oneMore, err := BindToolCall(input, invocationID(limits.LogCalls), domain.ModelToolCall{
+		oneMore, err := BindToolCall(input, invocationID(limits.LogCalls), ToolSelection{
 			ID:            "call-log-over",
 			Name:          domain.ToolNameGetPreviousPodLogs,
 			ArgumentsJSON: `{"pod_name":"sample-pod-over","purpose":"Inspect bounded previous logs."}`,

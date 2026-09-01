@@ -75,12 +75,12 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 			t.Fatalf("ResourceSummaries[%d] = %#v", index, summary)
 		}
 	}
-	message, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+	message, measured, err := agent.BuildToolResultContent(result)
 	if err != nil || measured != result.Truncation.ReturnedBytes || measured > call.Ceilings().MaxResultBytes {
-		t.Fatalf("BuildToolResultMessage() bytes/error = %d/%v, result = %#v", measured, err, result.Truncation)
+		t.Fatalf("BuildToolResultContent() bytes/error = %d/%v, result = %#v", measured, err, result.Truncation)
 	}
-	if strings.Contains(message.Content, "resource_summaries") {
-		t.Fatalf("local presentation summaries entered the model envelope: %s", message.Content)
+	if strings.Contains(message, "resource_summaries") {
+		t.Fatalf("local presentation summaries entered the model envelope: %s", message)
 	}
 }
 
@@ -217,7 +217,7 @@ func TestListResourcesEnforcesRequestedAndHardItemLimitsWithPartialMetadata(t *t
 		len(result.Evidence) != result.Truncation.ReturnedCount || len(result.ResourceSummaries) != len(result.Evidence) {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
 	}
-	_, measured, err := agent.BuildToolResultMessage(call.ModelCallID(), result)
+	_, measured, err := agent.BuildToolResultContent(result)
 	if err != nil || measured > 8192 || measured != result.Truncation.ReturnedBytes {
 		t.Fatalf("measured bytes/error = %d/%v, truncation = %#v", measured, err, result.Truncation)
 	}
@@ -304,7 +304,7 @@ func TestListResourcesRejectsSelectorScopeAndLimitAuthorityBeforeReader(t *testi
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := agent.BindToolCall(input, testInvocationID, domain.ModelToolCall{
+			_, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 				ID:            "call-denied",
 				Name:          domain.ToolNameListResources,
 				ArgumentsJSON: test.arguments,

@@ -27,6 +27,11 @@ the sole composer opens a fixed setup flow:
 3. Choose `save` or `session`. Empty input selects `save`.
 4. Enter the API key in masked mode.
 
+Each step keeps a field label directly above the composer after typing replaces
+the placeholder. `Ctrl+C` or `Esc` cancels an editable step. During in-flight
+runtime construction, either key requests cancellation and keeps the current
+runtime unless the replacement has already crossed its disclosed commit point.
+
 `save` discloses that the key will be plaintext and not encrypted, then
 atomically writes the effective typed settings and key to
 `KUPILOT_HOME/config.yaml`. `session` keeps the key only in the current Kupilot
@@ -88,7 +93,7 @@ an actual key so it remains safe to copy and inspect.
 | `model.api_key` | Optional plaintext credential. It is extracted before Viper and is never part of the ordinary typed `Config` value. |
 | `model.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. Use it when a reasoning model must disable reasoning to combine Chat Completions with function Tools. |
 | `model.temperature` | `0.1`; accepted range `0` through `0.2`. |
-| `model.max_output_tokens` | `2048`; accepted range `1` through the code-defined ceiling `8192`. |
+| `model.max_output_tokens` | `8192`; accepted range `1` through the same code-defined ceiling. The default avoids imposing a second, smaller truncation budget below the bounded response and run limits; configuration may tighten it. |
 | `model.request_timeout_seconds` | `300`; accepted range `1` through `300`. The active budget profile and remaining run time apply a smaller per-call deadline when required. |
 | `model.streaming` | Fixed to `true`. |
 | `model.tool_calling_required` | Fixed to `true`. |

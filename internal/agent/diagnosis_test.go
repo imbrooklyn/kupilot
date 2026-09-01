@@ -205,8 +205,8 @@ func TestEvidenceRegistryRejectsUnsafeAndPreactivationEvidence(t *testing.T) {
 	if _, err := unsafeRegistry.AcceptToolResult(call, unsafeResult); err == nil || unsafeRegistry.Len() != 0 {
 		t.Fatalf("unsafe AcceptToolResult() error = %v, registry length = %d", err, unsafeRegistry.Len())
 	}
-	if _, _, err := BuildToolResultMessage("call-1", unsafeResult); err == nil {
-		t.Fatal("unsafe BuildToolResultMessage() error = nil")
+	if _, _, err := BuildToolResultContent(unsafeResult); err == nil {
+		t.Fatal("unsafe BuildToolResultContent() error = nil")
 	}
 
 	preactivationRegistry, err := NewEvidenceRegistry(input.RunID(), input.Scope())

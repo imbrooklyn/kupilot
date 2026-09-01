@@ -190,7 +190,7 @@ func TestGetEventsBindingDeniesScopeSelectorsAndExpandedLimitsBeforeReader(t *te
 		`{"gvr":"v1/events","purpose":"Inspect events.","resource":{"kind":"Pod","name":"sample-pod"}}`,
 		`{"limit":51,"purpose":"Inspect events.","resource":{"kind":"Pod","name":"sample-pod"}}`,
 	} {
-		_, err := agent.BindToolCall(testRunInput(t, 0), testInvocationID, domain.ModelToolCall{
+		_, err := agent.BindToolCall(testRunInput(t, 0), testInvocationID, agent.ToolSelection{
 			ID: "call-events-denied", Name: domain.ToolNameGetEvents, ArgumentsJSON: arguments,
 		})
 		if err == nil || reader.count() != 0 {

@@ -19,6 +19,7 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 			RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 			Contexts: []application.UIContextCandidate{{Name: "development", Current: true}},
 		}})
+		assertPersistentInputLabel(t, model, "Context · type to filter")
 		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		command := applicationCommandFromCmd(t, cmd)
 		if command.Kind != application.UICommandSelectContext || command.Text != "development" || command.RequestID == 0 {
@@ -33,6 +34,7 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 			RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 			Namespaces: []application.UINamespaceCandidate{{Name: "payments"}},
 		}})
+		assertPersistentInputLabel(t, model, "Namespace · type to filter")
 		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		command := applicationCommandFromCmd(t, cmd)
 		if command.Kind != application.UICommandSelectNamespace || command.Text != "payments" || command.ExpectedScopeGeneration != 7 {
@@ -50,6 +52,7 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 				Namespace: "test-namespace", Name: "payment-api", Status: "Available",
 			}},
 		}})
+		assertPersistentInputLabel(t, model, "Resource · type to filter")
 		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		command := applicationCommandFromCmd(t, cmd)
 		if command.Kind != application.UICommandSelectResource || command.Resource == nil ||
@@ -71,6 +74,7 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 				Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 			}},
 		}})
+		assertPersistentInputLabel(t, model, "Session · type to filter")
 		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		request := resumeRequestFromCmd(t, cmd)
 		if request.Mode != application.UIResumeExact || request.SessionID != testSessionID {
@@ -78,6 +82,13 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 		}
 		assertSingleEditor(t, model)
 	})
+}
+
+func assertPersistentInputLabel(t *testing.T, model Model, want string) {
+	t.Helper()
+	if !strings.Contains(model.inputLabelView(), want) || !strings.Contains(model.render(), want) {
+		t.Fatalf("input label %q is not persistent: label=%q", want, model.inputLabelView())
+	}
 }
 
 func TestResumePickerCancellationDiffersByOrigin(t *testing.T) {
@@ -88,7 +99,7 @@ func TestResumePickerCancellationDiffersByOrigin(t *testing.T) {
 		StartIntent: application.UIStartIntent{Kind: application.UIStartResumePicker},
 		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
 	})
-	topLevel, cmd := updateModel(t, topLevel, tea.KeyPressMsg{Code: tea.KeyEscape})
+	topLevel, cmd := updateModel(t, topLevel, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !commandQuits(cmd) || topLevel.startup.Ready {
 		t.Fatal("top-level resume Picker cancellation did not exit")
 	}
@@ -96,7 +107,7 @@ func TestResumePickerCancellationDiffersByOrigin(t *testing.T) {
 	inTUI := newTestModel()
 	inTUI.session = SessionView{ID: testSessionID, Title: "Current Session"}
 	inTUI, _ = updateModel(t, inTUI, tea.PasteMsg{Content: "/resume "})
-	inTUI, cmd = updateModel(t, inTUI, tea.KeyPressMsg{Code: tea.KeyEscape})
+	inTUI, cmd = updateModel(t, inTUI, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil || inTUI.session.ID != testSessionID || !inTUI.startup.Ready || inTUI.composer.Value() != "" {
 		t.Fatalf("in-TUI resume cancellation changed current Session: %#v", inTUI.session)
 	}
@@ -117,7 +128,7 @@ func TestResumePickerDeletesOnlyAfterExplicitConfirmation(t *testing.T) {
 		!strings.Contains(model.render(), "Delete selected Session?") {
 		t.Fatal("resume Picker delete did not open a bound confirmation")
 	}
-	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil || model.sessionDelete != nil || !model.sessionPicker.Open() {
 		t.Fatal("resume Picker delete cancellation changed history or closed the Picker")
 	}

@@ -304,7 +304,7 @@ func TestDiagnosisFixtureCanary(t *testing.T) {
 		}
 	}
 	unsafeExternalText := "external prefix" + string(rune(0x202e)) + "external suffix"
-	if (domain.ModelMessage{Role: domain.ModelMessageRoleTool, Content: unsafeExternalText, ToolCallID: "call-1"}).Validate() == nil {
+	if domain.ValidModelText(unsafeExternalText, domain.MaxModelInputMessageBytes, false) {
 		t.Fatal("runtime-constructed bidirectional control text passed the model-bound validator")
 	}
 }
@@ -645,7 +645,7 @@ func (model *scriptedConversationModel) ServeHTTP(writer http.ResponseWriter, re
 	case 0:
 		if len(captured.Messages) < 2 || captured.Messages[0].Role != "system" ||
 			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 7 {
-			model.t.Errorf("initial ModelRequest does not contain the fixed policy and seven Tools")
+			model.t.Errorf("initial model request does not contain the fixed policy and seven Tools")
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}

@@ -28,6 +28,10 @@ func TestPrivacyExportUsesOnlyTheRootComposerAndExplicitConfirmation(t *testing.
 
 	target := "/private/export/session-summary.md"
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: target})
+	if !strings.Contains(model.inputLabelView(), "Export target · absolute .md path") ||
+		!strings.Contains(model.render(), "Export target · absolute .md path") {
+		t.Fatal("typed export path lost its persistent field label")
+	}
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil || model.sessionExport == nil || model.sessionExport.Stage != sessionExportConfirmation ||
 		!model.dialog.Open() || model.EditorCount() != 1 || model.FocusedEditorCount() != 0 {
@@ -81,7 +85,7 @@ func TestPrivacyExportCancellationAndFailureDoNotReportSuccess(t *testing.T) {
 		model, _ := openExportPrivacy(t, privacy, lifecycle)
 		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e'})
 		model, _ = updateModel(t, model, tea.PasteMsg{Content: target})
-		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 		if cmd != nil || model.sessionExport != nil || !model.dialog.Open() ||
 			!strings.Contains(model.render(), "Privacy and local data") || strings.Contains(model.render(), target) {
 			t.Fatalf("target cancellation state = %#v command=%v", model.sessionExport, cmd != nil)
@@ -93,7 +97,7 @@ func TestPrivacyExportCancellationAndFailureDoNotReportSuccess(t *testing.T) {
 		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e'})
 		model, _ = updateModel(t, model, tea.PasteMsg{Content: target})
 		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 		if cmd != nil || model.sessionExport != nil || !model.dialog.Open() || strings.Contains(model.render(), target) {
 			t.Fatalf("confirmation cancellation state = %#v command=%v", model.sessionExport, cmd != nil)
 		}

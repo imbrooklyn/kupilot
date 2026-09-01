@@ -118,7 +118,7 @@ func TestEvidenceDetailKeyboardNavigationAndCancellation(t *testing.T) {
 		t.Fatalf("selected Evidence/query/editor state = %#v/%d/%d", query.Reference, model.EditorCount(), model.FocusedEditorCount())
 	}
 
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || model.pendingEvidence.RequestID != 0 ||
 		model.FocusedEditorCount() != 1 {
 		t.Fatalf("cancelled Evidence detail state = dialog %v selecting %v pending %#v focused %d",
@@ -145,7 +145,7 @@ func TestEvidenceDetailNarrowNoColorPartialAndExpiredStates(t *testing.T) {
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 40, Height: 28})
 	content := model.View().Content
 	if lipgloss.Width(content) > 40 || lipgloss.Height(content) > 28 || strings.Contains(content, "\x1b[") ||
-		!strings.Contains(content, "Esc or Enter to close") || !strings.Contains(content, "Status: partial") ||
+		!strings.Contains(content, "Ctrl+C") || !strings.Contains(content, "Enter to") || !strings.Contains(content, "Status: partial") ||
 		strings.Contains(content, "partial:") || strings.Contains(content, "truncated:") {
 		t.Fatalf("narrow no-color partial detail is unusable: %dx%d\n%s", lipgloss.Width(content), lipgloss.Height(content), content)
 	}

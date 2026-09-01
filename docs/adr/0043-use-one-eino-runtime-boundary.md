@@ -66,6 +66,19 @@ scope-bearing, or runtime-authority fields, and is canonicalized before budget
 reservation or Tool dispatch. A provider accepting a looser output does not
 widen what Kupilot can execute.
 
+A complete batch whose Tool names and neutral JSON objects are structurally
+safe may still contain a correctable semantic policy error, such as assigning a
+Namespace to a cluster-scoped Kind or selecting a Namespace outside the frozen
+policy. If any member has such an error, the adapter rejects the entire batch
+before ToolInvocation creation, budget reservation, handler dispatch, or
+Kubernetes I/O. It returns one fixed code-authored policy-feedback Tool message
+for each correlated selection so Eino can make a new bounded model decision.
+The feedback contains no rejected arguments or live scope values. Unknown
+Tools, malformed strict object shapes, injected authority fields, and sensitive
+model text remain terminal failures. This feedback round is not an automatic
+Tool or Kubernetes retry, and existing model, step, and no-progress budgets
+bound correction attempts.
+
 The project-owned guarded HTTP transport remains inside the same adapter and
 continues to own:
 
@@ -83,6 +96,22 @@ current run. It clears inherited callback state and enables no provider retry,
 fallback, tracing, memory, checkpoint, dynamic Tool, or global callback. Eino
 types remain private to `internal/agent/einoadapter` and do not enter Domain,
 Application, Tools, Kubernetes, persistence, CLI, or TUI.
+
+Some compatible endpoints expose bounded reasoning fragments through Eino's
+paired `ReasoningContent` field and `reasoning-content` metadata even when the
+configured request asks for no reasoning. Those fragments are untrusted and
+non-authoritative. The boundary requires the paired values to match, validates
+UTF-8, checks credential reflection and the combined assistant byte ceiling,
+then clears both values before message assembly. Missing, mismatched, late,
+oversized, credential-bearing, or additional provider metadata remains a
+failed response. Reasoning content never reaches ReAct history, Tool binding,
+Application, the TUI, persistence, or logs.
+
+Domain does not define a parallel model request, message, role, Tool-call, or
+Tool-specification protocol. The strict `ToolSelection` and
+`ToolSpecification` values are Agent-owned catalog inputs without endpoint,
+credential, scope, budget, transport, or execution authority. The adapter
+validates the Eino-owned ReAct conversation in place before each model call.
 
 ## Consequences
 
@@ -121,17 +150,21 @@ Deterministic tests must prove:
 
 1. Eino serializes the configured model request once and Kupilot does not
    replace its admitted payload.
-2. Text, atomic Tool identities with fragmented and interleaved arguments,
-   non-canonical valid Tool JSON, Tool commentary, optional usage, and supported
-   finish reasons produce one validated Agent transition.
+2. Text, discarded bounded reasoning fragments, atomic Tool identities with
+   fragmented and interleaved arguments, non-canonical valid Tool JSON, Tool
+   commentary, optional usage, and supported finish reasons produce one
+   validated Agent transition.
 3. Unknown or malformed Tool calls, duplicate identities or JSON keys,
    non-contiguous indexes, unsupported output fields, missing or conflicting
    terminal state, and size limits cause zero unauthorized Tool calls.
-4. Cancellation, model deadline, stale scope, response closure, and Adapter
+4. A mixed batch containing one correctable semantic policy denial produces
+   fixed correlated feedback for the whole batch, zero handler and Kubernetes
+   calls, and admits a later corrected batch only within the existing budgets.
+5. Cancellation, model deadline, stale scope, response closure, and Adapter
    closure have one owner and one terminal outcome.
-5. HTTP status, redirect, TLS, media type, malformed stream, and transport
+6. HTTP status, redirect, TLS, media type, malformed stream, and transport
    failures map to stable safe classes without leaking bodies or credentials.
-6. Static import tests permit Eino and Eino OpenAI imports only inside
+7. Static import tests permit Eino and Eino OpenAI imports only inside
    `internal/agent/einoadapter` and prove that its exported surface contains no
    Eino type.
 

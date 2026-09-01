@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
@@ -51,19 +52,22 @@ func (model Model) render() string {
 
 func (model Model) renderLayout() (content string, composerY int, composerVisible bool) {
 	gap := model.layoutGap()
-	topSections := make([]string, 0, 3)
+	topSections := make([]string, 0, 2)
 	if transcript := model.transcript.View(); transcript != "" {
 		topSections = append(topSections, transcript)
-	}
-	if prompt := model.modelSetupView(); prompt != "" {
-		topSections = append(topSections, prompt)
 	}
 	if working := model.workingView(); working != "" {
 		topSections = append(topSections, working)
 	}
 	top := joinLayoutSections(topSections, gap)
 
-	bottomSections := []string{model.composer.View()}
+	bottomSections := make([]string, 0, 4)
+	composerOffset := 0
+	if label := model.inputLabelView(); label != "" {
+		bottomSections = append(bottomSections, label)
+		composerOffset = lipgloss.Height(label)
+	}
+	bottomSections = append(bottomSections, model.composer.View())
 	if model.pickerOpen() {
 		bottomSections = append(bottomSections, model.pickerView())
 	} else if model.slashMenu.Open() {
@@ -79,10 +83,10 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	if top != "" {
 		spacer = max(gap, spacer)
 		main = top + strings.Repeat("\n", spacer+1) + bottom
-		composerY = lipgloss.Height(top) + spacer
+		composerY = lipgloss.Height(top) + spacer + composerOffset
 	} else {
 		main = strings.Repeat("\n", spacer) + bottom
-		composerY = spacer
+		composerY = spacer + composerOffset
 	}
 	contentWidth := model.contentWidth()
 	main = lipgloss.NewStyle().Width(contentWidth).Render(main)
@@ -108,6 +112,45 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	baseLayer := lipgloss.NewLayer(main).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
+}
+
+func (model Model) inputLabelView() string {
+	label := ""
+	hint := ""
+	switch {
+	case model.modelSetup != nil:
+		parts := strings.SplitN(model.modelSetupView(), " · ", 2)
+		label = parts[0]
+		if len(parts) == 2 {
+			hint = parts[1]
+		}
+	case model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry:
+		label = "Export target"
+		hint = "absolute .md path"
+	case model.pickerOpen():
+		hint = "type to filter"
+		switch model.activePicker {
+		case application.UICompletionContext:
+			label = "Context"
+		case application.UICompletionNamespace:
+			label = "Namespace"
+		case application.UICompletionResource:
+			label = "Resource"
+		case application.UICompletionSession:
+			label = "Session"
+		}
+	case model.slashMenu.Open():
+		label = "Command"
+		hint = "fixed Slash commands"
+	}
+	if label == "" {
+		return ""
+	}
+	result := model.styles.footer.Value.Render(label)
+	if hint != "" {
+		result += model.styles.footer.Separator.Render(" · ") + model.styles.footer.Label.Render(hint)
+	}
+	return result
 }
 
 func joinLayoutSections(sections []string, gap int) string {

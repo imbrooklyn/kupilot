@@ -1,13 +1,13 @@
 # Agent Runtime
 
 Kupilot runs one supervised ReAct-style AgentRun at a time. Eino is confined to
-`internal/agent/einoadapter`; the rest of the system sees project-owned
-messages, events, Tool calls, Evidence, and safe errors.
+`internal/agent/einoadapter`; the rest of the system sees project-owned run
+inputs, events, bound Tool calls, Evidence, outcomes, and safe errors.
 
 The current protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v4`
-- Capability catalog: `kupilot-operational-tools-v1`
+- System prompt: `kupilot-agent-policy-v5`
+- Capability catalog: `kupilot-operational-tools-v2`
 
 ## Frozen run input
 
@@ -37,8 +37,12 @@ resource/action state, and rejects late results.
    exactly one assistant message. Candidate answer content remains hidden until
    the complete message and its metadata validate. Commentary accompanying a
    Tool selection is discarded and cannot authorize a Tool.
-5. Complete indexed Tool calls are strictly decoded, canonicalized,
-   budget-reserved, scope-injected, and dispatched through the fixed table.
+5. Complete indexed Tool calls are strictly decoded and bound as one atomic
+   batch. An admitted batch is canonicalized, budget-reserved, scope-injected,
+   and dispatched through the fixed table. If every call is known and
+   structurally safe but strict semantic binding denies any call, the whole
+   batch instead receives fixed local policy feedback and performs no Tool
+   handler or Kubernetes I/O.
 6. The handler performs bounded typed I/O, projects and sanitizes locally, and
    creates Evidence only after the post-I/O scope gate.
 7. Tool results return through a project-owned envelope and the loop continues
@@ -46,9 +50,11 @@ resource/action state, and rejects late results.
 8. The final answer is validated, persisted according to privacy mode, and
    published to the transcript.
 
-Runtime performs no automatic model or Kubernetes retry. A retry is admitted
-only as another visible Agent decision, must remain within all budgets, and
-cannot repeat an identical non-retryable call indefinitely.
+Runtime performs no automatic model or Kubernetes retry. Local policy feedback
+is not an I/O retry because the rejected batch never reached a handler. A model
+may make a new corrected selection as another bounded Agent decision; model,
+step, and consecutive no-progress budgets still apply and prevent an
+indefinite correction loop.
 
 ## Capability binding
 
@@ -71,6 +77,18 @@ Binding performs these checks before handler I/O:
 
 Malformed structured output, Tool-like prose, and unknown names cause zero
 handler calls.
+
+A complete selection with a known Tool name, bounded non-duplicated JSON
+object, and no runtime-authority field may still fail semantic binding, for
+example because a cluster-scoped Kind carries a Namespace, a requested
+Namespace is outside the frozen policy, or a requested value exceeds a fixed
+capability limit. The entire batch then produces one code-authored policy
+feedback Tool message per selection. Rejected arguments and live scope values
+are not copied into that feedback, and no ToolInvocation, Tool budget
+reservation, Kubernetes request, persistence record, or Evidence results. A
+subsequent corrected batch starts strict binding from the beginning. Unknown
+Tools, malformed JSON or strict object shapes, injected authority fields, and
+sensitive model text remain terminal policy failures.
 
 ## Evidence and answer validation
 

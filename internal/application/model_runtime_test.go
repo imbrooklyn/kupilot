@@ -194,6 +194,42 @@ func TestCoordinatorModelSetupCancellationDestroysCredentialWithoutDependencies(
 	}
 }
 
+func TestCoordinatorModelSetupCancellationAfterConstructionKeepsOldRuntime(t *testing.T) {
+	t.Parallel()
+	oldRuntime := &recordingModelRuntime{name: "old-model", origin: "https://model.example"}
+	coordinator, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), oldRuntime)
+	coordinator.modelRuntime = oldRuntime
+	replacement := &recordingModelRuntime{name: "new-model", origin: "https://new-model.example"}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	factory := &recordingModelFactory{build: func(ModelSetupRequest) (ModelRuntime, error) {
+		close(started)
+		<-release
+		return replacement, nil
+	}}
+	profiles := new(recordingModelProfiles)
+	coordinator.modelFactory = factory
+	coordinator.modelProfiles = profiles
+	secret, _ := NewModelSetupSecret("generated-in-flight-cancel-key")
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := coordinator.ConfigureModel(ctx, ModelSetupRequest{
+			RequestID: 95, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
+		})
+		result <- err
+	}()
+	<-started
+	cancel()
+	close(release)
+	err := <-result
+	if !errors.Is(err, context.Canceled) || coordinator.runner != oldRuntime || factory.calls.Load() != 1 ||
+		profiles.calls.Load() != 0 || oldRuntime.closed.Load() != 0 || replacement.closed.Load() != 1 || secret.IsSet() {
+		t.Fatalf("in-flight cancellation = %v runner=%T factory=%d profiles=%d oldClose=%d newClose=%d secret=%v",
+			err, coordinator.runner, factory.calls.Load(), profiles.calls.Load(), oldRuntime.closed.Load(), replacement.closed.Load(), secret.IsSet())
+	}
+}
+
 type recordingModelRuntime struct {
 	name   string
 	origin string

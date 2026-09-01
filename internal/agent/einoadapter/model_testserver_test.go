@@ -56,6 +56,7 @@ func newFixtureServer(t *testing.T, errorCanary string) *fixtureServer {
 		"interleaved-tool-calls.sse",
 		"noncanonical-tool-arguments.sse",
 		"commentary-tool-call.sse",
+		"reasoning-content.sse",
 		"no-usage-eof.sse",
 		"malformed.sse",
 		"error-400.json",
@@ -131,6 +132,8 @@ func (fixture *fixtureServer) serveHTTP(response http.ResponseWriter, request *h
 		fixture.serveSSE(response, "noncanonical-tool-arguments.sse", "request-fixture-noncanonical")
 	case "/v1/commentary-tool-call/chat/completions":
 		fixture.serveSSE(response, "commentary-tool-call.sse", "request-fixture-commentary-tool")
+	case "/v1/reasoning-content/chat/completions":
+		fixture.serveSSE(response, "reasoning-content.sse", "request-fixture-reasoning")
 	case "/v1/no-usage-eof/chat/completions":
 		fixture.serveSSE(response, "no-usage-eof.sse", "")
 	case "/v1/malformed/chat/completions":
@@ -200,7 +203,8 @@ func (fixture *fixtureServer) serveOversizeEvent(response http.ResponseWriter) {
 func (fixture *fixtureServer) serveOversizeStream(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "text/event-stream")
 	response.WriteHeader(http.StatusOK)
-	line := ": " + strings.Repeat("x", 1022) + "\n"
+	line := `data: {"id":"response-stream-limit","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"` +
+		strings.Repeat("x", 768) + `"},"finish_reason":null}]}` + "\n\n"
 	written := 0
 	for written <= fixture.limits.OversizeStreamBytes {
 		count, err := io.WriteString(response, line)
