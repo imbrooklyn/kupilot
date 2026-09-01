@@ -54,10 +54,10 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		RequestID: message.Request.RequestID, Model: "diagnostic-model",
 		Origin: "https://model.example.test", Persisted: true,
 	}})
-	if !model.modelConfigured || model.modelSetup != nil || !commandPrintsAbove(cmd) ||
+	if !model.modelConfigured || model.modelSetup != nil || cmd != nil ||
 		!transcriptContains(model, "Model configured.") ||
 		strings.Contains(model.footerView(), "model") ||
-		strings.Contains(model.render(), canary) {
+		strings.Contains(model.render(), canary) || strings.Contains(model.TerminalTranscript(), canary) {
 		t.Fatalf("configured model state = configured=%v setup=%#v footer=%q", model.modelConfigured, model.modelSetup, model.footerView())
 	}
 	if model.composer.PreviousHistory() {

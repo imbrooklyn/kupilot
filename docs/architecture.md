@@ -20,8 +20,9 @@ define the admitted behavior.
 4. `internal/cli` and `internal/tui` are delivery adapters. They use only typed
    Application commands, queries, DTOs, and events. Bubble Tea `Update` and
    `View` perform no business I/O.
-5. `internal/agent/einoadapter` is the sole Eino translation boundary. Vendor
-   message, stream, callback, Tool, and error types do not escape it.
+5. `internal/agent/einoadapter` is the sole Eino, model-provider, and model
+   transport boundary. Vendor message, stream, callback, Tool, HTTP, and error
+   types do not escape it.
 6. `internal/tools` owns strict capability handlers and the narrow Kubernetes
    ports each handler consumes. A handler does not receive a generic client,
    REST request builder, GVR, selector, repository, or executor.
@@ -78,12 +79,14 @@ control plane. "Local" describes orchestration and credential ownership, not
 where the configured model runs. The model has no direct Kubernetes, SQLite,
 filesystem, shell, approval, or executor connection.
 
-The TUI renders ordinary conversation in the primary terminal buffer. Its
-delivery state retains the complete bounded transcript for review, advances a
-monotonic boundary only across immutable entries, and schedules each newly
-committed rendered block once above the compact live Bubble Tea frame. The
-terminal emulator then owns scrollback retention. This delivery projection is
-independent of SQLite Message commitment and explicit Session resume.
+The TUI renders ordinary conversation in one full-height alternate-screen
+Bubble Tea frame. Its delivery state retains the complete bounded transcript
+for review, and the composer remains anchored at the bottom. No reducer writes
+unmanaged lines while that frame is active. After graceful Bubble Tea shutdown
+restores the primary screen, the composition root writes one completed
+terminal-safe transcript. The terminal emulator then owns scrollback retention.
+This delivery projection is independent of SQLite Message commitment and
+explicit Session resume.
 
 The composer publishes a real terminal cursor at the textarea insertion point;
 the placeholder remains separate rendered content. This gives operating-system
@@ -103,7 +106,7 @@ flowchart TB
     App["internal/application\nuse cases and ports"]
     Domain["internal/domain\npure values"]
     Agent["internal/agent\nloop policy"]
-    Eino["internal/agent/einoadapter\nvendor translation"]
+    Eino["internal/agent/einoadapter\nEino runtime and model boundary"]
     Tools["internal/tools\ntyped capabilities"]
     Kube["internal/kube\nclient-go adapters"]
     SQLite["internal/persistence/sqlite\nstorage adapters"]
@@ -120,7 +123,6 @@ flowchart TB
     CLI --> App
     TUI --> App
     App --> Domain
-    Eino --> App
     Eino --> Agent
     Agent --> Domain
     Tools --> Agent
@@ -148,7 +150,7 @@ Kubernetes, Tool, persistence, approval-service, or executor implementations.
 | Agent | Single-Agent loop, immutable policy, model and capability contracts, Evidence-reference validation | Live scope mutation, client-go, SQLite, TUI state, executor calls |
 | Tools | Strict schemas, canonical arguments, projected results, Evidence construction | Generic Kubernetes access, repositories, TUI, approval authority |
 | Infrastructure | Kubeconfig and client lifecycle, typed Kubernetes calls, model transport, storage mappings | End-to-end product decisions or policy widening |
-| Delivery | CLI intent, Bubble Tea state, rendering, keyboard input, terminal scrollback projection | Business I/O or authorization |
+| Delivery | CLI intent, Bubble Tea state, rendering, keyboard input, completed terminal transcript projection | Business I/O or authorization |
 | Composition | Concrete construction and lifecycle | Hidden globals, policy dispatch, service lookup |
 
 <!-- markdownlint-enable MD013 -->
@@ -391,17 +393,18 @@ No contract returns `any`, `map[string]any`, client-go objects, Eino values,
 Bubble Tea messages, SQL rows, DB handles, raw errors, or credentials.
 
 Application owns the sole run goroutine, cancellation function, and join path.
-The model adapter owns stream closure. The producer or sole coordinator owns
-channel closure. Every goroutine has one owner, cancellation path, and bounded
-termination path. Tests use barriers, fake clocks, and channels rather than
-long sleeps.
+The Eino boundary owns model stream and HTTP response-body closure. The
+producer or sole coordinator owns channel closure. Every goroutine has one
+owner, cancellation path, and bounded termination path. Tests use barriers,
+fake clocks, and channels rather than long sleeps.
 
-The model adapter also resolves the response modality before exposing text.
-Bounded commentary that precedes or accompanies an indexed Tool selection is
-discarded only after the same response terminates with `tool_calls`; only the
-validated Tool fragments cross the neutral port. Text from a `stop` or
-`length` response crosses normally. A Tool fragment with either of those finish
-reasons remains an invalid response.
+The Eino boundary resolves response modality after Eino assembles one bounded
+assistant message. Commentary that precedes or accompanies an indexed Tool
+selection is discarded only when the same response terminates with
+`tool_calls`; only complete calls that pass the project-owned strict binder can
+reach runtime dispatch. Valid `stop` text becomes a Diagnosis draft, while
+`length` becomes a local budget stop. Tool calls completed with either finish
+reason remain invalid.
 
 ## 12. Persistence and retention
 
@@ -435,8 +438,9 @@ Required deterministic checks include:
 8. approval mismatch, expiry, replay, target-change, pre-audit failure,
    ambiguous outcome, and verification-state tests;
 9. dark, light, ANSI-16, and `NO_COLOR` TUI goldens, real-cursor Unicode input,
-   correlated Working-frame rejection, primary-screen scrollback, one-editor,
-   and local `/status` zero-I/O checks; and
+   correlated Working-frame rejection, alternate-screen restoration and
+   post-exit transcript output, one-editor, and local `/status` zero-I/O checks;
+   and
 10. temporary-file SQLite migration, retention, deletion, and degraded-storage
     tests.
 
@@ -453,3 +457,4 @@ Required deterministic checks include:
 - [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
 - [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
 - [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)

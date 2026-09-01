@@ -202,6 +202,27 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	}
 }
 
+func TestToolCallBindingCanonicalizesNeutralProviderJSON(t *testing.T) {
+	t.Parallel()
+
+	input := testRunInput(t, "Inspect the selected Pod.")
+	selection := domain.ModelToolCall{
+		ID:            "call-noncanonical",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: ` { "resource": { "name": "sample-pod", "kind": "Pod" }, "purpose": "Inspect the selected Pod." } `,
+	}
+	bound, err := BindToolCall(input, testInvocationID, selection)
+	if err != nil {
+		t.Fatalf("BindToolCall(noncanonical provider JSON) error = %v", err)
+	}
+	if got := bound.ArgumentsJSON(); strings.HasPrefix(got, " ") || strings.Contains(got, `"name":"sample-pod","kind"`) {
+		t.Fatalf("bound arguments were not canonicalized: %q", got)
+	}
+	if err := bound.Validate(); err != nil {
+		t.Fatalf("canonical BoundToolCall validation error = %v", err)
+	}
+}
+
 func TestToolCallBindingPreservesSingleItemListsAndRequiresTwoItemOverview(t *testing.T) {
 	input := testRunInput(t, "Inspect Kubernetes resources.")
 	list, err := BindToolCall(input, invocationID(1), domain.ModelToolCall{

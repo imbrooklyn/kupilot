@@ -33,16 +33,16 @@ resource/action state, and rejects late results.
 3. The model receives the trusted policy, safe conversation projection,
    current scope metadata, complete seven-capability catalog, and remaining
    code-owned ceilings.
-4. A model turn streams bounded final-envelope fragments or finishes with one
-   or more structured Tool-call fragments. Candidate answer fragments remain
-   hidden until the complete free-form answer and its metadata validate. Mixed
-   answer content and Tool selection is rejected.
-5. Tool fragments are assembled by index, strictly decoded, canonicalized,
+4. The Eino boundary drains one bounded model stream and asks Eino to assemble
+   exactly one assistant message. Candidate answer content remains hidden until
+   the complete message and its metadata validate. Commentary accompanying a
+   Tool selection is discarded and cannot authorize a Tool.
+5. Complete indexed Tool calls are strictly decoded, canonicalized,
    budget-reserved, scope-injected, and dispatched through the fixed table.
 6. The handler performs bounded typed I/O, projects and sanitizes locally, and
    creates Evidence only after the post-I/O scope gate.
-7. Tool results return through a neutral envelope and the loop continues until
-   a final structured answer or a terminal policy outcome.
+7. Tool results return through a project-owned envelope and the loop continues
+   until a final structured answer or a terminal policy outcome.
 8. The final answer is validated, persisted according to privacy mode, and
    published to the transcript.
 
@@ -180,3 +180,4 @@ executor calls.
 - [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)
 - [ADR-0038](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
 - [ADR-0039](adr/0039-use-configurable-runtime-budget-profiles.md)
+- [ADR-0043](adr/0043-use-one-eino-runtime-boundary.md)

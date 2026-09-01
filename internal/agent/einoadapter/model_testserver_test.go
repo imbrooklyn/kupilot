@@ -1,4 +1,4 @@
-package openaicompat
+package einoadapter
 
 import (
 	"encoding/json"
@@ -54,6 +54,7 @@ func newFixtureServer(t *testing.T, errorCanary string) *fixtureServer {
 		"normal.sse",
 		"tool-call-fragments.sse",
 		"interleaved-tool-calls.sse",
+		"noncanonical-tool-arguments.sse",
 		"commentary-tool-call.sse",
 		"no-usage-eof.sse",
 		"malformed.sse",
@@ -126,6 +127,8 @@ func (fixture *fixtureServer) serveHTTP(response http.ResponseWriter, request *h
 		fixture.serveSSE(response, "tool-call-fragments.sse", "request-fixture-tool")
 	case "/v1/interleaved-tool-calls/chat/completions":
 		fixture.serveSSE(response, "interleaved-tool-calls.sse", "request-fixture-interleaved")
+	case "/v1/noncanonical-tool-arguments/chat/completions":
+		fixture.serveSSE(response, "noncanonical-tool-arguments.sse", "request-fixture-noncanonical")
 	case "/v1/commentary-tool-call/chat/completions":
 		fixture.serveSSE(response, "commentary-tool-call.sse", "request-fixture-commentary-tool")
 	case "/v1/no-usage-eof/chat/completions":

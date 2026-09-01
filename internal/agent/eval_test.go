@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +18,7 @@ import (
 
 	agentcore "github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
+	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
@@ -121,7 +124,7 @@ type scenarioRun struct {
 	diagnosis domain.Diagnosis
 	calls     []agentcore.BoundToolCall
 	events    []agentcore.RunEvent
-	requests  []domain.ModelRequest
+	requests  int
 }
 
 func TestDiagnosisScenarioFixtures(t *testing.T) {
@@ -474,19 +477,40 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 		t.Fatalf("NewRunInput() error = %v", err)
 	}
 	model := &scriptedConversationModel{t: t, steps: fixture.Steps, diagnosis: fixture.Diagnosis}
+	modelServer := httptest.NewServer(model)
+	defer modelServer.Close()
+	credential, err := config.NewSecretValue("eval-model-credential-9100")
+	if err != nil {
+		t.Fatalf("config.NewSecretValue() error = %v", err)
+	}
 	tool := &scriptedKubeTool{t: t, base: evalBaseTime, clock: clock, target: resource, steps: fixture.Steps}
 	guard := &fixtureScopeGuard{scope: scope}
 	sink := &fixtureEventSink{}
 	adapter, err := einoadapter.New(einoadapter.Config{
-		Model:       model,
+		ModelConfiguration: domain.ModelConfiguration{
+			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			Endpoint:            modelServer.URL + "/v1",
+			Origin:              modelServer.URL,
+			Model:               "eval-model",
+			APIKeySource:        domain.ModelAPIKeySourceRuntime,
+			Temperature:         0.1,
+			MaxOutputTokens:     2048,
+			RequestTimeout:      time.Second,
+			StreamingRequired:   true,
+			ToolCallingRequired: true,
+			TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+		},
+		Credential:  &credential,
 		Tools:       fixedFixtureHandlers(tool),
 		ScopeGuard:  guard,
 		Identifiers: &fixtureIdentifierSource{next: 9100},
 		Now:         clock.Now,
 	})
 	if err != nil {
+		credential.Destroy()
 		t.Fatalf("einoadapter.New() error = %v", err)
 	}
+	defer adapter.Close()
 	outcome := adapter.Run(context.Background(), input, sink)
 	if err := outcome.Validate(input); err != nil {
 		t.Fatalf("RunOutcome.Validate() error = %v; outcome = %#v", err, outcome)
@@ -494,9 +518,9 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	requests := model.Requests()
-	if len(requests) != 2 {
-		t.Fatalf("model request count = %d, want 2", len(requests))
+	requests := model.RequestCount()
+	if requests != 2 {
+		t.Fatalf("model request count = %d, want 2", requests)
 	}
 	if calls := tool.Calls(); len(calls) != len(fixture.Steps) {
 		t.Fatalf("Tool call count = %d, want %d", len(calls), len(fixture.Steps))
@@ -588,56 +612,68 @@ type scriptedConversationModel struct {
 	mu        sync.Mutex
 	steps     []fixtureStep
 	diagnosis json.RawMessage
-	requests  []domain.ModelRequest
+	requests  int
 }
 
-func (model *scriptedConversationModel) Stream(
-	ctx context.Context,
-	request domain.ModelRequest,
-	consume agentcore.ModelStreamConsumer,
-) *domain.ModelError {
-	model.mu.Lock()
-	callIndex := len(model.requests)
-	model.requests = append(model.requests, request)
-	model.mu.Unlock()
-	if request.Validate() != nil {
-		model.t.Errorf("scripted ModelRequest is invalid: %#v", request)
-		return fixtureModelError(request.ID)
+type scriptedConversationRequest struct {
+	Messages []struct {
+		Role       string `json:"role"`
+		Content    string `json:"content"`
+		ToolCallID string `json:"tool_call_id"`
+	} `json:"messages"`
+	Tools []json.RawMessage `json:"tools"`
+}
+
+func (model *scriptedConversationModel) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request == nil || request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
+	var captured scriptedConversationRequest
+	if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+		model.t.Errorf("decode scripted model request: %v", err)
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	model.mu.Lock()
+	callIndex := model.requests
+	model.requests++
+	model.mu.Unlock()
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
 	switch callIndex {
 	case 0:
-		if len(request.Messages) < 2 || request.Messages[0].Role != domain.ModelMessageRoleSystem ||
-			!strings.Contains(request.Messages[0].Content, agentcore.SystemPromptVersion) || len(request.Tools) != 7 {
+		if len(captured.Messages) < 2 || captured.Messages[0].Role != "system" ||
+			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 7 {
 			model.t.Errorf("initial ModelRequest does not contain the fixed policy and seven Tools")
-			return fixtureModelError(request.ID)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
 		}
+		toolCalls := make([]any, len(model.steps))
 		for index, step := range model.steps {
-			if ctx.Err() != nil {
-				return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
-			}
-			consume(domain.ModelStreamEvent{
-				Sequence: index + 1,
-				Kind:     domain.ModelStreamEventToolCallFragment,
-				ToolCallFragment: &domain.ModelToolCallFragment{
-					Index:             index,
-					IDFragment:        step.CallID,
-					NameFragment:      string(step.Name),
-					ArgumentsFragment: step.ArgumentsJSON,
+			toolCalls[index] = map[string]any{
+				"index": index, "id": step.CallID, "type": "function",
+				"function": map[string]any{
+					"name": string(step.Name), "arguments": step.ArgumentsJSON,
 				},
-			})
+			}
 		}
-		consume(domain.ModelStreamEvent{
-			Sequence: len(model.steps) + 1,
-			Kind:     domain.ModelStreamEventCompleted,
-			Completion: &domain.ModelCompletion{
-				FinishReason: domain.ModelFinishReasonToolCalls,
-			},
+		writeEvalModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "tool_calls": toolCalls},
+				"finish_reason": nil,
+			}},
 		})
-		return nil
+		writeEvalModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls",
+			}},
+		})
 	case 1:
 		toolCallIDs := make([]string, 0, len(model.steps))
-		for _, message := range request.Messages {
-			if message.Role == domain.ModelMessageRoleTool {
+		for _, message := range captured.Messages {
+			if message.Role == "tool" {
 				toolCallIDs = append(toolCallIDs, message.ToolCallID)
 			}
 		}
@@ -647,31 +683,38 @@ func (model *scriptedConversationModel) Stream(
 		}
 		if !reflect.DeepEqual(toolCallIDs, wantCallIDs) {
 			model.t.Errorf("Tool result order = %#v, want %#v", toolCallIDs, wantCallIDs)
-			return fixtureModelError(request.ID)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
 		}
-		consume(domain.ModelStreamEvent{Sequence: 1, Kind: domain.ModelStreamEventTextDelta, TextDelta: string(model.diagnosis)})
-		consume(domain.ModelStreamEvent{
-			Sequence: 2,
-			Kind:     domain.ModelStreamEventCompleted,
-			Completion: &domain.ModelCompletion{
-				FinishReason: domain.ModelFinishReasonStop,
-			},
+		writeEvalModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "content": string(model.diagnosis)},
+				"finish_reason": nil,
+			}},
 		})
-		return nil
+		writeEvalModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{}, "finish_reason": "stop",
+			}},
+		})
 	default:
 		model.t.Errorf("unexpected model request index %d", callIndex)
-		return fixtureModelError(request.ID)
+		writer.WriteHeader(http.StatusBadRequest)
+		return
 	}
+	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 }
 
-func fixtureModelError(id domain.ModelRequestID) *domain.ModelError {
-	return domain.NewModelError(domain.ModelErrorCodeInternal, domain.ModelOperationStream, string(id))
+func writeEvalModelChunk(writer http.ResponseWriter, value any) {
+	encoded, _ := json.Marshal(value)
+	_, _ = writer.Write(append(append([]byte("data: "), encoded...), '\n', '\n'))
 }
 
-func (model *scriptedConversationModel) Requests() []domain.ModelRequest {
+func (model *scriptedConversationModel) RequestCount() int {
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	return append([]domain.ModelRequest(nil), model.requests...)
+	return model.requests
 }
 
 type scriptedKubeTool struct {
@@ -792,8 +835,8 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 	if run.diagnosis.Validate() != nil {
 		addProblem("the final Diagnosis is invalid")
 	}
-	if len(run.requests) != 2 {
-		addProblem("model request count is %d, want 2", len(run.requests))
+	if run.requests != 2 {
+		addProblem("model request count is %d, want 2", run.requests)
 	}
 	gotToolOrder := make([]domain.ToolName, len(run.calls))
 	for index, call := range run.calls {

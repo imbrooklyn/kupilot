@@ -21,10 +21,14 @@ func (model Model) View() tea.View {
 			view.Cursor = cursor
 		}
 	}
-	// The primary buffer keeps committed conversation blocks in terminal
-	// scrollback after Kupilot exits. Dialogs remain managed overlays inside
-	// the same bounded inline frame.
-	view.AltScreen = false
+	return model.configureView(view)
+}
+
+func (model Model) configureView(view tea.View) tea.View {
+	// Keep every mutable runtime surface inside one full-screen buffer. After
+	// Bubble Tea restores the primary screen, the composition root writes one
+	// completed terminal-safe transcript for terminal-owned scrollback.
+	view.AltScreen = true
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
 	// Mouse reporting prevents ordinary terminal drag-selection. Keep it off
@@ -46,28 +50,43 @@ func (model Model) render() string {
 }
 
 func (model Model) renderLayout() (content string, composerY int, composerVisible bool) {
-	sections := make([]string, 0, 6)
+	gap := model.layoutGap()
+	topSections := make([]string, 0, 3)
 	if transcript := model.transcript.View(); transcript != "" {
-		sections = append(sections, transcript)
+		topSections = append(topSections, transcript)
 	}
 	if prompt := model.modelSetupView(); prompt != "" {
-		sections = append(sections, prompt)
+		topSections = append(topSections, prompt)
 	}
 	if working := model.workingView(); working != "" {
-		sections = append(sections, working)
+		topSections = append(topSections, working)
 	}
-	for _, section := range sections {
-		composerY += lipgloss.Height(section)
-	}
-	sections = append(sections, model.composer.View())
+	top := joinLayoutSections(topSections, gap)
+
+	bottomSections := []string{model.composer.View()}
 	if model.pickerOpen() {
-		sections = append(sections, model.pickerView())
+		bottomSections = append(bottomSections, model.pickerView())
 	} else if model.slashMenu.Open() {
-		sections = append(sections, model.slashMenu.View())
+		bottomSections = append(bottomSections, model.slashMenu.View())
 	}
-	sections = append(sections, model.footerView())
-	main := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	main = lipgloss.NewStyle().Width(model.width).Render(main)
+	bottom := lipgloss.JoinVertical(lipgloss.Left, bottomSections...)
+	if footer := model.footerView(); footer != "" {
+		bottom = joinLayoutSections([]string{bottom, footer}, gap)
+	}
+
+	spacer := max(0, model.height-lipgloss.Height(top)-lipgloss.Height(bottom))
+	main := bottom
+	if top != "" {
+		spacer = max(gap, spacer)
+		main = top + strings.Repeat("\n", spacer+1) + bottom
+		composerY = lipgloss.Height(top) + spacer
+	} else {
+		main = strings.Repeat("\n", spacer) + bottom
+		composerY = spacer
+	}
+	contentWidth := model.contentWidth()
+	main = lipgloss.NewStyle().Width(contentWidth).Render(main)
+	main = lipgloss.Place(model.width, model.height, lipgloss.Left, lipgloss.Top, main)
 
 	overlay := ""
 	switch {
@@ -91,6 +110,16 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
 }
 
+func joinLayoutSections(sections []string, gap int) string {
+	visible := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if section != "" {
+			visible = append(visible, section)
+		}
+	}
+	return strings.Join(visible, strings.Repeat("\n", max(0, gap)+1))
+}
+
 func (model Model) workingView() string {
 	if !model.run.Active || model.run.Terminal {
 		return ""
@@ -105,7 +134,7 @@ func (model Model) workingView() string {
 	line += model.styles.working.Muted.Render(" (" + components.FormatElapsedCompact(model.workingElapsed()) + " • ")
 	line += model.styles.working.Normal.Render("esc")
 	line += model.styles.working.Muted.Render(" to interrupt)")
-	return lipgloss.NewStyle().MaxWidth(max(1, model.width)).Render(line)
+	return lipgloss.NewStyle().MaxWidth(model.contentWidth()).Render(line)
 }
 
 func (model Model) workingElapsed() time.Duration {
@@ -152,7 +181,7 @@ func (model Model) footerView() string {
 			approvalStatus = "approval in progress"
 		}
 	}
-	return model.footer.View(model.width, components.FooterStatus{
+	return model.footer.View(model.contentWidth(), components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
 		Approval: approvalStatus,

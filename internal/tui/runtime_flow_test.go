@@ -304,7 +304,7 @@ func TestPrivacyClearHistoryAndDeleteAllRequireExplicitConfirmation(t *testing.T
 			Command: application.UICommandClearHistory, RequestID: command.RequestID,
 			HistoryDeletion: &application.HistoryDeletionResult{SessionsCleared: true, PreferencesPreserved: true},
 		}})
-		if !commandPrintsAbove(cmd) || model.session.ID != "" || model.localDeletion != nil ||
+		if cmd != nil || model.session.ID != "" || model.localDeletion != nil ||
 			!transcriptContains(model, "All Session history was deleted") ||
 			!strings.Contains(model.render(), "Session history cleared") {
 			t.Fatalf("clear-history result state = %#v", model.session)
@@ -515,7 +515,8 @@ func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
-	if !commandPrintsAbove(cmd) || model.run.Status != "cancelled" || model.composer.Value() != "next question" {
+	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "next question" ||
+		!strings.Contains(model.View().Content, "The diagnostic run was cancelled.") {
 		t.Fatal("ordinary cancellation exited or discarded the draft")
 	}
 }
@@ -536,8 +537,11 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
-	if !commandSequencesPrintBeforeNext(cmd) || model.quitAfterCancel {
-		t.Fatal("terminal cancellation did not complete bounded exit")
+	terminalTranscript := model.TerminalTranscript()
+	if !commandQuits(cmd) || model.quitAfterCancel ||
+		!strings.Contains(strings.ReplaceAll(terminalTranscript, "\n", " "), "The diagnostic run was cancelled.") {
+		t.Fatalf("terminal cancellation did not complete bounded exit: cmd=%T quitAfterCancel=%v run=%#v transcript=%q",
+			cmd, model.quitAfterCancel, model.run, terminalTranscript)
 	}
 }
 
@@ -566,11 +570,15 @@ func TestFocusResizeAndSmallTerminalPreserveKeyboardSafety(t *testing.T) {
 		t.Fatalf("small-terminal editor state = count %d, height %d", model.EditorCount(), model.composer.Height())
 	}
 	view := model.View()
-	if !view.ReportFocus || view.AltScreen || containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
-		t.Fatal("small-terminal View lost focus reporting, primary-screen mode, or terminal safety")
+	if !view.ReportFocus || !view.AltScreen || containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
+		t.Fatal("small-terminal View lost focus reporting, fullscreen isolation, or terminal safety")
 	}
 	model.run = RunView{}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil || model.composer.Value() != "" {
+		t.Fatal("first Ctrl+C did not clear the small-terminal draft")
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !commandQuits(cmd) {
 		t.Fatal("small terminal could not exit")
 	}

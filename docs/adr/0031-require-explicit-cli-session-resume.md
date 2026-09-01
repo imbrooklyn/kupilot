@@ -54,7 +54,7 @@ Session.
 Cancelling the top-level `kupilot resume` picker exits. Cancelling `/resume`
 inside the TUI returns to the current Session. Both use the same Application
 query and resume use cases. `version` and `help` short-circuit without opening the
-business database or initializing Kubernetes or model adapters.
+business database or initializing Kubernetes or the model boundary.
 
 ## Consequences
 

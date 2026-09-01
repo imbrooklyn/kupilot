@@ -73,8 +73,8 @@ where they protect authority or data rather than merely restricting usefulness.
 8. Kupilot returns a validated free-form Markdown answer. Evidence detail and
    gaps remain inspectable without forcing every response into a fixed layout.
    The final answer ends with a full-width `Worked for` duration separator.
-   Completed conversation blocks remain in the primary terminal scrollback
-   after the managed composer exits.
+   After the managed full-screen composer exits, one completed safe transcript
+   is written to the restored primary terminal and may remain in scrollback.
 9. If the Agent proposes an admitted mutation, Kupilot displays a default-reject
    approval bound to the exact target and operation. Request acceptance and
    post-operation verification remain distinct.

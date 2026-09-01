@@ -65,6 +65,39 @@ func TestModelRequestMessageCountCoversTheHardRunBudget(t *testing.T) {
 	}
 }
 
+func TestModelToolCallAcceptsNeutralJSONAndRejectsUnsafeShapes(t *testing.T) {
+	t.Parallel()
+
+	call := ModelToolCall{
+		ID:            "call-1",
+		Name:          ToolNameGetResource,
+		ArgumentsJSON: " { \"resource\": {\"name\": \"sample-pod\", \"kind\": \"Pod\"}, \"purpose\": \"Inspect the selected Pod.\" } ",
+	}
+	if err := call.Validate(); err != nil {
+		t.Fatalf("Validate(noncanonical provider JSON) error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		arguments string
+	}{
+		{name: "duplicate nested field", arguments: `{"purpose":"Inspect.","resource":{"kind":"Pod","kind":"Secret","name":"sample-pod"}}`},
+		{name: "runtime authority", arguments: `{"purpose":"Inspect.","resource":{"kind":"Pod","name":"sample-pod"},"scope":{"namespace":"other"}}`},
+		{name: "non-object root", arguments: `["get_resource"]`},
+	}
+	for _, current := range tests {
+		current := current
+		t.Run(current.name, func(t *testing.T) {
+			t.Parallel()
+			invalid := call
+			invalid.ArgumentsJSON = current.arguments
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
 func TestModelToolSpecificationRequiresStrictObjectSchema(t *testing.T) {
 	tests := []struct {
 		name   string

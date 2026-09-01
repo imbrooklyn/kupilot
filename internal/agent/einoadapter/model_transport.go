@@ -1,4 +1,4 @@
-package openaicompat
+package einoadapter
 
 import (
 	"bytes"
@@ -23,7 +23,6 @@ type transportRequestState struct {
 	mu                         sync.Mutex
 	sensitiveDiagnostics       bool
 	enteredTransport           bool
-	providerRequestID          string
 	providerErrorBody          string
 	providerErrorBodyTruncated bool
 	httpStatus                 int
@@ -40,18 +39,6 @@ func (state *transportRequestState) transportEntered() bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return state.enteredTransport
-}
-
-func (state *transportRequestState) setRequestID(value string) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.providerRequestID = value
-}
-
-func (state *transportRequestState) requestID() string {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	return state.providerRequestID
 }
 
 func (state *transportRequestState) setHTTPStatus(value int) {
@@ -100,6 +87,16 @@ func (state *transportRequestState) closeResponseBody() {
 	}
 }
 
+func (state *transportRequestState) responseLimitReached() bool {
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	body := state.responseBody
+	state.mu.Unlock()
+	return body != nil && errors.Is(body.failure, errModelResponseLimitReached)
+}
+
 type guardedRoundTripper struct {
 	base       http.RoundTripper
 	origin     *url.URL
@@ -112,6 +109,9 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return nil, errTransportRequestInvalid
 	}
 	state.markTransportEntered()
+	if request != nil && request.ContentLength > int64(domain.MaxModelRequestBytes) {
+		return nil, errModelRequestLimitReached
+	}
 	if !transport.validRequest(request) {
 		return nil, errTransportRequestInvalid
 	}
@@ -143,7 +143,12 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		_ = response.Body.Close()
 		return nil, errUnsupportedResponseMedia
 	}
-	state.setRequestID(response.Header.Get("X-Request-ID"))
+	if requestID := response.Header.Get("X-Request-ID"); requestID != "" &&
+		(!validProviderRequestIDText(requestID) || credentialAppearsInStrings(transport.credential, requestID)) {
+		_ = response.Body.Close()
+		return nil, errMalformedProviderChunk
+	}
+	response.Header.Del("X-Request-ID")
 	boundedBody := &boundedSSEBody{ReadCloser: response.Body}
 	state.setResponseBody(boundedBody)
 	response.Body = boundedBody
@@ -240,7 +245,7 @@ func (body *boundedSSEBody) accept(current byte) bool {
 		if body.linePrefixBytes == len(body.linePrefix) && string(body.linePrefix[:]) == "data:" {
 			body.dataLine = true
 			body.dataEvents++
-			if body.dataEvents > domain.MaxModelStreamEvents {
+			if body.dataEvents > domain.MaxModelStreamChunks {
 				return false
 			}
 		}
@@ -256,7 +261,7 @@ func (body *boundedSSEBody) accept(current byte) bool {
 	if body.dataLeadingSpace {
 		payloadBytes--
 	}
-	return payloadBytes <= domain.MaxModelStreamEventBytes
+	return payloadBytes <= domain.MaxModelStreamChunkBytes
 }
 
 func (body *boundedSSEBody) resetLine() {

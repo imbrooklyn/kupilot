@@ -3,39 +3,11 @@ package agent
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
-
-type scriptedModel struct {
-	mu       sync.Mutex
-	requests []domain.ModelRequest
-	events   []domain.ModelStreamEvent
-	err      *domain.ModelError
-}
-
-func (model *scriptedModel) Stream(ctx context.Context, request domain.ModelRequest, consume ModelStreamConsumer) *domain.ModelError {
-	model.mu.Lock()
-	model.requests = append(model.requests, request)
-	events := append([]domain.ModelStreamEvent(nil), model.events...)
-	model.mu.Unlock()
-	for _, event := range events {
-		if err := ctx.Err(); err != nil {
-			return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
-		}
-		consume(event)
-	}
-	return model.err
-}
-
-func (model *scriptedModel) Requests() []domain.ModelRequest {
-	model.mu.Lock()
-	defer model.mu.Unlock()
-	return append([]domain.ModelRequest(nil), model.requests...)
-}
 
 func TestAgentPolicyContractsComposeToolEvidenceAndDiagnosis(t *testing.T) {
 	input := testRunInput(t, "Why is this Pod not Ready?")
@@ -51,28 +23,11 @@ func TestAgentPolicyContractsComposeToolEvidenceAndDiagnosis(t *testing.T) {
 		t.Fatalf("ReserveModelCall() error = %v", err)
 	}
 
-	model := &scriptedModel{events: []domain.ModelStreamEvent{
-		{Sequence: 1, Kind: domain.ModelStreamEventToolCallFragment, ToolCallFragment: &domain.ModelToolCallFragment{Index: 0, IDFragment: "call-1", NameFragment: "get_", ArgumentsFragment: `{"purpose":"Inspect the selected Pod.",`}},
-		{Sequence: 2, Kind: domain.ModelStreamEventToolCallFragment, ToolCallFragment: &domain.ModelToolCallFragment{Index: 0, NameFragment: "resource", ArgumentsFragment: `"resource":{"kind":"Pod","name":"sample-pod"}}`}},
-		{Sequence: 3, Kind: domain.ModelStreamEventCompleted, Completion: &domain.ModelCompletion{FinishReason: domain.ModelFinishReasonToolCalls}},
-	}}
-	request, err := BuildInitialModelRequest(input, testModelID)
-	if err != nil {
-		t.Fatalf("BuildInitialModelRequest() error = %v", err)
+	selection := domain.ModelToolCall{
+		ID:            "call-1",
+		Name:          domain.ToolNameGetResource,
+		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
 	}
-	var id, name, arguments strings.Builder
-	modelError := model.Stream(context.Background(), request, func(event domain.ModelStreamEvent) {
-		if event.ToolCallFragment == nil {
-			return
-		}
-		id.WriteString(event.ToolCallFragment.IDFragment)
-		name.WriteString(event.ToolCallFragment.NameFragment)
-		arguments.WriteString(event.ToolCallFragment.ArgumentsFragment)
-	})
-	if modelError != nil {
-		t.Fatalf("scripted Model.Stream() error = %v", modelError)
-	}
-	selection := domain.ModelToolCall{ID: id.String(), Name: domain.ToolName(name.String()), ArgumentsJSON: arguments.String()}
 	call, err := BindToolCall(input, testInvocationID, selection)
 	if err != nil {
 		t.Fatalf("BindToolCall() error = %v", err)
@@ -141,8 +96,8 @@ func TestAgentPolicyContractsComposeToolEvidenceAndDiagnosis(t *testing.T) {
 	if len(diagnosis.ConfirmedFacts) != 1 || diagnosis.ConfirmedFacts[0].EvidenceIDs[0] != testEvidenceID {
 		t.Fatalf("validated confirmed facts = %#v", diagnosis.ConfirmedFacts)
 	}
-	if tool.Calls() != 1 || len(model.Requests()) != 1 {
-		t.Fatalf("calls: Tool = %d, Model = %d", tool.Calls(), len(model.Requests()))
+	if tool.Calls() != 1 {
+		t.Fatalf("Tool calls = %d, want 1", tool.Calls())
 	}
 }
 
@@ -275,11 +230,6 @@ func TestSystemPromptRequiresAvailableCapabilitiesBeforeAnswering(t *testing.T) 
 
 func TestStoppedPolicyCreatesNoSubsequentModelOrToolCall(t *testing.T) {
 	input := testRunInput(t, "Inspect the selected Pod.")
-	request, err := BuildInitialModelRequest(input, testModelID)
-	if err != nil {
-		t.Fatalf("BuildInitialModelRequest() error = %v", err)
-	}
-	model := &scriptedModel{}
 	clock := newFakeClock()
 	budget, err := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
 	if err != nil {
@@ -288,10 +238,7 @@ func TestStoppedPolicyCreatesNoSubsequentModelOrToolCall(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, reserveErr := budget.ReserveModelCall(cancelled); reserveErr == nil {
-		_ = model.Stream(cancelled, request, func(domain.ModelStreamEvent) {})
-	}
-	if len(model.Requests()) != 0 {
-		t.Fatalf("model calls after cancellation = %d", len(model.Requests()))
+		t.Fatal("cancelled budget admitted a model call")
 	}
 
 	tool := &fakeTool{result: func(call BoundToolCall) domain.ToolResult {

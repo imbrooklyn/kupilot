@@ -131,6 +131,9 @@ func (model Model) updateSessionExportTargetKey(message tea.KeyPressMsg) (tea.Mo
 	if model.sessionExport == nil || model.sessionExport.Stage != sessionExportTargetEntry || model.pendingExportID != 0 {
 		return model, nil
 	}
+	if key.Matches(message, model.keymap.Quit) && model.clearComposerForInterrupt() {
+		return model, nil
+	}
 	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Quit) {
 		model.cancelSessionExport()
 		return model, nil

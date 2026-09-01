@@ -19,7 +19,7 @@ content have no policy authority.
 
 Kupilot requires explicit informed consent before the first model-content
 transfer. Consent is enforced by Application and the model-egress gate, not by
-the TUI, Agent, Prompt, Tool result, or model adapter alone.
+the TUI, Agent, Prompt, Tool result, or Eino boundary alone.
 
 Before accepting the decision, the TUI must display:
 
@@ -62,10 +62,10 @@ matching consent snapshot. Missing or stale consent returns
 cancelling consent has the same zero-request property and never silently creates
 a new Session or changes endpoint configuration.
 
-Endpoint validation and a capability probe may occur before consent only when
-they contain no user question, conversation, Kubernetes, Tool, Evidence, or
-other cluster content. Authentication remains origin-bound under ADR-0010 and
-ADR-0035. A redirect never transfers consent or authentication to another
+Local endpoint validation may occur before consent. Kupilot sends no
+speculative capability probe; compatibility is learned only from the first
+consented model request. Authentication remains origin-bound under ADR-0010
+and ADR-0035. A redirect never transfers consent or authentication to another
 origin.
 
 Valid consent may be persisted under both standard and minimal-persistence
@@ -135,8 +135,8 @@ also cover:
    policy version, with zero content requests before renewed consent.
 3. Exact reuse of an unchanged valid tuple without manufacturing a new broader
    decision.
-4. Capability probes before consent containing no conversation or cluster
-   content.
+4. Zero model requests before consent, including speculative capability
+   probes.
 5. Cross-origin redirects, malformed origins, missing configuration, stale
    Session history, and forged TUI, Agent, Tool, or model events.
 6. Consent serialization containing only the allowlisted tuple and no endpoint

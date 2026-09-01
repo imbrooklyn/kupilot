@@ -1,6 +1,4 @@
-// Package openaicompat implements the single bounded model transport admitted
-// by the current compatibility contract.
-package openaicompat
+package einoadapter
 
 import (
 	"bytes"
@@ -13,13 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-	"time"
 
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 
-	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/security"
@@ -68,6 +65,7 @@ var (
 	errRedirectOriginDenied      = errors.New("model redirect origin denied")
 	errRedirectLimitReached      = errors.New("model redirect limit reached")
 	errRedirectUnsupported       = errors.New("model redirect unsupported")
+	errModelRequestLimitReached  = errors.New("model request limit reached")
 	errTransportRequestInvalid   = errors.New("model transport request invalid")
 	errUnsupportedResponseMedia  = errors.New("model response media type unsupported")
 	errModelResponseLimitReached = errors.New("model response limit reached")
@@ -75,52 +73,45 @@ var (
 	errUnsupportedProviderChunk  = errors.New("model provider chunk unsupported")
 )
 
-// Adapter is the process-local OpenAI-compatible model transport. New takes
-// ownership of the credential after successful construction. The composition
-// root must cancel and wait for owning requests before calling Close.
-type Adapter struct {
+// modelClient owns the one Eino OpenAI component and its guarded transport.
+// It is private to the sole Eino boundary and never becomes a second Agent
+// model port.
+type modelClient struct {
 	configuration domain.ModelConfiguration
 	credential    *config.SecretValue
-	model         *einoopenai.ChatModel
+	model         einomodel.ToolCallingChatModel
 	client        *http.Client
 	logger        *slog.Logger
 	diagnostics   DiagnosticOptions
-	withTimeout   func(context.Context, time.Duration) (context.Context, context.CancelFunc)
-
-	lifecycleMu sync.RWMutex
-	closed      bool
 }
 
-var _ agent.Model = (*Adapter)(nil)
-
-// New validates local configuration and constructs an isolated Eino-backed
-// HTTP client. It performs no network request; protocol capability is checked
-// strictly on the first admitted Stream call, with no retry or fallback.
-func New(
+// newModelClient validates local configuration and constructs an isolated
+// Eino-backed HTTP client without performing a network request.
+func newModelClient(
 	configuration domain.ModelConfiguration,
 	credential *config.SecretValue,
 	logger *slog.Logger,
 	diagnostics DiagnosticOptions,
-) (*Adapter, *domain.ModelError) {
-	return newAdapterWithDiagnostics(configuration, credential, logger, nil, diagnostics)
+) (*modelClient, *domain.ModelError) {
+	return newModelClientWithTransport(configuration, credential, logger, nil, diagnostics)
 }
 
-func newAdapter(
+func newModelClientForTest(
 	configuration domain.ModelConfiguration,
 	credential *config.SecretValue,
 	logger *slog.Logger,
 	baseTransport http.RoundTripper,
-) (*Adapter, *domain.ModelError) {
-	return newAdapterWithDiagnostics(configuration, credential, logger, baseTransport, DiagnosticOptions{})
+) (*modelClient, *domain.ModelError) {
+	return newModelClientWithTransport(configuration, credential, logger, baseTransport, DiagnosticOptions{})
 }
 
-func newAdapterWithDiagnostics(
+func newModelClientWithTransport(
 	configuration domain.ModelConfiguration,
 	credential *config.SecretValue,
 	logger *slog.Logger,
 	baseTransport http.RoundTripper,
 	diagnostics DiagnosticOptions,
-) (*Adapter, *domain.ModelError) {
+) (*modelClient, *domain.ModelError) {
 	if configuration.Validate() != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInvalidRequest, "model-configuration")
 	}
@@ -147,14 +138,22 @@ func newAdapterWithDiagnostics(
 		},
 		CheckRedirect: redirectPolicy(origin),
 	}
-	// The fixed payload modifier below owns the actual request values. Leaving
-	// optional SDK scaffolding parameters unset prevents vendor model-name
-	// heuristics from rejecting a valid OpenAI-compatible request before HTTP.
+	maximum := configuration.MaxOutputTokens
 	chatModel, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
 		APIKey:     einoCredentialPlaceholder,
 		HTTPClient: client,
 		BaseURL:    strings.TrimRight(configuration.Endpoint, "/"),
 		Model:      configuration.Model,
+		MaxTokens:  &maximum,
+		// The pinned OpenAI client rejects temperature before transport for
+		// identifiers beginning with gpt-5, even for compatible endpoints that
+		// admit the configured field. Eino's fixed ExtraFields path keeps Eino
+		// as the serializer without allowing SDK model-name inference to change
+		// Kupilot's typed request contract.
+		ExtraFields: map[string]any{
+			"temperature": configuration.Temperature,
+		},
+		ReasoningEffort: einoopenai.ReasoningEffortLevel(configuration.ReasoningEffort),
 	})
 	if err != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
@@ -162,14 +161,13 @@ func newAdapterWithDiagnostics(
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Adapter{
+	return &modelClient{
 		configuration: configuration,
 		credential:    credential,
 		model:         chatModel,
 		client:        client,
 		logger:        logger,
 		diagnostics:   diagnostics,
-		withTimeout:   context.WithTimeout,
 	}, nil
 }
 
@@ -221,136 +219,112 @@ func redirectPolicy(origin *url.URL) func(*http.Request, []*http.Request) error 
 	}
 }
 
-// Close releases the adapter-owned credential and idle transport connections.
-// It is idempotent and waits for any in-flight Stream call to return.
-func (adapter *Adapter) Close() {
-	if adapter == nil {
+// close releases the boundary-owned credential and idle transport connections.
+// Adapter.Close waits for admitted runs before calling it.
+func (client *modelClient) close() {
+	if client == nil {
 		return
 	}
-	adapter.lifecycleMu.Lock()
-	defer adapter.lifecycleMu.Unlock()
-	if adapter.closed {
-		return
+	if client.client != nil {
+		client.client.CloseIdleConnections()
 	}
-	adapter.closed = true
-	if adapter.client != nil {
-		adapter.client.CloseIdleConnections()
-	}
-	if adapter.credential != nil {
-		adapter.credential.Destroy()
+	if client.credential != nil {
+		client.credential.Destroy()
 	}
 }
 
-// Stream sends one bounded Chat Completions request and synchronously projects
-// the Eino stream into ordered project-owned events.
-func (adapter *Adapter) Stream(
-	ctx context.Context,
-	request domain.ModelRequest,
-	consume agent.ModelStreamConsumer,
-) *domain.ModelError {
-	if adapter == nil {
-		return domain.NewModelError(domain.ModelErrorCodeInternal, domain.ModelOperationRequest, string(request.ID))
+func (client *modelClient) withTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
+	if client == nil || client.model == nil || validateBoundToolInfos(tools) != nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	adapter.lifecycleMu.RLock()
-	defer adapter.lifecycleMu.RUnlock()
-	if adapter.closed {
-		return domain.NewModelError(domain.ModelErrorCodeInternal, domain.ModelOperationRequest, string(request.ID))
-	}
-	if ctx == nil || consume == nil || request.Validate() != nil {
-		return domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(request.ID))
-	}
-	if modelRequestContainsCredential(adapter.credential, request) {
-		return domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(request.ID))
-	}
-
-	body, err := marshalWireRequest(adapter.configuration, request)
+	bound, err := client.model.WithTools(tools)
 	if err != nil {
-		return domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(request.ID))
+		return nil, failedRuntime(domain.SafeErrorClassUnsupported, "The configured model cannot accept the fixed Tool catalog.", err)
 	}
-	if len(body) > domain.MaxModelRequestBytes {
-		return domain.NewModelError(domain.ModelErrorCodeRequestTooLarge, domain.ModelOperationRequest, string(request.ID))
-	}
-	if credentialAppearsInBytes(adapter.credential, body) {
-		return domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(request.ID))
+	return bound, nil
+}
+
+// stream sends one Eino-generated request and returns one assembled Eino
+// assistant message. It observes the generated payload without replacing it.
+func (client *modelClient) stream(
+	ctx context.Context,
+	requestID domain.ModelRequestID,
+	model einomodel.ToolCallingChatModel,
+	messages []*schema.Message,
+) (*schema.Message, *domain.ModelError) {
+	if client == nil || ctx == nil || model == nil || !requestID.Valid() || len(messages) == 0 ||
+		einoMessagesContainCredential(client.credential, messages) {
+		return nil, domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(requestID))
 	}
 	if code, cancelled := contextModelErrorCode(ctx); cancelled {
-		return domain.NewModelError(code, domain.ModelOperationRequest, string(request.ID))
+		return nil, domain.NewModelError(code, domain.ModelOperationRequest, string(requestID))
 	}
 
-	requestContext, cancel := adapter.withTimeout(ctx, adapter.configuration.RequestTimeout)
-	defer cancel()
-	state := &transportRequestState{sensitiveDiagnostics: adapter.diagnostics.Sensitive}
-	requestContext = context.WithValue(requestContext, transportRequestStateKey{}, state)
+	state := &transportRequestState{sensitiveDiagnostics: client.diagnostics.Sensitive}
+	requestContext := context.WithValue(ctx, transportRequestStateKey{}, state)
 	// Kupilot does not install Eino global callbacks. Reinitializing the local
 	// callback context prevents caller-owned handlers from observing model data.
 	requestContext = einocallbacks.InitCallbacks(requestContext, nil)
 
-	adapter.logger.Info(
+	client.logger.Info(
 		modelRequestLogEvent,
 		"component", "model",
 		"operation", string(domain.ModelOperationRequest),
 		"phase", "started",
-		"request_id", string(request.ID),
+		"request_id", string(requestID),
 	)
-	stream, err := adapter.model.Stream(
+	stream, err := model.Stream(
 		requestContext,
-		mapEinoMessages(request.Messages),
-		einoopenai.WithRequestPayloadModifier(fixedRequestPayload(body)),
+		messages,
+		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload()),
 		einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
 	)
 	if err != nil {
-		return adapter.finishWithError(
-			request.ID,
+		return nil, client.finishWithError(
+			requestID,
 			mapModelRequestError(requestContext, err, state),
 			domain.ModelOperationRequest,
 			err,
 			state,
 		)
 	}
-	defer func() {
-		stream.Close()
-		state.closeResponseBody()
-	}()
-
-	decoder := responseDecoder{
-		ctx:         requestContext,
-		requestID:   request.ID,
-		consume:     consume,
-		credential:  adapter.credential,
-		textScanner: credentialScanner{credential: adapter.credential},
-		tools:       make(map[int]*toolCallAssembly),
+	defer state.closeResponseBody()
+	message, err := collectModelMessage(requestContext, stream, client.credential)
+	if err != nil {
+		return nil, client.finishWithError(
+			requestID,
+			mapModelRequestError(requestContext, err, state),
+			domain.ModelOperationStream,
+			err,
+			state,
+		)
 	}
-	if providerRequestID := state.requestID(); providerRequestID != "" {
-		metadata := domain.ModelResponseMetadata{ProviderRequestID: providerRequestID}
-		if metadata.Validate() != nil || credentialAppearsInStrings(adapter.credential, providerRequestID) {
-			return adapter.finishWithError(request.ID, modelFailure{
-				code: domain.ModelErrorCodeMalformedStream, cause: modelFailureStreamProtocol, httpStatus: state.status(),
-			}, domain.ModelOperationStream, nil, state)
-		}
-		if modelError := decoder.emit(domain.ModelStreamEvent{Kind: domain.ModelStreamEventMetadata, Metadata: &metadata}); modelError != nil {
-			adapter.logFinished(request.ID, modelError, failureForModelError(modelError, state.status()), nil, state)
-			return modelError
-		}
-	}
-	if modelError := decoder.decode(stream); modelError != nil {
-		adapter.logFinished(request.ID, modelError, failureForModelError(modelError, state.status()), decoder.rawFailure, state)
-		return modelError
-	}
-	adapter.logFinished(request.ID, nil, modelFailure{httpStatus: state.status()}, nil, state)
-	return nil
+	client.logFinished(requestID, nil, modelFailure{httpStatus: state.status()}, nil, state)
+	return message, nil
 }
 
-func modelRequestContainsCredential(credential *config.SecretValue, request domain.ModelRequest) bool {
-	values := make([]string, 0, 1+len(request.Messages)*3+len(request.Tools)*4)
-	values = append(values, string(request.ID))
-	for _, message := range request.Messages {
-		values = append(values, message.Content, message.ToolCallID)
-		for _, call := range message.ToolCalls {
-			values = append(values, call.ID, string(call.Name), call.ArgumentsJSON)
+func (client *modelClient) observeRequestPayload() einoopenai.RequestPayloadModifier {
+	return func(_ context.Context, _ []*schema.Message, body []byte) ([]byte, error) {
+		if len(body) > domain.MaxModelRequestBytes {
+			return nil, errModelRequestLimitReached
 		}
+		if credentialAppearsInBytes(client.credential, body) {
+			return nil, errTransportRequestInvalid
+		}
+		return body, nil
 	}
-	for _, specification := range request.Tools {
-		values = append(values, string(specification.Name), specification.Version, specification.Description, specification.InputSchemaJSON)
+}
+
+func einoMessagesContainCredential(credential *config.SecretValue, messages []*schema.Message) bool {
+	values := make([]string, 0, len(messages)*6)
+	for _, message := range messages {
+		if message == nil {
+			return true
+		}
+		values = append(values, message.Content, message.ToolCallID, message.ToolName, message.Name, message.ReasoningContent)
+		for _, call := range message.ToolCalls {
+			values = append(values, call.ID, call.Type, call.Function.Name, call.Function.Arguments)
+		}
 	}
 	return credentialAppearsInStrings(credential, values...)
 }
@@ -417,6 +391,15 @@ func mapModelRequestError(ctx context.Context, cause error, state *transportRequ
 	if code, cancelled := contextModelErrorCode(ctx); cancelled {
 		return modelFailure{code: code, cause: contextFailureCause(code), httpStatus: observedHTTPStatus(state)}
 	}
+	var projected *domain.ModelError
+	if errors.As(cause, &projected) && projected.Validate() == nil {
+		return failureForModelError(projected, observedHTTPStatus(state))
+	}
+	if state.responseLimitReached() {
+		return modelFailure{
+			code: domain.ModelErrorCodeStreamLimitExceeded, cause: modelFailureStreamLimit, httpStatus: observedHTTPStatus(state),
+		}
+	}
 	switch {
 	case errors.Is(cause, errRedirectOriginDenied):
 		return modelFailure{
@@ -438,6 +421,10 @@ func mapModelRequestError(ctx context.Context, cause error, state *transportRequ
 	case errors.Is(cause, errModelResponseLimitReached):
 		return modelFailure{
 			code: domain.ModelErrorCodeStreamLimitExceeded, cause: modelFailureStreamLimit, httpStatus: observedHTTPStatus(state),
+		}
+	case errors.Is(cause, errModelRequestLimitReached):
+		return modelFailure{
+			code: domain.ModelErrorCodeRequestTooLarge, cause: modelFailureTransportValidation, httpStatus: observedHTTPStatus(state),
 		}
 	case errors.Is(cause, errMalformedProviderChunk):
 		return modelFailure{
@@ -538,7 +525,7 @@ func failureForModelError(modelError *domain.ModelError, status int) modelFailur
 	return failure
 }
 
-func (adapter *Adapter) finishWithError(
+func (client *modelClient) finishWithError(
 	requestID domain.ModelRequestID,
 	failure modelFailure,
 	operation domain.ModelOperation,
@@ -546,11 +533,11 @@ func (adapter *Adapter) finishWithError(
 	state *transportRequestState,
 ) *domain.ModelError {
 	modelError := domain.NewModelError(failure.code, operation, string(requestID))
-	adapter.logFinished(requestID, modelError, failure, rawCause, state)
+	client.logFinished(requestID, modelError, failure, rawCause, state)
 	return modelError
 }
 
-func (adapter *Adapter) logFinished(
+func (client *modelClient) logFinished(
 	requestID domain.ModelRequestID,
 	modelError *domain.ModelError,
 	failure modelFailure,
@@ -568,7 +555,7 @@ func (adapter *Adapter) logFinished(
 		if failure.httpStatus != 0 {
 			attributes = append(attributes, "http_status", failure.httpStatus)
 		}
-		adapter.logger.Info(modelRequestLogEvent, attributes...)
+		client.logger.Info(modelRequestLogEvent, attributes...)
 		return
 	}
 	outcome := "failure"
@@ -589,28 +576,28 @@ func (adapter *Adapter) logFinished(
 	if failure.httpStatus != 0 {
 		attributes = append(attributes, "http_status", failure.httpStatus)
 	}
-	attributes = append(attributes, adapter.sensitiveFailureAttributes(rawCause, state)...)
+	attributes = append(attributes, client.sensitiveFailureAttributes(rawCause, state)...)
 	if modelError.Class() == domain.SafeErrorClassCancelled {
-		adapter.logger.Warn(modelRequestLogEvent, attributes...)
+		client.logger.Warn(modelRequestLogEvent, attributes...)
 		return
 	}
-	adapter.logger.Error(modelRequestLogEvent, attributes...)
+	client.logger.Error(modelRequestLogEvent, attributes...)
 }
 
-func (adapter *Adapter) sensitiveFailureAttributes(rawCause error, state *transportRequestState) []any {
-	if adapter == nil || !adapter.diagnostics.Sensitive {
+func (client *modelClient) sensitiveFailureAttributes(rawCause error, state *transportRequestState) []any {
+	if client == nil || !client.diagnostics.Sensitive {
 		return nil
 	}
 	attributes := make([]any, 0, 12)
-	if endpoint, _ := adapter.sensitiveDiagnosticText(adapter.configuration.Endpoint, maxSensitiveEndpointLogBytes); endpoint != "" {
+	if endpoint, _ := client.sensitiveDiagnosticText(client.configuration.Endpoint, maxSensitiveEndpointLogBytes); endpoint != "" {
 		attributes = append(attributes, "sensitive_endpoint", endpoint)
 	}
-	if model, _ := adapter.sensitiveDiagnosticText(adapter.configuration.Model, maxSensitiveModelLogBytes); model != "" {
+	if model, _ := client.sensitiveDiagnosticText(client.configuration.Model, maxSensitiveModelLogBytes); model != "" {
 		attributes = append(attributes, "sensitive_model", model)
 	}
 	if rawCause != nil {
 		detail := fmt.Sprintf("%T: %+v", rawCause, rawCause)
-		if detail, truncated := adapter.sensitiveDiagnosticText(detail, maxSensitiveErrorLogBytes); detail != "" {
+		if detail, truncated := client.sensitiveDiagnosticText(detail, maxSensitiveErrorLogBytes); detail != "" {
 			attributes = append(attributes,
 				"sensitive_error_chain", detail,
 				"sensitive_error_truncated", truncated,
@@ -619,7 +606,7 @@ func (adapter *Adapter) sensitiveFailureAttributes(rawCause error, state *transp
 	}
 	if state != nil {
 		body, bodyTruncated := state.providerError()
-		if body, textTruncated := adapter.sensitiveDiagnosticText(body, domain.MaxModelErrorBodyBytes); body != "" {
+		if body, textTruncated := client.sensitiveDiagnosticText(body, domain.MaxModelErrorBodyBytes); body != "" {
 			attributes = append(attributes,
 				"sensitive_provider_error_body", body,
 				"sensitive_provider_body_truncated", bodyTruncated || textTruncated,
@@ -629,11 +616,11 @@ func (adapter *Adapter) sensitiveFailureAttributes(rawCause error, state *transp
 	return attributes
 }
 
-func (adapter *Adapter) sensitiveDiagnosticText(value string, maximum int) (string, bool) {
-	if adapter == nil || !adapter.diagnostics.Sensitive || value == "" || maximum < 1 || adapter.credential == nil {
+func (client *modelClient) sensitiveDiagnosticText(value string, maximum int) (string, bool) {
+	if client == nil || !client.diagnostics.Sensitive || value == "" || maximum < 1 || client.credential == nil {
 		return "", false
 	}
-	if err := adapter.credential.Use(func(secret string) {
+	if err := client.credential.Use(func(secret string) {
 		value = strings.ReplaceAll(value, secret, sensitiveRedactionMarker)
 	}); err != nil {
 		return "", false

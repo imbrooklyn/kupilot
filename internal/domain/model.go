@@ -20,11 +20,10 @@ const (
 	MaxModelRequestBytes = 256 * 1024
 	// MaxModelStreamBytes bounds all wire bytes consumed for one response stream.
 	MaxModelStreamBytes = 256 * 1024
-	// MaxModelStreamEventBytes bounds one neutral event payload. Adapters apply
-	// the same or a lower limit before mapping transport events.
-	MaxModelStreamEventBytes = 64 * 1024
-	// MaxModelStreamEvents bounds emitted neutral events in one response stream.
-	MaxModelStreamEvents = 1024
+	// MaxModelStreamChunkBytes bounds one decoded provider stream chunk.
+	MaxModelStreamChunkBytes = 64 * 1024
+	// MaxModelStreamChunks bounds decoded provider chunks in one response stream.
+	MaxModelStreamChunks = 1024
 	// MaxModelInputMessageBytes bounds system, user, and Tool content sent to a model.
 	MaxModelInputMessageBytes = maxMessageContentBytes
 	// MaxModelMessageBytes bounds one assembled assistant response. The parsed
@@ -49,7 +48,6 @@ const (
 	maxModelToolDescriptionBytes = 1024
 	maxModelCorrelationIDBytes   = 128
 	maxModelErrorMessageBytes    = 1024
-	maxModelReportedTokens       = int64(1_000_000_000)
 )
 
 var (
@@ -57,8 +55,6 @@ var (
 	ErrInvalidModelConfiguration = errors.New("ModelConfiguration data is invalid")
 	// ErrInvalidModelRequest reports an invalid neutral request without echoing content.
 	ErrInvalidModelRequest = errors.New("model request data is invalid")
-	// ErrInvalidModelStreamEvent reports an invalid or ambiguous neutral stream event.
-	ErrInvalidModelStreamEvent = errors.New("model stream event data is invalid")
 	// ErrInvalidModelError reports an invalid safe model error projection.
 	ErrInvalidModelError = errors.New("model error data is invalid")
 )
@@ -185,11 +181,13 @@ type ModelToolCall struct {
 	ArgumentsJSON string
 }
 
-// Validate checks a complete Tool selection without accepting scope or limits.
+// Validate checks a complete provider Tool selection without accepting scope
+// or limits. Provider JSON remains neutral here; the Tool binder applies the
+// strict schema and produces canonical project-owned arguments before use.
 func (call ModelToolCall) Validate() error {
 	if !validModelToken(call.ID, MaxModelToolCallIDBytes) ||
 		!call.Name.Valid() ||
-		!validCanonicalToolArguments(call.ArgumentsJSON) {
+		!validModelToolArguments(call.ArgumentsJSON) {
 		return ErrInvalidModelRequest
 	}
 	return nil
@@ -252,162 +250,6 @@ func (request ModelRequest) Validate() error {
 		return ErrInvalidModelRequest
 	}
 	return nil
-}
-
-// ModelToolCallFragment preserves one indexed structured fragment without
-// interpreting partial JSON as a Tool call.
-type ModelToolCallFragment struct {
-	Index             int
-	IDFragment        string
-	NameFragment      string
-	ArgumentsFragment string
-}
-
-// Validate checks one bounded fragment. A complete call is validated separately.
-func (fragment ModelToolCallFragment) Validate() error {
-	if fragment.Index < 0 || fragment.Index >= maxToolCalls ||
-		fragment.IDFragment == "" && fragment.NameFragment == "" && fragment.ArgumentsFragment == "" ||
-		fragment.IDFragment != "" && !validModelToken(fragment.IDFragment, MaxModelToolCallIDBytes) ||
-		fragment.NameFragment != "" && !validToolNameFragment(fragment.NameFragment) ||
-		len(fragment.ArgumentsFragment) > MaxModelToolArgumentsBytes || !utf8.ValidString(fragment.ArgumentsFragment) {
-		return ErrInvalidModelStreamEvent
-	}
-	return nil
-}
-
-// ModelUsage is optional, bounded provider-reported token metadata.
-type ModelUsage struct {
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
-}
-
-// Validate checks non-negative, internally consistent token counts.
-func (usage ModelUsage) Validate() error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.TotalTokens < 0 ||
-		usage.InputTokens > maxModelReportedTokens || usage.OutputTokens > maxModelReportedTokens ||
-		usage.TotalTokens > maxModelReportedTokens ||
-		usage.InputTokens > math.MaxInt64-usage.OutputTokens ||
-		usage.TotalTokens != usage.InputTokens+usage.OutputTokens {
-		return ErrInvalidModelStreamEvent
-	}
-	return nil
-}
-
-// ModelResponseMetadata contains only optional, validated request metadata.
-type ModelResponseMetadata struct {
-	ProviderRequestID string
-}
-
-// Validate checks the bounded allowlisted response metadata.
-func (metadata ModelResponseMetadata) Validate() error {
-	if !validModelToken(metadata.ProviderRequestID, maxProviderRequestIDBytes) {
-		return ErrInvalidModelStreamEvent
-	}
-	return nil
-}
-
-// ModelFinishReason is one supported neutral completion reason.
-type ModelFinishReason string
-
-const (
-	ModelFinishReasonStop      ModelFinishReason = "stop"
-	ModelFinishReasonToolCalls ModelFinishReason = "tool_calls"
-	ModelFinishReasonLength    ModelFinishReason = "length"
-)
-
-// ModelCompletion is the sole successful terminal stream payload.
-type ModelCompletion struct {
-	FinishReason ModelFinishReason
-}
-
-// Validate checks the supported completion set.
-func (completion ModelCompletion) Validate() error {
-	switch completion.FinishReason {
-	case ModelFinishReasonStop, ModelFinishReasonToolCalls, ModelFinishReasonLength:
-		return nil
-	default:
-		return ErrInvalidModelStreamEvent
-	}
-}
-
-// ModelStreamEventKind identifies one neutral stream payload.
-type ModelStreamEventKind string
-
-const (
-	ModelStreamEventMetadata         ModelStreamEventKind = "metadata"
-	ModelStreamEventTextDelta        ModelStreamEventKind = "text_delta"
-	ModelStreamEventToolCallFragment ModelStreamEventKind = "tool_call_fragment"
-	ModelStreamEventUsage            ModelStreamEventKind = "usage"
-	ModelStreamEventCompleted        ModelStreamEventKind = "completed"
-)
-
-// ModelStreamEvent contains exactly one payload. Failed streams return one
-// ModelError from the consumer-owned port instead of emitting a second terminal.
-type ModelStreamEvent struct {
-	Sequence         int
-	Kind             ModelStreamEventKind
-	Metadata         *ModelResponseMetadata
-	TextDelta        string
-	ToolCallFragment *ModelToolCallFragment
-	Usage            *ModelUsage
-	Completion       *ModelCompletion
-}
-
-// Validate rejects ambiguous, unbounded, or provider-shaped events.
-func (event ModelStreamEvent) Validate() error {
-	if event.Sequence < 1 || event.Sequence > MaxModelStreamEvents {
-		return ErrInvalidModelStreamEvent
-	}
-	payloads := 0
-	if event.Metadata != nil {
-		payloads++
-	}
-	if event.TextDelta != "" {
-		payloads++
-	}
-	if event.ToolCallFragment != nil {
-		payloads++
-	}
-	if event.Usage != nil {
-		payloads++
-	}
-	if event.Completion != nil {
-		payloads++
-	}
-	if payloads != 1 {
-		return ErrInvalidModelStreamEvent
-	}
-	switch event.Kind {
-	case ModelStreamEventMetadata:
-		if event.Metadata == nil || event.Metadata.Validate() != nil {
-			return ErrInvalidModelStreamEvent
-		}
-	case ModelStreamEventTextDelta:
-		if !validModelText(event.TextDelta, MaxModelStreamEventBytes, false) {
-			return ErrInvalidModelStreamEvent
-		}
-	case ModelStreamEventToolCallFragment:
-		if event.ToolCallFragment == nil || event.ToolCallFragment.Validate() != nil {
-			return ErrInvalidModelStreamEvent
-		}
-	case ModelStreamEventUsage:
-		if event.Usage == nil || event.Usage.Validate() != nil {
-			return ErrInvalidModelStreamEvent
-		}
-	case ModelStreamEventCompleted:
-		if event.Completion == nil || event.Completion.Validate() != nil {
-			return ErrInvalidModelStreamEvent
-		}
-	default:
-		return ErrInvalidModelStreamEvent
-	}
-	return nil
-}
-
-// Terminal reports whether the event is the sole successful terminal kind.
-func (event ModelStreamEvent) Terminal() bool {
-	return event.Kind == ModelStreamEventCompleted
 }
 
 // ModelOperation is a code-defined model boundary operation.
@@ -648,20 +490,6 @@ func validModelToken(value string, maximumBytes int) bool {
 	for _, current := range value {
 		if current < 0x21 || current > 0x7e {
 			return false
-		}
-	}
-	return true
-}
-
-func validToolNameFragment(value string) bool {
-	if len(value) > MaxModelToolNameBytes || !utf8.ValidString(value) {
-		return false
-	}
-	for _, current := range value {
-		if current < 'a' || current > 'z' {
-			if current != '_' {
-				return false
-			}
 		}
 	}
 	return true

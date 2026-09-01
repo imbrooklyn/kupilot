@@ -1,8 +1,8 @@
 data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","content":"I will inspect the Pod first. "},"finish_reason":null}]}
 
-data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"Checking its current state.","tool_calls":[{"index":0,"id":"call_fixture_commentary","type":"function","function":{"name":"get_","arguments":"{\"kind\":\""}}]},"finish_reason":null}]}
+data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"Checking its current state.","tool_calls":[{"index":0,"id":"call_fixture_commentary","type":"function","function":{"name":"get_resource","arguments":"{\"kind\":\""}}]},"finish_reason":null}]}
 
-data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"resource","arguments":"Pod\",\"name\":\"sample-pod\"}"}}]},"finish_reason":null}]}
+data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Pod\",\"name\":\"sample-pod\"}"}}]},"finish_reason":null}]}
 
 data: {"id":"response-fixture-commentary-tool","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
 

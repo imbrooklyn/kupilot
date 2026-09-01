@@ -21,7 +21,6 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/kube"
-	"github.com/imbrooklyn/kupilot/internal/llm/openaicompat"
 	"github.com/imbrooklyn/kupilot/internal/persistence/filesystem"
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
@@ -350,7 +349,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	go pumpApplicationRequests(requestContext, coordinator, program, requests, &workers)
 	go pumpApplicationEvents(eventContext, program, uiEventSink.events, deliveryStop, &workers)
 
-	_, runErr := program.Run()
+	finalState, runErr := program.Run()
 	cancelRequests()
 	close(requests)
 	shutdownContext, cancelShutdown := context.WithTimeout(context.WithoutCancel(ctx), domain.MaxAgentRunDuration+15*time.Second)
@@ -359,7 +358,26 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	close(deliveryStop)
 	cancelEvents()
 	workers.Wait()
-	return errors.Join(runErr, shutdownErr)
+	transcriptErr := writeCompletedTerminalTranscript(stdout, finalState, runErr)
+	return errors.Join(runErr, shutdownErr, transcriptErr)
+}
+
+func writeCompletedTerminalTranscript(output io.Writer, finalState tea.Model, runErr error) error {
+	if runErr != nil {
+		return nil
+	}
+	finalModel, ok := finalState.(tui.Model)
+	if !ok {
+		return errors.New("TUI final state is unavailable")
+	}
+	transcript := finalModel.TerminalTranscript()
+	if transcript == "" {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, transcript); err != nil {
+		return fmt.Errorf("write completed terminal transcript: %w", err)
+	}
+	return nil
 }
 
 type applicationSessionAdapter struct {
@@ -714,27 +732,23 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 	if err != nil {
 		return nil, err
 	}
-	modelAdapter, modelErr := openaicompat.New(
-		modelConfiguration(settings.Model),
-		&credential,
-		factory.logger,
-		openaicompat.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
-	)
-	if modelErr != nil {
-		credential.Destroy()
-		return nil, modelErr
-	}
 	agentAdapter, err := einoadapter.New(einoadapter.Config{
-		Model: modelAdapter, Tools: factory.tools, ScopeGuard: factory.scope,
-		Identifiers: factory.identifiers, Now: factory.now,
+		ModelConfiguration: modelConfiguration(settings.Model),
+		Credential:         &credential,
+		Logger:             factory.logger,
+		Diagnostics:        einoadapter.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
+		Tools:              factory.tools,
+		ScopeGuard:         factory.scope,
+		Identifiers:        factory.identifiers,
+		Now:                factory.now,
 	})
 	if err != nil {
-		modelAdapter.Close()
+		credential.Destroy()
 		return nil, err
 	}
 	return &compositionModelRuntime{
-		agent: agentAdapter, model: modelAdapter,
-		name: settings.Model.Model, origin: settings.Model.Origin,
+		agent: agentAdapter,
+		name:  settings.Model.Model, origin: settings.Model.Origin,
 	}, nil
 }
 
@@ -763,7 +777,6 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 type compositionModelRuntime struct {
 	once   sync.Once
 	agent  *einoadapter.Adapter
-	model  *openaicompat.Adapter
 	name   string
 	origin string
 }
@@ -786,9 +799,6 @@ func (runtime *compositionModelRuntime) Close() {
 	runtime.once.Do(func() {
 		if runtime.agent != nil {
 			runtime.agent.Close()
-		}
-		if runtime.model != nil {
-			runtime.model.Close()
 		}
 	})
 }

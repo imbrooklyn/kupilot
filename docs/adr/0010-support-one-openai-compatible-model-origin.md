@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0035
+- Amended by: ADR-0035 and ADR-0043
 
 ## Context
 
@@ -47,9 +47,9 @@ An endpoint is supported only after it passes the model contract in ADR-0022.
 every endpoint using that description works.
 
 The user must configure a model identifier; Kupilot does not hard-code a cloud
-provider default. The precise wire paths, payload fields, streaming event types,
-and concrete client API remain behind the adapter and must satisfy the
-validation requirements below.
+provider default. The precise wire path, Eino-generated payload, streaming
+message types, and concrete client API remain inside the sole Eino boundary and
+must satisfy the validation requirements below.
 
 ## Consequences
 
@@ -100,7 +100,8 @@ A local fake endpoint plus official protocol or SDK documentation must verify:
    origin.
 3. Strict decoding and bounded behavior for malformed, duplicated, reordered,
    oversized, and partial stream events.
-4. A capability probe with no cluster or conversation content.
+4. Construction performs no speculative capability probe; the first
+   Application-admitted request fails safely when the endpoint is incompatible.
 5. Safe timeout, throttling, unavailable, authentication, unsupported, and
    malformed-response classifications.
 6. Chat Completions-style stream and Tool behavior, with response format and
@@ -115,8 +116,8 @@ compatibility documentation.
 
 - A second provider is required and has a complete credential, consent, error,
   streaming, Tool, and test contract.
-- The accepted endpoint profile can no longer supply strict structured Tool
-  events.
+- The accepted endpoint profile can no longer supply structured Tool calls that
+  the project-owned strict binder can validate.
 - Product requirements admit a protected local endpoint mode through a separate
   threat review.
 
@@ -124,6 +125,6 @@ compatibility documentation.
 
 - [Privacy Overview](../privacy-overview.md)
 - [Security Threat Model](../security.md)
-- [ADR-0006: Use Eino Behind an Agent Adapter](0006-use-eino-behind-an-agent-adapter.md)
+- [ADR-0043: Use One Eino Runtime Boundary](0043-use-one-eino-runtime-boundary.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)

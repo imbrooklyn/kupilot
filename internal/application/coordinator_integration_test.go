@@ -2,8 +2,11 @@ package application_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,10 +16,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
+	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/security"
@@ -89,10 +92,34 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		t.Fatalf("NewReadOnlyToolCatalog() error = %v", err)
 	}
 	model := &integrationModel{diagnosis: integrationDiagnosisJSON(integrationEvidenceID1)}
+	modelServer := httptest.NewServer(model)
+	defer modelServer.Close()
+	modelCredential, err := config.NewSecretValue("integration-model-credential-8401")
+	if err != nil {
+		t.Fatalf("config.NewSecretValue() error = %v", err)
+	}
 	agentAdapter, err := einoadapter.New(einoadapter.Config{
-		Model: model, Tools: toolHandlers, ScopeGuard: scope, Identifiers: identifiers, Now: clock.Now,
+		ModelConfiguration: domain.ModelConfiguration{
+			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			Endpoint:            modelServer.URL + "/v1",
+			Origin:              modelServer.URL,
+			Model:               "integration-model",
+			APIKeySource:        domain.ModelAPIKeySourceRuntime,
+			Temperature:         0.1,
+			MaxOutputTokens:     2048,
+			RequestTimeout:      time.Second,
+			StreamingRequired:   true,
+			ToolCallingRequired: true,
+			TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+		},
+		Credential:  &modelCredential,
+		Tools:       toolHandlers,
+		ScopeGuard:  scope,
+		Identifiers: identifiers,
+		Now:         clock.Now,
 	})
 	if err != nil {
+		modelCredential.Destroy()
 		t.Fatalf("einoadapter.New() error = %v", err)
 	}
 	defer agentAdapter.Close()
@@ -647,24 +674,35 @@ func (scope *integrationScope) UnbindRun(runID domain.AgentRunID) {
 	}
 }
 
+type integrationModelMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type integrationModelRequest struct {
+	Messages []integrationModelMessage `json:"messages"`
+}
+
 type integrationModel struct {
 	mu          sync.Mutex
-	requests    []domain.ModelRequest
+	requests    []integrationModelRequest
 	toolPurpose string
 	diagnosis   string
 	step        int
 }
 
-func (model *integrationModel) Stream(
-	ctx context.Context,
-	request domain.ModelRequest,
-	consume agent.ModelStreamConsumer,
-) *domain.ModelError {
-	if ctx == nil || request.Validate() != nil {
-		return domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationStream, "integration-model")
+func (model *integrationModel) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request == nil || request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var captured integrationModelRequest
+	if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
 	}
 	model.mu.Lock()
-	model.requests = append(model.requests, request)
+	model.requests = append(model.requests, captured)
 	step := model.step
 	model.step++
 	toolPurpose := model.toolPurpose
@@ -673,36 +711,67 @@ func (model *integrationModel) Stream(
 	if toolPurpose == "" {
 		toolPurpose = "Inspect the selected Pod."
 	}
-	if err := ctx.Err(); err != nil {
-		return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
-	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
 	switch step % 2 {
 	case 0:
-		consume(domain.ModelStreamEvent{
-			Sequence: 1, Kind: domain.ModelStreamEventToolCallFragment,
-			ToolCallFragment: &domain.ModelToolCallFragment{
-				Index: 0, IDFragment: "call-1", NameFragment: string(domain.ToolNameGetResource),
-				ArgumentsFragment: fmt.Sprintf(`{"purpose":%q,"resource":{"kind":"Pod","name":"sample-pod"}}`, toolPurpose),
-			},
+		arguments, _ := json.Marshal(struct {
+			Purpose  string `json:"purpose"`
+			Resource struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"resource"`
+		}{
+			Purpose: toolPurpose,
+			Resource: struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			}{Kind: "Pod", Name: "sample-pod"},
 		})
-		consume(domain.ModelStreamEvent{
-			Sequence: 2, Kind: domain.ModelStreamEventCompleted,
-			Completion: &domain.ModelCompletion{FinishReason: domain.ModelFinishReasonToolCalls},
+		writeIntegrationModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{
+					"role": "assistant",
+					"tool_calls": []any{map[string]any{
+						"index": 0, "id": "call-1", "type": "function",
+						"function": map[string]any{
+							"name": string(domain.ToolNameGetResource), "arguments": string(arguments),
+						},
+					}},
+				},
+				"finish_reason": nil,
+			}},
+		})
+		writeIntegrationModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls",
+			}},
 		})
 	case 1:
-		consume(domain.ModelStreamEvent{Sequence: 1, Kind: domain.ModelStreamEventTextDelta, TextDelta: diagnosis})
-		consume(domain.ModelStreamEvent{
-			Sequence: 2, Kind: domain.ModelStreamEventCompleted,
-			Completion: &domain.ModelCompletion{FinishReason: domain.ModelFinishReasonStop},
+		writeIntegrationModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{"role": "assistant", "content": diagnosis}, "finish_reason": nil,
+			}},
+		})
+		writeIntegrationModelChunk(writer, map[string]any{
+			"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{}, "finish_reason": "stop",
+			}},
 		})
 	}
-	return nil
+	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 }
 
-func (model *integrationModel) Requests() []domain.ModelRequest {
+func writeIntegrationModelChunk(writer http.ResponseWriter, value any) {
+	encoded, _ := json.Marshal(value)
+	_, _ = writer.Write(append(append([]byte("data: "), encoded...), '\n', '\n'))
+}
+
+func (model *integrationModel) Requests() []integrationModelRequest {
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	return append([]domain.ModelRequest(nil), model.requests...)
+	return append([]integrationModelRequest(nil), model.requests...)
 }
 
 func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) {

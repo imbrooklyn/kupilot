@@ -2,7 +2,6 @@ package einoadapter
 
 import (
 	"context"
-	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -12,17 +11,21 @@ import (
 )
 
 type modelBridge struct {
-	state      *runState
-	toolsBound bool
+	state *runState
+	model einomodel.ToolCallingChatModel
 }
 
 var _ einomodel.ToolCallingChatModel = (*modelBridge)(nil)
 
 func (bridge *modelBridge) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if bridge == nil || bridge.state == nil || validateBoundToolInfos(tools) != nil {
+	if bridge == nil || bridge.state == nil || bridge.state.client == nil || validateBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	return &modelBridge{state: bridge.state, toolsBound: true}, nil
+	bound, err := bridge.state.client.withTools(tools)
+	if err != nil {
+		return nil, err
+	}
+	return &modelBridge{state: bridge.state, model: bound}, nil
 }
 
 func (bridge *modelBridge) Generate(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.Message, error) {
@@ -38,17 +41,24 @@ func (bridge *modelBridge) Generate(ctx context.Context, input []*schema.Message
 }
 
 func (bridge *modelBridge) Stream(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
-	if bridge == nil || bridge.state == nil || !bridge.toolsBound || ctx == nil || len(options) != 0 {
+	if bridge == nil || bridge.state == nil || bridge.model == nil || ctx == nil || len(options) != 0 {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	message, err := bridge.state.callModel(ctx, input)
+	message, err := bridge.state.callModel(ctx, bridge.model, input)
 	if err != nil {
 		return nil, err
 	}
 	return schema.StreamReaderFromArray([]*schema.Message{message}), nil
 }
 
-func (state *runState) callModel(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+func (state *runState) callModel(
+	ctx context.Context,
+	model einomodel.ToolCallingChatModel,
+	messages []*schema.Message,
+) (*schema.Message, error) {
+	if state == nil || state.client == nil || model == nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
 	if err := state.checkScope(ctx); err != nil {
 		return nil, err
 	}
@@ -79,15 +89,11 @@ func (state *runState) callModel(ctx context.Context, messages []*schema.Message
 	}
 
 	modelCtx, cancel := context.WithTimeout(ctx, reservation.Timeout)
-	collector := newModelCollector(state, modelCtx, cancel)
-	modelError := state.model.Stream(modelCtx, request, collector.consume)
+	message, modelError := state.client.stream(modelCtx, requestID, model, messages)
 	modelContextError := modelCtx.Err()
 	cancel()
 	if err := state.checkScope(ctx); err != nil {
 		return nil, err
-	}
-	if collector.failure != nil {
-		return nil, collector.failure
 	}
 	if modelContextError != nil {
 		return nil, normalizeFrameworkError(modelContextError)
@@ -95,7 +101,77 @@ func (state *runState) callModel(ctx context.Context, messages []*schema.Message
 	if modelError != nil {
 		return nil, runtimeFailureFromModel(modelError)
 	}
-	return collector.finalMessage(ctx)
+	return state.acceptModelMessage(ctx, message)
+}
+
+func (state *runState) acceptModelMessage(ctx context.Context, message *schema.Message) (*schema.Message, error) {
+	if message == nil || message.Role != "" && message.Role != schema.Assistant ||
+		len(message.MultiContent) != 0 || len(message.UserInputMultiContent) != 0 ||
+		len(message.AssistantGenMultiContent) != 0 || message.Name != "" ||
+		message.ToolCallID != "" || message.ToolName != "" || message.ReasoningContent != "" ||
+		message.Extra != nil || message.ResponseMeta == nil || message.ResponseMeta.LogProbs != nil {
+		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	}
+
+	switch message.ResponseMeta.FinishReason {
+	case "stop":
+		neutral := domain.ModelMessage{Role: domain.ModelMessageRoleAssistant, Content: message.Content}
+		if len(message.ToolCalls) != 0 || neutral.Validate() != nil {
+			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		}
+		if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: safeModelProgress}); err != nil {
+			return nil, err
+		}
+		return schema.AssistantMessage(message.Content, nil), nil
+	case "length":
+		if len(message.ToolCalls) != 0 {
+			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		}
+		return nil, localRuntimeStop(
+			agent.RunStopStepLimit,
+			domain.SafeErrorClassBudgetExhausted,
+			"The model response reached its fixed output limit.",
+			nil,
+		)
+	case "tool_calls":
+		if len(message.ToolCalls) == 0 || len(message.ToolCalls) > domain.MaxAgentToolCalls {
+			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		}
+		calls := make([]domain.ModelToolCall, len(message.ToolCalls))
+		for index, call := range message.ToolCalls {
+			if call.Extra != nil || call.Type != "" && call.Type != "function" ||
+				call.Index == nil || *call.Index != index {
+				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			}
+			calls[index] = domain.ModelToolCall{
+				ID:            call.ID,
+				Name:          domain.ToolName(call.Function.Name),
+				ArgumentsJSON: call.Function.Arguments,
+			}
+			if calls[index].Validate() != nil {
+				return nil, failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", nil)
+			}
+		}
+		if err := state.bindToolCalls(ctx, calls); err != nil {
+			return nil, err
+		}
+		einoCalls := make([]schema.ToolCall, len(calls))
+		for index, call := range calls {
+			position := index
+			einoCalls[index] = schema.ToolCall{
+				Index: &position,
+				ID:    call.ID,
+				Type:  "function",
+				Function: schema.FunctionCall{
+					Name:      string(call.Name),
+					Arguments: call.ArgumentsJSON,
+				},
+			}
+		}
+		return schema.AssistantMessage("", einoCalls), nil
+	default:
+		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	}
 }
 
 func runtimeFailureFromModel(modelError *domain.ModelError) *runtimeFailure {
@@ -121,159 +197,5 @@ func runtimeFailureFromModel(modelError *domain.ModelError) *runtimeFailure {
 		}
 	default:
 		return failedRuntime(modelError.Class(), modelError.SafeMessage(), modelError)
-	}
-}
-
-type toolCallAssembly struct {
-	seen      bool
-	id        strings.Builder
-	name      strings.Builder
-	arguments strings.Builder
-}
-
-type modelCollector struct {
-	state *runState
-	ctx   context.Context
-	stop  context.CancelFunc
-
-	sequence  int
-	text      strings.Builder
-	tools     [domain.MaxAgentToolCalls]toolCallAssembly
-	maxIndex  int
-	sawTool   bool
-	metadata  bool
-	usage     bool
-	progress  bool
-	completed *domain.ModelCompletion
-	failure   error
-}
-
-func newModelCollector(state *runState, ctx context.Context, stop context.CancelFunc) *modelCollector {
-	return &modelCollector{state: state, ctx: ctx, stop: stop, maxIndex: -1}
-}
-
-func (collector *modelCollector) consume(event domain.ModelStreamEvent) {
-	if collector.failure != nil {
-		return
-	}
-	if err := collector.accept(event); err != nil {
-		collector.failure = err
-		collector.stop()
-	}
-}
-
-func (collector *modelCollector) accept(event domain.ModelStreamEvent) error {
-	if event.Validate() != nil || event.Sequence != collector.sequence+1 || collector.completed != nil {
-		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-	}
-	collector.sequence = event.Sequence
-	switch event.Kind {
-	case domain.ModelStreamEventMetadata:
-		if collector.metadata {
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		collector.metadata = true
-	case domain.ModelStreamEventUsage:
-		if collector.usage {
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		collector.usage = true
-	case domain.ModelStreamEventTextDelta:
-		if collector.sawTool || collector.text.Len()+len(event.TextDelta) > domain.MaxModelMessageBytes {
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		collector.text.WriteString(event.TextDelta)
-		if !collector.progress {
-			if err := collector.state.publish(collector.ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: safeModelProgress}); err != nil {
-				return err
-			}
-			collector.progress = true
-		}
-	case domain.ModelStreamEventToolCallFragment:
-		if collector.text.Len() != 0 {
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		fragment := event.ToolCallFragment
-		assembly := &collector.tools[fragment.Index]
-		assembly.seen = true
-		assembly.id.WriteString(fragment.IDFragment)
-		assembly.name.WriteString(fragment.NameFragment)
-		assembly.arguments.WriteString(fragment.ArgumentsFragment)
-		if assembly.id.Len() > domain.MaxModelToolCallIDBytes || assembly.name.Len() > domain.MaxModelToolNameBytes ||
-			assembly.arguments.Len() > domain.MaxModelToolArgumentsBytes {
-			return failedRuntime(domain.SafeErrorClassBudgetExhausted, "The model's cluster-read request exceeded a fixed limit.", nil)
-		}
-		collector.sawTool = true
-		if fragment.Index > collector.maxIndex {
-			collector.maxIndex = fragment.Index
-		}
-	case domain.ModelStreamEventCompleted:
-		completion := *event.Completion
-		collector.completed = &completion
-	default:
-		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-	}
-	return nil
-}
-
-func (collector *modelCollector) finalMessage(ctx context.Context) (*schema.Message, error) {
-	if collector.completed == nil || collector.sequence == 0 {
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-	}
-	switch collector.completed.FinishReason {
-	case domain.ModelFinishReasonStop:
-		if collector.sawTool || collector.text.Len() == 0 {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		return schema.AssistantMessage(collector.text.String(), nil), nil
-	case domain.ModelFinishReasonLength:
-		if collector.sawTool {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		return nil, localRuntimeStop(
-			agent.RunStopStepLimit,
-			domain.SafeErrorClassBudgetExhausted,
-			"The model response reached its fixed output limit.",
-			nil,
-		)
-	case domain.ModelFinishReasonToolCalls:
-		if !collector.sawTool || collector.text.Len() != 0 {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		calls := make([]domain.ModelToolCall, collector.maxIndex+1)
-		for index := 0; index <= collector.maxIndex; index++ {
-			assembly := &collector.tools[index]
-			if !assembly.seen {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-			}
-			call := domain.ModelToolCall{
-				ID:            assembly.id.String(),
-				Name:          domain.ToolName(assembly.name.String()),
-				ArgumentsJSON: assembly.arguments.String(),
-			}
-			if call.Validate() != nil {
-				return nil, failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", nil)
-			}
-			calls[index] = call
-		}
-		if err := collector.state.bindToolCalls(ctx, calls); err != nil {
-			return nil, err
-		}
-		einoCalls := make([]schema.ToolCall, len(calls))
-		for index, call := range calls {
-			position := index
-			einoCalls[index] = schema.ToolCall{
-				Index: &position,
-				ID:    call.ID,
-				Type:  "function",
-				Function: schema.FunctionCall{
-					Name:      string(call.Name),
-					Arguments: call.ArgumentsJSON,
-				},
-			}
-		}
-		return schema.AssistantMessage("", einoCalls), nil
-	default:
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
 }

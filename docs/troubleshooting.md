@@ -135,9 +135,10 @@ chain. For example, HTTP 400 with `cause: http_status` and
 and Tool contract; it does not mean the network is unavailable. The log never
 contains the provider body, Authorization header, key, URL, question, cluster
 content, file paths, line numbers, or raw error in its default mode. No model
-record is expected when neutral request validation rejected the request before
-the model adapter. `cause: transport_validation` without an HTTP status means
-an SDK or local transport constraint rejected the call before network I/O;
+record is expected when project-owned request validation rejected the request
+before the Eino boundary entered its transport. `cause: transport_validation`
+without an HTTP status means an SDK or local transport constraint rejected the
+call before network I/O;
 `cause: transport_unavailable` without a status means the guarded transport was
 entered but no valid HTTP response was observed.
 
@@ -148,8 +149,8 @@ Kupilot accepts inert empty deltas and interleaving between distinct bounded
 Tool indexes. It also accepts bounded commentary before or alongside a Tool
 selection when that response terminates with `tool_calls`; the commentary is
 discarded and cannot authorize a Tool. Kupilot still rejects missing or
-non-contiguous indexes, incomplete calls, Tool fragments completed with
-`stop` or `length`, unsupported finish states, and data after terminal state.
+non-contiguous indexes, incomplete calls, Tool calls completed with `stop` or
+`length`, unsupported finish states, and data after terminal state.
 Default logs intentionally do not retain the raw chunk or its content.
 
 For a private, short-lived reproduction, add:

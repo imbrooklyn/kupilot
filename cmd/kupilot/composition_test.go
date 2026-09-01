@@ -143,7 +143,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *te
 		t.Fatalf("os.ReadFile(main.go) error = %v", err)
 	}
 	mainSource := string(mainContent)
-	if strings.Count(mainSource, "openaicompat.New(") != 1 || strings.Count(mainSource, "einoadapter.New(") != 1 ||
+	if strings.Count(mainSource, "openaicompat.New(") != 0 || strings.Count(mainSource, "einoadapter.New(") != 1 ||
 		strings.Count(mainSource, "tools.NewReadOnlyToolCatalog(") != 1 ||
 		strings.Count(mainSource, "sqlite.NewScopePreferenceRepository(") != 1 ||
 		strings.Count(mainSource, "ScopePreferences: scopePreferenceRepository") != 1 ||
@@ -186,7 +186,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *te
 	if err != nil {
 		t.Fatalf("filepath.WalkDir() error = %v", err)
 	}
-	if providerConstructors != 1 || !strings.HasSuffix(providerPath, "internal/llm/openaicompat/adapter.go") {
+	if providerConstructors != 1 || !strings.HasSuffix(providerPath, "internal/agent/einoadapter/model_client.go") {
 		t.Fatalf("provider constructors/path = %d/%q", providerConstructors, providerPath)
 	}
 }

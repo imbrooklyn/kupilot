@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-05
-- Amended by: ADR-0037
+- Amended by: ADR-0037 and ADR-0043
 
 ## Context
 
@@ -25,8 +25,9 @@ fixed ownership:
 - `internal/application` is the only use-case layer and owns orchestration,
   commands, queries, events, and outbound ports.
 - `internal/agent` owns neutral single-Agent policy and its consumer ports.
-- `internal/agent/einoadapter` is the Eino translation boundary. Eino types do
-  not cross it.
+- `internal/agent/einoadapter` is the sole Eino and model-provider boundary. It
+  owns the pinned model component, guarded transport, and ReAct translation;
+  Eino and provider types do not cross it.
 - `internal/tools` owns the admitted structured handlers and the narrow Kubernetes
   read ports they consume.
 - `internal/kube` and `internal/persistence/sqlite` are infrastructure adapters.

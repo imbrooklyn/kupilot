@@ -1,0 +1,146 @@
+# ADR-0043: Use One Eino Runtime Boundary
+
+- Status: Accepted
+- Date: 2026-09-01
+- Supersedes: ADR-0006
+- Amends: ADR-0010, ADR-0022, and ADR-0036
+
+## Context
+
+Kupilot originally isolated the Eino OpenAI component in
+`internal/llm/openaicompat` and the Eino ReAct runtime in
+`internal/agent/einoadapter`. The model adapter converted Eino stream chunks
+into project-owned fragment events. The Agent adapter immediately reassembled
+those events into an Eino assistant message so that ReAct could consume it.
+
+That double translation made one provider response pass through two independent
+state machines for Tool-call fragments, finish reasons, usage, cancellation,
+and terminal ownership. It also replaced the complete request payload after the
+Eino component serialized it. Compatibility fixes therefore accumulated in a
+parallel Chat Completions implementation instead of remaining aligned with the
+pinned Eino component.
+
+The project still needs exact local ownership of credentials, endpoint origin,
+raw byte limits, safe errors, budgets, Tool authority, Evidence, and scope. None
+of those controls requires a second model protocol abstraction.
+
+## Decision
+
+`internal/agent/einoadapter` is the single Eino and model-provider boundary. It
+owns both the pinned Eino ReAct runtime and the pinned Eino OpenAI ChatModel.
+The `internal/llm/openaicompat` package, the Agent-owned neutral `Model` port,
+and the neutral model-fragment event hierarchy are removed.
+
+The production path is:
+
+1. Agent core creates project-owned immutable run input, prompt text, Tool
+   specifications, budgets, and policy services.
+2. The Eino adapter maps the initial project messages and fixed Tool catalog to
+   Eino values once.
+3. ReAct calls the guarded Eino OpenAI ChatModel directly.
+4. The Eino component owns Chat Completions request serialization and SSE/JSON
+   conversion. The adapter drains and closes one Eino stream, and Eino's schema
+   API assembles its indexed Tool-argument fragments and finish metadata once.
+5. The adapter validates the one assembled Eino assistant message, binds every
+   complete Tool call through the project-owned strict catalog, and maps the
+   final answer into the project-owned Diagnosis contract.
+
+Kupilot does not replace or reconstruct the Eino-generated request payload. A
+request payload observer may reject an oversized body or an exact credential
+reflection, but it returns admitted bytes unchanged. The configured model,
+temperature, output limit, optional reasoning effort, messages, stream usage,
+and Tool definitions are supplied through typed Eino configuration and values.
+The sole exception to Eino's typed request fields is one adapter-owned,
+constant-key `temperature` entry in Eino's `ExtraFields`. Its value is still
+the validated scalar configuration value. This prevents the pinned downstream
+OpenAI client from rejecting a compatible endpoint before transport merely
+because a configured model identifier begins with `gpt-5`. No user-controlled
+extension map is admitted, and the adapter neither examines the identifier nor
+rewrites the serialized payload.
+
+Provider-side `strict: true` is not a compatibility requirement or an authority
+boundary. The model-visible Tool parameters remain code-owned JSON Schemas with
+closed object shapes. Every returned argument object is decoded with the fixed
+project schema, rejects unknown, duplicate, wrong-type, overlong, sensitive,
+scope-bearing, or runtime-authority fields, and is canonicalized before budget
+reservation or Tool dispatch. A provider accepting a looser output does not
+widen what Kupilot can execute.
+
+The project-owned guarded HTTP transport remains inside the same adapter and
+continues to own:
+
+- canonical-origin, HTTPS verification, loopback-only HTTP, and redirect
+  enforcement;
+- late Authorization injection from the opaque credential and immediate
+  placeholder restoration;
+- request size and raw SSE byte, record, and record-size limits;
+- content-type checks, non-success body disposal, optional bounded sensitive
+  diagnostics, observed HTTP status, and stable safe error classification; and
+- response-body closure and cancellation propagation.
+
+The adapter accepts only the fixed Eino model and Tool options needed by the
+current run. It clears inherited callback state and enables no provider retry,
+fallback, tracing, memory, checkpoint, dynamic Tool, or global callback. Eino
+types remain private to `internal/agent/einoadapter` and do not enter Domain,
+Application, Tools, Kubernetes, persistence, CLI, or TUI.
+
+## Consequences
+
+One component now interprets provider streaming semantics, and ReAct consumes
+the resulting message without a neutral-fragment round trip. Ordinary
+OpenAI-compatible variations that the pinned Eino component already supports,
+including non-canonical whitespace or key order in Tool arguments, reach the
+local strict binder instead of being rejected by a parallel serializer.
+
+Agent tests that need scripted model behavior use Eino fakes inside the Eino
+adapter package. Tests outside that package observe only `AgentRunner`, run
+events, and project-owned outcomes. There is no exported provider or Eino test
+seam.
+
+The guarded transport and assembled-message validator remain non-trivial. They
+are security controls, not a second provider client. An Eino dependency update
+must still pass the request, stream, Tool, cancellation, error, credential, and
+body-closure fixtures before it is accepted.
+
+## Security and privacy impact
+
+The change removes an authority-neutral translation layer; it does not move
+authority into Eino. Tool dispatch still requires immutable scope, current
+generation, local strict binding, atomic budget reservation, fixed dispatch,
+projected Tool results, and deterministic Evidence creation.
+
+The model credential remains opaque and transport-only. Raw request and
+response bodies, provider errors, Eino messages, callback values, and streams
+remain excluded from Application, TUI, SQLite, AuditEvents, and default logs.
+The ADR-0036 sensitive failure projection remains opt-in, bounded, locally
+redacted, and failure-only.
+
+## Validation
+
+Deterministic tests must prove:
+
+1. Eino serializes the configured model request once and Kupilot does not
+   replace its admitted payload.
+2. Text, atomic Tool identities with fragmented and interleaved arguments,
+   non-canonical valid Tool JSON, Tool commentary, optional usage, and supported
+   finish reasons produce one validated Agent transition.
+3. Unknown or malformed Tool calls, duplicate identities or JSON keys,
+   non-contiguous indexes, unsupported output fields, missing or conflicting
+   terminal state, and size limits cause zero unauthorized Tool calls.
+4. Cancellation, model deadline, stale scope, response closure, and Adapter
+   closure have one owner and one terminal outcome.
+5. HTTP status, redirect, TLS, media type, malformed stream, and transport
+   failures map to stable safe classes without leaking bodies or credentials.
+6. Static import tests permit Eino and Eino OpenAI imports only inside
+   `internal/agent/einoadapter` and prove that its exported surface contains no
+   Eino type.
+
+## References
+
+- [Architecture](../architecture.md)
+- [Model Compatibility](../model-compatibility.md)
+- [Security Threat Model](../security.md)
+- [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
+- [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
+- [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)
+- [ADR-0036: Record Bounded Model Failure Diagnostics](0036-record-bounded-safe-model-failure-diagnostics.md)

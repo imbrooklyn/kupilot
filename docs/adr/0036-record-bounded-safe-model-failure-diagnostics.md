@@ -2,7 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-08-29
-- Amends: ADR-0006, ADR-0017, ADR-0022, ADR-0027
+- Amends: ADR-0006, ADR-0017, ADR-0022, and ADR-0027
+- Amended by: ADR-0043
 
 ## Context
 
@@ -21,14 +22,18 @@ SDK failure that the stable projection cannot explain.
 
 ## Decision
 
-The Eino request scaffold leaves optional sampling and output fields unset;
-Kupilot's fixed payload modifier remains the sole owner of their actual wire
-values. This prevents SDK model-name heuristics from rejecting an otherwise
-valid OpenAI-compatible request before HTTP. An optional reasoning-effort value
-comes only from typed configuration and is never inferred from a model name or
-raw endpoint error. The guarded model transport marks
-when an HTTP round trip is entered and records any valid HTTP status from 100
-through 599 in request-local state before the SDK maps the response. Context
+The pinned Eino ChatModel is the sole request serializer. Model, temperature,
+output limit, optional reasoning effort, messages, stream usage, and Tool
+definitions come from typed configuration and Eino values. Kupilot observes the
+serialized request only to reject an oversized body or exact credential
+reflection and otherwise returns the bytes unchanged. Reasoning effort is never
+inferred from a model name or raw endpoint error. The Eino boundary uses one
+fixed `ExtraFields` key for the validated temperature value so the
+pinned downstream client cannot reject an otherwise compatible endpoint based
+only on a `gpt-5` model-name prefix. This is not a user extension surface and
+does not modify the serialized body. The guarded model transport marks when an
+HTTP round trip is entered and records any valid HTTP status from
+100 through 599 in request-local state before the SDK maps the response. Context
 cancellation and code-defined local policy failures retain precedence.
 Otherwise, a non-200 observed status is classified from that status even when
 the SDK returns only a generic error. A generic SDK failure after an accepted
@@ -130,8 +135,8 @@ Deterministic tests must prove:
 3. The fixed model event records its safe fields at the configured level and
    includes only a bounded project-symbol chain with an honest truncation flag.
 4. Default mode excludes caller-provided errors, bodies, stacks, credentials,
-   local paths, and unknown values, and invalid neutral requests still produce
-   zero HTTP and log calls.
+   local paths, and unknown values, and invalid project-owned requests still
+   produce zero HTTP and log calls.
 5. Sensitive mode is off by default, records the bounded endpoint, model,
    error, provider body and full stack fields only for terminal model failures,
    marks truncation, removes an exact reflected credential, applies general

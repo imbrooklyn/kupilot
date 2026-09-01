@@ -1,18 +1,19 @@
 palette enabled=true base=default muted=default surface=#1e1e1e border=default accent=#008080 success=#008000 warning=#808000 danger=#800000
 <blank rows=1>
- › Why is payment-api unavailable?
+› Why is payment-api unavailable?
 <blank rows=2>
 • Inspect resource · done
     └ Inspect the selected Deployment. → No available replicas.
 <blank rows=1>
-────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────────
 <blank rows=1>
 The Deployment has no available replicas.
 <blank rows=1>
-─ Worked for 20s ───────────────────────────────────────────────────────
-<blank rows=1>
- › /resource pay
+─ Worked for 20s ──────────────────────────────────────────────────────
+<blank rows=4>
+› /resource pay
 <blank rows=1>
 › Deployment/payment-api · Unavailable
   Pod/payment-api-7d9 · Pending
+<blank rows=1>
 Context development · Namespace payments · supervised

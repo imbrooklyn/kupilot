@@ -14,7 +14,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 )
 
-func TestEinoImportsRemainInTheirSoleTranslationBoundaries(t *testing.T) {
+func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller() did not return the test path")
@@ -42,13 +42,11 @@ func TestEinoImportsRemainInTheirSoleTranslationBoundaries(t *testing.T) {
 				return err
 			}
 			inAgentAdapter := strings.HasPrefix(relative, filepath.Join("internal", "agent", "einoadapter")+string(filepath.Separator))
-			inModelAdapter := strings.HasPrefix(relative, filepath.Join("internal", "llm", "openaicompat")+string(filepath.Separator))
-			if strings.HasPrefix(importPath, "github.com/cloudwego/eino") && !inAgentAdapter && !inModelAdapter {
+			if strings.HasPrefix(importPath, "github.com/cloudwego/eino") && !inAgentAdapter {
 				t.Errorf("%s imports Eino outside an admitted adapter: %s", relative, importPath)
 			}
-			if inAgentAdapter && (strings.HasPrefix(importPath, "github.com/cloudwego/eino-ext") ||
-				importPath == "github.com/imbrooklyn/kupilot/internal/llm/openaicompat" || importPath == "net/http") {
-				t.Errorf("%s imports a provider or transport boundary: %s", relative, importPath)
+			if importPath == "github.com/imbrooklyn/kupilot/internal/llm/openaicompat" {
+				t.Errorf("%s imports the removed parallel model adapter: %s", relative, importPath)
 			}
 		}
 		return nil

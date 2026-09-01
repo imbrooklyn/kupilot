@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-30
-- Amended: 2026-08-31
+- Amended: 2026-09-01
 - Supersedes: ADR-0023
 
 ## Context
@@ -26,11 +26,13 @@ these presentation rules:
   eight content rows, submits with `Enter`, and inserts a newline with
   `Shift+Enter`, `Alt+Enter`, or a distinguishable `Ctrl+J`. It uses subtle
   vertical spacing or background only when the terminal color mode can render
-  it safely. The textarea uses the terminal's real cursor at the insertion
-  point, while placeholder text is rendered separately. Operating-system input
-  methods therefore receive a stable candidate-window position, and committed
-  Unicode text is inserted exactly without placeholder overpainting or
-  delivery-added spaces.
+  it safely. Only the first visual row renders `›`; explicit and soft-wrapped
+  continuation rows reserve the same prompt width so their text stays aligned.
+  The textarea uses the terminal's real cursor at the insertion point, while
+  placeholder text is rendered separately. Operating-system input methods
+  therefore receive a stable candidate-window position, and committed Unicode
+  text is inserted exactly without placeholder overpainting or delivery-added
+  spaces.
 - User messages retain the `›` marker and use the same quiet surface and
   vertical spacing as the composer. Assistant Markdown is unframed and rendered
   into width-aware prose, lists, inert code, and readable tables. Wide tables
@@ -38,14 +40,21 @@ these presentation rules:
   outer or vertical border. Tables fall back to key/value records when a grid
   would starve its columns. Repeated role labels and fixed report headings are
   not added.
-- Ordinary conversation uses the primary terminal buffer, not a full-session
-  alternate screen. The TUI keeps streaming output, the composer, suggestions,
-  and the footer in a compact managed frame. When a leading transcript block is
-  immutable, it advances a monotonic commit boundary and schedules that safe
-  rendered block once into terminal-owned scrollback. A user question waits
-  for a subsequent accepted transcript item, normally the run start; an Agent
-  block waits for terminal text, Tool steps, Evidence references, and elapsed
-  time. Resize and duplicate events do not recommit it.
+- Ordinary conversation uses one full-height alternate-screen runtime. The TUI
+  leaves readable vertical gaps and one terminal-safe right wrapping column,
+  keeps output above a bottom-anchored composer, and retains suggestions and
+  the footer below it. Transcript, composer, footer, Working state, and dialogs
+  remain inside the same renderer-owned frame; reducers never insert unmanaged
+  lines into the primary screen while that frame is active. User history and
+  the composer use the same left origin, with no additional root-level
+  horizontal inset.
+  On graceful exit, Bubble Tea restores the primary screen before the
+  composition root writes the completed terminal-safe transcript exactly once.
+  This post-runtime projection includes completed user, notice, Tool, Evidence,
+  answer, and elapsed-time entries. It excludes the composer and its draft or
+  placeholder, footer, dialogs, live Working row, and provisional Agent output.
+  It uses the final accepted terminal width and may remain in terminal-owned
+  scrollback after the process exits.
 - Primary text uses the terminal's default foreground. Secondary information
   uses the terminal dim attribute instead of a low-contrast hard-coded gray.
   Cyan is the default accent, green means success, red means failure, and
@@ -66,11 +75,15 @@ these presentation rules:
   the turn ends with a muted full-width
   `─ Worked for <duration> ─────────` separator.
 - The persistent footer prioritizes the verified Kubernetes Context, working
-  Namespace, and access/action state. Model configuration, Session identity,
-  budget counters, retention mode, and detailed run state move to `/status`.
+  Namespace, and access/action state. Labels and separators are secondary,
+  Context and Namespace values use the accent, and verified supervision uses
+  the success semantic; the same meaning remains explicit in no-color mode.
+  Model configuration, Session identity, budget counters, retention mode, and
+  detailed run state move to `/status`.
 - `/status` is a local query. It performs no model or Kubernetes call and shows
   the current Session, model, scope generation, namespace-access policy,
-  mutation availability, privacy mode, active run, and budget usage.
+  mutation availability, privacy mode, active run, and budget usage in aligned
+  Session, Scope, Run, and Budget groups.
 - Suggestions and bounded Pickers remain directly below the one composer. The
   product has no primary resource table, navigation tree, dashboard, YAML
   editor, raw log pane, shell, or kubectl mode.
@@ -80,9 +93,11 @@ these presentation rules:
   as composer-history actions. `Page Up` and `Page Down` scroll the retained
   transcript; `Ctrl+P` and `Ctrl+N` explicitly recall submitted input. Plain
   arrow keys remain available to the multiline editor and bounded Pickers.
-- `Page Up` temporarily re-renders the retained in-memory transcript at the
-  current width, and `Page Down` returns to the live projection at the bottom.
-  This review state and terminal scrollback do not restore an AgentRun,
+  `Ctrl+C` clears a non-empty composer first; only a later `Ctrl+C` with no
+  draft follows the quit or active-run cancellation path.
+- `Page Up` scrolls the retained in-memory transcript at the current width, and
+  `Page Down` returns to the live projection at the bottom. This review state
+  and the post-exit terminal transcript do not restore an AgentRun,
   Evidence authority, approval, scope, or Session persistence.
 
 Layout and palette behavior are derived from public Codex CLI documentation and
@@ -91,9 +106,10 @@ scope, consent, Evidence, and approval semantics.
 
 ## Consequences
 
-The screen reads as an Agent conversation, uses less terminal chrome, and keeps
-high-value Kubernetes context persistent without crowding every frame with
-diagnostic metadata.
+The full-height alternate screen reads as an Agent conversation, uses less
+terminal chrome, and keeps high-value Kubernetes context persistent without
+crowding every frame with diagnostic metadata. It also isolates renderer
+cursor accounting from shell history and terminal-owned scrollback.
 
 Golden fixtures must change, and terminal-background detection remains
 imperfect. Unknown modes therefore prefer terminal defaults and semantic text
@@ -103,11 +119,13 @@ selection; deterministic `Page Up` and `Page Down` navigation remains
 available for transcript content outside the visible screen.
 
 Completed conversation remains available in normal terminal scrollback after
-graceful exit. Already committed rows retain the width and palette used when
-they were emitted; explicit in-process transcript review reflows from bounded
-source state after a resize. Terminal scrollback is outside Kupilot deletion
-and retention control, so switching or deleting Sessions does not erase rows
-already displayed by the terminal.
+graceful exit because Kupilot writes one final projection after restoring the
+primary screen. In-process transcript review reflows from bounded source state
+after a resize, and the exit projection uses the last accepted width and
+palette. Terminal scrollback is outside Kupilot deletion and retention control,
+so switching or deleting Sessions does not erase rows already displayed by the
+terminal. During the full-screen runtime, earlier rows are reviewed inside the
+TUI rather than through terminal scrollback.
 
 ## Security and privacy impact
 
@@ -116,12 +134,12 @@ a bounded Application DTO and contains no credential, kubeconfig, raw endpoint
 authorization, raw Tool data, or live client. Scope, approval, and execution
 meaning never depends on color alone.
 
-Primary-screen commitment creates no new model, Kubernetes, Tool, executor,
-SQLite, log, or audit call. Only normalized bounded render state is eligible;
-partial model drafts, credentials, raw payloads, unsafe controls, clipboard
-sequences, and model-selected styles remain excluded. Terminal-emulator
-scrollback may outlive Kupilot and is disclosed as an external local retention
-surface.
+Post-runtime transcript output creates no new model, Kubernetes, Tool,
+executor, SQLite, log, or audit call. Only normalized bounded completed render
+state is eligible; composer drafts, partial model output, credentials, raw
+payloads, unsafe controls, clipboard sequences, and model-selected styles
+remain excluded. Terminal-emulator scrollback may outlive Kupilot and is
+disclosed as an external local retention surface.
 
 The real cursor and Working animation are delivery-only. Working ticks carry
 the active run ID, scope generation, accepted sequence, and terminal snapshot;
@@ -140,10 +158,11 @@ input-history shortcuts; borderless wide and record-fallback narrow Markdown
 tables; compact duration formatting; stale and post-terminal Working-frame
 rejection; `Esc` cancellation; inert links; status width; terminal controls;
 and proof that `/status`, `Update`, and `View` cause no business I/O. Runtime
-tests must also prove primary-screen operation, immutable-prefix ordering, no
-commit of streaming drafts, no duplicate commit after resize or duplicate
-events, retained keyboard review, and absence of alternate-screen control
-sequences in ordinary conversation.
+tests must also prove exactly one alternate-screen enter and leave pair, no
+unmanaged transcript writes while the runtime frame is active, retained
+keyboard review, and one post-restore completed transcript containing no
+composer, placeholder, footer, Working state, duplicate entry, streaming draft,
+or unsafe terminal control.
 
 ## References
 
@@ -154,5 +173,8 @@ sequences in ordinary conversation.
 - [Codex status indicator](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status_indicator_widget.rs)
 - [Codex Markdown renderer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/markdown_render.rs)
 - [Codex final-message separators](https://github.com/openai/codex/blob/main/codex-rs/tui/src/history_cell/separators.rs)
+- [Codex alternate-screen configuration](https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json)
 - [Codex inline terminal runtime](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui.rs)
+- [Codex inline history insertion](https://github.com/openai/codex/blob/main/codex-rs/tui/src/insert_history.rs)
+- [Codex custom terminal](https://github.com/openai/codex/blob/main/codex-rs/tui/src/custom_terminal.rs)
 - [Product Contract](../product.md)

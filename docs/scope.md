@@ -7,9 +7,10 @@ data-safety controls.
 ## In scope for `v0.4`
 
 - A local, single-process, single-user TUI with one active AgentRun. Ordinary
-  conversation uses the primary terminal buffer: immutable completed blocks
-  enter terminal-owned scrollback once, while live output and the one composer
-  remain in a compact managed frame.
+  conversation uses one full-height alternate-screen runtime with the composer
+  anchored at the bottom. After graceful terminal restoration, one bounded
+  completed transcript enters terminal-owned scrollback; runtime drafts and
+  chrome do not.
 - One configured `openai_compatible` model origin and the accepted streaming
   structured-capability protocol.
 - One verified Kubernetes Context, one visible working Namespace, and one

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
+
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
@@ -16,7 +18,7 @@ func TestToolBudgetProcessesBatchInOrderAndStopsBeforeSecondHandler(t *testing.T
 	limits := agent.DefaultRunBudgetLimits()
 	limits.ToolCalls = 1
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(toolCallEvents(
+		scriptedChunks(toolCallChunks(
 			resourceCall("call-1", "sample-pod"),
 			eventsCall("call-2", "sample-pod"),
 		)...),
@@ -48,8 +50,8 @@ func TestRepeatedToolCallStopsWithoutSecondHandlerOrThirdModelCall(t *testing.T)
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(toolCallEvents(resourceCall("call-1", "sample-pod"))...),
-		scriptedEvents(toolCallEvents(resourceCall("call-2", "sample-pod"))...),
+		scriptedChunks(toolCallChunks(resourceCall("call-1", "sample-pod"))...),
+		scriptedChunks(toolCallChunks(resourceCall("call-2", "sample-pod"))...),
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return successfulToolResult(t, call, testEvidenceID, clock.Now(), `{"ready":false}`)
@@ -71,8 +73,8 @@ func TestNoProgressStopsBeforeThirdNeutralModelCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(toolCallEvents(resourceCall("call-1", "sample-pod"))...),
-		scriptedEvents(toolCallEvents(resourceCall("call-2", "other-pod"))...),
+		scriptedChunks(toolCallChunks(resourceCall("call-1", "sample-pod"))...),
+		scriptedChunks(toolCallChunks(resourceCall("call-2", "other-pod"))...),
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return emptyToolResult(t, call, clock.Now())
@@ -105,10 +107,10 @@ func TestCancellationStopsBlockedModelAndPublishesOneTerminal(t *testing.T) {
 	started := make(chan struct{})
 	var closeOnce sync.Once
 	model := &recordingModel{scripts: []modelScript{
-		func(ctx context.Context, request domain.ModelRequest, _ agent.ModelStreamConsumer) *domain.ModelError {
+		func(ctx context.Context, request domain.ModelRequest) ([]*schema.Message, error) {
 			closeOnce.Do(func() { close(started) })
 			<-ctx.Done()
-			return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
+			return nil, domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
 		},
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
@@ -149,8 +151,8 @@ func TestModelDeadlineMapsToTimedOutWithoutRetry(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		func(_ context.Context, request domain.ModelRequest, _ agent.ModelStreamConsumer) *domain.ModelError {
-			return domain.NewModelError(domain.ModelErrorCodeTimeout, domain.ModelOperationStream, string(request.ID))
+		func(_ context.Context, request domain.ModelRequest) ([]*schema.Message, error) {
+			return nil, domain.NewModelError(domain.ModelErrorCodeTimeout, domain.ModelOperationStream, string(request.ID))
 		},
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
@@ -170,15 +172,15 @@ func TestModelDeadlineMapsToTimedOutWithoutRetry(t *testing.T) {
 	assertTerminalSequence(t, recorder.Events())
 }
 
-func TestModelChildDeadlineStopsWithoutRetryOrToolCall(t *testing.T) {
+func TestExpiredModelChildDeadlineStopsBeforeModelOrToolCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	limits := agent.DefaultRunBudgetLimits()
 	limits.ModelRequestTimeout = time.Nanosecond
 	model := &recordingModel{scripts: []modelScript{
-		func(ctx context.Context, request domain.ModelRequest, _ agent.ModelStreamConsumer) *domain.ModelError {
+		func(ctx context.Context, request domain.ModelRequest) ([]*schema.Message, error) {
 			<-ctx.Done()
-			return domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
+			return nil, domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationStream, string(request.ID))
 		},
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
@@ -192,7 +194,7 @@ func TestModelChildDeadlineStopsWithoutRetryOrToolCall(t *testing.T) {
 		*outcome.ErrorClass != domain.SafeErrorClassTimeout {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	if len(model.Requests()) != 1 || len(tool.Calls()) != 0 {
+	if len(model.Requests()) != 0 || len(tool.Calls()) != 0 {
 		t.Fatalf("calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
 	}
 	assertTerminalSequence(t, recorder.Events())
@@ -204,7 +206,7 @@ func TestToolChildDeadlineStopsBeforeAnotherModelOrToolCall(t *testing.T) {
 	limits := agent.DefaultRunBudgetLimits()
 	limits.ToolRequestTimeout = time.Nanosecond
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(toolCallEvents(
+		scriptedChunks(toolCallChunks(
 			resourceCall("call-1", "sample-pod"),
 			eventsCall("call-2", "sample-pod"),
 		)...),
@@ -227,15 +229,11 @@ func TestToolChildDeadlineStopsBeforeAnotherModelOrToolCall(t *testing.T) {
 	assertTerminalSequence(t, recorder.Events())
 }
 
-func TestInvalidDeltaSequenceStopsWithoutToolCall(t *testing.T) {
+func TestMissingModelFinishStopsWithoutToolCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(domain.ModelStreamEvent{
-			Sequence:  2,
-			Kind:      domain.ModelStreamEventTextDelta,
-			TextDelta: `{"confirmed_facts":[]}`,
-		}),
+		scriptedChunks(&schema.Message{Role: schema.Assistant, Content: `{"confirmed_facts":[]}`}),
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return emptyToolResult(t, call, clock.Now())
@@ -275,12 +273,12 @@ func TestStaleScopeBeforeAndAfterExternalReturnsDiscardsLateData(t *testing.T) {
 	t.Run("after model", func(t *testing.T) {
 		clock := newTestClock()
 		guard := newTestScopeGuard()
-		events := toolCallEvents(resourceCall("call-1", "sample-pod"))
+		chunks := toolCallChunks(resourceCall("call-1", "sample-pod"))
 		model := &recordingModel{scripts: []modelScript{
-			func(ctx context.Context, request domain.ModelRequest, consume agent.ModelStreamConsumer) *domain.ModelError {
-				result := scriptedEvents(events...)(ctx, request, consume)
+			func(ctx context.Context, request domain.ModelRequest) ([]*schema.Message, error) {
+				result, err := scriptedChunks(chunks...)(ctx, request)
 				guard.SetCurrent(false)
-				return result
+				return result, err
 			},
 		}}
 		tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
@@ -299,7 +297,7 @@ func TestStaleScopeBeforeAndAfterExternalReturnsDiscardsLateData(t *testing.T) {
 		clock := newTestClock()
 		guard := newTestScopeGuard()
 		model := &recordingModel{scripts: []modelScript{
-			scriptedEvents(toolCallEvents(resourceCall("call-1", "sample-pod"))...),
+			scriptedChunks(toolCallChunks(resourceCall("call-1", "sample-pod"))...),
 		}}
 		tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 			result := successfulToolResult(t, call, testEvidenceID, clock.Now(), `{"ready":false}`)
@@ -325,7 +323,7 @@ func TestInvalidToolEvidenceStopsBeforeAnotherModelCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
-		scriptedEvents(toolCallEvents(
+		scriptedChunks(toolCallChunks(
 			resourceCall("call-1", "sample-pod"),
 			eventsCall("call-2", "sample-pod"),
 		)...),

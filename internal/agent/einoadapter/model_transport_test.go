@@ -1,4 +1,4 @@
-package openaicompat
+package einoadapter
 
 import (
 	"bytes"
@@ -32,8 +32,8 @@ func FuzzBoundedSSEBodyIsChunkIndependent(f *testing.F) {
 	for _, seed := range [][]byte{
 		[]byte("data: {\"choices\":[]}\n\n"),
 		[]byte("data:{\"choices\":[]}\r\n\r\n"),
-		[]byte("data: " + strings.Repeat("x", domain.MaxModelStreamEventBytes+1) + "\n\n"),
-		[]byte(strings.Repeat("data: {}\n\n", domain.MaxModelStreamEvents+1)),
+		[]byte("data: " + strings.Repeat("x", domain.MaxModelStreamChunkBytes+1) + "\n\n"),
+		[]byte(strings.Repeat("data: {}\n\n", domain.MaxModelStreamChunks+1)),
 		[]byte(strings.Repeat(":", domain.MaxModelStreamBytes+1)),
 	} {
 		f.Add(seed, uint8(17))

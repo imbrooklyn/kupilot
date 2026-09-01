@@ -1,3 +1,5 @@
+// Package agent owns project-defined single-Agent policy, runtime contracts,
+// and consumer-owned ports.
 package agent
 
 import (

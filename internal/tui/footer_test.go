@@ -61,6 +61,34 @@ func TestFooterExcludesResourceRunModelAndPrivacyDetails(t *testing.T) {
 	}
 }
 
+func TestFooterUsesSemanticScopeColorsWithoutColorOnlyMeaning(t *testing.T) {
+	t.Parallel()
+
+	colored := NewModel(Config{
+		Width: 100, Height: 24, Theme: ThemeDark,
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+	})
+	footer := colored.footerView()
+	for _, styled := range []string{
+		colored.styles.footer.Label.Render("Context "),
+		colored.styles.footer.Value.Render("development"),
+		colored.styles.footer.Value.Render("payments"),
+		colored.styles.footer.State.Render("supervised"),
+	} {
+		if !strings.Contains(footer, styled) {
+			t.Fatalf("footer is missing semantic style %q: %q", styled, footer)
+		}
+	}
+
+	plain := NewModel(Config{
+		Width: 100, Height: 24, Theme: ThemeNoColor,
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+	}).footerView()
+	if hasColorSGR(plain) || !strings.Contains(plain, "Context development · Namespace payments · supervised") {
+		t.Fatalf("no-color footer lost textual meaning or retained color: %q", plain)
+	}
+}
+
 func TestFooterNarrowWidthsRetainScopeAndSupervisionBeforeOptionalState(t *testing.T) {
 	t.Parallel()
 

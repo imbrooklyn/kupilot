@@ -497,11 +497,25 @@ func validSHA256Hex(value string) bool {
 }
 
 func validCanonicalToolArguments(value string) bool {
-	if !validBoundedText(value, 2, maxToolArgumentsBytes) || value[0] != '{' || value[len(value)-1] != '}' || !json.Valid([]byte(value)) {
+	if !validModelToolArguments(value) {
 		return false
 	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(value)); err != nil || compact.String() != value {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var fields map[string]any
+	if err := decoder.Decode(&fields); err != nil {
+		return false
+	}
+	canonical, err := json.Marshal(fields)
+	return err == nil && string(canonical) == value
+}
+
+// validModelToolArguments accepts a bounded neutral JSON object from a model
+// provider without requiring provider-specific whitespace or key ordering. It
+// still rejects duplicate keys and every field that could carry runtime
+// authority before the Tool binder sees the selection.
+func validModelToolArguments(value string) bool {
+	if !validBoundedText(value, 2, maxToolArgumentsBytes) || !json.Valid([]byte(value)) || !validJSONWithoutDuplicateKeys(value) {
 		return false
 	}
 	decoder := json.NewDecoder(strings.NewReader(value))
@@ -518,12 +532,64 @@ func validCanonicalToolArguments(value string) bool {
 	if !ok {
 		return false
 	}
-	canonical, err := json.Marshal(fields)
-	if err != nil || string(canonical) != value {
-		return false
-	}
 	items := 0
 	return !containsToolAuthorityField(fields) && validSafeJSONValue(fields, 0, &items)
+}
+
+func validJSONWithoutDuplicateKeys(value string) bool {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	items := 0
+	if !scanUniqueJSONValue(decoder, 0, &items) {
+		return false
+	}
+	var trailing any
+	return decoder.Decode(&trailing) == io.EOF
+}
+
+func scanUniqueJSONValue(decoder *json.Decoder, depth int, items *int) bool {
+	if depth > 16 || *items >= 10_000 {
+		return false
+	}
+	(*items)++
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	delimiter, structured := token.(json.Delim)
+	if !structured {
+		return true
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, keyErr := decoder.Token()
+			key, ok := keyToken.(string)
+			if keyErr != nil || !ok {
+				return false
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return false
+			}
+			seen[key] = struct{}{}
+			if !scanUniqueJSONValue(decoder, depth+1, items) {
+				return false
+			}
+		}
+		closing, closeErr := decoder.Token()
+		return closeErr == nil && closing == json.Delim('}')
+	case '[':
+		for decoder.More() {
+			if !scanUniqueJSONValue(decoder, depth+1, items) {
+				return false
+			}
+		}
+		closing, closeErr := decoder.Token()
+		return closeErr == nil && closing == json.Delim(']')
+	default:
+		return false
+	}
 }
 
 func containsToolAuthorityField(value any) bool {

@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
+	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/cli"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/kube"
-	"github.com/imbrooklyn/kupilot/internal/llm/openaicompat"
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 	platformlogging "github.com/imbrooklyn/kupilot/internal/platform/logging"
@@ -173,31 +173,63 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 	if err != nil {
 		t.Fatalf("EnvironmentSecretSource.Read() error = %v", err)
 	}
-	adapter, modelErr := openaicompat.New(domain.ModelConfiguration{
-		ProviderKind:        domain.ModelProviderOpenAICompatible,
-		Endpoint:            server.URL + "/v1",
-		Origin:              server.URL,
-		Model:               "assurance-model",
-		APIKeySource:        domain.ModelAPIKeySourceRuntime,
-		Temperature:         0.1,
-		MaxOutputTokens:     256,
-		RequestTimeout:      time.Second,
-		StreamingRequired:   true,
-		ToolCallingRequired: true,
-		TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
-	}, &credential, nil, openaicompat.DiagnosticOptions{})
+	tool := &assuranceNoopTool{}
+	adapter, modelErr := einoadapter.New(einoadapter.Config{
+		ModelConfiguration: domain.ModelConfiguration{
+			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			Endpoint:            server.URL + "/v1",
+			Origin:              server.URL,
+			Model:               "assurance-model",
+			APIKeySource:        domain.ModelAPIKeySourceRuntime,
+			Temperature:         0.1,
+			MaxOutputTokens:     256,
+			RequestTimeout:      time.Second,
+			StreamingRequired:   true,
+			ToolCallingRequired: true,
+			TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+		},
+		Credential: &credential,
+		Tools: agent.ToolHandlers{
+			GetResource: tool, ListResources: tool, GetEvents: tool,
+			GetPodLogs: tool, GetPreviousPodLogs: tool,
+			GetRelatedResources: tool, GetClusterOverview: tool,
+		},
+		ScopeGuard:  assuranceScopeGuard{},
+		Identifiers: &assuranceRunIDs{},
+		Now:         func() time.Time { return time.UnixMilli(2).UTC() },
+	})
 	if modelErr != nil {
 		credential.Destroy()
-		t.Fatalf("openaicompat.New() error = %v", modelErr)
+		t.Fatalf("einoadapter.New() error = %v", modelErr)
 	}
 	defer adapter.Close()
-	modelErr = adapter.Stream(context.Background(), assuranceModelRequest(), func(domain.ModelStreamEvent) {})
-	if modelErr == nil {
-		t.Fatal("Adapter.Stream() error = nil")
+	input, err := agent.NewRunInput(
+		domain.AgentRunID("00000000-0000-7000-8000-000000000935"),
+		domain.SessionID("00000000-0000-7000-8000-000000000936"),
+		domain.MessageID("00000000-0000-7000-8000-000000000937"),
+		"Report the bounded diagnostic result.", assuranceScope(), nil, agent.DefaultRunBudgetLimits(),
+	)
+	if err != nil {
+		t.Fatalf("agent.NewRunInput() error = %v", err)
+	}
+	outcome := adapter.Run(context.Background(), input, agent.EventSinkFunc(func(context.Context, agent.RunEvent) agent.EventSinkResult {
+		return agent.EventSinkAccepted
+	}))
+	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
+		*outcome.ErrorClass != domain.SafeErrorClassUnavailable {
+		t.Fatalf("Adapter.Run() outcome = %#v", outcome)
 	}
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("model requests = %d, want 1", got)
 	}
+	if got := tool.calls.Load(); got != 0 {
+		t.Fatalf("Tool calls = %d, want 0", got)
+	}
+	modelErr = domain.NewModelError(
+		domain.ModelErrorCodeServiceUnavailable,
+		domain.ModelOperationRequest,
+		"assurance-model",
+	)
 	return assuranceBoundary{
 		err: modelErr, class: domain.SafeErrorClassUnavailable, canaries: []string{credentialCanary, errorCanary},
 	}
@@ -550,6 +582,35 @@ func readAssuranceFiles(t *testing.T, directory string) string {
 type assuranceResourceReader struct {
 	calls atomic.Int32
 	err   error
+}
+
+type assuranceNoopTool struct {
+	calls atomic.Int32
+}
+
+func (tool *assuranceNoopTool) Execute(context.Context, agent.BoundToolCall) domain.ToolResult {
+	tool.calls.Add(1)
+	return domain.ToolResult{}
+}
+
+type assuranceRunIDs struct {
+	counter atomic.Uint64
+}
+
+func (ids *assuranceRunIDs) next() string {
+	return fmt.Sprintf("00000000-0000-7000-8000-%012x", 0x940+ids.counter.Add(1))
+}
+
+func (ids *assuranceRunIDs) NewModelRequestID() (domain.ModelRequestID, error) {
+	return domain.ModelRequestID(ids.next()), nil
+}
+
+func (ids *assuranceRunIDs) NewToolInvocationID() (domain.ToolInvocationID, error) {
+	return domain.ToolInvocationID(ids.next()), nil
+}
+
+func (ids *assuranceRunIDs) NewDiagnosisID() (domain.DiagnosisID, error) {
+	return domain.DiagnosisID(ids.next()), nil
 }
 
 type assuranceToolError struct {

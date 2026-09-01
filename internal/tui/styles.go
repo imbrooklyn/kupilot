@@ -148,9 +148,12 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 	surface := backgroundStyle(base, palette.Surface)
 	mutedSurface := backgroundStyle(muted, palette.Surface)
 	accentSurface := backgroundStyle(accent, palette.Surface)
-	focusedSurface := surface.Padding(1, 1)
-	blurredSurface := surface.Padding(1, 1)
-	userSurface := surface.Padding(1, 1)
+	// Codex keeps the composer and historic user surface full-width on the
+	// left: the two-column prompt is the only left inset. One blank row above
+	// and below keeps submitted input visually stable without adding a box.
+	focusedSurface := surface.Padding(1, 0)
+	blurredSurface := surface.Padding(1, 0)
+	userSurface := surface.Padding(1, 0)
 
 	textareaFocused := textarea.StyleState{
 		Base:             surface,
@@ -249,7 +252,7 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 			Body:  base, Selected: accent, Muted: muted,
 		},
 		footer: components.FooterStyles{
-			Primary: base, Secondary: muted, Warning: warning,
+			Label: muted, Value: accent, Separator: muted, State: success, Warning: warning,
 		},
 	}
 }

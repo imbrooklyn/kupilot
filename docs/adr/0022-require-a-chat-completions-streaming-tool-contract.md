@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0036 and ADR-0039
+- Amended by: ADR-0036, ADR-0039, and ADR-0043
 
 ## Context
 
@@ -12,56 +12,57 @@ cannot provide a safe Tool authorization boundary. Providers also differ in
 stream framing, partial arguments, finish reasons, error bodies, usage, and
 capability claims.
 
-The internal contract must be stable and project-owned even though one Eino and
-one OpenAI-compatible adapter implement it.
+The policy contract must remain project-owned even though the sole Eino
+boundary implements the OpenAI-compatible wire profile.
 
 ## Decision
 
 A model endpoint is usable only if it implements the accepted Chat
-Completions-style streaming and Tool-call profile and satisfies Kupilot's neutral
-Model contract:
+Completions-style streaming and Tool-call profile:
 
 - Bounded request messages with project-owned roles and content parts.
-- One frozen set of strict, versioned structured Tool specifications per model
-  request.
-- Streaming text deltas and structured Tool selections represented as distinct
-  typed events.
-- Deterministic request completion, finish reason, and one terminal success or
-  classified failure. Usage and response-format features are optional and never
-  required for core safety.
+- One frozen set of versioned function Tool specifications with code-owned
+  closed JSON Schemas per model request.
+- One bounded Eino stream that assembles into exactly one supported assistant
+  text or structured Tool-selection message.
+- A supported finish reason and exactly one project terminal outcome. Usage and
+  response-format features are optional and never required for core safety.
 - Context cancellation and a profile-selected per-request ceiling of at most
   300 seconds, further bounded by remaining AgentRun time.
 
-The adapter must assemble fragmented structured arguments under fixed byte and
-event limits, reject unknown or duplicate fields according to the Tool schema,
-and reject ambiguous, malformed, non-contiguous, duplicate-terminal, or
-unsupported events. Bounded empty deltas are inert no-ops. Fragments belonging
-to distinct bounded Tool indexes may interleave, but assembly preserves arrival
-order within each index and every complete indexed call still passes the fixed
-catalog and strict-schema gates. Some compatible models emit commentary content
-before or alongside a structured Tool selection. The adapter buffers that text
-under the ordinary response limits and, only when the same response terminates
-with `tool_calls`, discards it without emitting a neutral text event. A
-`stop` or `length` response containing a Tool fragment remains invalid. Text
-that resembles JSON, a Tool name, approval, command, or execution claim remains
-text and never dispatches a Tool.
+The Eino component owns provider serialization, SSE/JSON decoding, and
+fragmented argument assembly. Tool-call identifier, type, and function name are
+atomic for each index; argument fragments for distinct bounded indexes may
+interleave. Kupilot independently bounds raw bytes, SSE records, decoded
+chunks, and the assembled message; rejects ambiguous choices, malformed or
+non-contiguous calls, unsupported finish reasons, and content after terminal
+state; and validates every complete call through the fixed catalog and strict
+local binder. Bounded empty deltas are inert.
+
+Some compatible models emit commentary before or alongside a structured Tool
+selection. After Eino assembles the response, Kupilot discards that text only
+when the finish reason is `tool_calls`. A `stop` or `length` response containing
+a Tool call remains invalid. Text that resembles JSON, a Tool name, approval,
+command, or execution claim remains text and never dispatches a Tool.
 
 Kupilot does not downgrade to prompt-parsed Tool calls, a prose-only diagnostic
-mode, or an endpoint-selected Tool schema. If required capabilities are absent,
-the run stops before cluster data is transferred or returns a safe unsupported
-classification from a content-free capability check.
+mode, or an endpoint-selected Tool schema. Construction performs no network
+probe. If the first Application-admitted request proves incompatible, the run
+returns a safe unsupported or invalid-response classification without retry,
+downgrade, or fallback.
 
 The user must configure the model identifier; Kupilot does not embed a provider
 default. Temperature is accepted only in the low range from 0 through 0.2, and a
 hard output-token limit is mandatory. The concrete default must remain inside
-that range and be documented with the model adapter configuration. An optional
+that range and be documented with the Eino boundary configuration. An optional
 typed reasoning-effort field may be omitted or set only to `none`; it is never
 inferred from the model identifier or an endpoint error.
 
-Raw provider request, response, stream, error, and usage objects stay in the
-adapter. Application and Agent core see only neutral bounded events and safe
-errors. A final model draft becomes a Diagnosis only after local structure and
-same-run Evidence validation.
+Raw provider request, response, stream, error, usage, and Eino message objects
+stay inside `internal/agent/einoadapter`. Application and Agent core see only
+project-owned run events, safe errors, Tool calls, and final outcomes. A final
+model draft becomes a Diagnosis only after local structure and same-run
+Evidence validation.
 
 ## Consequences
 
@@ -76,8 +77,8 @@ Costs and constraints:
 
 - Basic chat-compatible endpoints without reliable structured Tools are not
   supported.
-- Fragment assembly, duplicate detection, cancellation, and terminal ownership
-  require careful adapter code.
+- Eino version behavior, local bounds, cancellation, and terminal ownership
+  require careful compatibility tests.
 - A provider protocol change can block model use until its mapping is updated.
 - Streaming improves feedback but does not allow partial text to become a final
   durable Message.
@@ -88,8 +89,8 @@ Costs and constraints:
   untrusted cluster text could trigger ambiguous operations.
 - Offering a prose-only fallback was rejected because the Agent could not gather
   runtime Evidence through the accepted contract.
-- Letting Eino or a provider type become the internal contract was rejected
-  because it couples policy, tests, and TUI to a vendor API.
+- Letting Eino or provider types escape the sole adapter was rejected because
+  it couples policy, Application, persistence, and TUI to a vendor API.
 - Buffering an unbounded complete response before validation was rejected for
   latency and resource-exhaustion reasons.
 
@@ -109,12 +110,14 @@ safety limits before any sink.
 
 Local fake-endpoint and Eino adapter tests must prove:
 
-1. Required structured Tool schema and streaming event representation.
+1. Eino-generated request fields and the required closed Tool schemas without
+   relying on a provider-specific `strict` flag.
 2. Cancellation and exactly one terminal outcome at every chunk boundary.
-3. Bounded fragmented argument assembly, inert empty deltas, interleaved
-   distinct Tool indexes, discard of non-authoritative commentary attached to
-   a valid `tool_calls` response, and rejection of malformed, duplicate,
-   non-contiguous, unknown, oversized, and finish-inconsistent events.
+3. Bounded fragmented argument assembly with atomic Tool identities, inert
+   empty deltas, interleaved distinct indexes, discard of non-authoritative
+   commentary attached to a valid `tool_calls` response, and rejection of
+   malformed, non-contiguous, unknown, oversized, and finish-inconsistent
+   responses.
 4. No Tool dispatch from prose or unsupported fallback behavior.
 5. Safe mapping of finish reasons, optional usage, authentication, permission,
    throttling, timeout, unavailable, and malformed responses.
@@ -136,7 +139,7 @@ Local fake-endpoint and Eino adapter tests must prove:
 
 - [Architecture](../architecture.md)
 - [Security Threat Model](../security.md)
-- [ADR-0006: Use Eino Behind an Agent Adapter](0006-use-eino-behind-an-agent-adapter.md)
+- [ADR-0043: Use One Eino Runtime Boundary](0043-use-one-eino-runtime-boundary.md)
 - [ADR-0009: Use Fixed Structured Tools](0009-use-fixed-structured-tools.md)
 - [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
 - [ADR-0015: Require the Evidence and Diagnosis Contract](0015-evidence-and-diagnosis-contract.md)

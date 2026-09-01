@@ -32,22 +32,11 @@ Ctrl+E opens supporting observation details. Esc interrupts an active run when n
 
 const transcriptWheelRows = 3
 
-// Update reduces one message into pure UI state and commits newly immutable
-// transcript blocks to terminal-owned scrollback when no command is competing
-// for delivery. Run start explicitly sequences its commit before animation.
-// Live Agent output remains in the managed frame.
+// Update reduces one message into pure UI state. The complete runtime frame is
+// renderer-owned; terminal transcript output occurs only after Program.Run has
+// restored the primary screen.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := model.update(msg)
-	updated, ok := next.(Model)
-	if !ok || cmd != nil {
-		return next, cmd
-	}
-	block := updated.transcript.CommitReady()
-	if block == "" {
-		return updated, nil
-	}
-	updated.reflow()
-	return updated, tea.Println(block)
+	return model.update(msg)
 }
 
 func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -74,21 +63,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ApplicationEventMsg:
 		cmd := model.acceptApplicationEvent(message.Event)
 		model.reflow()
-		if message.Event.Kind == application.UIEventRunStarted && cmd != nil {
-			block := model.transcript.CommitReady()
-			model.reflow()
-			if block != "" {
-				return model, tea.Sequence(tea.Println(block), cmd)
-			}
-		}
 		if model.quitAfterCancel && !model.run.Active && model.run.Terminal {
 			model.quitAfterCancel = false
-			block := model.transcript.CommitReady()
-			model.reflow()
-			if block != "" {
-				return model, tea.Sequence(tea.Println(block), quitCommand())
-			}
-			return model, quitCommand()
+			return model, model.prepareQuit()
 		}
 		return model, cmd
 	case ApprovalExpiryMsg:
@@ -373,11 +350,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model.updateSessionExportTargetKey(message)
 	}
 	if key.Matches(message, model.keymap.Quit) {
+		if model.clearComposerForInterrupt() {
+			return model, nil
+		}
 		if model.run.Active {
 			model.quitAfterCancel = true
 			return model, model.cancelRunCommand()
 		}
-		return model, quitCommand()
+		return model, model.prepareQuit()
 	}
 	if model.scopeConflict.Open() {
 		return model.updateScopeConflictKey(message)
@@ -394,7 +374,7 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
 				model.quitAfterLocalDeletion = false
 				model.closeDialog()
-				return model, quitCommand()
+				return model, model.prepareQuit()
 			}
 			return model, nil
 		}
@@ -417,7 +397,7 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			quitFailedResume := model.resumeOrigin == resumeOriginTopLevel && model.startup.Failed && !model.startup.Ready
 			model.closeDialog()
 			if quitFailedResume {
-				return model, quitCommand()
+				return model, model.prepareQuit()
 			}
 			if model.resumeOrigin == resumeOriginInTUI && model.startup.Ready {
 				model.resumeOrigin = resumeOriginNone
@@ -750,7 +730,7 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 	case slashQuit:
 		model.composer.Reset()
 		model.slashMenu.Close()
-		return model, quitCommand()
+		return model, model.prepareQuit()
 	case slashApplication:
 		intent := application.UICommand{
 			Kind:                    command.commandKind,
@@ -961,6 +941,24 @@ func quitCommand() tea.Cmd {
 	return func() tea.Msg { return tea.Quit() }
 }
 
+func (model *Model) clearComposerForInterrupt() bool {
+	if model.composer.Value() == "" {
+		return false
+	}
+	model.composer.Reset()
+	model.closePickers()
+	model.slashMenu.Close()
+	model.reflow()
+	return true
+}
+
+func (model *Model) prepareQuit() tea.Cmd {
+	model.closePickers()
+	model.slashMenu.Close()
+	model.composer.Blur()
+	return quitCommand()
+}
+
 func combineCommands(commands ...tea.Cmd) tea.Cmd {
 	filtered := make([]tea.Cmd, 0, len(commands))
 	for _, command := range commands {
@@ -1002,7 +1000,7 @@ func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
 	}
 	model.reflow()
 	if topLevel {
-		return model, quitCommand()
+		return model, model.prepareQuit()
 	}
 	return model, nil
 }
@@ -1024,7 +1022,7 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 		}
 		model.focus = FocusComposer
 		if topLevel {
-			return model, quitCommand()
+			return model, model.prepareQuit()
 		}
 		model.startup.Ready = true
 		if requestID == 0 {
@@ -1770,31 +1768,42 @@ func statusText(status application.UIStatusResult, modelName string) string {
 	if modelName == "" {
 		modelName = "unavailable"
 	}
-	return fmt.Sprintf(`Kupilot status
+	return strings.Join([]string{
+		"Kupilot status",
+		"",
+		"Session",
+		statusRow("ID", session),
+		statusRow("Model", modelName),
+		statusRow("Privacy", privacy),
+		statusRow("Storage", storage),
+		"",
+		"Scope",
+		statusRow("Context", contextName),
+		statusRow("Namespace", namespace),
+		statusRow("Generation", fmt.Sprintf("%d", status.ScopeGeneration)),
+		statusRow("Access", access),
+		statusRow("Actions", actions),
+		"",
+		"Run",
+		statusRow("State", run),
+		statusRow("Catalog", status.CapabilityCatalogVersion),
+		"",
+		"Budget",
+		statusRow("Profile", string(budget.Profile)),
+		statusRow("Time", statusDuration(budget.ElapsedMilliseconds)+" elapsed · "+statusDuration(budget.RemainingMilliseconds)+" remaining"),
+		statusRow("Calls", fmt.Sprintf("%d/%d steps · %d/%d tools · %d/%d model", budget.StepsUsed, budget.StepsMaximum,
+			budget.ToolCallsUsed, budget.ToolCallsMaximum, budget.ModelCallsUsed, budget.ModelCallsMaximum)),
+		statusRow("Data", fmt.Sprintf("%s/%s · %d/%d log calls", statusBytes(budget.ToolResultBytesUsed),
+			statusBytes(budget.ToolResultBytesMaximum), budget.LogCallsUsed, budget.LogCallsMaximum)),
+	}, "\n")
+}
 
-Session: %s
-Model: %s
-Context: %s
-Namespace: %s
-Scope generation: %d
-Access: %s
-Actions: %s
-Run: %s
-Capability catalog: %s
-Budget: %s · elapsed %s · remaining %s
-Usage: steps %d/%d · tools %d/%d · model %d/%d
-Data: %s/%s · log calls %d/%d
-Privacy: %s · local storage: %s`,
-		session, modelName, contextName, namespace, status.ScopeGeneration, access, actions, run, status.CapabilityCatalogVersion, budget.Profile,
-		statusDuration(budget.ElapsedMilliseconds), statusDuration(budget.RemainingMilliseconds),
-		budget.StepsUsed, budget.StepsMaximum, budget.ToolCallsUsed, budget.ToolCallsMaximum,
-		budget.ModelCallsUsed, budget.ModelCallsMaximum,
-		statusBytes(budget.ToolResultBytesUsed), statusBytes(budget.ToolResultBytesMaximum),
-		budget.LogCallsUsed, budget.LogCallsMaximum, privacy, storage)
+func statusRow(label, value string) string {
+	return fmt.Sprintf("  %-11s %s", label, value)
 }
 
 func statusDuration(milliseconds int64) string {
-	return (time.Duration(milliseconds) * time.Millisecond).Truncate(time.Second).String()
+	return components.FormatElapsedCompact((time.Duration(milliseconds) * time.Millisecond).Truncate(time.Second))
 }
 
 func statusBytes(value int) string {

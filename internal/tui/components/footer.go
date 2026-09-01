@@ -8,8 +8,10 @@ import (
 
 // FooterStyles distinguish primary scope state from lower-priority metadata.
 type FooterStyles struct {
-	Primary   lipgloss.Style
-	Secondary lipgloss.Style
+	Label     lipgloss.Style
+	Value     lipgloss.Style
+	Separator lipgloss.Style
+	State     lipgloss.Style
 	Warning   lipgloss.Style
 }
 
@@ -66,15 +68,51 @@ func (footer Footer) View(width int, status FooterStatus) string {
 		}
 	}
 
-	lines := []string{footer.styles.Primary.Render(lineOne)}
+	lines := []string{footer.renderScopeLine(lineOne, status)}
 	if lineTwo != "" {
-		style := footer.styles.Secondary
-		if status.ScopeSwitching || status.Approval != "" {
-			style = footer.styles.Warning
-		}
-		lines = append(lines, style.Render(clipFooterColumns(lineTwo, width)))
+		lines = append(lines, footer.renderStateLine(clipFooterColumns(lineTwo, width), status))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (footer Footer) renderScopeLine(line string, status FooterStatus) string {
+	if contextPart, remainder, ok := strings.Cut(line, " · Namespace "); ok {
+		contextValue := strings.TrimPrefix(contextPart, "Context ")
+		namespaceValue := remainder
+		access := ""
+		if value, state, found := strings.Cut(remainder, " · "); found {
+			namespaceValue = value
+			access = state
+		}
+		rendered := footer.styles.Label.Render("Context ") + footer.styles.Value.Render(contextValue) +
+			footer.styles.Separator.Render(" · ") + footer.styles.Label.Render("Namespace ") + footer.styles.Value.Render(namespaceValue)
+		if access != "" {
+			stateStyle := footer.styles.Warning
+			if status.ReadOnly && !status.ScopeSwitching {
+				stateStyle = footer.styles.State
+			}
+			rendered += footer.styles.Separator.Render(" · ") + stateStyle.Render(access)
+		}
+		return rendered
+	}
+	if contextValue, namespaceValue, ok := strings.Cut(line, " / "); ok {
+		return footer.styles.Value.Render(contextValue) + footer.styles.Separator.Render(" / ") + footer.styles.Value.Render(namespaceValue)
+	}
+	return footer.styles.Value.Render(line)
+}
+
+func (footer Footer) renderStateLine(line string, status FooterStatus) string {
+	stateStyle := footer.styles.Warning
+	if status.ReadOnly && !status.ScopeSwitching {
+		stateStyle = footer.styles.State
+	}
+	if status.Approval == "" {
+		return stateStyle.Render(line)
+	}
+	if state, approval, ok := strings.Cut(line, " · "); ok {
+		return stateStyle.Render(state) + footer.styles.Separator.Render(" · ") + footer.styles.Warning.Render(approval)
+	}
+	return footer.styles.Warning.Render(line)
 }
 
 func requiredFooterLine(width int, contextName, namespace, access string) (string, bool) {

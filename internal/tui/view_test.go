@@ -16,8 +16,12 @@ func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
 
 	model := newTestModel()
 	view := model.View()
-	if view.Cursor == nil || view.Cursor.Position.X != 3 || view.Cursor.Position.Y != 1 {
-		t.Fatalf("empty composer cursor = %#v, want terminal position (3,1)", view.Cursor)
+	_, composerY, _ := model.renderLayout()
+	if view.Cursor == nil || view.Cursor.Position.X != 2 || view.Cursor.Position.Y != composerY+1 {
+		t.Fatalf("empty composer cursor = %#v, want the full-height composer insertion point", view.Cursor)
+	}
+	if got := lipgloss.Height(view.Content); got != model.height || view.Cursor.Position.Y <= model.height/2 {
+		t.Fatalf("initial fullscreen frame height/cursor = %d/%d, want height %d and a bottom composer", got, view.Cursor.Position.Y, model.height)
 	}
 	if !strings.Contains(view.Content, "Ask a question, or type / for commands") {
 		t.Fatalf("empty composer truncated its placeholder: %q", view.Content)
@@ -29,14 +33,63 @@ func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
 		t.Fatalf("system input commit changed text: value=%q command=%T", model.composer.Value(), command)
 	}
 	view = model.View()
-	if view.Cursor == nil || view.Cursor.Position.X != 7 || view.Cursor.Position.Y != 1 {
-		t.Fatalf("Unicode composer cursor = %#v, want terminal position (7,1)", view.Cursor)
+	if view.Cursor == nil || view.Cursor.Position.X != 6 || view.Cursor.Position.Y != composerY+1 {
+		t.Fatalf("Unicode composer cursor = %#v, want the live terminal insertion point", view.Cursor)
 	}
 
 	model.showDialog("Unavailable", "Close this dialog.")
 	if cursor := model.View().Cursor; cursor != nil {
 		t.Fatalf("modal left the background composer cursor visible: %#v", cursor)
 	}
+}
+
+func TestSubmittedHistoryKeepsComposerGeometryAcrossEnter(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "first line\nthird line"})
+	assertUserSurfaceGeometry(t, model.composer.View(), model.contentWidth(), "first line", "third line")
+
+	model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = commandFromCmd(t, submit)
+	pendingHistory := model.transcript.View()
+	assertUserSurfaceGeometry(t, pendingHistory, model.contentWidth(), "first line", "third line")
+
+	model, runStart := updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	if runStart == nil {
+		t.Fatal("run start did not schedule the bounded Working update")
+	}
+	assertUserSurfaceGeometry(t, model.transcript.View(), model.contentWidth(), "first line", "third line")
+	assertUserSurfaceGeometry(t, model.composer.View(), model.contentWidth(), "Ask a question", "")
+}
+
+func assertUserSurfaceGeometry(t *testing.T, rendered string, width int, firstText, continuationText string) {
+	t.Helper()
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("user surface line width = %d, want at most %d:\n%s", got, width, rendered)
+		}
+	}
+	firstLine := lineContaining(lines, firstText)
+	if firstLine == "" || visualColumn(firstLine, "›") != 0 || visualColumn(firstLine, firstText) != 2 {
+		t.Fatalf("first user row did not use the two-column prompt geometry: %q", firstLine)
+	}
+	if continuationText == "" {
+		return
+	}
+	continuationLine := lineContaining(lines, continuationText)
+	if continuationLine == "" || strings.Contains(continuationLine, "›") || visualColumn(continuationLine, continuationText) != 2 {
+		t.Fatalf("continuation row did not align with the first row: %q", continuationLine)
+	}
+}
+
+func visualColumn(line, text string) int {
+	index := strings.Index(line, text)
+	if index < 0 {
+		return -1
+	}
+	return lipgloss.Width(line[:index])
 }
 
 func TestViewStructureKeepsTranscriptComposerSuggestionsAndFooterOrder(t *testing.T) {
@@ -70,7 +123,7 @@ func TestViewStructureKeepsTranscriptComposerSuggestionsAndFooterOrder(t *testin
 		!strings.Contains(questionLine, "› Why is the Pod restarting?") || !strings.Contains(composerLine, "› /r") {
 		t.Fatalf("user/composer surfaces are framed or the prompt marker is missing: %q / %q", questionLine, composerLine)
 	}
-	historySurface := model.styles.transcript.UserSurface.Width(model.width - 2).Render(
+	historySurface := model.styles.transcript.UserSurface.Width(model.contentWidth()).Render(
 		model.styles.transcript.UserPrompt.Render("› ") + model.styles.transcript.UserText.Render("one line"),
 	)
 	if got, want := lipgloss.Height(historySurface), model.composer.FrameHeight(); got != want {
@@ -144,7 +197,7 @@ func TestSemanticPaletteModesKeepMeaningIndependentOfColor(t *testing.T) {
 	}
 }
 
-func TestCompletedConversationLeavesManagedFrameAndUsesPrimaryScreen(t *testing.T) {
+func TestCompletedConversationStaysInOneFullscreenManagedFrame(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
@@ -152,27 +205,32 @@ func TestCompletedConversationLeavesManagedFrameAndUsesPrimaryScreen(t *testing.
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
-	if !commandSequencesPrintBeforeNext(cmd) || strings.Contains(model.View().Content, "How many Nodes are Ready?") {
-		t.Fatal("accepted user history was not committed exactly outside the managed frame")
+	if cmd == nil || !strings.Contains(model.View().Content, "How many Nodes are Ready?") {
+		t.Fatal("run start removed user history from the managed frame")
 	}
 	terminalEvent := application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
 		ScopeGeneration: 7, Sequence: 2, Text: "Three Nodes are Ready.",
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
-	if !commandPrintsAbove(cmd) || strings.Contains(model.View().Content, "Three Nodes are Ready.") {
-		t.Fatal("terminal Agent history was not committed exactly outside the managed frame")
+	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
+		t.Fatal("terminal Agent history left the managed frame or emitted an unmanaged command")
 	}
-	if model.View().AltScreen {
-		t.Fatal("conversation view still uses the alternate screen")
+	if !model.View().AltScreen {
+		t.Fatal("conversation view did not isolate the full-height runtime in the alternate screen")
 	}
 	model, duplicate := updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
 	if duplicate != nil {
-		t.Fatal("duplicate terminal event recommitted conversation history")
+		t.Fatal("duplicate terminal event emitted an unmanaged command")
 	}
 	model, duplicate = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 24})
 	if duplicate != nil {
-		t.Fatal("resize attempted to commit terminal history a second time")
+		t.Fatal("resize emitted an unmanaged transcript command")
+	}
+	terminalTranscript := model.TerminalTranscript()
+	if strings.Count(terminalTranscript, "How many Nodes are Ready?") != 1 ||
+		strings.Count(terminalTranscript, "Three Nodes are Ready.") != 1 {
+		t.Fatalf("completed terminal transcript duplicated the turn: %q", terminalTranscript)
 	}
 	model.transcript.PageUp()
 	if review := model.View().Content; !strings.Contains(review, "How many Nodes are Ready?") ||
@@ -184,6 +242,8 @@ func TestCompletedConversationLeavesManagedFrameAndUsesPrimaryScreen(t *testing.
 func populatedViewModel(t *testing.T) Model {
 	t.Helper()
 	model := newTestModel()
+	model.height = 32
+	model.reflow()
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "Why is the Pod restarting?"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)

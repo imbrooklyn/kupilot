@@ -138,6 +138,59 @@ func TestCompositionRootCacheClearShortCircuitsOrdinaryStartup(t *testing.T) {
 	}
 }
 
+func TestCompletedTerminalTranscriptWritesOnlyAfterGracefulRuntime(t *testing.T) {
+	t.Parallel()
+
+	model := tui.NewModel(tui.Config{
+		Width: 80, Height: 24, Theme: tui.ThemeNoColor,
+		Scope: tui.ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 1, ReadOnly: true},
+	})
+	model = updateTUIModel(t, model, tea.PasteMsg{Content: "How many Nodes are Ready?"})
+	model = updateTUIModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	runID := domain.AgentRunID("0198a46e-7d2a-7d34-9b6f-2df5f45a2a10")
+	model = updateTUIModel(t, model, tui.ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 1, Sequence: 1,
+	}})
+	model = updateTUIModel(t, model, tui.ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventRunCompleted, RunID: runID, ScopeGeneration: 1, Sequence: 2,
+		Text: "Three Nodes are Ready.",
+	}})
+
+	var output bytes.Buffer
+	if err := writeCompletedTerminalTranscript(&output, model, nil); err != nil {
+		t.Fatalf("writeCompletedTerminalTranscript() error = %v", err)
+	}
+	if strings.Count(output.String(), "How many Nodes are Ready?") != 1 ||
+		strings.Count(output.String(), "Three Nodes are Ready.") != 1 ||
+		strings.Contains(output.String(), "Ask a question") || strings.Contains(output.String(), "supervised") {
+		t.Fatalf("completed terminal transcript = %q", output.String())
+	}
+
+	output.Reset()
+	if err := writeCompletedTerminalTranscript(&output, model, context.Canceled); err != nil || output.Len() != 0 {
+		t.Fatalf("interrupted runtime wrote terminal transcript: error=%v output=%q", err, output.String())
+	}
+
+	writeErr := errors.New("synthetic terminal write failure")
+	if err := writeCompletedTerminalTranscript(terminalErrorWriter{err: writeErr}, model, nil); !errors.Is(err, writeErr) {
+		t.Fatalf("terminal write failure = %v, want wrapped synthetic error", err)
+	}
+}
+
+type terminalErrorWriter struct{ err error }
+
+func (writer terminalErrorWriter) Write([]byte) (int, error) { return 0, writer.err }
+
+func updateTUIModel(t *testing.T, model tui.Model, message tea.Msg) tui.Model {
+	t.Helper()
+	next, _ := model.Update(message)
+	updated, ok := next.(tui.Model)
+	if !ok {
+		t.Fatalf("TUI update returned %T, want tui.Model", next)
+	}
+	return updated
+}
+
 func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t *testing.T) {
 	t.Parallel()
 

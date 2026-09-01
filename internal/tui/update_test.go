@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -36,16 +35,68 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 	}
 	got := statusText(status, "diagnostic-model")
 	for _, required := range []string{
-		"Kupilot status", "Model: diagnostic-model", "Context: test-context", "Namespace: test-namespace",
-		"Scope generation: 7", "Budget: balanced",
-		"Access: namespace policy all",
-		"Actions: restart_deployment · local approval and Kubernetes RBAC required",
-		"elapsed 1m30s", "remaining 8m30s", "steps 3/32", "tools 5/48", "model 3/16",
-		"96.0 KiB/4.0 MiB", "log calls 2/12", "Privacy: standard", "local storage: healthy",
+		"Kupilot status", "Session", "Model       diagnostic-model", "Privacy     standard", "Storage     healthy",
+		"Scope", "Context     test-context", "Namespace   test-namespace", "Generation  7",
+		"Access      namespace policy all",
+		"Actions     restart_deployment · local approval and Kubernetes RBAC required",
+		"Run", "Catalog     " + agent.ToolCatalogVersion, "Budget", "Profile     balanced",
+		"1m 30s elapsed", "8m 30s remaining", "3/32 steps", "5/48 tools", "3/16 model",
+		"96.0 KiB/4.0 MiB", "2/12 log calls",
 	} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("status text missing %q:\n%s", required, got)
 		}
+	}
+}
+
+func TestCtrlCClearsDraftBeforeCancellingOrExiting(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/sta"})
+	if !model.slashMenu.Open() {
+		t.Fatal("Slash suggestions did not open for the draft")
+	}
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil || model.composer.Value() != "" || model.slashMenu.Open() {
+		t.Fatal("first Ctrl+C did not only clear the editable draft")
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !commandQuits(cmd) {
+		t.Fatal("second Ctrl+C with an empty composer did not exit")
+	}
+
+	active := newTestModel()
+	active, _ = updateModel(t, active, ApplicationEventMsg{Event: runStartedEvent(1)})
+	active, _ = updateModel(t, active, tea.PasteMsg{Content: "draft for later"})
+	active, cmd = updateModel(t, active, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil || active.composer.Value() != "" || !active.run.Active || active.quitAfterCancel {
+		t.Fatal("first Ctrl+C during a run did more than clear the draft")
+	}
+	active, cmd = updateModel(t, active, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if command := applicationCommandFromCmd(t, cmd); command.Kind != application.UICommandCancelRun || !active.quitAfterCancel {
+		t.Fatalf("second Ctrl+C command = %#v", command)
+	}
+}
+
+func TestExitLeavesTrailingHistoryForPostRestoreProjection(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.transcript.AppendUser("A submitted question awaiting startup.")
+	model.reflow()
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !commandQuits(cmd) {
+		t.Fatal("exit did not issue one direct quit command")
+	}
+	view := model.View()
+	if !view.AltScreen || !strings.Contains(view.Content, "A submitted question awaiting startup.") || view.Cursor != nil {
+		t.Fatalf("exit state did not retain the isolated managed frame until restoration: %#v", view)
+	}
+	transcript := model.TerminalTranscript()
+	if strings.Count(transcript, "A submitted question awaiting startup.") != 1 ||
+		strings.Contains(transcript, "Ask a question") || strings.Contains(transcript, "Context test-context") {
+		t.Fatalf("post-restore transcript contains missing or live UI state: %q", transcript)
 	}
 }
 
@@ -563,20 +614,6 @@ func commandFromCmd(t *testing.T, cmd tea.Cmd) application.UICommand {
 		t.Fatalf("command validation error = %v", err)
 	}
 	return intent.Command
-}
-
-func commandPrintsAbove(cmd tea.Cmd) bool {
-	if cmd == nil {
-		return false
-	}
-	return fmt.Sprintf("%T", cmd()) == "tea.printLineMessage"
-}
-
-func commandSequencesPrintBeforeNext(cmd tea.Cmd) bool {
-	if cmd == nil {
-		return false
-	}
-	return fmt.Sprintf("%T", cmd()) == "tea.sequenceMsg"
 }
 
 func assertSingleEditor(t *testing.T, model Model) {

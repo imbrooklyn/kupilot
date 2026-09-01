@@ -35,7 +35,7 @@ func TestTranscriptMatchesUserSurfaceAndFinalRunTimeline(t *testing.T) {
 	surface := lipgloss.NewStyle().Background(lipgloss.Color("#303030"))
 	userText := surface
 	transcript := NewTranscript(TranscriptStyles{
-		UserSurface: surface.Padding(1, 1),
+		UserSurface: surface.Padding(1, 0),
 		UserPrompt:  surface.Foreground(lipgloss.Cyan).Bold(true),
 		UserText:    userText,
 	}, ToolStepStyles{})
@@ -109,23 +109,20 @@ func TestTranscriptCollapsesBulkEvidenceWithoutLosingSelection(t *testing.T) {
 	}
 }
 
-func TestTranscriptCommitsOnlyImmutablePrefixAndRetainsReviewableHistory(t *testing.T) {
+func TestTranscriptRetainsManagedHistoryAndProjectsOnlyCompletedEntries(t *testing.T) {
 	t.Parallel()
 
 	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
 	transcript.SetSize(48, 30)
 	transcript.AppendUser("How many Nodes are Ready?")
-	if block := transcript.CommitReady(); block != "" {
-		t.Fatalf("trailing user entry committed before the run started: %q", block)
+	if view := transcript.View(); !strings.Contains(view, "› How many Nodes are Ready?") {
+		t.Fatalf("submitted user history left the managed transcript: %q", view)
 	}
 
 	transcript.StartAgent()
-	userBlock := transcript.CommitReady()
-	if !strings.Contains(userBlock, "› How many Nodes are Ready?") || strings.Contains(userBlock, "Working") {
-		t.Fatalf("user scrollback block = %q", userBlock)
-	}
-	if view := transcript.View(); strings.Contains(view, "How many Nodes") || view != "" {
-		t.Fatalf("live projection after user commit = %q", view)
+	if projected := transcript.TerminalTranscript(); !strings.Contains(projected, "› How many Nodes are Ready?") ||
+		strings.Contains(projected, "A provisional answer.") {
+		t.Fatalf("streaming projection = %q", projected)
 	}
 
 	transcript.UpsertToolStep(ToolStep{
@@ -135,27 +132,28 @@ func TestTranscriptCommitsOnlyImmutablePrefixAndRetainsReviewableHistory(t *test
 		Status:       "succeeded",
 	})
 	transcript.AppendAgent("A provisional answer.")
-	if block := transcript.CommitReady(); block != "" {
-		t.Fatalf("streaming Agent draft entered scrollback: %q", block)
+	if projected := transcript.TerminalTranscript(); strings.Contains(projected, "A provisional answer.") ||
+		strings.Contains(projected, "Count Ready Nodes.") {
+		t.Fatalf("streaming Agent state entered the terminal projection: %q", projected)
 	}
 	transcript.FinishAgentWithDuration("Three Nodes are Ready.", 20*time.Second)
 	transcript.SetAgentEvidence([]EvidenceReference{{Index: 0, ID: "internal-evidence-id", State: "available"}})
-	agentBlock := transcript.CommitReady()
+	agentBlock := transcript.TerminalTranscript()
 	for _, want := range []string{"Inspect cluster overview · done", "Count Ready Nodes.", "Three Nodes are Ready.", "Worked for 20s"} {
 		if !strings.Contains(agentBlock, want) {
-			t.Fatalf("Agent scrollback block missing %q: %q", want, agentBlock)
+			t.Fatalf("terminal transcript missing %q: %q", want, agentBlock)
 		}
 	}
-	if strings.Contains(agentBlock, "internal-evidence-id") || transcript.View() != "" {
-		t.Fatalf("committed Agent block exposed an internal ID or remained live: block=%q view=%q", agentBlock, transcript.View())
+	if strings.Contains(agentBlock, "internal-evidence-id") || !strings.Contains(transcript.View(), "Three Nodes are Ready.") {
+		t.Fatalf("terminal transcript exposed an internal ID or left managed history: block=%q view=%q", agentBlock, transcript.View())
 	}
-	if duplicate := transcript.CommitReady(); duplicate != "" {
-		t.Fatalf("immutable entries were committed twice: %q", duplicate)
+	if repeated := transcript.TerminalTranscript(); repeated != agentBlock {
+		t.Fatalf("terminal projection changed between reads:\nfirst=%q\nsecond=%q", agentBlock, repeated)
 	}
 	transcript.AppendAgent(" late mutation")
 	transcript.FinishAgent("replacement")
 	if entries := transcript.Entries(); entries[1].Text != "Three Nodes are Ready." {
-		t.Fatalf("committed Agent entry accepted a late mutation: %#v", entries[1])
+		t.Fatalf("completed Agent entry accepted a late mutation: %#v", entries[1])
 	}
 
 	transcript.PageUp()
@@ -164,8 +162,8 @@ func TestTranscriptCommitsOnlyImmutablePrefixAndRetainsReviewableHistory(t *test
 		t.Fatalf("retained transcript review = %q", review)
 	}
 	transcript.PageDown()
-	if transcript.reviewing || transcript.View() != "" {
-		t.Fatalf("PageDown did not return to the live projection: reviewing=%v view=%q", transcript.reviewing, transcript.View())
+	if transcript.reviewing || !strings.Contains(transcript.View(), "Three Nodes are Ready.") {
+		t.Fatalf("PageDown did not return to the live transcript bottom: reviewing=%v view=%q", transcript.reviewing, transcript.View())
 	}
 
 	transcript.PageUp()
@@ -175,6 +173,39 @@ func TestTranscriptCommitsOnlyImmutablePrefixAndRetainsReviewableHistory(t *test
 		strings.Contains(transcript.View(), "Working") {
 		t.Fatalf("new run did not return history review to the live projection: %q", transcript.View())
 	}
+}
+
+func TestTerminalTranscriptIncludesTrailingUserAndKeepsContinuationAligned(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{
+		UserSurface: lipgloss.NewStyle().Padding(1, 0),
+	}, ToolStepStyles{})
+	transcript.SetSize(24, 10)
+	transcript.AppendUser("first line\nthird line\nfourth line")
+	block := transcript.TerminalTranscript()
+	if block == "" || strings.Count(block, "›") != 1 {
+		t.Fatalf("terminal transcript did not retain one historic prompt: %q", block)
+	}
+	lines := strings.Split(block, "\n")
+	firstColumn := columnContainingText(lines, "first line")
+	thirdColumn := columnContainingText(lines, "third line")
+	fourthColumn := columnContainingText(lines, "fourth line")
+	if firstColumn < 0 || thirdColumn != firstColumn || fourthColumn != firstColumn {
+		t.Fatalf("historic continuation columns = %d, %d, %d:\n%s", firstColumn, thirdColumn, fourthColumn, block)
+	}
+	if repeated := transcript.TerminalTranscript(); repeated != block {
+		t.Fatalf("terminal transcript was not deterministic: %q", repeated)
+	}
+}
+
+func columnContainingText(lines []string, value string) int {
+	for _, line := range lines {
+		if index := strings.Index(line, value); index >= 0 {
+			return lipgloss.Width(line[:index])
+		}
+	}
+	return -1
 }
 
 func TestWorkedDurationUsesCompactCodexFormatting(t *testing.T) {

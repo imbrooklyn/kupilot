@@ -121,10 +121,12 @@ safety pipeline.
 
 ## Terminal output and scrollback
 
-Ordinary conversation uses the terminal's primary screen. Once a user message,
-safe notice, or final assistant block is immutable, Kupilot writes its bounded
-terminal-safe rendering once above the live composer. It may therefore remain
-in terminal-emulator scrollback after Kupilot exits.
+Ordinary conversation runs in one alternate-screen frame. On graceful exit,
+Bubble Tea restores the primary screen and Kupilot writes one bounded
+terminal-safe rendering of the completed transcript. Composer drafts,
+placeholders, footer and dialog state, the live Working row, and provisional
+model output are excluded. The completed projection may therefore remain in
+terminal-emulator scrollback after Kupilot exits.
 
 Terminal scrollback is not SQLite or a second Kupilot-created history store;
 its capture, lifetime, search, copy, and deletion behavior belong to the

@@ -1,9 +1,10 @@
 # ADR-0006: Use Eino Behind an Agent Adapter
 
-- Status: Accepted
+- Status: Superseded by ADR-0043
 - Date: 2026-08-08
 - Amended: 2026-08-10
 - Amended by: ADR-0036 and ADR-0037
+- Superseded: 2026-09-01
 
 ## Context
 
@@ -196,3 +197,4 @@ compatibility metadata.
 - [ADR-0009: Use Fixed Structured Tools](0009-use-fixed-structured-tools.md)
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
 - [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)
+- [ADR-0043: Use One Eino Runtime Boundary](0043-use-one-eino-runtime-boundary.md)

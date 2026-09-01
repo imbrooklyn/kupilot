@@ -5,6 +5,7 @@ package einoadapter
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -14,23 +15,34 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
+	projectconfig "github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-// Config contains only neutral dependencies and run-local policy services.
-// It contains no provider client, transport, repository, or global callback.
+// Config contains the complete project-owned inputs for the sole Eino runtime
+// boundary. It exposes no Eino or provider SDK values.
 type Config struct {
-	Model       agent.Model
-	Tools       agent.ToolHandlers
-	ScopeGuard  agent.RunScopeGuard
-	Identifiers agent.RunIdentifierSource
-	Now         func() time.Time
+	ModelConfiguration domain.ModelConfiguration
+	Credential         *projectconfig.SecretValue
+	Logger             *slog.Logger
+	Diagnostics        DiagnosticOptions
+	Tools              agent.ToolHandlers
+	ScopeGuard         agent.RunScopeGuard
+	Identifiers        agent.RunIdentifierSource
+	Now                func() time.Time
+}
+
+type runtimeConfig struct {
+	tools       agent.ToolHandlers
+	scopeGuard  agent.RunScopeGuard
+	identifiers agent.RunIdentifierSource
+	now         func() time.Time
 }
 
 // Adapter runs one bounded ReAct composition at a time. All policy-bearing
 // state is created per Run call and never stored in Eino framework state.
 type Adapter struct {
-	model       agent.Model
+	client      *modelClient
 	tools       agent.ToolHandlers
 	scopeGuard  agent.RunScopeGuard
 	identifiers agent.RunIdentifierSource
@@ -46,16 +58,43 @@ var _ agent.AgentRunner = (*Adapter)(nil)
 // New constructs the production single-Agent adapter without performing model
 // or Tool I/O.
 func New(config Config) (*Adapter, error) {
-	if config.Model == nil || config.ScopeGuard == nil || config.Identifiers == nil || config.Now == nil ||
+	if config.ScopeGuard == nil || config.Identifiers == nil || config.Now == nil ||
 		config.Tools.Validate() != nil || !validRuntimeTime(config.Now()) {
 		return nil, ErrInvalidConfiguration
 	}
-	return &Adapter{
-		model:       config.Model,
+	client, modelError := newModelClient(
+		config.ModelConfiguration,
+		config.Credential,
+		config.Logger,
+		config.Diagnostics,
+	)
+	if modelError != nil {
+		return nil, modelError
+	}
+	adapter, err := newAdapter(runtimeConfig{
 		tools:       config.Tools,
 		scopeGuard:  config.ScopeGuard,
 		identifiers: config.Identifiers,
 		now:         config.Now,
+	}, client)
+	if err != nil {
+		client.close()
+		return nil, err
+	}
+	return adapter, nil
+}
+
+func newAdapter(config runtimeConfig, client *modelClient) (*Adapter, error) {
+	if client == nil || client.model == nil || config.scopeGuard == nil || config.identifiers == nil || config.now == nil ||
+		config.tools.Validate() != nil || !validRuntimeTime(config.now()) {
+		return nil, ErrInvalidConfiguration
+	}
+	return &Adapter{
+		client:      client,
+		tools:       config.tools,
+		scopeGuard:  config.scopeGuard,
+		identifiers: config.identifiers,
+		now:         config.now,
 	}, nil
 }
 
@@ -95,7 +134,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	runCtx = einocallbacks.InitCallbacks(runCtx, nil)
 	state := &runState{
 		input:             input,
-		model:             adapter.model,
+		client:            adapter.client,
 		tools:             adapter.tools,
 		scopeGuard:        adapter.scopeGuard,
 		identifiers:       adapter.identifiers,
@@ -190,6 +229,7 @@ func (adapter *Adapter) Close() {
 	adapter.closed = true
 	adapter.lifecycleMu.Unlock()
 	adapter.activeRuns.Wait()
+	adapter.client.close()
 }
 
 func validRuntimeTime(value time.Time) bool {

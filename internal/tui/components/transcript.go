@@ -57,7 +57,6 @@ type TranscriptStyles struct {
 // Transcript is a continuous scrollable conversation projection.
 type Transcript struct {
 	entries     []Entry
-	committed   int
 	activeAgent int
 	viewport    viewport.Model
 	width       int
@@ -136,7 +135,8 @@ func (transcript *Transcript) StartAgent() {
 
 // AppendAgent appends one accepted ordered delta to the active Agent item.
 func (transcript *Transcript) AppendAgent(delta string) {
-	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		!transcript.entries[transcript.activeAgent].Streaming {
 		return
 	}
 	transcript.entries[transcript.activeAgent].Text += delta
@@ -156,7 +156,8 @@ func (transcript *Transcript) FinishAgentWithDuration(text string, workedFor tim
 }
 
 func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, showWorkedFor bool) {
-	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		!transcript.entries[transcript.activeAgent].Streaming {
 		return
 	}
 	if workedFor < 0 {
@@ -172,7 +173,8 @@ func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, 
 
 // SetAgentEvidence adds bounded citations to the current terminal Agent item.
 func (transcript *Transcript) SetAgentEvidence(references []EvidenceReference) {
-	if transcript.activeAgent < transcript.committed || transcript.activeAgent >= len(transcript.entries) || len(references) > 100 {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		transcript.entries[transcript.activeAgent].Streaming || len(references) > 100 {
 		return
 	}
 	transcript.entries[transcript.activeAgent].EvidenceReferences = append([]EvidenceReference(nil), references...)
@@ -239,7 +241,8 @@ func (transcript Transcript) SelectedEvidence() (int, bool) {
 
 // UpsertToolStep adds one step beneath the active Agent prose.
 func (transcript *Transcript) UpsertToolStep(step ToolStep) {
-	if transcript.activeAgent < transcript.committed {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		!transcript.entries[transcript.activeAgent].Streaming {
 		return
 	}
 	transcript.toolSteps.Upsert(step)
@@ -263,33 +266,25 @@ func (transcript Transcript) Entries() []Entry {
 // ToolSteps returns a defensive copy of inline step state.
 func (transcript Transcript) ToolSteps() []ToolStep { return transcript.toolSteps.Items() }
 
-// CommitReady advances the immutable scrollback boundary and returns exactly
-// one terminal-safe rendered block. A trailing user question waits until a
-// following item proves that submission has left the composer, and a streaming
-// Agent item blocks every later entry until its final state is complete.
-func (transcript *Transcript) CommitReady() string {
-	end := transcript.committed
+// TerminalTranscript returns every completed terminal-safe entry for one
+// post-runtime write. A streaming Agent entry stops the projection so a
+// provisional model draft cannot enter terminal-owned scrollback.
+func (transcript *Transcript) TerminalTranscript() string {
+	end := 0
 	for end < len(transcript.entries) {
 		entry := transcript.entries[end]
 		if entry.Kind == EntryAgent && entry.Streaming {
 			break
 		}
-		if entry.Kind == EntryUser && end == len(transcript.entries)-1 {
-			break
-		}
 		end++
 	}
-	if end == transcript.committed {
+	if end == 0 {
 		return ""
 	}
-	block := transcript.renderRange(transcript.committed, end, false)
-	transcript.committed = end
-	transcript.refresh(true)
-	return block
+	return transcript.renderRange(0, end, false)
 }
 
-// PageUp opens the retained in-memory transcript and scrolls it without moving
-// the composer. Normal rendering still keeps committed rows terminal-owned.
+// PageUp scrolls the retained in-memory transcript without moving the composer.
 func (transcript *Transcript) PageUp() {
 	transcript.beginReview()
 	transcript.viewport.PageUp()
@@ -331,6 +326,9 @@ func (transcript Transcript) View() string {
 	return transcript.viewport.View()
 }
 
+// Visible reports whether the managed frame currently contains transcript rows.
+func (transcript Transcript) Visible() bool { return transcript.visible }
+
 func (transcript *Transcript) refresh(follow bool) {
 	wasAtBottom := transcript.viewport.AtBottom()
 	content := transcript.renderVisibleContent()
@@ -352,11 +350,7 @@ func (transcript *Transcript) renderContent() string {
 }
 
 func (transcript *Transcript) renderVisibleContent() string {
-	start := transcript.committed
-	if transcript.reviewing || transcript.selecting {
-		start = 0
-	}
-	return transcript.renderRange(start, len(transcript.entries), transcript.selecting)
+	return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
 }
 
 func (transcript *Transcript) renderRange(start, end int, includeSelection bool) string {
@@ -372,8 +366,8 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 			// resets SGR state after the styled prompt, so leaving the body raw
 			// would make only the historic message text fall back to the terminal
 			// background inside the otherwise continuous user surface.
-			content := transcript.styles.UserPrompt.Render("› ") + transcript.styles.UserText.Render(entry.Text)
-			rendered = transcript.styles.UserSurface.Width(max(1, transcript.width-2)).Render(content)
+			content := transcript.renderUserEntry(entry.Text)
+			rendered = transcript.styles.UserSurface.Width(transcript.width).Render(content)
 		case EntryAgent:
 			blocks := make([]string, 0, 5)
 			stepRenderer := transcript.toolSteps
@@ -405,8 +399,22 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 	return strings.Join(parts, "\n\n")
 }
 
+func (transcript Transcript) renderUserEntry(text string) string {
+	// The two-column prompt is the only left inset. The model-level content
+	// width already reserves the terminal's final column for safe wrapping.
+	lines := strings.Split(lipgloss.Wrap(text, max(1, transcript.width-2), ""), "\n")
+	for index, line := range lines {
+		prompt := "  "
+		if index == 0 {
+			prompt = "› "
+		}
+		lines[index] = transcript.styles.UserPrompt.Render(prompt) + transcript.styles.UserText.Render(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (transcript *Transcript) beginReview() {
-	if transcript.reviewing || transcript.committed == 0 {
+	if transcript.reviewing || len(transcript.entries) == 0 {
 		return
 	}
 	transcript.reviewing = true

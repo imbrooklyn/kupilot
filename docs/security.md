@@ -156,9 +156,9 @@ state machines, not prompt compliance, control authority. Only local Tool
 handling creates Evidence. Only typed Application action state can create a
 proposal, approval, request attempt, or verification event. Markdown and Tool
 text are inert data. Model commentary attached to a structured Tool response is
-bounded and validated inside the model adapter, then discarded when the same
-response finishes with `tool_calls`; it cannot become visible text, Tool
-authority, Evidence, or action state. Indexed Tool assembly and every runtime
+bounded inside the Eino boundary and discarded after the assembled response
+proves `tool_calls`; it cannot become visible text, Tool authority, Evidence, or
+action state. Eino's indexed argument assembly and every project-owned runtime
 authorization check remain mandatory.
 
 ### T05: Model transfer without valid consent
@@ -193,9 +193,10 @@ device-control, bidirectional, invalid UTF-8, or oversized terminal content.
 replaces unsafe control sequences before render state. `Update` and `View` have
 no business I/O. Scope, policy, approval, and execution states include text and
 do not rely on color. Unknown terminal backgrounds prefer default foreground
-and dim styling rather than low-contrast hard-coded colors. Only that safe
-render projection can cross the monotonic commit boundary into primary-screen
-scrollback; streaming drafts, duplicate commits, model-selected styling,
+and dim styling rather than low-contrast hard-coded colors. Runtime content
+remains inside one alternate-screen frame. After graceful restoration, only the
+completed safe transcript projection can enter primary-screen scrollback;
+composer and streaming drafts, duplicate output, model-selected styling,
 clipboard controls, and device controls cannot. The composer exposes one real
 cursor for operating-system input-method positioning; its placeholder is never
 editable state. Working animation messages are local, bounded, correlated to
@@ -365,3 +366,4 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
 - [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
 - [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)

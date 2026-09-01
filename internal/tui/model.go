@@ -338,33 +338,73 @@ func (model *Model) nextUIRequestID() uint64 {
 }
 
 func (model *Model) reflow() {
+	contentWidth := model.contentWidth()
 	composerRows := MaxComposerRows
 	if model.height < 20 {
 		composerRows = max(MinComposerRows, model.height/3)
 	}
 	model.composer.SetMaxRows(composerRows)
-	model.composer.SetWidth(model.width)
-	model.slashMenu.SetWidth(model.width)
-	model.contextPicker.SetWidth(model.width)
-	model.namespacePicker.SetWidth(model.width)
-	model.resourcePicker.SetWidth(model.width)
-	model.sessionPicker.SetWidth(model.width)
+	model.composer.SetWidth(contentWidth)
+	model.slashMenu.SetWidth(contentWidth)
+	model.contextPicker.SetWidth(contentWidth)
+	model.namespacePicker.SetWidth(contentWidth)
+	model.resourcePicker.SetWidth(contentWidth)
+	model.sessionPicker.SetWidth(contentWidth)
 	footerHeight := 1 + strings.Count(model.footerView(), "\n")
 	workingHeight := 0
 	if model.run.Active && !model.run.Terminal {
 		workingHeight = 1
 	}
-	availableSuggestions := max(1, model.height-model.composer.FrameHeight()-footerHeight-workingHeight-1)
+	setupHeight := 0
+	if prompt := model.modelSetupView(); prompt != "" {
+		setupHeight = 1 + strings.Count(prompt, "\n")
+	}
+	gap := model.layoutGap()
+	reservedWithoutSuggestions := model.composer.FrameHeight() + footerHeight + setupHeight + workingHeight + gap
+	availableSuggestions := max(1, model.height-reservedWithoutSuggestions-1)
 	visible := min(MaxPickerCandidates, availableSuggestions)
 	model.slashMenu.SetMaxVisible(visible)
 	model.contextPicker.SetMaxVisible(visible)
 	model.namespacePicker.SetMaxVisible(visible)
 	model.resourcePicker.SetMaxVisible(visible)
 	model.sessionPicker.SetMaxVisible(visible)
-	setupHeight := 0
-	if prompt := model.modelSetupView(); prompt != "" {
-		setupHeight = 1 + strings.Count(prompt, "\n")
+	topSections := 0
+	if model.transcript.Visible() {
+		topSections++
 	}
-	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight - setupHeight - workingHeight
-	model.transcript.SetSize(model.width, max(1, transcriptHeight))
+	if setupHeight > 0 {
+		topSections++
+	}
+	if workingHeight > 0 {
+		topSections++
+	}
+	topGaps := max(0, topSections-1) * gap
+	beforeComposer := 0
+	if topSections > 0 {
+		beforeComposer = gap
+	}
+	transcriptHeight := model.height - model.composer.FrameHeight() - model.suggestionsHeight() - footerHeight -
+		setupHeight - workingHeight - gap - topGaps - beforeComposer
+	model.transcript.SetSize(contentWidth, max(1, transcriptHeight))
+}
+
+func (model Model) contentWidth() int {
+	// Keep the last terminal column unused. This matches the Codex composer
+	// layout and prevents terminal autowrap both in the managed frame and in the
+	// completed transcript written after terminal restoration.
+	return max(1, model.width-1)
+}
+
+// TerminalTranscript returns only completed, terminal-safe conversation. It
+// deliberately excludes the composer, footer, live Working row, dialogs, and
+// any provisional Agent stream.
+func (model *Model) TerminalTranscript() string {
+	return model.transcript.TerminalTranscript()
+}
+
+func (model Model) layoutGap() int {
+	if model.height < 10 {
+		return 0
+	}
+	return 1
 }

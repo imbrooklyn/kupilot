@@ -44,6 +44,12 @@ type Composer struct {
 func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 	input := textarea.New()
 	input.Prompt = "› "
+	input.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "› "
+		}
+		return ""
+	})
 	input.Placeholder = defaultPlaceholder
 	input.ShowLineNumbers = false
 	input.EndOfBufferCharacter = ' '
@@ -112,13 +118,14 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 	return composer, cmd, nil
 }
 
-// SetWidth updates the editable content width inside the quiet surface padding.
+// SetWidth updates the editable surface width. The caller reserves the final
+// terminal column so the prompt can begin at column zero without autowrap.
 func (composer *Composer) SetWidth(width int) {
 	if width < 8 {
 		width = 8
 	}
 	composer.width = width
-	composer.input.SetWidth(max(1, width-2))
+	composer.input.SetWidth(width)
 }
 
 // SetMaxRows tightens the editor for a small terminal while preserving 1-8 rows.
@@ -267,7 +274,7 @@ func (composer Composer) View() string {
 		style = composer.styles.FocusedSurface
 	}
 	composer.prepareRenderInput()
-	return style.Width(max(1, composer.width-2)).Render(composer.input.View())
+	return style.Width(composer.width).Render(composer.input.View())
 }
 
 func (composer *Composer) prepareRenderInput() {

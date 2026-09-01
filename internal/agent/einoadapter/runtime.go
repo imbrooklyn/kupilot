@@ -22,7 +22,7 @@ type runState struct {
 	mu sync.Mutex
 
 	input       agent.RunInput
-	model       agent.Model
+	client      *modelClient
 	tools       agent.ToolHandlers
 	scopeGuard  agent.RunScopeGuard
 	identifiers agent.RunIdentifierSource
