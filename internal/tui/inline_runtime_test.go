@@ -30,9 +30,20 @@ type rawMouseRuntimeHarness struct {
 	offsetBeforeWheel    int
 }
 
+type cursorRestoreRuntimeHarness struct {
+	runtime TerminalRuntime
+}
+
 type synchronizedBuffer struct {
 	mutex sync.Mutex
 	data  bytes.Buffer
+}
+
+type cursorSequenceBuffer struct {
+	mutex      sync.Mutex
+	data       bytes.Buffer
+	hidden     chan struct{}
+	hiddenOnce sync.Once
 }
 
 func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
@@ -42,6 +53,23 @@ func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
 }
 
 func (buffer *synchronizedBuffer) String() string {
+	buffer.mutex.Lock()
+	defer buffer.mutex.Unlock()
+	return buffer.data.String()
+}
+
+func (buffer *cursorSequenceBuffer) Write(data []byte) (int, error) {
+	buffer.mutex.Lock()
+	written, err := buffer.data.Write(data)
+	hidden := strings.Contains(buffer.data.String(), "\x1b[?25l")
+	buffer.mutex.Unlock()
+	if hidden {
+		buffer.hiddenOnce.Do(func() { close(buffer.hidden) })
+	}
+	return written, err
+}
+
+func (buffer *cursorSequenceBuffer) String() string {
 	buffer.mutex.Lock()
 	defer buffer.mutex.Unlock()
 	return buffer.data.String()
@@ -96,6 +124,21 @@ func (harness rawMouseRuntimeHarness) Update(message tea.Msg) (tea.Model, tea.Cm
 }
 
 func (harness rawMouseRuntimeHarness) View() tea.View { return harness.runtime.View() }
+
+func (harness cursorRestoreRuntimeHarness) Init() tea.Cmd { return harness.runtime.Init() }
+
+func (harness cursorRestoreRuntimeHarness) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, command := harness.runtime.Update(message)
+	if updated, ok := next.(TerminalRuntime); ok {
+		harness.runtime = updated
+	}
+	if _, committed := message.(terminalHistoryCommittedMsg); committed {
+		return harness, sequenceTerminalCommands(command, tea.Quit)
+	}
+	return harness, command
+}
+
+func (harness cursorRestoreRuntimeHarness) View() tea.View { return harness.runtime.View() }
 
 func TestTerminalRuntimeCommitsHistoryOnceWithoutMouseOrAlternateScreen(t *testing.T) {
 	t.Parallel()
@@ -188,6 +231,129 @@ func TestTerminalRuntimeWaitsForInitialClearBeforeHistoryCommit(t *testing.T) {
 	if !ok || committed.commitPending || committedModel.PendingTerminalTranscript() != "" {
 		t.Fatalf("prepared history was not acknowledged: state=%T pending=%t transcript=%q",
 			next, committed.commitPending, committedModel.PendingTerminalTranscript())
+	}
+}
+
+func TestTerminalRuntimeRestoresComposerCursorAfterHistoryInsertion(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.transcript.AppendNotice("Startup notice.")
+	runtime := newTerminalRuntime(model, immediateTerminalFrameBarrier)
+	next, _ := runtime.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	sized, ok := next.(TerminalRuntime)
+	if !ok {
+		t.Fatalf("sized runtime state = %T", next)
+	}
+	next, command := sized.Update(terminalReadyMsg{})
+	prepared, ok := next.(TerminalRuntime)
+	if !ok || command == nil || !prepared.commitPending || prepared.View().Cursor == nil {
+		t.Fatalf("prepared cursor state = runtime %T command=%t pending=%t cursor=%#v",
+			next, command != nil, prepared.commitPending, prepared.View().Cursor)
+	}
+	preparedPosition := prepared.View().Cursor.Position
+
+	next, _ = prepared.Update(terminalHistoryInsertionStartedMsg{end: prepared.pendingEnd})
+	inserting, ok := next.(TerminalRuntime)
+	if !ok || !inserting.insertionStarted || inserting.View().Cursor != nil {
+		t.Fatalf("insertion cursor state = runtime %T started=%t cursor=%#v",
+			next, inserting.insertionStarted, inserting.View().Cursor)
+	}
+
+	next, _ = inserting.Update(terminalHistoryCommittedMsg{
+		end: inserting.pendingEnd, rows: inserting.pendingRows,
+	})
+	committed, ok := next.(TerminalRuntime)
+	if !ok {
+		t.Fatalf("committed runtime state = %T", next)
+	}
+	cursor := committed.View().Cursor
+	if committed.insertionStarted || committed.commitPending || cursor == nil ||
+		cursor.Position != preparedPosition {
+		t.Fatalf("committed cursor state = runtime %T started=%t pending=%t cursor=%#v",
+			next, committed.insertionStarted, committed.commitPending, cursor)
+	}
+}
+
+func TestTerminalRuntimeFlushesHiddenCursorBeforePrintingHistory(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.transcript.AppendNotice("Startup cursor fixture.")
+	barrierReached := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	var barrierOnce sync.Once
+	barrier := func() tea.Cmd {
+		return func() tea.Msg {
+			barrierOnce.Do(func() { close(barrierReached) })
+			<-releaseBarrier
+			return terminalFrameSettledMsg{}
+		}
+	}
+	defer func() {
+		select {
+		case <-releaseBarrier:
+		default:
+			close(releaseBarrier)
+		}
+	}()
+
+	output := &cursorSequenceBuffer{hidden: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	program := tea.NewProgram(
+		cursorRestoreRuntimeHarness{runtime: newTerminalRuntime(model, barrier)},
+		tea.WithContext(ctx),
+		tea.WithInput(nil),
+		tea.WithOutput(output),
+		tea.WithEnvironment([]string{"TERM=xterm-256color", "NO_COLOR=1"}),
+		tea.WithWindowSize(80, 24),
+		tea.WithoutSignalHandler(),
+	)
+	type programResult struct {
+		model tea.Model
+		err   error
+	}
+	finished := make(chan programResult, 1)
+	go func() {
+		final, err := program.Run()
+		finished <- programResult{model: final, err: err}
+	}()
+
+	select {
+	case <-barrierReached:
+	case <-ctx.Done():
+		t.Fatal("terminal insertion did not reach the renderer-settle barrier")
+	}
+	select {
+	case <-output.hidden:
+	case <-ctx.Done():
+		t.Fatal("terminal history insertion reached its barrier before hiding the physical cursor")
+	}
+	beforePrint := len(output.String())
+	close(releaseBarrier)
+
+	var result programResult
+	select {
+	case result = <-finished:
+	case <-ctx.Done():
+		t.Fatal("terminal insertion did not finish")
+	}
+	if result.err != nil {
+		t.Fatalf("terminal runtime failed: %v", result.err)
+	}
+	final, ok := result.model.(cursorRestoreRuntimeHarness)
+	if !ok || final.runtime.View().Cursor == nil {
+		t.Fatalf("final runtime/cursor = %T/%#v", result.model, final.runtime.View().Cursor)
+	}
+	rendered := output.String()
+	if beforePrint > len(rendered) {
+		t.Fatalf("terminal output shrank from %d to %d bytes", beforePrint, len(rendered))
+	}
+	afterBarrier := rendered[beforePrint:]
+	historyAt := strings.Index(afterBarrier, "Startup cursor fixture.")
+	if historyAt < 0 || !strings.Contains(afterBarrier[historyAt:], "\x1b[?25h") {
+		t.Fatalf("terminal output did not restore the cursor after inserted history: %q", afterBarrier)
 	}
 }
 

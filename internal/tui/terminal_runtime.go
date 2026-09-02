@@ -112,9 +112,9 @@ func (runtime TerminalRuntime) commitHistory(command tea.Cmd) (tea.Model, tea.Cm
 	runtime.pendingRows = rows
 	batches := terminalHistoryBatches(history, runtime.model.height-frameHeight)
 	commands := make([]tea.Cmd, 0, 3+len(batches))
-	commands = append(commands, runtime.frameBarrier())
 	started := terminalHistoryInsertionStartedMsg{end: end}
 	commands = append(commands, func() tea.Msg { return started })
+	commands = append(commands, runtime.frameBarrier())
 	for _, batch := range batches {
 		commands = append(commands, tea.Println(batch))
 	}
@@ -124,7 +124,15 @@ func (runtime TerminalRuntime) commitHistory(command tea.Cmd) (tea.Model, tea.Cm
 }
 
 func (runtime TerminalRuntime) View() tea.View {
-	return runtime.model.View()
+	view := runtime.model.View()
+	if runtime.insertionStarted {
+		// Bubble Tea's primary-screen history insertion resets the renderer's
+		// physical cursor to the frame origin. Hiding it for the insertion and
+		// restoring it after acknowledgement makes the next view observably
+		// different, so the renderer moves the real cursor back to the composer.
+		view.Cursor = nil
+	}
+	return view
 }
 
 // Model returns a copy of the final pure TUI state after Bubble Tea exits.
