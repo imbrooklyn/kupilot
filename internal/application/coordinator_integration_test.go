@@ -252,12 +252,18 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 
 	ui := uiEvents.Events()
 	terminalCount := 0
+	provisionalCount := 0
+	var provisionalAnswer strings.Builder
 	for index, event := range ui {
 		if event.Sequence != int64(index+1) || event.RunID != runID || event.ScopeGeneration != 7 || event.Validate() != nil {
 			t.Fatalf("UIEvent[%d] = %#v", index, event)
 		}
 		if strings.Contains(fmt.Sprintf("%#v", event), canary) {
 			t.Fatalf("UIEvent[%d] contains the sensitive canary", index)
+		}
+		if event.Kind == application.UIEventTextDelta {
+			provisionalCount++
+			provisionalAnswer.WriteString(event.Text)
 		}
 		if event.Terminal() {
 			terminalCount++
@@ -269,6 +275,11 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 				event.EvidenceReferences[0].Sequence != event.Sequence ||
 				event.EvidenceReferences[0].State != application.UIEvidenceDetailAvailable {
 				t.Fatalf("terminal Evidence references = %#v", event.EvidenceReferences)
+			}
+			if provisionalCount < 2 || provisionalAnswer.String() != event.Text ||
+				strings.Contains(provisionalAnswer.String(), "evidence_citations") ||
+				strings.Contains(provisionalAnswer.String(), "proposed_actions") {
+				t.Fatalf("provisional/final answer = %d / %q / %q", provisionalCount, provisionalAnswer.String(), event.Text)
 			}
 		}
 	}
@@ -749,11 +760,13 @@ func (model *integrationModel) ServeHTTP(writer http.ResponseWriter, request *ht
 			}},
 		})
 	case 1:
-		writeIntegrationModelChunk(writer, map[string]any{
-			"choices": []any{map[string]any{
-				"index": 0, "delta": map[string]any{"role": "assistant", "content": diagnosis}, "finish_reason": nil,
-			}},
-		})
+		for _, fragment := range integrationModelFragments(diagnosis, 11) {
+			writeIntegrationModelChunk(writer, map[string]any{
+				"choices": []any{map[string]any{
+					"index": 0, "delta": map[string]any{"role": "assistant", "content": fragment}, "finish_reason": nil,
+				}},
+			})
+		}
 		writeIntegrationModelChunk(writer, map[string]any{
 			"choices": []any{map[string]any{
 				"index": 0, "delta": map[string]any{}, "finish_reason": "stop",
@@ -766,6 +779,15 @@ func (model *integrationModel) ServeHTTP(writer http.ResponseWriter, request *ht
 func writeIntegrationModelChunk(writer http.ResponseWriter, value any) {
 	encoded, _ := json.Marshal(value)
 	_, _ = writer.Write(append(append([]byte("data: "), encoded...), '\n', '\n'))
+}
+
+func integrationModelFragments(value string, size int) []string {
+	runes := []rune(value)
+	fragments := make([]string, 0, (len(runes)+size-1)/size)
+	for start := 0; start < len(runes); start += size {
+		fragments = append(fragments, string(runes[start:min(len(runes), start+size)]))
+	}
+	return fragments
 }
 
 func (model *integrationModel) Requests() []integrationModelRequest {

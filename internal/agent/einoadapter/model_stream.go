@@ -60,6 +60,7 @@ func collectModelMessage(
 	ctx context.Context,
 	stream *schema.StreamReader[*schema.Message],
 	credential *config.SecretValue,
+	observeContent func(string) error,
 ) (*schema.Message, error) {
 	if ctx == nil || stream == nil || credential == nil || !credential.IsSet() {
 		return nil, errTransportRequestInvalid
@@ -95,6 +96,11 @@ func collectModelMessage(
 		}
 		if chunk.ResponseMeta != nil && chunk.ResponseMeta.FinishReason != "" {
 			finishSeen = true
+		}
+		if observeContent != nil && chunk.Content != "" {
+			if err := observeContent(chunk.Content); err != nil {
+				return nil, err
+			}
 		}
 		chunks = append(chunks, chunk)
 	}

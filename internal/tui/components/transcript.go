@@ -58,6 +58,8 @@ type TranscriptStyles struct {
 type Transcript struct {
 	entries     []Entry
 	activeAgent int
+	committed   int
+	prepared    int
 	viewport    viewport.Model
 	width       int
 	height      int
@@ -69,6 +71,8 @@ type Transcript struct {
 	reviewing   bool
 	visible     bool
 }
+
+const terminalHistorySeparatorRows = 1
 
 // NewTranscript creates an empty viewport. The root reducer owns mouse routing.
 func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcript {
@@ -140,6 +144,20 @@ func (transcript *Transcript) AppendAgent(delta string) {
 		return
 	}
 	transcript.entries[transcript.activeAgent].Text += delta
+	transcript.entries[transcript.activeAgent].markdownCacheValid = false
+	transcript.refresh(true)
+}
+
+// ClearAgent discards provisional prose from a pre-Tool model turn while
+// retaining the active streaming entry for the eventual final answer.
+func (transcript *Transcript) ClearAgent() {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		!transcript.entries[transcript.activeAgent].Streaming || transcript.entries[transcript.activeAgent].Text == "" {
+		return
+	}
+	transcript.entries[transcript.activeAgent].Text = ""
+	transcript.entries[transcript.activeAgent].markdownCache = ""
+	transcript.entries[transcript.activeAgent].markdownCacheWidth = 0
 	transcript.entries[transcript.activeAgent].markdownCacheValid = false
 	transcript.refresh(true)
 }
@@ -266,10 +284,99 @@ func (transcript Transcript) Entries() []Entry {
 // ToolSteps returns a defensive copy of inline step state.
 func (transcript Transcript) ToolSteps() []ToolStep { return transcript.toolSteps.Items() }
 
-// TerminalTranscript returns every completed terminal-safe entry for one
-// post-runtime write. A streaming Agent entry stops the projection so a
-// provisional model draft cannot enter terminal-owned scrollback.
+// TerminalTranscript returns every completed terminal-safe entry. A streaming
+// Agent entry stops the projection so a provisional model draft cannot enter
+// terminal-owned scrollback.
 func (transcript *Transcript) TerminalTranscript() string {
+	end := transcript.committableEnd()
+	if end == 0 {
+		return ""
+	}
+	return transcript.renderRange(0, end, false)
+}
+
+// PrepareCommit removes the next immutable block from the live projection
+// without claiming that the terminal renderer has inserted it. A streaming
+// Agent entry is a barrier: neither its provisional prose nor later entries can
+// reach terminal-owned scrollback until the Agent becomes terminal.
+func (transcript *Transcript) PrepareCommit() (string, int, int) {
+	if transcript.prepared > transcript.committed {
+		return "", 0, 0
+	}
+	end := transcript.committableEnd()
+	if end <= transcript.committed {
+		return "", 0, 0
+	}
+	block := transcript.renderCommitBlock(transcript.committed, end)
+	if block == "" {
+		transcript.committed = end
+		transcript.prepared = end
+		transcript.refresh(true)
+		return "", 0, 0
+	}
+	transcript.prepared = end
+	transcript.refresh(true)
+	return block, lipgloss.Height(block), end
+}
+
+// CompleteCommit records that one prepared block reached terminal scrollback.
+func (transcript *Transcript) CompleteCommit(end int) bool {
+	if end <= transcript.committed || end != transcript.prepared {
+		return false
+	}
+	transcript.committed = end
+	transcript.refresh(true)
+	return true
+}
+
+// AbortCommit restores a prepared block to the live projection when the
+// terminal cannot provide one safe insertion row.
+func (transcript *Transcript) AbortCommit(end int) bool {
+	if end <= transcript.committed || end != transcript.prepared {
+		return false
+	}
+	transcript.prepared = transcript.committed
+	transcript.refresh(true)
+	return true
+}
+
+// CommitReady is the synchronous component-level form used outside the
+// terminal renderer. Runtime insertion uses PrepareCommit and CompleteCommit
+// so pending output remains recoverable until it has actually been handed off.
+func (transcript *Transcript) CommitReady() (string, int) {
+	block, rows, end := transcript.PrepareCommit()
+	if block == "" {
+		return "", 0
+	}
+	if !transcript.CompleteCommit(end) {
+		return "", 0
+	}
+	return block, rows
+}
+
+// PendingTerminalTranscript returns immutable history that has not yet been
+// handed to the running terminal renderer. It is used only as a bounded
+// shutdown fallback.
+func (transcript *Transcript) PendingTerminalTranscript() string {
+	end := transcript.committableEnd()
+	if end <= transcript.committed {
+		return ""
+	}
+	return transcript.renderCommitBlock(transcript.committed, end)
+}
+
+func (transcript *Transcript) renderCommitBlock(start, end int) string {
+	block := transcript.renderRange(start, end, false)
+	if block == "" {
+		return ""
+	}
+	// Every renderer-owned immutable block leaves one inert row after itself.
+	// That single rule separates submitted history from the live Working row
+	// and a final Worked separator from the composer without transient chrome.
+	return block + strings.Repeat("\n", terminalHistorySeparatorRows)
+}
+
+func (transcript *Transcript) committableEnd() int {
 	end := 0
 	for end < len(transcript.entries) {
 		entry := transcript.entries[end]
@@ -278,10 +385,7 @@ func (transcript *Transcript) TerminalTranscript() string {
 		}
 		end++
 	}
-	if end == 0 {
-		return ""
-	}
-	return transcript.renderRange(0, end, false)
+	return end
 }
 
 // PageUp scrolls the retained in-memory transcript without moving the composer.
@@ -340,7 +444,11 @@ func (transcript *Transcript) refresh(follow bool) {
 	transcript.height = min(transcript.maxHeight, contentHeight)
 	transcript.viewport.SetHeight(transcript.height)
 	transcript.viewport.SetContent(content)
-	if follow && wasAtBottom {
+	// Outside explicit transcript review, every reflow remains attached to the
+	// live bottom. Working-state layout changes can shrink the viewport before
+	// new content arrives; relying only on the old AtBottom value would strand
+	// the viewport above a newly submitted user surface and all later output.
+	if !transcript.reviewing || (follow && wasAtBottom) {
 		transcript.viewport.GotoBottom()
 	}
 }
@@ -350,7 +458,10 @@ func (transcript *Transcript) renderContent() string {
 }
 
 func (transcript *Transcript) renderVisibleContent() string {
-	return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
+	if transcript.reviewing || transcript.selecting {
+		return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
+	}
+	return transcript.renderRange(max(transcript.committed, transcript.prepared), len(transcript.entries), false)
 }
 
 func (transcript *Transcript) renderRange(start, end int, includeSelection bool) string {
@@ -402,7 +513,7 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 func (transcript Transcript) renderUserEntry(text string) string {
 	// The two-column prompt is the only left inset. The model-level content
 	// width already reserves the terminal's final column for safe wrapping.
-	lines := strings.Split(lipgloss.Wrap(text, max(1, transcript.width-2), ""), "\n")
+	lines := strings.Split(wrapTerminalText(text, max(1, transcript.width-2)), "\n")
 	for index, line := range lines {
 		prompt := "  "
 		if index == 0 {

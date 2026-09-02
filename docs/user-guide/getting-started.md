@@ -162,7 +162,7 @@ to submit an ordinary question that begins with `/`.
 
 Key bindings include `Enter` to submit, `Shift+Enter` or `Alt+Enter` for a
 newline, `Ctrl+J` for a newline when the terminal can distinguish it, `Tab` for
-completion, arrow keys or `Ctrl+P`/`Ctrl+N` for choices, `Esc` to close or
+completion, arrow keys or `Ctrl+P`/`Ctrl+N` for bounded choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
 `Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C`
 to cancel the active local interaction first. Model setup, Pickers, observation
@@ -173,23 +173,40 @@ active run, an empty-composer `Ctrl+C` cancels the run before the bounded exit.
 Outside a Picker, `Up` recalls the newest submitted input from an empty
 composer. `Up`/`Down` continue through history while the recalled text is
 unchanged and the cursor is at the beginning or end of the complete input;
-otherwise they move within the multiline editor. `Ctrl+P`/`Ctrl+N` remain
-explicit history shortcuts. Model setup and other repurposed composer fields
-cannot recall ordinary question history. Kupilot
-leaves terminal mouse reporting disabled so visible text can be selected and
-copied with the terminal's native controls. Mouse-wheel and trackpad gestures
-are therefore terminal-owned and cannot recall composer history. The composer
-uses an unframed `›` prompt and grows from one through eight content rows. Only
-its first visual row shows `›`; continuation rows retain the same two-column
-indent. Submitted user messages retain the same marker, continuous surface,
-and vertical spacing as the composer. Multi-step command and Picker inputs keep
-a short field label immediately above the same composer after typing begins.
+otherwise they move within the multiline editor. Only `Up` and `Down` navigate
+ordinary submitted-input history. Model setup and other repurposed composer
+fields cannot recall ordinary question history. After an explicit Session
+resume is accepted, `Up` and `Down` recall that Session's restored user
+questions; restored answers and notices are display-only and never become
+editable input history. A failed or cancelled resume keeps the current input
+history unchanged. Kupilot does not enable mouse reporting. Native terminal
+drag selection and copy therefore remain available, while wheel and trackpad
+momentum use the terminal emulator's own scrollback behavior and never recall
+composer history. `Page Up` and `Page Down` provide an explicit in-memory
+transcript review fallback. While new output is live, Working-state layout
+changes keep the complete newest user message and Agent output attached to the
+bottom. Explicit transcript review stays at the selected position until it
+returns to the bottom. Before completed output enters scrollback, Kupilot
+removes it from the live projection and settles a compact frame; transient Tool
+steps, Working text, and layout spacer rows are not copied into history.
+
+Structured inventories with multiple resources and shared attributes use a
+compact Markdown table per Kind by default. The user does not need to request
+formatting. When the terminal is too narrow, the same data falls back to
+readable key/value records.
+
+The composer uses an unframed `›` prompt and grows from one through eight
+content rows. Only its first visual row shows `›`; continuation rows retain the
+same two-column indent. Submitted user messages retain the same marker,
+continuous surface, and vertical spacing as the composer. Multi-step command
+and Picker inputs keep a short field label immediately above the same composer
+after typing begins.
 
 ## Stop safely
 
 Use `/quit`, `/exit`, or `Ctrl+C` with an empty composer. If a draft is present,
 the first `Ctrl+C` clears it without exiting. Kupilot cancels owned work,
-restores the primary terminal, writes the completed safe transcript once to
+clears only its remaining live frame, leaves already committed safe history in
 terminal-owned scrollback, closes the model and Kubernetes adapters, waits for
 bounded child work, and closes the SQLite database and local log. A run that
 was durable and still marked running at process interruption is classified as

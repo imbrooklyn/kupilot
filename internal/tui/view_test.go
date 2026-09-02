@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,6 +20,9 @@ func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
 	_, composerY, _ := model.renderLayout()
 	if view.Cursor == nil || view.Cursor.Position.X != 2 || view.Cursor.Position.Y != composerY+1 {
 		t.Fatalf("empty composer cursor = %#v, want the full-height composer insertion point", view.Cursor)
+	}
+	if view.Cursor.Shape != terminalDefaultCursorShape || view.Cursor.Blink || view.Cursor.Color != nil {
+		t.Fatalf("composer cursor = %#v, want the terminal's default user shape and color", view.Cursor)
 	}
 	if got := lipgloss.Height(view.Content); got != model.height || view.Cursor.Position.Y <= model.height/2 {
 		t.Fatalf("initial fullscreen frame height/cursor = %d/%d, want height %d and a bottom composer", got, view.Cursor.Position.Y, model.height)
@@ -43,6 +47,82 @@ func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
 	}
 }
 
+func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []struct{ width, height int }{{8, 4}, {12, 6}, {20, 9}, {36, 12}, {80, 24}, {140, 32}} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			model := newTestModel()
+			model.width = size.width
+			model.height = size.height
+			model.reflow()
+			model, _ = updateModel(t, model, tea.PasteMsg{Content: "Explain the scheduling path."})
+			model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+			_ = commandFromCmd(t, submit)
+			_, submittedRows := model.transcript.CommitReady()
+			model.terminalHistoryRows += submittedRows
+			model.reflow()
+			assertCursorOnComposer(t, model, "submitted question")
+
+			model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+			assertCursorOnComposer(t, model, "Working")
+			for sequence := int64(2); sequence <= 18; sequence++ {
+				model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+					Kind: application.UIEventTextDelta, RunID: testRunID,
+					ScopeGeneration: 7, Sequence: sequence,
+					Text: "A bounded streaming paragraph grows while the composer stays visible. ",
+				}})
+				assertCursorOnComposer(t, model, "streaming answer")
+			}
+
+			model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+				Kind: application.UIEventRunCompleted, RunID: testRunID,
+				ScopeGeneration: 7, Sequence: 19,
+				Text: "The scheduling path is healthy.",
+			}})
+			assertCursorOnComposer(t, model, "completed answer")
+		})
+	}
+}
+
+func TestViewKeepsMultilineCursorOnVisibleContinuationDuringTinyResize(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "first row\nsecond row\nvisible tail"})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 24, Height: 4})
+	view := model.View()
+	if view.Cursor == nil || view.Cursor.Position.Y < 0 || view.Cursor.Position.Y >= lipgloss.Height(view.Content) {
+		t.Fatalf("multiline cursor = %#v for tiny frame %q", view.Cursor, view.Content)
+	}
+	row := strings.Split(view.Content, "\n")[view.Cursor.Position.Y]
+	if !strings.Contains(row, "visible tail") || view.Cursor.Position.X != 2+lipgloss.Width("visible tail") {
+		t.Fatalf("multiline cursor row/column = %q/%#v, want the visible continuation insertion point", row, view.Cursor)
+	}
+}
+
+func assertCursorOnComposer(t *testing.T, model Model, stage string) {
+	t.Helper()
+	view := model.View()
+	height := lipgloss.Height(view.Content)
+	if height > model.height {
+		t.Fatalf("%s frame height = %d, want at most terminal height %d", stage, height, model.height)
+	}
+	if view.Cursor == nil || view.Cursor.Position.X != 2 || view.Cursor.Position.Y < 0 ||
+		view.Cursor.Position.Y >= height {
+		t.Fatalf("%s cursor = %#v for frame height %d", stage, view.Cursor, height)
+	}
+	lines := strings.Split(view.Content, "\n")
+	if row := lines[view.Cursor.Position.Y]; !strings.Contains(row, "›") {
+		t.Fatalf("%s cursor row does not contain the composer: row=%q cursor=%#v", stage, row, view.Cursor)
+	}
+	for index, line := range lines {
+		if width := lipgloss.Width(line); width >= model.width {
+			t.Fatalf("%s row %d width = %d, terminal width = %d", stage, index, width, model.width)
+		}
+	}
+}
+
 func TestSubmittedHistoryKeepsComposerGeometryAcrossEnter(t *testing.T) {
 	t.Parallel()
 
@@ -61,6 +141,44 @@ func TestSubmittedHistoryKeepsComposerGeometryAcrossEnter(t *testing.T) {
 	}
 	assertUserSurfaceGeometry(t, model.transcript.View(), model.contentWidth(), "first line", "third line")
 	assertUserSurfaceGeometry(t, model.composer.View(), model.contentWidth(), "Ask a question", "")
+}
+
+func TestWorkingLayoutKeepsNewestTurnVisibleAndFollowsCompletion(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model.height = 12
+	for range 20 {
+		model.transcript.AppendNotice(strings.Repeat("Historic output. ", 4))
+	}
+	model.reflow()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "Newest submitted question."})
+	model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = commandFromCmd(t, submit)
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+
+	workingView := model.transcript.View()
+	workingLines := strings.Split(workingView, "\n")
+	questionRow := -1
+	for index, line := range workingLines {
+		if strings.Contains(line, "Newest submitted question.") {
+			questionRow = index
+			break
+		}
+	}
+	if questionRow <= 0 || questionRow >= len(workingLines)-1 ||
+		strings.TrimSpace(workingLines[questionRow-1]) != "" || strings.TrimSpace(workingLines[questionRow+1]) != "" {
+		t.Fatalf("Working layout clipped the submitted-user surface: %q", workingView)
+	}
+
+	answer := strings.Repeat("Diagnostic detail.\n", 8) + "Final visible answer."
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventRunCompleted, RunID: testRunID,
+		ScopeGeneration: 7, Sequence: 2, Text: answer,
+	}})
+	if view := model.transcript.View(); !strings.Contains(view, "Final visible answer.") {
+		t.Fatalf("completed turn did not remain attached to the live bottom: %q", view)
+	}
 }
 
 func assertUserSurfaceGeometry(t *testing.T, rendered string, width int, firstText, continuationText string) {
@@ -197,7 +315,7 @@ func TestSemanticPaletteModesKeepMeaningIndependentOfColor(t *testing.T) {
 	}
 }
 
-func TestCompletedConversationStaysInOneFullscreenManagedFrame(t *testing.T) {
+func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
@@ -214,10 +332,10 @@ func TestCompletedConversationStaysInOneFullscreenManagedFrame(t *testing.T) {
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
 	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
-		t.Fatal("terminal Agent history left the managed frame or emitted an unmanaged command")
+		t.Fatal("pure TUI state lost terminal Agent history or emitted a runtime command")
 	}
-	if !model.View().AltScreen {
-		t.Fatal("conversation view did not isolate the full-height runtime in the alternate screen")
+	if model.View().AltScreen || model.View().MouseMode != tea.MouseModeNone {
+		t.Fatal("conversation view did not leave primary-screen selection and scrolling under terminal ownership")
 	}
 	model, duplicate := updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
 	if duplicate != nil {

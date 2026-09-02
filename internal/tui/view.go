@@ -26,22 +26,14 @@ func (model Model) View() tea.View {
 }
 
 func (model Model) configureView(view tea.View) tea.View {
-	// Keep every mutable runtime surface inside one full-screen buffer. After
-	// Bubble Tea restores the primary screen, the composition root writes one
-	// completed terminal-safe transcript for terminal-owned scrollback.
-	view.AltScreen = true
+	// Completed conversation is inserted above this live primary-screen frame.
+	// Keeping mouse reporting disabled leaves selection, copy, and high-density
+	// wheel or trackpad scrolling under terminal ownership.
+	view.AltScreen = false
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
-	// Mouse reporting prevents ordinary terminal drag-selection. Keep it off
-	// so visible transcript text can be selected and copied natively.
 	view.MouseMode = tea.MouseModeNone
-	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
-		wheel, ok := message.(tea.MouseWheelMsg)
-		if !ok {
-			return nil
-		}
-		return func() tea.Msg { return wheel }
-	}
+	view.OnMouse = nil
 	return view
 }
 
@@ -52,45 +44,50 @@ func (model Model) render() string {
 
 func (model Model) renderLayout() (content string, composerY int, composerVisible bool) {
 	gap := model.layoutGap()
+	contentWidth := model.contentWidth()
 	topSections := make([]string, 0, 2)
 	if transcript := model.transcript.View(); transcript != "" {
-		topSections = append(topSections, transcript)
+		topSections = append(topSections, constrainLayoutWidth(transcript, contentWidth))
 	}
 	if working := model.workingView(); working != "" {
-		topSections = append(topSections, working)
+		topSections = append(topSections, constrainLayoutWidth(working, contentWidth))
 	}
 	top := joinLayoutSections(topSections, gap)
 
 	bottomSections := make([]string, 0, 4)
 	composerOffset := 0
 	if label := model.inputLabelView(); label != "" {
+		label = constrainLayoutWidth(label, contentWidth)
 		bottomSections = append(bottomSections, label)
 		composerOffset = lipgloss.Height(label)
 	}
-	bottomSections = append(bottomSections, model.composer.View())
+	bottomSections = append(bottomSections, constrainLayoutWidth(model.composer.View(), contentWidth))
 	if model.pickerOpen() {
-		bottomSections = append(bottomSections, model.pickerView())
+		bottomSections = append(bottomSections, constrainLayoutWidth(model.pickerView(), contentWidth))
 	} else if model.slashMenu.Open() {
-		bottomSections = append(bottomSections, model.slashMenu.View())
+		bottomSections = append(bottomSections, constrainLayoutWidth(model.slashMenu.View(), contentWidth))
 	}
 	bottom := lipgloss.JoinVertical(lipgloss.Left, bottomSections...)
 	if footer := model.footerView(); footer != "" {
+		footer = constrainLayoutWidth(footer, contentWidth)
 		bottom = joinLayoutSections([]string{bottom, footer}, gap)
 	}
 
-	spacer := max(0, model.height-lipgloss.Height(top)-lipgloss.Height(bottom))
+	liveHeight := lipgloss.Height(bottom)
+	if top != "" {
+		liveHeight += lipgloss.Height(top) + gap
+	}
+	visibleHistoryRows := min(max(0, model.terminalHistoryRows), max(0, model.height-liveHeight))
+	targetHeight := max(liveHeight, model.height-visibleHistoryRows)
+	spacer := max(0, targetHeight-liveHeight)
 	main := bottom
 	if top != "" {
-		spacer = max(gap, spacer)
-		main = top + strings.Repeat("\n", spacer+1) + bottom
-		composerY = lipgloss.Height(top) + spacer + composerOffset
+		main = top + strings.Repeat("\n", spacer+gap+1) + bottom
+		composerY = lipgloss.Height(top) + spacer + gap + composerOffset
 	} else {
 		main = strings.Repeat("\n", spacer) + bottom
 		composerY = spacer + composerOffset
 	}
-	contentWidth := model.contentWidth()
-	main = lipgloss.NewStyle().Width(contentWidth).Render(main)
-	main = lipgloss.Place(model.width, model.height, lipgloss.Left, lipgloss.Top, main)
 
 	overlay := ""
 	switch {
@@ -104,14 +101,45 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 		overlay = model.dialog.View(model.width)
 	}
 	if overlay == "" {
+		main, composerY = model.constrainLayoutHeight(main, composerY)
 		return main, composerY, true
 	}
 
 	x := max(0, (model.width-lipgloss.Width(overlay))/2)
-	y := max(0, (model.height-lipgloss.Height(overlay))/2)
+	y := max(0, (targetHeight-lipgloss.Height(overlay))/2)
 	baseLayer := lipgloss.NewLayer(main).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
+}
+
+func constrainLayoutWidth(content string, width int) string {
+	if content == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Width(max(1, width)).Render(content)
+}
+
+// constrainLayoutHeight performs the top-row clipping that Bubble Tea would
+// otherwise do after it has forgotten the corresponding cursor adjustment.
+// The focused composer row is the anchor, so even a transient tiny resize keeps
+// the operating-system input method attached to the one real editor.
+func (model Model) constrainLayoutHeight(content string, composerY int) (string, int) {
+	rows := strings.Split(content, "\n")
+	height := max(1, model.height)
+	if len(rows) <= height {
+		return content, composerY
+	}
+	start := len(rows) - height
+	if cursor := model.composer.Cursor(); cursor != nil {
+		cursorY := composerY + cursor.Position.Y
+		if cursorY < start {
+			start = cursorY
+		} else if cursorY >= start+height {
+			start = cursorY - height + 1
+		}
+	}
+	start = max(0, min(start, len(rows)-height))
+	return strings.Join(rows[start:start+height], "\n"), composerY - start
 }
 
 func (model Model) inputLabelView() string {

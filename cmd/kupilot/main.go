@@ -339,7 +339,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	eventContext, cancelEvents := context.WithCancel(ctx)
 	requests := make(chan tea.Msg, 32)
 	program := tea.NewProgram(
-		model,
+		tui.NewTerminalRuntime(model),
 		tea.WithContext(ctx),
 		tea.WithOutput(stdout),
 		tea.WithFilter(applicationRequestFilter(requestContext, requests)),
@@ -358,24 +358,45 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	close(deliveryStop)
 	cancelEvents()
 	workers.Wait()
-	transcriptErr := writeCompletedTerminalTranscript(stdout, finalState, runErr)
-	return errors.Join(runErr, shutdownErr, transcriptErr)
+	restoreErr := restoreTerminalAfterRuntime(stdout, finalState, runErr)
+	return errors.Join(runErr, shutdownErr, restoreErr)
 }
 
-func writeCompletedTerminalTranscript(output io.Writer, finalState tea.Model, runErr error) error {
+func restoreTerminalAfterRuntime(output io.Writer, finalState tea.Model, runErr error) error {
+	var finalModel tui.Model
+	var pendingTranscript string
+	switch state := finalState.(type) {
+	case tui.TerminalRuntime:
+		finalModel = state.Model()
+		pendingTranscript = state.PendingTerminalTranscript()
+	case tui.Model:
+		finalModel = state
+		pendingTranscript = finalModel.PendingTerminalTranscript()
+	default:
+		return errors.New("TUI final state is unavailable")
+	}
+	frameHeight := finalModel.TerminalFrameHeight()
+	if frameHeight > 0 {
+		if _, err := fmt.Fprint(output, "\r"); err != nil {
+			return fmt.Errorf("restore terminal frame: %w", err)
+		}
+		if frameHeight > 1 {
+			if _, err := fmt.Fprintf(output, "\x1b[%dA", frameHeight-1); err != nil {
+				return fmt.Errorf("restore terminal frame: %w", err)
+			}
+		}
+		if _, err := fmt.Fprint(output, "\x1b[J"); err != nil {
+			return fmt.Errorf("restore terminal frame: %w", err)
+		}
+	}
 	if runErr != nil {
 		return nil
 	}
-	finalModel, ok := finalState.(tui.Model)
-	if !ok {
-		return errors.New("TUI final state is unavailable")
-	}
-	transcript := finalModel.TerminalTranscript()
-	if transcript == "" {
+	if pendingTranscript == "" {
 		return nil
 	}
-	if _, err := fmt.Fprintln(output, transcript); err != nil {
-		return fmt.Errorf("write completed terminal transcript: %w", err)
+	if _, err := fmt.Fprintln(output, pendingTranscript); err != nil {
+		return fmt.Errorf("write pending terminal transcript: %w", err)
 	}
 	return nil
 }

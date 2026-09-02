@@ -136,6 +136,41 @@ func TestDiagnosisValidatorSanitizesEveryModelFreeTextField(t *testing.T) {
 	}
 }
 
+func TestDiagnosisValidatorPreservesAnswerMarkdownStructure(t *testing.T) {
+	input := testRunInput(t, "Summarize the cluster inventory.")
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	answer := strings.Join([]string{
+		"# Cluster overview",
+		"",
+		"## Nodes",
+		"",
+		"| Node | State |",
+		"| --- | --- |",
+		"| worker-0 | Ready |",
+		"",
+		"## Namespaces",
+		"",
+		"| Namespace | State |",
+		"| --- | --- |",
+		"| default | Active |",
+		"| system | Active |",
+	}, "\r\n")
+	want := strings.ReplaceAll(answer, "\r\n", "\n")
+
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: answer}, DiagnosisMetadata{
+		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(),
+	}, registry)
+	if err != nil {
+		t.Fatalf("ValidateDiagnosis(multiline Markdown) error = %v", err)
+	}
+	if diagnosis.AnswerMarkdown != want {
+		t.Fatalf("answer Markdown structure changed\nwant:\n%s\n\ngot:\n%s", want, diagnosis.AnswerMarkdown)
+	}
+}
+
 func TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence(t *testing.T) {
 	input := testRunInput(t, "Inspect the selected Pod.")
 	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())

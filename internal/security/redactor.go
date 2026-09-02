@@ -58,7 +58,7 @@ func (*Redactor) Process(value string, maximumBytes int) (TextResult, error) {
 }
 
 // ProcessLines applies the same fixed policy while preserving normalized line
-// boundaries for bounded container log excerpts.
+// boundaries for multiline external text.
 func (*Redactor) ProcessLines(value string, maximumBytes int) (TextResult, error) {
 	if maximumBytes < 1 {
 		return TextResult{}, ErrInvalidTextPolicy

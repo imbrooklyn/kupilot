@@ -59,7 +59,7 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 	}
 	events := recorder.Events()
 	assertTerminalSequence(t, events)
-	wanted := []agent.RunEventKind{
+	prefix := []agent.RunEventKind{
 		agent.RunEventRunStarted,
 		agent.RunEventModelStreamStarted,
 		agent.RunEventToolCallRequested,
@@ -67,20 +67,26 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 		agent.RunEventToolCallCompleted,
 		agent.RunEventEvidenceCollected,
 		agent.RunEventModelStreamStarted,
-		agent.RunEventTextDelta,
-		agent.RunEventDiagnosisReady,
-		agent.RunEventRunCompleted,
 	}
-	if len(events) != len(wanted) {
-		t.Fatalf("event count = %d, want %d", len(events), len(wanted))
+	if len(events) < len(prefix)+3 {
+		t.Fatalf("event count = %d, want at least %d", len(events), len(prefix)+3)
 	}
-	for index, kind := range wanted {
+	for index, kind := range prefix {
 		if events[index].Kind != kind {
 			t.Fatalf("event[%d].Kind = %q, want %q", index, events[index].Kind, kind)
 		}
 	}
-	if events[7].TextDelta != safeModelProgress || strings.Contains(events[7].TextDelta, "confirmed_facts") {
-		t.Fatalf("model progress event = %#v", events[7])
+	var provisional strings.Builder
+	for _, event := range events[len(prefix) : len(events)-2] {
+		if event.Kind != agent.RunEventTextDelta || strings.Contains(event.TextDelta, "evidence_citations") {
+			t.Fatalf("provisional answer event = %#v", event)
+		}
+		provisional.WriteString(event.TextDelta)
+	}
+	if events[len(events)-2].Kind != agent.RunEventDiagnosisReady ||
+		events[len(events)-1].Kind != agent.RunEventRunCompleted ||
+		provisional.String() != outcome.Diagnosis.AnswerMarkdown {
+		t.Fatalf("provisional answer sequence = %#v", events)
 	}
 }
 
@@ -137,7 +143,7 @@ func TestAdapterDiscardsCommentaryAccompanyingToolSelection(t *testing.T) {
 		t.Fatalf("outcome/Tool calls = %#v/%d", outcome, len(tool.Calls()))
 	}
 	for _, event := range recorder.Events() {
-		if event.Kind == agent.RunEventTextDelta && event.TextDelta != safeModelProgress {
+		if event.Kind == agent.RunEventTextDelta && strings.Contains(event.TextDelta, "I will inspect") {
 			t.Fatalf("Tool commentary reached the run event stream: %#v", event)
 		}
 	}
@@ -170,7 +176,24 @@ func TestAdapterCompletesGeneralAnswerWithoutToolCall(t *testing.T) {
 	if len(model.Requests()) != 1 || len(tool.Calls()) != 0 {
 		t.Fatalf("general-answer calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
 	}
-	assertTerminalSequence(t, recorder.Events())
+	events := recorder.Events()
+	assertTerminalSequence(t, events)
+	if len(events) < 5 || events[0].Kind != agent.RunEventRunStarted ||
+		events[1].Kind != agent.RunEventModelStreamStarted ||
+		events[len(events)-2].Kind != agent.RunEventDiagnosisReady ||
+		events[len(events)-1].Kind != agent.RunEventRunCompleted {
+		t.Fatalf("general-answer events = %#v", events)
+	}
+	var provisional strings.Builder
+	for _, event := range events[2 : len(events)-2] {
+		if event.Kind != agent.RunEventTextDelta {
+			t.Fatalf("general-answer event = %#v", event)
+		}
+		provisional.WriteString(event.TextDelta)
+	}
+	if provisional.String() != outcome.Diagnosis.AnswerMarkdown {
+		t.Fatalf("general-answer provisional text = %q", provisional.String())
+	}
 }
 
 func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
@@ -247,9 +270,13 @@ func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 			t.Fatalf("blocked Diagnosis calls: Tool = %d, Model = %d", len(tool.Calls()), len(model.Requests()))
 		}
 		encodedEvents := fmt.Sprintf("%#v", recorder.Events())
-		if strings.Contains(encodedEvents, blockedCanary) || strings.Contains(encodedEvents, blockedText) ||
-			!strings.Contains(encodedEvents, safeModelProgress) {
+		if strings.Contains(encodedEvents, blockedCanary) || strings.Contains(encodedEvents, blockedText) {
 			t.Fatalf("blocked Diagnosis events = %s", encodedEvents)
+		}
+		for _, event := range recorder.Events() {
+			if event.Kind == agent.RunEventTextDelta {
+				t.Fatalf("blocked Diagnosis produced provisional text: %#v", event)
+			}
 		}
 		assertTerminalSequence(t, recorder.Events())
 	})

@@ -199,6 +199,13 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if err != nil {
 		return state.finishFailure(runCtx, err)
 	}
+	if diagnosisDraftContainsCredential(state.client.credential, draft) {
+		return state.finishFailure(runCtx, failedRuntime(
+			domain.SafeErrorClassSensitiveOutputBlocked,
+			safeSensitiveModelTextBlocked,
+			agent.ErrSensitiveModelTextBlocked,
+		))
+	}
 	diagnosis, err := state.validateDiagnosis(draft, true)
 	if err != nil {
 		return state.finishFailure(runCtx, err)

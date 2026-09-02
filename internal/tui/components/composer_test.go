@@ -133,6 +133,26 @@ func TestComposerArrowHistoryRequiresAnUnchangedWholeInputBoundary(t *testing.T)
 	}
 }
 
+func TestComposerClearHistoryRemovesPriorSessionInputs(t *testing.T) {
+	t.Parallel()
+
+	composer := NewComposer(ComposerStyles{}, 1024)
+	composer.RecordSubmission("Prior Session question.")
+	composer.SetValue("Preserved draft.")
+	composer.ClearHistory()
+	if composer.Value() != "Preserved draft." {
+		t.Fatalf("ClearHistory changed the current draft: %q", composer.Value())
+	}
+	composer.Reset()
+	if composer.PreviousHistory() || composer.Value() != "" {
+		t.Fatalf("cleared prior Session history remained recallable: %q", composer.Value())
+	}
+	composer.RecordSubmission("Current Session question.")
+	if !composer.PreviousHistory() || composer.Value() != "Current Session question." {
+		t.Fatalf("new Session history could not be recalled after clearing: %q", composer.Value())
+	}
+}
+
 func visualTextColumn(line, value string) int {
 	index := strings.Index(line, value)
 	if index < 0 {

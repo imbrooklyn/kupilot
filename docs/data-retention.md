@@ -38,11 +38,10 @@ disk encryption, and backup lifecycle remain the user's controls.
 8. A storage failure can degrade an already-started investigation, but it
    cannot enable a model call before the required run-start transaction or a
    supervised write before durable pre-operation audit.
-9. The completed transcript written to the primary terminal after graceful
-   full-screen restoration is a terminal-owned display consequence, not a
-   Kupilot-created durable store. Kupilot deletion controls cannot retract
-   already displayed text from a terminal emulator, multiplexer, recorder,
-   backup, or remote session.
+9. Completed history inserted into primary-terminal scrollback is a
+   terminal-owned display consequence, not a Kupilot-created durable store.
+   Kupilot deletion controls cannot retract already displayed text from a
+   terminal emulator, multiplexer, recorder, backup, or remote session.
 
 ## 2. Standard-persistence defaults
 
@@ -276,11 +275,11 @@ a crash bundle, or another Kupilot-created durable store:
 
 The terminal-byte exclusion means Kupilot does not copy terminal output into
 SQLite, logs, exports, crash bundles, or another generic durable sink. It does
-not mean displayed text vanishes: after graceful full-screen restoration,
-Kupilot writes one completed safe transcript that the primary terminal,
-multiplexer, or session recorder may keep in its own scrollback. Session
-deletion, clear-history, delete-all-local-state, and minimal persistence do not
-control that external retention.
+not mean displayed text vanishes: Kupilot inserts completed safe history into
+the primary terminal, and a terminal emulator, multiplexer, or session recorder
+may keep it in its own scrollback. Session deletion, clear-history,
+delete-all-local-state, and minimal persistence do not control that external
+retention.
 
 Kubeconfig paths are not stored in SQLite or ordinary logs. A user-requested
 local diagnostic view may show a safely resolved path without making it model or

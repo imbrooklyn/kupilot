@@ -23,6 +23,14 @@ its message stream. The adapter then validates and locally canonicalizes the
 one assembled assistant message before any Tool reservation, Tool dispatch,
 durable assistant Message, Evidence reference, or Diagnosis can result.
 
+The only pre-assembly delivery projection observes already decoded and
+chunk-validated Eino `Content` strings. It incrementally recognizes a first
+top-level `answer_markdown` JSON string, applies cross-chunk output safety, and
+emits project-owned provisional text. It does not decode SSE, reconstruct a
+provider payload, assemble a message or Tool call, decide a finish reason, or
+create runtime authority. The validated assembled message remains the only
+source of final text and structured actions.
+
 Provider fragments never authorize a Tool. A complete Tool call must have a
 contiguous bounded index, fixed name, bounded identifier, valid JSON argument
 object, and the `tool_calls` finish reason. The project-owned strict binder then
@@ -31,8 +39,9 @@ runtime-authority fields, injects immutable scope and ceilings, and produces
 canonical arguments before budget reservation or dispatch. Non-canonical JSON
 whitespace and key order remain valid. Commentary that precedes or accompanies
 a Tool selection is bounded and discarded after the assembled response proves
-`tool_calls`; it cannot become visible text, Tool authority, Evidence, or
-Diagnosis.
+`tool_calls`; ordinary commentary is not recognized by the provisional answer
+projector and cannot become Tool authority, Evidence, or Diagnosis. A requested
+Tool clears any final-envelope-shaped provisional prose from that model turn.
 
 When every selection has a known Tool name and a structurally safe argument
 object but strict semantic binding denies any member, the adapter keeps the
@@ -60,7 +69,9 @@ envelopes without decoding a second provider protocol. Before assembly,
 Kupilot accepts only Eino's paired request-ID and reasoning metadata, bounds
 and credential-checks those values, and discards them. After Eino assembles the
 stream, Kupilot validates the message shape and finish reason and applies
-project policy.
+project policy. During that same read-once drain, the passive answer projector
+may receive validated `Content` strings. It exposes neither raw provider chunks
+nor Eino values outside the adapter.
 
 Construction validates the effective profile and credential locally, clones an
 independent HTTP transport, and performs no network request. A successfully
@@ -158,6 +169,15 @@ discarded and only complete indexed Tool calls proceed to strict binding.
 Every Tool index must remain in range and the completed index set must be
 contiguous from zero.
 
+For visible provisional output, the final protocol places `answer_markdown`
+first. Its incremental JSON string decoder supports escaped characters and
+UTF-16 surrogate pairs split across content chunks. Before each provisional
+event, the adapter checks the exact model credential across chunk boundaries,
+normalizes split terminal controls, applies the fixed sensitive-value policy,
+enforces answer and run-wide event ceilings, and verifies the immutable run
+scope. Raw envelope syntax, citation metadata, proposed actions, reasoning
+content, and provider metadata are never provisional answer text.
+
 `data: [DONE]` is accepted after a supported finish reason. EOF is also accepted
 after a supported finish reason, so usage and `[DONE]` are optional. EOF before
 a finish reason, data after a finish reason other than one optional usage chunk,
@@ -170,8 +190,10 @@ The response header `X-Request-ID` and Eino's decoded response identifier are
 optional. When present, they are bounded and credential-checked inside the
 adapter, then discarded from the policy-bearing message. Other response
 headers and raw response identifiers are not part of the internal contract.
-Raw chunks, headers, request or response bodies, partial output, usage objects,
-and provider objects never become Application or Domain metadata.
+Raw chunks, headers, request or response bodies, usage objects, and provider
+objects never become Application or Domain metadata. Only the project-owned
+safe provisional text event may cross into Application, and it is never Domain
+state, a successful result, or durable content.
 
 ## Capability validation strategy
 
@@ -344,7 +366,7 @@ synthetic English content and loopback `httptest` servers.
 
 | Fixture or route | Contract exercised |
 | --- | --- |
-| `normal.sse` | Text deltas, optional request metadata and usage, finish reason, `[DONE]` |
+| `normal.sse` | Ordered decoded-content observation, optional request metadata and usage, finish reason, `[DONE]` |
 | `tool-call-fragments.sse` | Atomic Tool identity with ordered argument fragments |
 | `interleaved-tool-calls.sse` | Atomic identities with interleaved indexed argument fragments |
 | `noncanonical-tool-arguments.sse` | Valid non-canonical Tool JSON passed to strict local binding |
@@ -363,6 +385,7 @@ synthetic English content and loopback `httptest` servers.
 | Verified private HTTPS and same-origin redirect routes | Normal certificate verification and authenticated POST preservation |
 | Generated credential, endpoint-error, and caller-callback canaries | Header-only credential use and safe sink confinement |
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
+| Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
 
 <!-- markdownlint-enable MD013 -->
 

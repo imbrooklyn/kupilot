@@ -20,7 +20,7 @@ var streamMergeBenchmarkSink []UIEvent
 func BenchmarkStreamDeltaMergeV1(b *testing.B) {
 	const (
 		deltaBytes = 1024
-		deltaCount = MaxQuestionBytes / deltaBytes
+		deltaCount = MaxAnswerMarkdownBytes / deltaBytes
 	)
 	delta := strings.Repeat("x", deltaBytes)
 	now := time.UnixMilli(1_700_000_000_000).UTC()
@@ -29,7 +29,7 @@ func BenchmarkStreamDeltaMergeV1(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		events := make([]UIEvent, 0, deltaCount/4+2)
+		events := make([]UIEvent, 0, deltaCount+2)
 		bridge, err := newEventBridge(streamBenchmarkRunID, 7, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 			events = append(events, event)
 			return nil
@@ -60,7 +60,8 @@ func BenchmarkStreamDeltaMergeV1(b *testing.B) {
 		}); err != nil {
 			b.Fatalf("accept(terminal) error = %v", err)
 		}
-		if len(events) != deltaCount/4+2 || !events[len(events)-1].Terminal() {
+		wantEvents := MaxAnswerMarkdownBytes/uiDeltaFlushBytes + 2
+		if len(events) != wantEvents || !events[len(events)-1].Terminal() {
 			b.Fatalf("coalesced event shape is invalid: count=%d", len(events))
 		}
 		if err := bridge.accept(ctx, agent.RunEvent{

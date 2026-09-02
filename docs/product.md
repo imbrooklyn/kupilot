@@ -68,13 +68,19 @@ where they protect authority or data rather than merely restricting usefulness.
    namespace-access policy, capability catalog, consent, and budget profile.
 7. Inline steps show bounded reads and any proposed action. While work is
    active, a live row shows compact elapsed time and the `Esc` interrupt hint.
-   The user may cancel the run at any time and may inspect `/status` without
-   causing external I/O.
-8. Kupilot returns a validated free-form Markdown answer. Evidence detail and
-   gaps remain inspectable without forcing every response into a fixed layout.
+   Once a final-answer envelope begins, bounded safe provisional Markdown
+   appears in the same Agent entry. The user may cancel the run at any time and
+   may inspect `/status` without causing external I/O.
+8. Kupilot replaces the provisional draft with a validated free-form Markdown
+   answer. Evidence detail and gaps remain inspectable without forcing every
+   response into a fixed layout. A partial, failed, cancelled, timed-out, or
+   stale stream never becomes committed assistant history.
    The final answer ends with a full-width `Worked for` duration separator.
-   After the managed full-screen composer exits, one completed safe transcript
-   is written to the restored primary terminal and may remain in scrollback.
+   Completed safe history is inserted once above the live primary-terminal
+   frame. Every inserted immutable block ends with one inert separator row, so
+   submitted history remains distinct from live Working state and the final
+   `Worked for` row remains distinct from the composer. Completed history may
+   remain in terminal-owned scrollback after Kupilot exits.
 9. If the Agent proposes an admitted mutation, Kupilot displays a default-reject
    approval bound to the exact target and operation. Request acceptance and
    post-operation verification remain distinct.
@@ -109,6 +115,12 @@ server and every denial remains visible.
 The visible result is bounded Markdown. Kupilot does not prepend scope text or
 append `Confirmed facts`, `Hypotheses`, `Missing information`, and
 `Recommended actions` sections to every answer.
+
+Structured inventories and comparisons containing multiple resources of the
+same Kind and shared attributes default to compact Markdown tables, one per
+Kind, even when the user does not explicitly request formatting. Prose and
+lists remain appropriate for non-tabular results, and the terminal renderer
+degrades tables safely when width is insufficient.
 
 The internal final-response envelope separately carries:
 

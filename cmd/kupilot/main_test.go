@@ -139,7 +139,7 @@ func TestCompositionRootCacheClearShortCircuitsOrdinaryStartup(t *testing.T) {
 	}
 }
 
-func TestCompletedTerminalTranscriptWritesOnlyAfterGracefulRuntime(t *testing.T) {
+func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 	t.Parallel()
 
 	model := tui.NewModel(tui.Config{
@@ -158,22 +158,26 @@ func TestCompletedTerminalTranscriptWritesOnlyAfterGracefulRuntime(t *testing.T)
 	}})
 
 	var output bytes.Buffer
-	if err := writeCompletedTerminalTranscript(&output, model, nil); err != nil {
-		t.Fatalf("writeCompletedTerminalTranscript() error = %v", err)
+	if err := restoreTerminalAfterRuntime(&output, model, nil); err != nil {
+		t.Fatalf("restoreTerminalAfterRuntime() error = %v", err)
 	}
-	if strings.Count(output.String(), "How many Nodes are Ready?") != 1 ||
+	if !strings.HasPrefix(output.String(), "\r\x1b[") ||
+		strings.Count(output.String(), "How many Nodes are Ready?") != 1 ||
 		strings.Count(output.String(), "Three Nodes are Ready.") != 1 ||
 		strings.Contains(output.String(), "Ask a question") || strings.Contains(output.String(), "supervised") {
 		t.Fatalf("completed terminal transcript = %q", output.String())
 	}
 
 	output.Reset()
-	if err := writeCompletedTerminalTranscript(&output, model, context.Canceled); err != nil || output.Len() != 0 {
-		t.Fatalf("interrupted runtime wrote terminal transcript: error=%v output=%q", err, output.String())
+	if err := restoreTerminalAfterRuntime(&output, model, context.Canceled); err != nil ||
+		strings.Contains(output.String(), "How many Nodes are Ready?") ||
+		strings.Contains(output.String(), "Three Nodes are Ready.") ||
+		!strings.HasSuffix(output.String(), "\x1b[J") {
+		t.Fatalf("interrupted runtime did not limit output to live-frame cleanup: error=%v output=%q", err, output.String())
 	}
 
 	writeErr := errors.New("synthetic terminal write failure")
-	if err := writeCompletedTerminalTranscript(terminalErrorWriter{err: writeErr}, model, nil); !errors.Is(err, writeErr) {
+	if err := restoreTerminalAfterRuntime(terminalErrorWriter{err: writeErr}, model, nil); !errors.Is(err, writeErr) {
 		t.Fatalf("terminal write failure = %v, want wrapped synthetic error", err)
 	}
 }

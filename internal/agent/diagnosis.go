@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
 var (
@@ -328,7 +329,7 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 		RecommendedActions: make([]domain.RecommendedAction, len(draft.RecommendedActions)),
 	}
 	if draft.AnswerMarkdown != "" {
-		answer, err := processModelText(draft.AnswerMarkdown, MaxAnswerMarkdownBytes)
+		answer, err := processModelMarkdown(draft.AnswerMarkdown, MaxAnswerMarkdownBytes)
 		if err != nil || answer == "" {
 			if errors.Is(err, ErrSensitiveModelTextBlocked) {
 				return DiagnosisDraft{}, err
@@ -397,6 +398,20 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 		}
 	}
 	return result, nil
+}
+
+func processModelMarkdown(value string, maximumBytes int) (string, error) {
+	if maximumBytes < 1 || len(value) > maximumBytes {
+		return "", errInvalidModelText
+	}
+	processed, err := security.NewRedactor().ProcessLines(value, maximumBytes)
+	if errors.Is(err, security.ErrSensitiveOutputBlocked) {
+		return "", ErrSensitiveModelTextBlocked
+	}
+	if err != nil || processed.Truncated {
+		return "", errInvalidModelText
+	}
+	return processed.Value, nil
 }
 
 func cloneResourceRef(reference *domain.ResourceRef) *domain.ResourceRef {

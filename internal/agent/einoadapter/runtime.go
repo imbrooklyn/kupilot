@@ -39,6 +39,7 @@ type runState struct {
 	modelRequestIDs   map[domain.ModelRequestID]struct{}
 	toolInvocationIDs map[domain.ToolInvocationID]struct{}
 	toolBatchFailure  error
+	provisionalEvents int
 }
 
 func (state *runState) toolBatchAbort() error {
@@ -73,6 +74,16 @@ func (state *runState) publish(ctx context.Context, event agent.RunEvent) error 
 		return failedRuntime(domain.SafeErrorClassPersistenceUnavailable, safeEventRejected, nil)
 	}
 	return nil
+}
+
+func (state *runState) reserveProvisionalEvent() bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.provisionalEvents >= maxProvisionalAnswerEvents {
+		return false
+	}
+	state.provisionalEvents++
+	return true
 }
 
 func (state *runState) checkScope(ctx context.Context) error {

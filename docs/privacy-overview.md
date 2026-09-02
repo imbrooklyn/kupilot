@@ -133,14 +133,37 @@ the assistant-response ceiling, and discards it before message assembly. It is
 not shown, persisted, cited, logged, returned to the model, or treated as Tool
 or action authority.
 
+Final-answer content may be shown provisionally after Eino decodes and validates
+each content chunk. Only the first top-level `answer_markdown` string is
+eligible. Before a fragment reaches Application or the TUI, Kupilot checks the
+exact model credential across chunk boundaries, normalizes split terminal
+controls, applies the fixed sensitive-value policy, enforces byte and event
+ceilings, and verifies current scope. Raw SSE, envelope syntax, Evidence
+citations, proposed actions, reasoning and provider metadata remain excluded.
+The complete decoded Diagnosis is checked again and only its final validated
+answer may be persisted or committed to terminal scrollback.
+
 ## Terminal output and scrollback
 
-Ordinary conversation runs in one alternate-screen frame. On graceful exit,
-Bubble Tea restores the primary screen and Kupilot writes one bounded
-terminal-safe rendering of the completed transcript. Composer drafts,
-placeholders, footer and dialog state, the live Working row, and provisional
-model output are excluded. The completed projection may therefore remain in
-terminal-emulator scrollback after Kupilot exits.
+Ordinary conversation starts in one cleared primary-screen live frame. Kupilot
+removes each newly immutable, bounded terminal-safe history block from the live
+projection, settles a compact frame, and inserts bounded row batches above it.
+Each immutable block includes one inert trailing separator row and remains
+pending until insertion is acknowledged. Composer drafts, placeholders, footer
+and dialog state, the live Working row, provisional model output, and transient
+layout spacer rows are excluded. Completed history may therefore remain in
+terminal-emulator scrollback during and after Kupilot.
+
+Provisional output exists only in the replaceable live Agent entry. A Tool
+request clears any draft from that pre-Tool turn. Completion replaces the draft
+with the validated answer; cancellation, timeout, stale scope, model failure,
+and final-validation failure replace it with code-authored terminal text. None
+of those transitions promotes a partial response into Session history.
+
+If shutdown interrupts an insertion after its first batch may have reached the
+terminal, Kupilot does not replay the entire ambiguous block. This prevents a
+duplicate terminal disclosure; retained Session data continues to follow the
+selected persistence mode.
 
 Terminal scrollback is not SQLite or a second Kupilot-created history store;
 its capture, lifetime, search, copy, and deletion behavior belong to the

@@ -3,8 +3,10 @@ package components
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestTerminalMarkdownRendersReadableTablesAtWideAndNarrowWidths(t *testing.T) {
@@ -39,6 +41,51 @@ func TestTerminalMarkdownRendersReadableTablesAtWideAndNarrowWidths(t *testing.T
 	}
 	if lipglossLineWidth(narrow) > 28 {
 		t.Fatalf("narrow Markdown records exceeded 28 cells:\n%s", narrow)
+	}
+}
+
+func TestTerminalMarkdownRendersMultipleInventorySections(t *testing.T) {
+	t.Parallel()
+
+	markdown := strings.Join([]string{
+		"# Cluster overview",
+		"",
+		"## Nodes",
+		"",
+		"| Node | State | Ready |",
+		"| --- | --- | --- |",
+		"| development-agent-0 | Ready | 1/1 |",
+		"| development-server-0 | Ready | 1/1 |",
+		"",
+		"## Namespaces",
+		"",
+		"| Namespace | State |",
+		"| --- | --- |",
+		"| default | Active |",
+		"| system | Active |",
+		"",
+		"## system Pods",
+		"",
+		"| Pod | State | Ready | Note |",
+		"| --- | --- | --- | --- |",
+		"| install-ingress-controller-7k2mv | Succeeded | 0/1 | Completed |",
+		"| metrics-server-786d997795-jx9nl | Running | 1/1 | - |",
+	}, "\n")
+	rendered := renderTerminalMarkdown(markdown, 120, MarkdownStyles{})
+
+	for _, required := range []string{
+		"Cluster overview", "Nodes", "Namespaces", "system Pods",
+		"development-agent-0", "install-ingress-controller-7k2mv", "Completed",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered Markdown missing %q:\n%s", required, rendered)
+		}
+	}
+	if strings.Contains(rendered, "| --- |") || strings.Count(rendered, "━━━") < 3 {
+		t.Fatalf("multiple Markdown tables were not rendered as separate grids:\n%s", rendered)
+	}
+	if lipglossLineWidth(rendered) > 120 {
+		t.Fatalf("rendered inventory exceeded 120 cells:\n%s", rendered)
 	}
 }
 
@@ -82,6 +129,92 @@ func TestTerminalMarkdownRendersListsAndLinksAsInertText(t *testing.T) {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("rendered Markdown contains active or raw syntax %q:\n%s", forbidden, rendered)
 		}
+	}
+}
+
+func TestTerminalMarkdownUsesUnicodeLineBreaksWithoutSplittingTechnicalTerms(t *testing.T) {
+	t.Parallel()
+
+	technicalPrefix := strings.Repeat("\u8282", 7)
+	technical := technicalPrefix + "imagePullPolicy " +
+		"\u5f71\u54cd\u4f55\u65f6\u68c0\u67e5\u955c\u50cf\uff0c\u968f\u540e\u7531 kubelet \u7ee7\u7eed\u5904\u7406\u3002"
+	technicalRendered := renderTerminalMarkdown(technical, 16, MarkdownStyles{})
+	technicalPlain := ansi.Strip(technicalRendered)
+	if !strings.Contains(technicalPlain, "\nimagePullPolicy") {
+		t.Fatalf("a line break split or stranded the technical term:\n%s", technicalPlain)
+	}
+	for _, term := range []string{"imagePullPolicy", "kubelet"} {
+		if !strings.Contains(technicalPlain, term) {
+			t.Fatalf("rendered text lost technical term %q:\n%s", term, technicalPlain)
+		}
+	}
+
+	paragraph := "\u8c03\u5ea6\u5668\u9009\u5b9a\u8282\u70b9\u540e\uff0c\u4f1a\u901a\u8fc7 API Server " +
+		"\u5c06\u7ed1\u5b9a\u7ed3\u679c\u5199\u56de Pod\u3002\u7ed1\u5b9a\u672c\u8eab\u4e0d\u4ee3\u8868\u5bb9\u5668\u5df2\u7ecf\u542f\u52a8\uff0c" +
+		"\u53ea\u8868\u793a\u8be5 Pod \u7684\u540e\u7eed\u751f\u547d\u5468\u671f\u7531\u76ee\u6807\u8282\u70b9\u4e0a\u7684 kubelet \u8d1f\u8d23\u3002"
+	styled := "\x1b[1m" + paragraph + "\x1b[0m"
+	rendered := wrapTerminalText(styled, 32)
+	plain := ansi.Strip(rendered)
+	stripWhitespace := func(value string) string {
+		return strings.Map(func(current rune) rune {
+			if unicode.IsSpace(current) {
+				return -1
+			}
+			return current
+		}, value)
+	}
+	if got, want := stripWhitespace(plain), stripWhitespace(paragraph); got != want {
+		t.Fatalf("Unicode wrapping changed text:\ngot:  %q\nwant: %q", got, paragraph)
+	}
+	if strings.Contains(rendered, unicodeLineBreakMarker) {
+		t.Fatalf("private line-break marker escaped the renderer: %q", rendered)
+	}
+	if got := wrapTerminalText("safe\u200btext", 32); got != "safetext" {
+		t.Fatalf("source line-break marker was retained: %q", got)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if width := lipgloss.Width(line); width > 32 {
+			t.Fatalf("Unicode-wrapped line width = %d, want <= 32: %q", width, line)
+		}
+	}
+	for _, line := range strings.Split(plain, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if strings.HasPrefix(trimmed, "\uff0c") || strings.HasPrefix(trimmed, "\u3002") {
+			t.Fatalf("Unicode wrapping stranded closing punctuation: %q", line)
+		}
+	}
+}
+
+func TestTranscriptRendersIncrementalMarkdownBeforeFinalReplacement(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(64, 20)
+	transcript.StartAgent()
+	fragments := []string{
+		"Pods:\n\n| Pod | ",
+		"State |\n| --- | --- |\n",
+		"| api-0 | Running |",
+	}
+	var markdown strings.Builder
+	for index, fragment := range fragments {
+		markdown.WriteString(fragment)
+		transcript.AppendAgent(fragment)
+		if !strings.Contains(transcript.View(), "Pods") {
+			t.Fatalf("incremental Markdown fragment %d was not visible: %q", index, transcript.View())
+		}
+	}
+	if view := transcript.View(); strings.Contains(view, "| --- |") ||
+		!strings.Contains(view, "api-0") || !strings.Contains(view, "━━━") {
+		t.Fatalf("incremental table was not rendered readably:\n%s", view)
+	}
+	if transcript.TerminalTranscript() != "" {
+		t.Fatalf("provisional Markdown entered terminal history: %q", transcript.TerminalTranscript())
+	}
+	transcript.FinishAgent(markdown.String())
+	if terminal := transcript.TerminalTranscript(); strings.Contains(terminal, "| --- |") ||
+		!strings.Contains(terminal, "api-0") || !strings.Contains(terminal, "━━━") {
+		t.Fatalf("final Markdown replacement was not rendered readably:\n%s", terminal)
 	}
 }
 

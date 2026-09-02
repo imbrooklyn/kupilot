@@ -20,7 +20,6 @@ const (
 	safeEventRejected             = "The diagnostic event stream could not be accepted safely."
 	safeScopeStale                = "The diagnostic run stopped because the Kubernetes context or namespace changed."
 	safeSensitiveModelTextBlocked = "Sensitive model output was blocked before downstream use."
-	safeModelProgress             = "Validating the model response."
 )
 
 type runtimeFailure struct {

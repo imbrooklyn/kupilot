@@ -157,7 +157,106 @@ func streamFixture(
 	model einomodel.ToolCallingChatModel,
 	ctx context.Context,
 ) (*schema.Message, *domain.ModelError) {
-	return client.stream(ctx, fixtureRequestID, model, fixtureMessages())
+	return client.stream(ctx, fixtureRequestID, model, fixtureMessages(), nil)
+}
+
+func TestModelClientObservesEachValidatedSSEContentFragmentBeforeAssembly(t *testing.T) {
+	t.Parallel()
+
+	server := newFixtureServer(t, "")
+	client, model := newFixtureModelClient(
+		t,
+		fixtureConfiguration(server.endpoint("normal"), time.Second),
+		strings.Repeat("o", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+	)
+	var observed []string
+	message, modelError := client.stream(
+		context.Background(),
+		fixtureRequestID,
+		model,
+		fixtureMessages(),
+		func(fragment string) error {
+			observed = append(observed, fragment)
+			return nil
+		},
+	)
+	if modelError != nil || message == nil || message.Content != "Pod is healthy." {
+		t.Fatalf("streamed message/error = %#v / %#v", message, modelError)
+	}
+	if len(observed) != 2 || observed[0] != "Pod " || observed[1] != "is healthy." {
+		t.Fatalf("observed SSE content fragments = %#v", observed)
+	}
+}
+
+func TestModelClientDeliversSSEFragmentBeforeProviderCompletes(t *testing.T) {
+	firstObserved := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	var observedOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(response, "data: {\"id\":\"response-live\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Pod \"},\"finish_reason\":null}]}\n\n")
+		flusher, ok := response.(http.Flusher)
+		if !ok {
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-releaseProvider:
+		case <-request.Context().Done():
+			return
+		}
+		_, _ = io.WriteString(response, "data: {\"id\":\"response-live\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"is healthy.\"},\"finish_reason\":null}]}\n\n")
+		_, _ = io.WriteString(response, "data: {\"id\":\"response-live\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(response, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client, model := newFixtureModelClient(
+		t,
+		fixtureConfiguration(server.URL+"/v1", time.Second),
+		strings.Repeat("l", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+	)
+	type result struct {
+		message *schema.Message
+		failure *domain.ModelError
+	}
+	resultReady := make(chan result, 1)
+	go func() {
+		message, failure := client.stream(
+			context.Background(), fixtureRequestID, model, fixtureMessages(),
+			func(fragment string) error {
+				if fragment == "Pod " {
+					observedOnce.Do(func() { close(firstObserved) })
+				}
+				return nil
+			},
+		)
+		resultReady <- result{message: message, failure: failure}
+	}()
+
+	select {
+	case <-firstObserved:
+	case <-time.After(time.Second):
+		close(releaseProvider)
+		t.Fatal("the first flushed SSE fragment was not delivered while the provider remained open")
+	}
+	select {
+	case early := <-resultReady:
+		close(releaseProvider)
+		t.Fatalf("model stream completed before the provider released its terminal chunks: %#v", early)
+	default:
+	}
+	close(releaseProvider)
+	select {
+	case completed := <-resultReady:
+		if completed.failure != nil || completed.message == nil || completed.message.Content != "Pod is healthy." {
+			t.Fatalf("completed live stream = %#v / %#v", completed.message, completed.failure)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the model stream did not complete after the provider was released")
+	}
 }
 
 func TestModelClientUsesEinoRequestAndStreamOnceForGPT5CompatibleIdentifier(t *testing.T) {
@@ -371,6 +470,7 @@ func TestModelClientRejectsOversizedEinoPayloadBeforeHTTP(t *testing.T) {
 		fixtureRequestID,
 		model,
 		[]*schema.Message{schema.UserMessage(strings.Repeat("x", domain.MaxModelRequestBytes))},
+		nil,
 	)
 	if message != nil || modelError == nil || modelError.Code() != domain.ModelErrorCodeRequestTooLarge {
 		t.Fatalf("oversized message/error = %#v / %#v", message, modelError)
@@ -932,7 +1032,7 @@ func TestCollectModelMessageBlocksSplitCredential(t *testing.T) {
 		{Role: schema.Assistant, Content: "split-credential-"},
 		{Role: schema.Assistant, Content: "canary", ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"}},
 	})
-	message, err := collectModelMessage(context.Background(), stream, &credential)
+	message, err := collectModelMessage(context.Background(), stream, &credential, nil)
 	if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 		t.Fatalf("credential stream message/error = %#v / %v", message, err)
 	}
@@ -1024,7 +1124,7 @@ func TestCollectModelMessageRejectsInvalidUTF8(t *testing.T) {
 		Content:      string([]byte{0xff}),
 		ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"},
 	}})
-	message, err := collectModelMessage(context.Background(), stream, &credential)
+	message, err := collectModelMessage(context.Background(), stream, &credential, nil)
 	if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 		t.Fatalf("invalid UTF-8 message/error = %#v / %v", message, err)
 	}
@@ -1050,7 +1150,7 @@ func TestCollectModelMessageRejectsMissingToolIndex(t *testing.T) {
 		}},
 		ResponseMeta: &schema.ResponseMeta{FinishReason: "tool_calls"},
 	}})
-	message, err := collectModelMessage(context.Background(), stream, &credential)
+	message, err := collectModelMessage(context.Background(), stream, &credential, nil)
 	if message != nil || !errors.Is(err, errUnsupportedProviderChunk) {
 		t.Fatalf("missing-index message/error = %#v / %v", message, err)
 	}
@@ -1094,11 +1194,41 @@ func TestCollectModelMessageRequiresOneUsageChunkAfterFinish(t *testing.T) {
 				context.Background(),
 				schema.StreamReaderFromArray(current.chunks),
 				&credential,
+				nil,
 			)
 			if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 				t.Fatalf("usage-order message/error = %#v / %v", message, err)
 			}
 		})
+	}
+}
+
+func TestCollectModelMessageDoesNotObserveStreamLevelInvalidChunk(t *testing.T) {
+	t.Parallel()
+
+	credential, err := config.NewSecretValue("test-model-credential")
+	if err != nil {
+		t.Fatalf("NewSecretValue() error = %v", err)
+	}
+	defer credential.Destroy()
+	observed := false
+	message, err := collectModelMessage(
+		context.Background(),
+		schema.StreamReaderFromArray([]*schema.Message{{
+			Role:    schema.Assistant,
+			Content: "This chunk has invalid stream-level ordering.",
+			ResponseMeta: &schema.ResponseMeta{Usage: &schema.TokenUsage{
+				PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2,
+			}},
+		}}),
+		&credential,
+		func(string) error {
+			observed = true
+			return nil
+		},
+	)
+	if message != nil || !errors.Is(err, errMalformedProviderChunk) || observed {
+		t.Fatalf("invalid stream-level chunk message/error/observed = %#v / %v / %t", message, err, observed)
 	}
 }
 

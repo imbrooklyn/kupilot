@@ -161,6 +161,7 @@ type Model struct {
 	quitAfterCancel        bool
 	quitAfterLocalDeletion bool
 	terminalFocused        bool
+	terminalHistoryRows    int
 
 	styles styleSet
 	keymap KeyMap
@@ -388,7 +389,7 @@ func (model *Model) reflow() {
 func (model Model) contentWidth() int {
 	// Keep the last terminal column unused. This matches the Codex composer
 	// layout and prevents terminal autowrap both in the managed frame and in the
-	// completed transcript written after terminal restoration.
+	// completed history inserted into terminal scrollback.
 	return max(1, model.width-1)
 }
 
@@ -397,6 +398,23 @@ func (model Model) contentWidth() int {
 // any provisional Agent stream.
 func (model *Model) TerminalTranscript() string {
 	return model.transcript.TerminalTranscript()
+}
+
+// PendingTerminalTranscript returns only completed history that the active
+// renderer did not already insert into terminal-owned scrollback.
+func (model *Model) PendingTerminalTranscript() string {
+	return model.transcript.PendingTerminalTranscript()
+}
+
+// TerminalFrameHeight reports the renderer-owned live rows that must be
+// cleared after Bubble Tea restores terminal modes. Completed history lives
+// above this frame and is deliberately excluded.
+func (model Model) TerminalFrameHeight() int {
+	content := model.View().Content
+	if content == "" {
+		return 0
+	}
+	return min(max(1, model.height), 1+strings.Count(content, "\n"))
 }
 
 func (model Model) layoutGap() int {

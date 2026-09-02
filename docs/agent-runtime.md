@@ -6,7 +6,7 @@ inputs, events, bound Tool calls, Evidence, outcomes, and safe errors.
 
 The current protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v5`
+- System prompt: `kupilot-agent-policy-v7`
 - Capability catalog: `kupilot-operational-tools-v2`
 
 ## Frozen run input
@@ -34,9 +34,12 @@ resource/action state, and rejects late results.
    current scope metadata, complete seven-capability catalog, and remaining
    code-owned ceilings.
 4. The Eino boundary drains one bounded model stream and asks Eino to assemble
-   exactly one assistant message. Candidate answer content remains hidden until
-   the complete message and its metadata validate. Commentary accompanying a
-   Tool selection is discarded and cannot authorize a Tool.
+   exactly one assistant message. After each Eino-decoded content chunk passes
+   stream validation, a passive projector may decode the first top-level
+   `answer_markdown` string and publish only its normalized, sensitive-filtered,
+   scope-current provisional text. The projector does not interpret response
+   modality or Tool calls. Commentary accompanying a Tool selection is
+   discarded and cannot authorize a Tool.
 5. Complete indexed Tool calls are strictly decoded and bound as one atomic
    batch. An admitted batch is canonicalized, budget-reserved, scope-injected,
    and dispatched through the fixed table. If every call is known and
@@ -48,7 +51,9 @@ resource/action state, and rejects late results.
 7. Tool results return through a project-owned envelope and the loop continues
    until a final structured answer or a terminal policy outcome.
 8. The final answer is validated, persisted according to privacy mode, and
-   published to the transcript.
+   atomically replaces any provisional transcript text. Structured same-Kind
+   inventories with shared attributes default to one compact Markdown table per
+   Kind without requiring the user to request formatting.
 
 Runtime performs no automatic model or Kubernetes retry. Local policy feedback
 is not an I/O retry because the rejected batch never reached a handler. A model
@@ -97,7 +102,8 @@ binds the run, invocation, scope generation, exact ResourceRef, category,
 source path, observation time, safe fact, and partial/truncation/redaction
 state.
 
-The final wire object contains:
+The final wire object contains these members in order so the answer can be
+projected without treating the rest of the envelope as visible text:
 
 - `answer_markdown`;
 - `evidence_citations`; and
@@ -107,6 +113,16 @@ The final wire object contains:
 is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
 without mandatory headings. Citation IDs must exist in the same run; invalid
 or duplicate references are removed and produce visible validation warnings.
+
+Provisional text is delivery-only. It is independently bounded, checked for
+the exact model credential and sensitive patterns across chunk boundaries,
+normalized across split terminal controls, and rechecked against the immutable
+scope before each event. Application emits an immediate first safe fragment and
+then uses bounded byte- and time-based coalescing. A Tool request
+clears pre-Tool provisional prose. Cancellation, timeout, stale scope, malformed
+or length-limited output, and final validation failure replace it with the safe
+terminal result. It is never Evidence, Tool authority, a committed Message,
+SQLite data, audit content, log content, export content, or terminal scrollback.
 
 The runtime cannot prove that prose semantically follows Evidence. Evidence
 metadata improves traceability but does not turn model interpretation into a
@@ -172,11 +188,13 @@ for the hard Tool, Evidence, and model budgets but remains independently finite;
 the TUI receives a smaller projection because model-start and individual
 Evidence-acceptance events are not rendered as transcript entries.
 
-The transcript shows one code-authored validation-progress message, compact
-Tool steps, safe warnings, the validated final Markdown answer, and typed
-approval state. `/status` is a local Application query exposing the catalog,
-namespace policy, budget profile and usage, run state, privacy mode, and storage
-health without model or Kubernetes activity.
+The transcript shows bounded provisional answer Markdown, compact Tool steps,
+safe warnings, the validated final Markdown answer, and typed approval state.
+The internal stream and the smaller UI projection have independent run-wide
+event ceilings; excess provisional refreshes may be omitted because the validated
+terminal answer replaces the draft. `/status` is a local Application query
+exposing the catalog, namespace policy, budget profile and usage, run state,
+privacy mode, and storage health without model or Kubernetes activity.
 
 ## Failure classes
 

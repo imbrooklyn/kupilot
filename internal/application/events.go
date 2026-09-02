@@ -403,9 +403,12 @@ const (
 	UIEventRestartExecution    UIEventKind = "restart_execution"
 )
 
-// MaxAnswerMarkdownBytes is the delivery ceiling for a validated final answer.
-// It is intentionally distinct from the user-question ceiling.
-const MaxAnswerMarkdownBytes = agent.MaxAnswerMarkdownBytes
+const (
+	// MaxAnswerMarkdownBytes is the delivery ceiling for a validated final answer.
+	// It is intentionally distinct from the user-question ceiling.
+	MaxAnswerMarkdownBytes = agent.MaxAnswerMarkdownBytes
+	maxUIEventSequence     = 4096
+)
 
 const answerValidationWarningText = "Kupilot removed unsupported final-answer metadata. Review the remaining Evidence and proposed-action state before relying on affected claims."
 
@@ -454,7 +457,7 @@ func (event UIEvent) Terminal() bool {
 
 // Validate checks identity, payload exclusivity, and fixed event states.
 func (event UIEvent) Validate() error {
-	if !event.RunID.Valid() || event.ScopeGeneration < 1 || event.Sequence < 1 || event.Sequence > 4096 {
+	if !event.RunID.Valid() || event.ScopeGeneration < 1 || event.Sequence < 1 || event.Sequence > maxUIEventSequence {
 		return ErrInvalidUIEvent
 	}
 	switch event.Kind {
@@ -674,7 +677,11 @@ func (observation RunObservation) valid() bool {
 	}
 }
 
-const uiDeltaFlushBytes = 4 * 1024
+const (
+	uiDeltaFlushBytes    = 4 * 1024
+	uiDeltaFlushInterval = 25 * time.Millisecond
+	maxUIDeltaEvents     = 2 * 1024
+)
 
 // eventBridge is the synchronous Application-to-delivery coalescing boundary.
 // It owns no goroutine or channel, never drops structural events, and assigns a
@@ -687,6 +694,10 @@ type eventBridge struct {
 	started         bool
 	terminal        bool
 	pendingDelta    string
+	lastDeltaAt     time.Time
+	lastDeltaFlush  time.Time
+	deltaEvents     int
+	deltaBytes      int
 	diagnosis       *domain.Diagnosis
 }
 
@@ -706,16 +717,26 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		if !bridge.started {
 			return ErrInvalidUIEvent
 		}
-		if len(bridge.pendingDelta)+len(event.TextDelta) > MaxAnswerMarkdownBytes {
-			if err := bridge.flushDelta(ctx); err != nil {
-				return err
-			}
+		if bridge.deltaEvents >= maxUIDeltaEvents {
+			bridge.pendingDelta = ""
+			return nil
+		}
+		if len(event.TextDelta) > MaxAnswerMarkdownBytes-bridge.deltaBytes {
+			return nil
 		}
 		bridge.pendingDelta += event.TextDelta
-		if len(bridge.pendingDelta) >= uiDeltaFlushBytes {
+		bridge.deltaBytes += len(event.TextDelta)
+		bridge.lastDeltaAt = event.OccurredAt
+		if bridge.deltaEvents == 0 || len(bridge.pendingDelta) >= uiDeltaFlushBytes ||
+			!bridge.lastDeltaFlush.IsZero() && event.OccurredAt.Sub(bridge.lastDeltaFlush) >= uiDeltaFlushInterval {
 			return bridge.flushDelta(ctx)
 		}
 		return nil
+	}
+	if event.Kind == agent.RunEventRunFailed || event.Kind == agent.RunEventRunCancelled ||
+		event.Kind == agent.RunEventRunTimedOut || event.Kind == agent.RunEventRunStaleScope ||
+		event.Kind == agent.RunEventRunInterrupted {
+		bridge.pendingDelta = ""
 	}
 	if err := bridge.flushDelta(ctx); err != nil {
 		return err
@@ -742,7 +763,13 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		if err != nil {
 			return err
 		}
-		return bridge.emit(ctx, UIEvent{Kind: UIEventToolStep, ToolStep: &step})
+		if err := bridge.emit(ctx, UIEvent{Kind: UIEventToolStep, ToolStep: &step}); err != nil {
+			return err
+		}
+		if event.Kind == agent.RunEventToolCallRequested {
+			bridge.deltaBytes = 0
+		}
+		return nil
 	case agent.RunEventRunCompleted:
 		if bridge.diagnosis == nil {
 			return ErrInvalidUIEvent
@@ -789,9 +816,7 @@ func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) 
 			return err
 		}
 	}
-	if err := bridge.flushDelta(ctx); err != nil {
-		return err
-	}
+	bridge.pendingDelta = ""
 	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: safeMessage})
 }
 
@@ -799,11 +824,17 @@ func (bridge *eventBridge) flushDelta(ctx context.Context) error {
 	if bridge.pendingDelta == "" {
 		return nil
 	}
+	if bridge.deltaEvents >= maxUIDeltaEvents {
+		bridge.pendingDelta = ""
+		return nil
+	}
 	value := bridge.pendingDelta
 	if err := bridge.emit(ctx, UIEvent{Kind: UIEventTextDelta, Text: value}); err != nil {
 		return err
 	}
 	bridge.pendingDelta = ""
+	bridge.lastDeltaFlush = bridge.lastDeltaAt
+	bridge.deltaEvents++
 	return nil
 }
 

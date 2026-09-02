@@ -22,14 +22,14 @@ var (
 // BenchmarkStreamRenderV1 measures the normal ordered Bubble Tea reduction and
 // render path for a maximum-size stream and the maximum retained message count.
 func BenchmarkStreamRenderV1(b *testing.B) {
-	b.Run("BoundedStream64KiB", benchmarkBoundedStreamRender)
+	b.Run("BoundedStream128KiB", benchmarkBoundedStreamRender)
 	b.Run("RetainedHistory100x1KiB", benchmarkRetainedHistory)
 }
 
 func benchmarkBoundedStreamRender(b *testing.B) {
-	const deltaCount = 16
-	delta := strings.Repeat("x", application.MaxQuestionBytes/deltaCount)
-	terminal := strings.Repeat("f", application.MaxQuestionBytes-8) + "\x1b[31m" + "\u202e"
+	const deltaCount = 32
+	delta := strings.Repeat("x", application.MaxAnswerMarkdownBytes/deltaCount)
+	terminal := strings.Repeat("f", application.MaxAnswerMarkdownBytes-8) + "\x1b[31m" + "\u202e"
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -46,11 +46,11 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		}
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventTextDelta, RunID: performanceRunID,
-			ScopeGeneration: 8, Sequence: 18, Text: "stale",
+			ScopeGeneration: 8, Sequence: deltaCount + 2, Text: "stale",
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: 18,
+			ScopeGeneration: 7, Sequence: deltaCount + 2,
 			ToolStep: &application.ToolStep{
 				InvocationID: performanceInvocationID, Name: domain.ToolNameGetResource,
 				Purpose: "Inspect one bounded synthetic projection.", Status: application.ToolStepRunning,
@@ -58,7 +58,7 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: 19,
+			ScopeGeneration: 7, Sequence: deltaCount + 3,
 			ToolStep: &application.ToolStep{
 				InvocationID: performanceInvocationID, Name: domain.ToolNameGetResource,
 				Purpose: "Inspect one bounded synthetic projection.", Status: application.ToolStepSucceeded,
@@ -67,13 +67,13 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventRunCompleted, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: 20, Text: terminal,
+			ScopeGeneration: 7, Sequence: deltaCount + 4, Text: terminal,
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventTextDelta, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: 21, Text: "late",
+			ScopeGeneration: 7, Sequence: deltaCount + 5, Text: "late",
 		})
-		if !model.run.Terminal || model.run.LastSequence != 20 || len(model.run.StreamedText) > application.MaxQuestionBytes {
+		if !model.run.Terminal || model.run.LastSequence != deltaCount+4 || len(model.run.StreamedText) > application.MaxAnswerMarkdownBytes {
 			b.Fatalf("terminal stream state is invalid: sequence=%d bytes=%d", model.run.LastSequence, len(model.run.StreamedText))
 		}
 		if strings.ContainsAny(model.run.StreamedText, "\x1b\u202e") || strings.Contains(view, "\x1b[31m") ||

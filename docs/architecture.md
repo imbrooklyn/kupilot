@@ -79,14 +79,25 @@ control plane. "Local" describes orchestration and credential ownership, not
 where the configured model runs. The model has no direct Kubernetes, SQLite,
 filesystem, shell, approval, or executor connection.
 
-The TUI renders ordinary conversation in one full-height alternate-screen
-Bubble Tea frame. Its delivery state retains the complete bounded transcript
-for review, and the composer remains anchored at the bottom. No reducer writes
-unmanaged lines while that frame is active. After graceful Bubble Tea shutdown
-restores the primary screen, the composition root writes one completed
-terminal-safe transcript. The terminal emulator then owns scrollback retention.
-This delivery projection is independent of SQLite Message commitment and
-explicit Session resume.
+The TUI starts with one cleared full-height primary-terminal frame and keeps the
+composer anchored at the bottom. A delivery-only Bubble Tea runtime wrapper
+first removes each newly immutable terminal-safe history block from the live
+projection, shrinks and settles that frame, and then inserts history in batches
+no taller than the protected area above it. Each block owns exactly one inert
+trailing separator row. It acknowledges the block only after insertion. This
+prevents transient Tool, Working, answer, or layout spacer rows from being
+pushed into scrollback while keeping submitted history separate from Working
+and `Worked for` separate from the composer. A terminal without one protected
+insertion row keeps the block in the safe live and pending projection. Mouse
+reporting remains disabled, so native selection, copy, wheel, and trackpad
+scrolling belong to the terminal emulator. The retained bounded transcript
+supports keyboard review. This delivery projection is independent of SQLite
+Message commitment and explicit Session resume.
+
+Shutdown may print a prepared block only before its first insertion batch. Once
+insertion has begun, renderer completion is ambiguous during interruption, so
+the runtime never replays the entire block and risks duplicating rows already
+owned by terminal scrollback.
 
 The composer publishes a real terminal cursor at the textarea insertion point;
 the placeholder remains separate rendered content. This gives operating-system
@@ -176,9 +187,10 @@ sequenceDiagram
     App-->>TUI: RunStarted
     App->>Agent: Run(ctx, immutable RunInput, event sink)
     Agent->>Model: bounded messages and typed catalog
-    Model-->>Agent: bounded final-envelope fragments
-    Agent-->>App: ordered safe validation-progress event
-    App-->>TUI: accepted safe progress
+    Model-->>Agent: Eino-decoded bounded content chunks
+    Agent->>Agent: passive answer-field decode and cross-chunk safety
+    Agent-->>App: ordered safe provisional Markdown deltas
+    App-->>TUI: bounded coalesced provisional answer
     Model-->>Agent: structured capability call
     Agent->>Agent: strict decode, canonicalize, reserve budget, pre-scope check
     Agent->>Tool: Execute(BoundToolCall)
@@ -190,16 +202,21 @@ sequenceDiagram
     App->>App: run/generation/sequence/terminal check
     App->>Store: persist eligible safe metadata
     Agent->>Model: untrusted ToolResult envelope
-    Model-->>Agent: final answer envelope
+    Model-->>Agent: final answer envelope chunks
+    Agent-->>App: safe provisional answer deltas
     Agent->>Agent: validate Markdown, citations, proposed actions
     Agent-->>App: AnswerReady
     App->>Store: final answer and terminal run transaction
-    App-->>TUI: validated free-form Markdown
+    App-->>TUI: replace draft with validated free-form Markdown
 ```
 
 The model/Tool middle segment repeats within the run's frozen budget. Calls are
 serial unless a later Accepted decision defines an owned parallel coordinator
-and global budget. No partial stream is promoted to a final assistant Message.
+and global budget. The provisional projector does not interpret response
+modality or create authority. A requested Tool clears text projected from that
+pre-Tool turn. No partial stream is promoted to a final assistant Message,
+Evidence, action, persistence record, log, audit event, export, or terminal
+scrollback entry.
 
 If persistence fails before durable run start, model and Kubernetes call counts
 remain zero. A later read-side persistence failure may let the in-memory answer
@@ -315,6 +332,15 @@ Runtime removes invalid and duplicate citations and records warnings. It does
 not claim semantic proof of arbitrary prose. The Evidence registry remains the
 source of accepted observations and observation time windows.
 
+The prompt places `answer_markdown` first. The Eino boundary may pass its
+already decoded content chunks through an authority-free incremental JSON
+string projector. Exact model-credential checks, cross-chunk sensitive-value
+recognition, terminal normalization, byte and event ceilings, and current-scope
+checks happen before each provisional event. Application provides immediate
+first output plus bounded byte- and time-based coalescing. The TUI
+renders that draft in the active Agent entry and replaces it with the validated
+terminal answer.
+
 `Diagnosis` remains the durable name for the validated terminal result to avoid
 an unnecessary migration of every storage concept. Its current semantic core is
 the answer Markdown, Evidence citations, proposed actions, validation warnings,
@@ -406,6 +432,13 @@ reach runtime dispatch. Valid `stop` text becomes a Diagnosis draft, while
 `length` becomes a local budget stop. Tool calls completed with either finish
 reason remain invalid.
 
+The passive provisional projector does not alter that ownership. It does not
+decode SSE, assemble Eino messages or Tool arguments, or decide a finish reason.
+If a response later resolves to `tool_calls`, the first requested Tool event
+clears any final-envelope-shaped prose projected from that turn. Failure,
+cancellation, timeout, and stale scope replace visible provisional text with a
+safe terminal state.
+
 ## 12. Persistence and retention
 
 SQLite stores only the explicit safe fields admitted by the Data Retention
@@ -433,13 +466,16 @@ Required deterministic checks include:
    missing consent, and unapproved action paths;
 5. pre-, post-, and event-acceptance generation races;
 6. free-form Markdown, citation, action-proposal, terminal-control, sensitive
-   output, persistence, and historic compatibility cases;
+   output, persistence, and historic compatibility cases, including fragmented
+   provisional answers, cancellation, timeout, stale scope, event ceilings,
+   Tool-turn clearing, and final replacement;
 7. compact, balanced, extended, and hard-ceiling budget tests with fake clocks;
 8. approval mismatch, expiry, replay, target-change, pre-audit failure,
    ambiguous outcome, and verification-state tests;
 9. dark, light, ANSI-16, and `NO_COLOR` TUI goldens, real-cursor Unicode input,
-   correlated Working-frame rejection, alternate-screen restoration and
-   post-exit transcript output, one-editor, and local `/status` zero-I/O checks;
+   correlated Working-frame rejection, primary-screen history insertion and
+   live-frame cleanup, disabled mouse reporting, one-editor, and local
+   `/status` zero-I/O checks;
    and
 10. temporary-file SQLite migration, retention, deletion, and degraded-storage
     tests.

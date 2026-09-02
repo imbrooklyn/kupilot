@@ -86,11 +86,27 @@ func (state *runState) callModel(
 	}
 
 	modelCtx, cancel := context.WithTimeout(ctx, reservation.Timeout)
-	message, modelError := state.client.stream(modelCtx, requestID, model, messages)
+	preview, err := newProvisionalAnswer(modelCtx, cancel, state, state.client.credential)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	message, modelError := state.client.stream(modelCtx, requestID, model, messages, preview.accept)
+	var finishError error
+	if modelError == nil && preview.failure == nil && message != nil && message.ResponseMeta != nil &&
+		message.ResponseMeta.FinishReason == "stop" {
+		finishError = preview.finish()
+	}
 	modelContextError := modelCtx.Err()
 	cancel()
 	if err := state.checkScope(ctx); err != nil {
 		return nil, err
+	}
+	if preview.failure != nil {
+		return nil, preview.failure
+	}
+	if finishError != nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, finishError)
 	}
 	if modelContextError != nil {
 		return nil, normalizeFrameworkError(modelContextError)
@@ -114,9 +130,6 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 	case "stop":
 		if len(message.ToolCalls) != 0 || !domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, false) {
 			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
-		}
-		if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventTextDelta, TextDelta: safeModelProgress}); err != nil {
-			return nil, err
 		}
 		message.Role = schema.Assistant
 		message.ResponseMeta = nil

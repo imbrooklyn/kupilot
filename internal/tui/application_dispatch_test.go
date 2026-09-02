@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -131,6 +133,75 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 	}
 	if entries[1].Text != historicAnswer {
 		t.Fatalf("historic answer bytes = %d, want %d", len(entries[1].Text), len(historicAnswer))
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := model.composer.Value(); got != "Historic question." {
+		t.Fatalf("resumed user input history = %q", got)
+	}
+}
+
+func TestAcceptedResumeReplacesInputHistoryWithResumedUserMessages(t *testing.T) {
+	t.Parallel()
+
+	resumedSessionID := domain.SessionID("0198a46e-7d2a-7d34-9b6f-2df5f45a2a24")
+	model := newTestModel()
+	model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	model.composer.RecordSubmission("Question from the current Session.")
+	request := resumeRequestFromCmd(t, model.beginResume(
+		application.UIResumeExact,
+		resumedSessionID,
+		resumeOriginInTUI,
+	))
+	resumed := application.UIResumedSession{
+		ResumeRequestID: request.RequestID,
+		Session: application.UISessionCandidate{
+			ID: resumedSessionID, Title: "Resumed Session", UpdatedAtUnixMillis: 1,
+			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		SavedScope: &domain.ScopeCandidate{Context: "test-context", Namespace: "test-namespace"},
+		History: []application.UIHistoryMessage{
+			{Role: domain.MessageRoleUser, Format: domain.MessageFormatPlain, Content: "Older resumed question."},
+			{Role: domain.MessageRoleAssistant, Format: domain.MessageFormatMarkdown, Content: "Historic answer."},
+			{Role: domain.MessageRoleSystemNotice, Format: domain.MessageFormatPlain, Content: "Historic notice."},
+			{Role: domain.MessageRoleUser, Format: domain.MessageFormatPlain, Content: "Newest resumed\x1b]52;c;clipboard-canary\x07 question."},
+		},
+	}
+	model, command := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
+	}})
+	model.composer.Reset()
+	if !model.composer.PreviousHistory() || model.composer.Value() != "Question from the current Session." {
+		t.Fatalf("staged resume changed current input history: %q", model.composer.Value())
+	}
+	model.composer.Reset()
+	accept := applicationCommandFromCmd(t, command)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandAcceptResume, RequestID: accept.RequestID,
+		Session: &application.UISessionState{
+			ID: resumedSessionID, Title: "Resumed Session", PrivacyMode: domain.PrivacyModeStandard, Resumed: true,
+		},
+		Resumed: &resumed,
+		Scope: &application.UIScopeResult{
+			RequestID: accept.RequestID, ExpectedGeneration: 7, ScopeGeneration: 7,
+			Context: "test-context", Namespace: "test-namespace", ReadOnly: true,
+		},
+	}})
+
+	for index, want := range []string{
+		"Newest resumed question.",
+		"Older resumed question.",
+		"Older resumed question.",
+	} {
+		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
+		if got := model.composer.Value(); got != want {
+			t.Fatalf("resume history Up %d = %q, want %q", index+1, got, want)
+		}
+	}
+	for index, want := range []string{"Newest resumed question.", ""} {
+		model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+		if got := model.composer.Value(); got != want {
+			t.Fatalf("resume history Down %d = %q, want %q", index+1, got, want)
+		}
 	}
 }
 

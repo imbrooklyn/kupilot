@@ -59,6 +59,7 @@ func TestParseSlashDraftRules(t *testing.T) {
 		{name: "empty slash", draft: "/", mode: DraftSlash},
 		{name: "known command", draft: "/namespace pay", mode: DraftSlash, commandName: "namespace", argument: "pay"},
 		{name: "known alias", draft: "/ns pay", mode: DraftSlash, commandName: "namespace", argument: "pay"},
+		{name: "removed mouse command", draft: "/mouse", mode: DraftUnknownSlash},
 		{name: "literal slash", draft: "//help", mode: DraftEscapedChat},
 		{name: "multiline slash", draft: "/help\nnot a command", mode: DraftChat},
 		{name: "unknown command", draft: "/unknown", mode: DraftUnknownSlash},

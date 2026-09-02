@@ -79,7 +79,7 @@ func TestCtrlCClearsDraftBeforeCancellingOrExiting(t *testing.T) {
 	}
 }
 
-func TestExitLeavesTrailingHistoryForPostRestoreProjection(t *testing.T) {
+func TestExitLeavesTrailingHistoryForTerminalRuntimeFallback(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
@@ -90,8 +90,9 @@ func TestExitLeavesTrailingHistoryForPostRestoreProjection(t *testing.T) {
 		t.Fatal("exit did not issue one direct quit command")
 	}
 	view := model.View()
-	if !view.AltScreen || !strings.Contains(view.Content, "A submitted question awaiting startup.") || view.Cursor != nil {
-		t.Fatalf("exit state did not retain the isolated managed frame until restoration: %#v", view)
+	if view.AltScreen || view.MouseMode != tea.MouseModeNone ||
+		!strings.Contains(view.Content, "A submitted question awaiting startup.") || view.Cursor != nil {
+		t.Fatalf("exit state did not retain safe terminal history with native input ownership: %#v", view)
 	}
 	transcript := model.TerminalTranscript()
 	if strings.Count(transcript, "A submitted question awaiting startup.") != 1 ||
@@ -235,12 +236,9 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	}
 	model.composer.Reset()
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if got := model.composer.Value(); got != "second" {
-		t.Fatalf("explicit previous-history shortcut = %q", got)
-	}
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	if got := model.composer.Value(); got != "" {
-		t.Fatalf("explicit next-history shortcut did not return to empty draft: %q", got)
+		t.Fatalf("non-arrow keys recalled input history: %q", got)
 	}
 
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: strings.Repeat("line\n", 11) + "last"})
@@ -252,12 +250,10 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	}
 }
 
-func TestNativeMouseSelectionAndWheelEventsCannotRecallInputHistory(t *testing.T) {
+func TestMouseInputRemainsTerminalOwnedAndCannotRecallInputHistory(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
-	model.composer.RecordSubmission("first question")
-	model.composer.RecordSubmission("second question")
 	model.transcript.SetSize(40, 4)
 	model.transcript.StartAgent()
 	for index := range 24 {
@@ -269,27 +265,41 @@ func TestNativeMouseSelectionAndWheelEventsCannotRecallInputHistory(t *testing.T
 	}
 
 	view := model.View()
-	if view.MouseMode != tea.MouseModeNone {
-		t.Fatal("view enabled terminal mouse reporting and blocked native selection")
+	if view.MouseMode != tea.MouseModeNone || view.OnMouse != nil {
+		t.Fatalf("conversation view captured terminal mouse input: mode=%v callback=%v", view.MouseMode, view.OnMouse != nil)
 	}
-	if view.OnMouse == nil {
-		t.Fatal("view lost its defensive wheel-event relay")
-	}
-	wheelCommand := view.OnMouse(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
-	if wheelCommand == nil {
-		t.Fatal("mouse-wheel callback did not relay the wheel event")
-	}
-	model, cmd := updateModel(t, model, wheelCommand())
-	if cmd != nil || model.transcript.ScrollOffset() >= bottom {
-		t.Fatal("wheel up did not move the transcript")
-	}
-	if got := model.composer.Value(); got != "" {
-		t.Fatalf("wheel up recalled input history: %q", got)
+	for _, message := range []tea.MouseMsg{
+		tea.MouseClickMsg{Button: tea.MouseLeft},
+		tea.MouseReleaseMsg{Button: tea.MouseLeft},
+		tea.MouseMotionMsg{Button: tea.MouseLeft},
+		tea.MouseWheelMsg{Button: tea.MouseWheelUp},
+		tea.MouseWheelMsg{Button: tea.MouseWheelDown},
+		tea.MouseWheelMsg{Button: tea.MouseWheelLeft},
+		tea.MouseWheelMsg{Button: tea.MouseWheelRight},
+	} {
+		updated, command := updateModel(t, model, message)
+		if command != nil || updated.transcript.ScrollOffset() != bottom || updated.composer.Value() != "" {
+			t.Fatalf("terminal-owned mouse event %T changed TUI state", message)
+		}
 	}
 
+	model.composer.RecordSubmission("first question")
+	model.composer.RecordSubmission("second question")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
 	if got := model.composer.Value(); got != "second question" {
-		t.Fatalf("keyboard history did not remain independent from wheel scrolling: %q", got)
+		t.Fatalf("physical keyboard history was unavailable after terminal-owned mouse input: %q", got)
+	}
+}
+
+func TestRemovedMouseSlashCannotChangeTerminalInputOwnership(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/mouse"})
+	model, command := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command != nil || !model.dialog.Open() || model.View().MouseMode != tea.MouseModeNone {
+		t.Fatalf("removed mouse command changed terminal authority: command=%v dialog=%v mode=%v",
+			command != nil, model.dialog.Open(), model.View().MouseMode)
 	}
 }
 
@@ -322,7 +332,7 @@ func TestUpdateEscapedSlashHistoryPreservesChatMeaning(t *testing.T) {
 	if intent := commandFromCmd(t, cmd); intent.Kind != application.UICommandSubmitQuestion || intent.Text != "/help" {
 		t.Fatalf("first escaped intent = %#v", intent)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
 	if model.composer.Value() != "//help" {
 		t.Fatalf("escaped history draft = %q", model.composer.Value())
 	}
@@ -523,6 +533,42 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 	entries := model.transcript.Entries()
 	if len(entries) != 2 || len(entries[0].ToolSteps) != 1 {
 		t.Fatalf("historic Tool steps were not retained: %#v", entries)
+	}
+}
+
+func TestRequestedToolClearsOnlyThePreToolProvisionalAnswer(t *testing.T) {
+	t.Parallel()
+
+	model := newTestModel()
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2,
+		Text: "Discard this pre-Tool draft.",
+	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		ToolStep: &application.ToolStep{
+			InvocationID: testInvocationID,
+			Name:         domain.ToolNameGetResource,
+			Purpose:      "Inspect the selected Pod.",
+			Status:       application.ToolStepRequested,
+		},
+	}})
+	if model.run.StreamedText != "" || strings.Contains(model.transcript.View(), "Discard this pre-Tool draft.") {
+		t.Fatalf("requested Tool retained pre-Tool text: run=%#v view=%q", model.run, model.transcript.View())
+	}
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 4,
+		Text: "Keep this final answer.",
+	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, Sequence: 5,
+		Text: "Keep this final answer.",
+	}})
+	if model.run.StreamedText != "Keep this final answer." ||
+		strings.Contains(model.TerminalTranscript(), "Discard this pre-Tool draft.") ||
+		!strings.Contains(model.TerminalTranscript(), "Keep this final answer.") {
+		t.Fatalf("final stream after Tool = %#v / %q", model.run, model.TerminalTranscript())
 	}
 }
 

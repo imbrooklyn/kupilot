@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-01
+- Amended: 2026-09-02
 - Supersedes: ADR-0006
 - Amends: ADR-0010, ADR-0022, and ADR-0036
 
@@ -44,6 +45,17 @@ The production path is:
 5. The adapter validates the one assembled Eino assistant message, binds every
    complete Tool call through the project-owned strict catalog, and maps the
    final answer into the project-owned Diagnosis contract.
+
+Visible answer streaming does not restore the removed neutral model protocol.
+While the adapter drains the same read-once Eino stream, one passive observer
+receives already decoded and chunk-validated `Content` strings. It recognizes
+only a first top-level `answer_markdown` JSON string, applies project-owned
+cross-chunk output safety, and publishes authority-free provisional text. Eino
+still performs the only provider SSE decoding and final message and Tool-call
+assembly. The observer neither reconstructs provider events nor produces a
+message consumed by ReAct. The assembled finish reason and strict local
+validation remain authoritative; a requested Tool or any terminal failure
+discards the applicable draft.
 
 Kupilot does not replace or reconstruct the Eino-generated request payload. A
 request payload observer may reject an oversized body or an exact credential
@@ -115,8 +127,10 @@ validates the Eino-owned ReAct conversation in place before each model call.
 
 ## Consequences
 
-One component now interprets provider streaming semantics, and ReAct consumes
-the resulting message without a neutral-fragment round trip. Ordinary
+One component still interprets provider streaming semantics, and ReAct consumes
+the resulting message without a neutral-fragment round trip. The passive answer
+projection improves delivery latency without becoming a provider or Agent
+protocol. Ordinary
 OpenAI-compatible variations that the pinned Eino component already supports,
 including non-canonical whitespace or key order in Tool arguments, reach the
 local strict binder instead of being rejected by a parallel serializer.
@@ -167,6 +181,10 @@ Deterministic tests must prove:
 7. Static import tests permit Eino and Eino OpenAI imports only inside
    `internal/agent/einoadapter` and prove that its exported surface contains no
    Eino type.
+8. Provisional answer tests cover real SSE content callbacks, fragmented JSON
+   and Unicode decoding, cross-chunk output safety, scope and terminal races,
+   cancellation and timeout, Tool-turn clearing, bounded event delivery, and
+   final answer replacement without persistence or scrollback commitment.
 
 ## References
 

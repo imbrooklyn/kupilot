@@ -198,14 +198,27 @@ replaces unsafe control sequences before render state. `Update` and `View` have
 no business I/O. Scope, policy, approval, and execution states include text and
 do not rely on color. Unknown terminal backgrounds prefer default foreground
 and dim styling rather than low-contrast hard-coded colors. Runtime content
-remains inside one alternate-screen frame. After graceful restoration, only the
-completed safe transcript projection can enter primary-screen scrollback;
-composer and streaming drafts, duplicate output, model-selected styling,
-clipboard controls, and device controls cannot. The composer exposes one real
-cursor for operating-system input-method positioning; its placeholder is never
-editable state. Working animation messages are local, bounded, correlated to
-the active run and scope generation, and rejected after terminal or stale
-state. They cannot affect budgets, Evidence, authority, or external calls.
+uses a cleared primary-screen live frame. Newly immutable safe history is
+removed from the live projection before a settled compact frame accepts
+bounded row insertion. A completed block is acknowledged only afterward, and
+an undersized terminal retains it safely instead of risking duplicate live
+rows or transient layout gaps in scrollback. The only admitted spacing is one
+code-owned inert trailing row per immutable block. Composer and streaming
+drafts, model-selected styling, clipboard controls, and device controls cannot
+enter scrollback. Mouse reporting remains disabled so native selection and
+scrolling stay terminal-owned. The composer exposes one real cursor for
+operating-system input-method positioning; its placeholder is never editable
+state. Working animation messages are local, bounded, correlated to the active
+run and scope generation, and rejected after terminal or stale state. They
+cannot affect budgets, Evidence, authority, or external calls.
+
+Provisional answer text uses a stateful pre-render processor so JSON escapes,
+UTF-8 text, carriage returns, CSI, OSC, control strings, bidirectional controls,
+and sensitive patterns remain safe when their syntax is split across provider
+chunks. Raw envelope syntax and metadata are not rendered. The first safe
+fragment is delivered promptly; later fragments are coalesced under independent
+byte, time, and event limits. A terminal result replaces the draft, and only
+that immutable result can enter terminal scrollback.
 
 ### T08: Credential leakage
 
@@ -218,6 +231,12 @@ source is unset. It never enters CLI values, domain DTOs, prompts, TUI history,
 audit, SQLite, or child environments. The optional saved plaintext copy is
 limited to the fixed Home configuration after explicit disclosure. Kubernetes
 credentials remain inside client-go and the kube adapter.
+
+Each streamed answer also uses an exact-credential guard that retains matching
+prefixes across chunk boundaries before emitting text. After JSON decoding, the
+complete Diagnosis draft is checked again so escaped credential bytes in answer
+or metadata cannot enter Domain, persistence, UI terminal state, audit, or
+logs. A match fails the run with code-authored safe text.
 
 ### T09: Unsafe kubeconfig exec credential launch
 
@@ -335,7 +354,11 @@ barriers, and temporary databases. Required proof includes:
 - no credential or prohibited canary in model, TUI, error, log, audit, SQLite,
   child-process, or export sinks;
 - terminal-safe rendering across dark, light, ANSI-16, and `NO_COLOR`, including
-  real-cursor Unicode input and stale Working-frame rejection; and
+  real-cursor Unicode input and stale Working-frame rejection;
+- provisional-answer safety across every synthetic chunk boundary, including
+  Unicode and JSON escapes, exact credentials, sensitive patterns, terminal
+  controls, cancellation, timeout, stale scope, Tool-turn reset, event limits,
+  final replacement, and scrollback exclusion; and
 - restart recovery that never restores a run, stream, live generation,
   approval authority, or write retry.
 

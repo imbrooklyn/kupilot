@@ -27,15 +27,12 @@ const helpText = `/help                 Show commands and key bindings
 /quit                 Exit Kupilot
 
 Enter sends. Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Tab completes a command.
-Up and Down recall submitted input at composer boundaries; Ctrl+P and Ctrl+N recall it explicitly. Page Up and Page Down scroll the transcript.
+Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
 Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
-const transcriptWheelRows = 3
-
-// Update reduces one message into pure UI state. The complete runtime frame is
-// renderer-owned; terminal transcript output occurs only after Program.Run has
-// restored the primary screen.
+// Update reduces one message into pure UI state. The TerminalRuntime wrapper,
+// not this reducer, owns renderer-only history insertion.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return model.update(msg)
 }
@@ -150,17 +147,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			model.focus = FocusComposer
 		}
 		return model, nil
-	case tea.MouseWheelMsg:
-		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
-			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
-			return model, nil
-		}
-		switch message.Mouse().Button {
-		case tea.MouseWheelUp:
-			model.transcript.ScrollUp(transcriptWheelRows)
-		case tea.MouseWheelDown:
-			model.transcript.ScrollDown(transcriptWheelRows)
-		}
+	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
 		return model, nil
 	case tea.PasteMsg:
 		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
@@ -587,18 +574,6 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, queryCmd
 	}
-	if ordinaryComposer && key.Matches(message, model.keymap.PreviousAlt) && model.composer.HistoryEligible() {
-		model.composer.PreviousHistory()
-		queryCmd := model.syncSuggestionsAfterEdit()
-		model.reflow()
-		return model, queryCmd
-	}
-	if ordinaryComposer && key.Matches(message, model.keymap.NextAlt) && model.composer.NextHistory() {
-		queryCmd := model.syncSuggestionsAfterEdit()
-		model.reflow()
-		return model, queryCmd
-	}
-
 	updated, cmd, err := model.composer.Update(message)
 	if err != nil {
 		model.showComposerLimit()
@@ -1700,6 +1675,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 	model.resumeOrigin = resumeOriginNone
 	model.closePickers()
 	model.composer.Reset()
+	model.composer.ClearHistory()
 	model.scopeConflict.Close()
 	model.resetTranscript()
 	for _, message := range resumed.History {
@@ -1714,6 +1690,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 		switch message.Role {
 		case domain.MessageRoleUser:
 			model.transcript.AppendUser(text)
+			model.composer.RecordSubmission(text)
 		case domain.MessageRoleAssistant:
 			model.transcript.StartAgent()
 			model.transcript.FinishAgent(text)
@@ -2014,6 +1991,10 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.transcript.AppendNotice(text)
 	case application.UIEventToolStep:
 		step := event.ToolStep
+		if step.Status == application.ToolStepRequested {
+			model.run.StreamedText = ""
+			model.transcript.ClearAgent()
+		}
 		model.transcript.UpsertToolStep(components.ToolStep{
 			InvocationID:  string(step.InvocationID),
 			Name:          string(step.Name),

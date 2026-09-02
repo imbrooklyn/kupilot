@@ -188,6 +188,14 @@ func (composer *Composer) RecordSubmission(value string) {
 	composer.closeHistory()
 }
 
+// ClearHistory removes every submitted input associated with the previous
+// Session without changing the current draft or editor mode.
+func (composer *Composer) ClearHistory() {
+	clear(composer.history)
+	composer.history = nil
+	composer.closeHistory()
+}
+
 // PreviousHistory recalls the next older submitted draft.
 func (composer *Composer) PreviousHistory() bool {
 	if len(composer.history) == 0 || !composer.HistoryEligible() {
@@ -226,8 +234,8 @@ func (composer *Composer) NextHistory() bool {
 	return true
 }
 
-// HistoryEligible reports whether an explicit history shortcut may recall a
-// submitted draft without exposing secret-mode input.
+// HistoryEligible reports whether submitted-input history may be recalled
+// without exposing secret-mode input.
 func (composer Composer) HistoryEligible() bool {
 	return !composer.secretMode && (composer.historyOpen || composer.input.Value() == "" && composer.input.LineCount() == 1)
 }

@@ -6,11 +6,12 @@ data-safety controls.
 
 ## In scope for `v0.4`
 
-- A local, single-process, single-user TUI with one active AgentRun. Ordinary
-  conversation uses one full-height alternate-screen runtime with the composer
-  anchored at the bottom. After graceful terminal restoration, one bounded
-  completed transcript enters terminal-owned scrollback; runtime drafts and
-  chrome do not.
+- A local, single-process, single-user TUI with one active AgentRun. Startup
+  clears the visible primary-terminal frame and anchors the composer at the
+  bottom. Completed bounded history enters terminal-owned scrollback exactly
+  once with one inert trailing separator row per immutable block, while the
+  live frame retains only provisional output and chrome; runtime drafts never
+  enter scrollback.
 - One configured `openai_compatible` model origin and the accepted streaming
   structured-capability protocol.
 - One verified Kubernetes Context, one visible working Namespace, and one
@@ -18,8 +19,9 @@ data-safety controls.
 - Startup Context resolution uses the effective configured Context, the last
   successfully verified local Context, then kubeconfig `current-context`.
   Without an explicit Namespace, the startup working Namespace is `default`.
-- Natural-language questions, safe validation progress, compact inline
-  capability steps, cancellation, and a validated free-form Markdown answer.
+- Natural-language questions, bounded safe provisional answer streaming,
+  compact inline capability steps, cancellation, and atomic replacement by a
+  validated free-form Markdown answer.
 - A versioned code-owned read catalog over the built-in resource allowlist in
   the Product Contract.
 - Cross-Namespace exact reads and bounded all-Namespace lists in the same

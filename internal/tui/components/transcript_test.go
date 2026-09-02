@@ -175,6 +175,115 @@ func TestTranscriptRetainsManagedHistoryAndProjectsOnlyCompletedEntries(t *testi
 	}
 }
 
+func TestTranscriptClearsPreToolProvisionalTextAndAcceptsFinalStream(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(48, 20)
+	transcript.StartAgent()
+	transcript.AppendAgent("Discard this pre-Tool draft.")
+	transcript.ClearAgent()
+	transcript.UpsertToolStep(ToolStep{
+		InvocationID: "invocation-1",
+		Name:         "get_resource",
+		Purpose:      "Inspect one resource.",
+		Status:       "requested",
+	})
+	transcript.AppendAgent("Keep this final answer.")
+	entries := transcript.Entries()
+	if len(entries) != 1 || entries[0].Text != "Keep this final answer." ||
+		strings.Contains(transcript.View(), "Discard this pre-Tool draft.") {
+		t.Fatalf("cleared/final provisional transcript = %#v / %q", entries, transcript.View())
+	}
+	transcript.FinishAgent("Keep this final answer.")
+	if strings.Contains(transcript.TerminalTranscript(), "Discard this pre-Tool draft.") ||
+		!strings.Contains(transcript.TerminalTranscript(), "Keep this final answer.") {
+		t.Fatalf("terminal transcript retained pre-Tool draft: %q", transcript.TerminalTranscript())
+	}
+}
+
+func TestTranscriptCommitsOnlyImmutableHistoryExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(48, 20)
+	transcript.AppendUser("Inspect the current cluster.")
+	transcript.StartAgent()
+	transcript.AppendAgent("Provisional answer.")
+	transcript.AppendNotice("Validation is still running.")
+
+	first, firstRows := transcript.CommitReady()
+	if firstRows == 0 || !strings.Contains(first, "Inspect the current cluster.") ||
+		strings.Contains(first, "Provisional answer.") || strings.Contains(first, "Validation is still running.") ||
+		!strings.HasSuffix(first, "\n") || strings.HasSuffix(first, "\n\n") {
+		t.Fatalf("first immutable history commit = %q rows=%d", first, firstRows)
+	}
+	if contentRows := lipgloss.Height(strings.TrimSuffix(first, "\n")); firstRows != contentRows+terminalHistorySeparatorRows {
+		t.Fatalf("first immutable history rows = %d, want content %d + separator %d",
+			firstRows, contentRows, terminalHistorySeparatorRows)
+	}
+	if repeated, rows := transcript.CommitReady(); repeated != "" || rows != 0 {
+		t.Fatalf("immutable history replayed: block=%q rows=%d", repeated, rows)
+	}
+	if view := transcript.View(); !strings.Contains(view, "Provisional answer.") ||
+		strings.Contains(view, "Inspect the current cluster.") {
+		t.Fatalf("live frame did not separate committed and provisional history: %q", view)
+	}
+
+	transcript.FinishAgentWithDuration("Final answer.", 2*time.Second)
+	second, secondRows := transcript.CommitReady()
+	if secondRows == 0 || strings.HasPrefix(second, "\n") || !strings.HasSuffix(second, "\n") ||
+		strings.HasSuffix(second, "\n\n") ||
+		!strings.Contains(second, "Final answer.") ||
+		!strings.Contains(second, "Validation is still running.") ||
+		strings.Contains(second, "Provisional answer.") {
+		t.Fatalf("terminal Agent history commit = %q rows=%d", second, secondRows)
+	}
+	if transcript.PendingTerminalTranscript() != "" || transcript.View() != "" {
+		t.Fatalf("completed history remained pending or live: pending=%q view=%q",
+			transcript.PendingTerminalTranscript(), transcript.View())
+	}
+	transcript.PageUp()
+	if review := transcript.View(); !strings.Contains(review, "Inspect the current cluster.") ||
+		!strings.Contains(review, "Final answer.") {
+		t.Fatalf("committed history was unavailable to keyboard review: %q", review)
+	}
+}
+
+func TestTranscriptPreparedCommitRemainsRecoverableUntilAcknowledged(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(48, 12)
+	transcript.AppendNotice("Completed notice.")
+	block, rows, end := transcript.PrepareCommit()
+	if block == "" || rows == 0 || end == 0 || transcript.View() != "" ||
+		transcript.PendingTerminalTranscript() != block || !strings.HasSuffix(block, "\n") ||
+		!strings.Contains(transcript.PendingTerminalTranscript(), "Completed notice.") {
+		t.Fatalf("prepared commit block=%q rows=%d end=%d view=%q pending=%q",
+			block, rows, end, transcript.View(), transcript.PendingTerminalTranscript())
+	}
+	if transcript.CompleteCommit(end+1) || transcript.PendingTerminalTranscript() == "" {
+		t.Fatal("a stale terminal acknowledgement changed prepared history")
+	}
+	if !transcript.CompleteCommit(end) || transcript.PendingTerminalTranscript() != "" {
+		t.Fatal("the exact terminal acknowledgement did not complete prepared history")
+	}
+}
+
+func TestTranscriptAbortedCommitReturnsToLiveProjection(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(48, 12)
+	transcript.AppendNotice("Keep this visible.")
+	_, _, end := transcript.PrepareCommit()
+	if !transcript.AbortCommit(end) || !strings.Contains(transcript.View(), "Keep this visible.") ||
+		!strings.Contains(transcript.PendingTerminalTranscript(), "Keep this visible.") {
+		t.Fatalf("aborted commit view=%q pending=%q", transcript.View(), transcript.PendingTerminalTranscript())
+	}
+}
+
 func TestTerminalTranscriptIncludesTrailingUserAndKeepsContinuationAligned(t *testing.T) {
 	t.Parallel()
 
@@ -196,6 +305,72 @@ func TestTerminalTranscriptIncludesTrailingUserAndKeepsContinuationAligned(t *te
 	}
 	if repeated := transcript.TerminalTranscript(); repeated != block {
 		t.Fatalf("terminal transcript was not deterministic: %q", repeated)
+	}
+}
+
+func TestTerminalTranscriptWrapsEastAsianUserTextWithoutSplittingTechnicalTerms(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(18, 10)
+	transcript.AppendUser(strings.Repeat("\u8282", 7) + "imagePullPolicy")
+	block := transcript.TerminalTranscript()
+	if strings.Count(block, "›") != 1 || !strings.Contains(block, "\n  imagePullPolicy") {
+		t.Fatalf("historic user wrapping did not preserve one prompt and one technical term: %q", block)
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if width := lipgloss.Width(line); width > 18 {
+			t.Fatalf("historic user line width = %d, want <= 18: %q", width, line)
+		}
+	}
+}
+
+func TestTranscriptReflowFollowsLiveBottomAndPreservesExplicitReview(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{
+		UserSurface: lipgloss.NewStyle().Padding(1, 0),
+	}, ToolStepStyles{})
+	transcript.SetSize(40, 4)
+	for index := range 16 {
+		transcript.AppendNotice(fmt.Sprintf("Historic row %02d", index))
+	}
+	transcript.AppendUser("Newest submitted question.")
+	assertPaddedUserEntryVisible := func(stage string) {
+		t.Helper()
+		lines := strings.Split(transcript.View(), "\n")
+		textRow := -1
+		for index, line := range lines {
+			if strings.Contains(line, "Newest submitted question.") {
+				textRow = index
+				break
+			}
+		}
+		if textRow <= 0 || textRow >= len(lines)-1 ||
+			strings.TrimSpace(lines[textRow-1]) != "" || strings.TrimSpace(lines[textRow+1]) != "" {
+			t.Fatalf("%s did not keep the complete submitted-user surface at the live bottom: %q", stage, transcript.View())
+		}
+	}
+	assertPaddedUserEntryVisible("initial layout")
+
+	transcript.SetSize(40, 3)
+	if !transcript.viewport.AtBottom() {
+		t.Fatal("live transcript reflow detached from the bottom")
+	}
+	assertPaddedUserEntryVisible("smaller Working layout")
+
+	transcript.StartAgent()
+	transcript.AppendAgent("Initial provisional answer.")
+	transcript.ScrollUp(2)
+	if !transcript.reviewing || transcript.viewport.AtBottom() {
+		t.Fatal("explicit transcript scroll did not enter review state")
+	}
+	reviewOffset := transcript.ScrollOffset()
+	transcript.SetSize(40, 2)
+	transcript.AppendAgent("\n\nA later provisional paragraph.")
+	if !transcript.reviewing || transcript.viewport.AtBottom() || transcript.ScrollOffset() != reviewOffset {
+		t.Fatalf("reflow or live update discarded explicit review: reviewing=%v offset=%d want=%d",
+			transcript.reviewing, transcript.ScrollOffset(), reviewOffset)
 	}
 }
 

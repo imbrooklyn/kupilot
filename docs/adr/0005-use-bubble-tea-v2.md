@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended: 2026-08-31
+- Amended: 2026-09-02
 
 ## Context
 
@@ -104,9 +104,13 @@ Compatibility and lifecycle tests must verify:
    queued.
 5. Supported-platform behavior for macOS and Linux terminals.
 6. Primary-screen transcript insertion persists after graceful exit without
-   duplicate rows or alternate-screen control sequences.
+   duplicate rows, leaked live-frame rows, spacer gaps, or alternate-screen
+   control sequences. The managed frame must settle below terminal height
+   before bounded row insertion begins.
 7. Real-cursor coordinates remain correct for empty placeholder and Unicode
    input, and local animation ticks cannot revive a stale or terminal run.
+8. Mouse reporting remains disabled, injected mouse events are inert, and
+   terminal-owned wheel input cannot mutate composer history.
 
 The selected versions and APIs remain recorded in dependency metadata and must
 continue to satisfy these requirements after an upgrade.

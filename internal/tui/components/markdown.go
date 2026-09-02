@@ -422,7 +422,7 @@ func (renderer terminalMarkdownRenderer) renderTableRecords(headers []string, ro
 }
 
 func (renderer terminalMarkdownRenderer) wrap(value string, width int) string {
-	return strings.TrimSpace(lipgloss.Wrap(value, max(1, width), ""))
+	return strings.TrimSpace(wrapTerminalText(value, max(1, width)))
 }
 
 func prefixLines(value, firstPrefix, continuationPrefix string) string {

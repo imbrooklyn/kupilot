@@ -251,6 +251,7 @@ func (client *modelClient) stream(
 	requestID domain.ModelRequestID,
 	model einomodel.ToolCallingChatModel,
 	messages []*schema.Message,
+	observeContent func(string) error,
 ) (*schema.Message, *domain.ModelError) {
 	if client == nil || ctx == nil || model == nil || !requestID.Valid() || len(messages) == 0 ||
 		einoMessagesContainCredential(client.credential, messages) {
@@ -289,7 +290,7 @@ func (client *modelClient) stream(
 		)
 	}
 	defer state.closeResponseBody()
-	message, err := collectModelMessage(requestContext, stream, client.credential)
+	message, err := collectModelMessage(requestContext, stream, client.credential, observeContent)
 	if err != nil {
 		return nil, client.finishWithError(
 			requestID,

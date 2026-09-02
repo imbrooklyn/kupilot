@@ -13,6 +13,12 @@ import (
 // ThemeMode selects one local semantic palette without enabling theme plugins.
 type ThemeMode uint8
 
+// Bubble Tea v2.0.8 does not expose DECSCUSR 0 (the terminal's configured
+// cursor shape). Its pinned renderer encodes shape -1 with Blink false as 0.
+// Runtime coverage guards this compatibility shim so a dependency update
+// cannot silently start forcing a different cursor, color, or blink policy.
+const terminalDefaultCursorShape tea.CursorShape = -1
+
 const (
 	ThemeAuto ThemeMode = iota
 	ThemeDark
@@ -171,9 +177,9 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 		Focused: textareaFocused,
 		Blurred: textareaBlurred,
 		Cursor: textarea.CursorStyle{
-			Color: palette.Accent,
-			Shape: tea.CursorBar,
-			Blink: true,
+			Color: nil,
+			Shape: terminalDefaultCursorShape,
+			Blink: false,
 		},
 	}
 	evidenceSelected := lipgloss.NewStyle()

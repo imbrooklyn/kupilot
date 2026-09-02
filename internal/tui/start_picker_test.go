@@ -203,6 +203,7 @@ func TestCtrlCCancelsInTUIResumeScopeConflict(t *testing.T) {
 
 	model := newTestModel()
 	model.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	model.composer.RecordSubmission("Current Session question.")
 	request := resumeRequestFromCmd(t, model.beginResume(application.UIResumeExact, testSessionID, resumeOriginInTUI))
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
@@ -224,6 +225,10 @@ func TestCtrlCCancelsInTUIResumeScopeConflict(t *testing.T) {
 		model.scopeConflict.Open() || model.pendingResumed != nil || model.session.ID != testSessionID || !model.startup.Ready {
 		t.Fatalf("Ctrl+C scope-conflict cancellation = %#v conflict=%v pending=%v session=%q ready=%v",
 			cancel, model.scopeConflict.Open(), model.pendingResumed != nil, model.session.ID, model.startup.Ready)
+	}
+	model.composer.Reset()
+	if !model.composer.PreviousHistory() || model.composer.Value() != "Current Session question." {
+		t.Fatalf("cancelled resume changed current input history: %q", model.composer.Value())
 	}
 }
 
@@ -248,6 +253,7 @@ func TestResumeFailureDismissalExitsOnlyTopLevelFlow(t *testing.T) {
 
 	inTUI := newTestModel()
 	inTUI.session = SessionView{ID: testSessionID, Title: "Current Session"}
+	inTUI.composer.RecordSubmission("Current Session question.")
 	request := resumeRequestFromCmd(t, inTUI.beginResume(
 		application.UIResumeExact,
 		domain.SessionID("0198a46e-7d2a-7d34-9b6f-2df5f45a2a24"),
@@ -259,6 +265,10 @@ func TestResumeFailureDismissalExitsOnlyTopLevelFlow(t *testing.T) {
 	inTUI, cmd = updateModel(t, inTUI, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil || !inTUI.startup.Ready || inTUI.session.ID != testSessionID {
 		t.Fatalf("in-TUI resume failure changed current Session: %#v", inTUI.session)
+	}
+	inTUI.composer.Reset()
+	if !inTUI.composer.PreviousHistory() || inTUI.composer.Value() != "Current Session question." {
+		t.Fatalf("failed resume changed current input history: %q", inTUI.composer.Value())
 	}
 }
 
