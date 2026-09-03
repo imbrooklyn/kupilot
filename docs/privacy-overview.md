@@ -1,13 +1,16 @@
 # Kupilot Privacy Overview
 
 Kupilot runs locally, connects to the Kubernetes API selected by the user, and
-uses one user-configured model endpoint. "Local" does not mean all operational
-data stays on the workstation. Eligible bounded content is sent to that endpoint
-only after informed consent and local safety processing.
+uses explicitly configured named model profiles and optional data sources.
+"Local" does not mean all operational data stays on the workstation. Eligible
+bounded content is sent only to the destination bound to its fixed consumer
+role after informed consent and local safety processing.
 
-This document defines the `v0.4` privacy boundary. It does not claim that
-redaction recognizes every sensitive value or that a model provider follows
-Kupilot's local retention schedule.
+This document defines the accepted `v0.5` privacy target. The checked-in
+implementation remains the `v0.4` baseline; no new profile, data source,
+Session-memory, or execution path is claimed reachable yet. Kupilot does not
+claim that redaction recognizes every sensitive value or that a model or data
+provider follows its local retention schedule.
 
 > [!IMPORTANT]
 > Context and Namespace names, resource names, Node and workload status,
@@ -19,40 +22,54 @@ Kupilot's local retention schedule.
 
 Kupilot displays:
 
-- the validated canonical origin of the model endpoint;
+- the fixed consumer role, named profile, and validated canonical origin;
 - the consent-policy version and current decision;
 - every code-defined content category and whether it is enabled;
 - whether bounded container output is enabled; and
 - categories that are never eligible.
 
-Consent binds the exact policy version, canonical origin hash, and category set.
-A changed origin, category, meaning, or policy version invalidates it. Reject,
-revoke, cancel, and stale-review paths send zero model content.
+Consent binds the exact policy version, model role, canonical origin hash, and
+category set. A changed profile, role, origin, category, meaning, or policy
+version invalidates it and any dependent pending authority. Reject, revoke,
+cancel, and stale-review paths send zero model content. Agent consent cannot be
+reused for a Reviewer at another origin.
 
-Container output is disabled by default and requires its separate category.
-Changing it returns consent to pending and cancels the active run before another
-model or Pod-log request.
+Container output, metrics detail, an exact ConfigMap key or non-credential
+container environment value, container-file content, optional Prometheus or
+Loki results, remote diagnostic output, and local process output use separate
+categories as applicable and remain disabled until their exact capability and
+policy enable them. Changing a category returns the affected consent to pending
+and cancels old work before another transfer.
 
 Consent permits content transfer only. It does not authorize Kubernetes RBAC,
 cross-Namespace policy, a new capability, raw persistence, approval, or a write.
 
 ## Data that may be sent
 
-After consent, an AgentRun may send only bounded content from these categories:
+After consent, an AgentRun may send only bounded content from code-defined
+categories, including:
 
 - `user_question`: the current question after normalization,
   sensitive-value handling, and byte limits;
-- `safe_conversation_context`: bounded committed conversation context and
-  validated free-form answers needed for the current turn;
+- `safe_conversation_context`: bounded committed same-Session user and final
+  assistant context, plus a safe summary and recent tail when required;
 - `resource_names_and_references`: the Context, working and explicitly targeted
   Namespaces, allowlisted resource names, Kinds, and safe identity fields;
 - `projected_kubernetes_status`: reviewed status, conditions, counts,
-  timestamps, and fixed relationship summaries for allowlisted built-in
-  resources;
+  timestamps, fixed relationship summaries, and exact safe Secret metadata for
+  allowlisted built-in resources;
 - `projected_kubernetes_events`: bounded related Event fields after
-  normalization, unsafe-control removal, redaction, and truncation; and
-- `redacted_container_output`: bounded current or previous Pod output only when
-  enabled and after the same safety pipeline.
+  normalization, unsafe-control removal, redaction, and truncation;
+- `redacted_container_output`: bounded current, previous, explicit all-container,
+  or local-search result only when enabled and after the same safety pipeline;
+- separately versioned exact ConfigMap-key or non-credential container-
+  environment values only under `review`, category consent, and sink policy;
+- separately versioned projected metrics, explicitly configured Prometheus or
+  Loki results, container-file content, and remote/local diagnostic output only
+  when the exact capability, sink, and consent category are enabled; and
+- the minimum normalized `ActionEnvelope` and policy facts sent to an optional
+  `approval_reviewer`, without raw cluster data or general Session history by
+  default.
 
 Under namespace-access policy `all`, an answer may include projected metadata
 from more than the working Namespace. Each item retains its actual Namespace.
@@ -69,20 +86,21 @@ Kupilot never includes:
 - raw kubeconfig or Kubernetes credentials, certificates, keys, bearer tokens,
   ServiceAccount tokens, or exec credential output;
 - the model API key or Authorization header as content;
-- Kubernetes Secret objects or data;
-- ConfigMap `data` or `binaryData`, container environment values, or referenced
-  credential values;
+- Kubernetes Secret values or an unprojected Secret object;
+- credential-bearing ConfigMap or environment values, ServiceAccount material,
+  or another referenced credential value;
 - raw Kubernetes objects, full YAML, managed fields, unrestricted labels or
   annotations, arbitrary APIs, or discovery bodies;
 - Node addresses, provider IDs, image inventories, system information, taint
   values, or raw capacity/allocatable maps;
 - EndpointSlice addresses, raw volume sources, storage credentials, or CSI
   attributes;
-- raw or unbounded Events and container output;
+- raw or unbounded Events, logs, metrics, files, query results, remote output,
+  or local process output;
 - raw local database, configuration, log, prompt, model request/response,
   header, stream, ToolResult, or provider-error content; or
-- shell commands, kubectl input/output, terminal control bytes, or executable
-  action payloads.
+- arbitrary shell commands, unapproved kubectl/helm/argocd input or output,
+  terminal control bytes, process environments, or generic executable payloads.
 
 The model key is used only to authenticate to the selected origin. It may come
 from masked TUI input, the one-shot environment override, or the optional
@@ -104,8 +122,11 @@ an action phrase is authority.
 - Only deterministic local capability handling creates Evidence.
 - Invalid Evidence references are removed and produce a warning.
 - A proposal does not mean approved, attempted, accepted, or verified.
-- Local digest-bound approval and durable pre-operation audit are required
-  before every mutation.
+- Deterministic risk and permission routing plus a digest-bound immutable
+  `ActionEnvelope` and durable pre-operation audit are required before every
+  sensitive or effectful operation.
+- A Reviewer recommendation is not authority and can cover only `review` work;
+  malformed or failed review is fail-closed.
 - Request acceptance and post-operation verification remain distinct durable
   and visible states.
 
@@ -197,11 +218,14 @@ Standard persistence may additionally store:
 
 - safe Session and AgentRun metadata;
 - processed committed user Messages and validated final Markdown Messages;
+- one bounded safe Session summary, coverage metadata, and the eligible recent
+  Message tail;
 - Diagnosis metadata, Evidence citations, and typed proposed actions;
 - sanitized capability invocation metadata, accepted Evidence, and bounded
   model-request metadata;
 - lifecycle and consent audit; and
-- approval, write-attempt, and verification audit for supervised actions.
+- versioned ActionEnvelope projection, permission decision, one-attempt outcome,
+  cleanup, and verification audit for supervised actions.
 
 It never stores assembled prompts, streaming deltas, raw model traffic, raw
 Tool results, raw Kubernetes objects, raw Events, or raw container output.
@@ -212,10 +236,20 @@ ordinary lifecycle audit after 90 days; and terminal approval/write audit after
 180 days. `/privacy` may shorten operational-detail retention. Viewing
 `/status` does not create a new content record.
 
-Minimal persistence keeps conversation, answer, Tool, Evidence, and model detail
-in memory only and creates no resumable Session. It still retains mandatory
-lifecycle and write-approval audit. Privacy mode never weakens the durable
-pre-write gate.
+Minimal persistence keeps conversation, answer, summary, coverage, Tool,
+Evidence, and model detail in memory only and creates no resumable Session. It
+still retains mandatory lifecycle and action audit. Privacy mode never weakens
+the durable pre-operation gate.
+
+In standard mode, explicit resume only reads eligible safe local history and
+unverified candidates. It performs zero model, Kubernetes, Tool, Reviewer,
+approval, process, or executor I/O. On the next explicit question, when retained
+eligible history exists and current role/origin/category consent, scope, policy,
+coverage, and budget checks pass, Application must transmit exactly one ordered,
+bounded representation of that history. A failed gate causes zero model calls
+and no current-question-only fallback. Historic scope, Evidence, permission
+rules, reviews, ActionEnvelopes, approvals, and execution state are never
+restored as authority.
 
 The user can delete the current or a selected historical Session after explicit
 confirmation. Active work is cancelled and joined, and unexecuted approval is
@@ -263,9 +297,10 @@ disabled independently from the container-output consent category.
 
 Kupilot has no usage analytics, remote crash reporting, Kupilot-operated
 account, update checker, hosted control plane, or telemetry endpoint. Normal
-network paths are the selected Kubernetes API and configured model origin. A
-kubeconfig exec credential program may have independent behavior outside
-Kupilot's control.
+network paths are the selected Kubernetes API, the explicit model origins, and
+explicit optional Prometheus or Loki destinations. A kubeconfig exec credential
+program, admitted local argv, Pod Exec, or diagnostic Pod may have behavior
+outside Kupilot's full control and is separately disclosed and gated.
 
 ## References
 
@@ -276,3 +311,7 @@ Kupilot's control.
 - [Scope](scope.md)
 - [ADR-0026: Require Informed Consent Before Model Transfer](adr/0026-require-informed-consent-before-model-transfer.md)
 - [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

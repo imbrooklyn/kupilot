@@ -1,5 +1,12 @@
 # Troubleshooting
 
+The accepted `v0.5` contracts describe a future implementation target. The
+checked-in binary, strict version 1 configuration, and RBAC fixtures still
+implement `v0.4`. Do not expect named model roles, permission profiles,
+Session summarization, optional data sources, Pod Exec, diagnostic Pods, local
+argv, shell, or the expanded remediation catalog until their implementation
+and tests land.
+
 Kupilot fails closed when configuration, credential, scope, consent, storage,
 model, or Kubernetes safety checks cannot be completed. A safe error may omit a
 raw vendor message, filesystem path, endpoint body, or cluster payload on
@@ -178,10 +185,11 @@ the SSE payload.
 ## The model returned an invalid Agent response
 
 This error means the endpoint completed an accepted stream, but the final
-assistant content did not satisfy the strict four-collection Diagnosis JSON
-contract. Kupilot rejects Markdown fences, commentary, missing or null
-collections, unknown or duplicate keys, invalid enum values, trailing content,
-and malformed JSON. Partial or invalid model content is not persisted.
+assistant content did not satisfy the strict final-response envelope for
+`answer_markdown`, Evidence citations, and typed proposed actions. Kupilot
+rejects unexpected fences or commentary outside the envelope, missing or null
+required fields, unknown or duplicate keys, invalid enum values, trailing
+content, and malformed JSON. Partial or invalid model content is not persisted.
 
 Use a current Kupilot build whose System Prompt includes the exact final JSON
 shape and enum values. If the error persists through a relay, verify that the
@@ -262,10 +270,10 @@ result is sensitive-blocked, or a time, line, byte, or run-call limit is reached
 
 ## Consent is repeatedly required
 
-Consent is valid only for the exact policy version, canonical endpoint-origin
-hash, and enabled category set. It is expected to become pending after any of
-these changes, after container-output toggle, after revocation, or after local
-state removal.
+Consent is valid only for the exact policy version, model role, canonical
+endpoint-origin hash, and enabled category set. It is expected to become
+pending after any profile, role, origin, category or meaning change, after a
+sensitive-category toggle, after revocation, or after local state removal.
 
 Rejecting or cancelling the dialog sends no pending question. If accepting the
 unchanged tuple does not persist, inspect the safe storage failure and owner-only
@@ -320,6 +328,64 @@ failure may allow the current in-memory answer to finish with a
 visible degraded state, but Kupilot does not claim the missing turn is resumable
 and does not start another run until storage is healthy.
 
+## A `v0.5` permission or capability is unavailable
+
+First confirm that the feature has been implemented; an Accepted ADR is not an
+availability claim. Once implemented, `/status` and `/permissions` must show
+the active capability version, technical enablement, permission profile,
+deterministic risk, both generations, Reviewer availability, RBAC result,
+consent, and remaining budget without external I/O.
+
+`ask` is the default. `read-only` cannot be approved into a mutation, Pod Exec,
+diagnostic Pod, local process, or shell. `auto-review` can route only `review`;
+`critical` remains human-reviewed. `full-access` does not enable default-off
+capabilities, grant Kubernetes RBAC, broaden scope or consent, or override a
+hard denial. Do not solve a denial by selecting full access or granting
+`cluster-admin` without identifying the exact missing layer.
+
+A missing, unconsented, over-budget, timed-out, malformed, or stale Reviewer
+must yield no action and no implicit fallback to the Agent or another endpoint.
+The user may explicitly choose human review for the same still-fresh envelope;
+changed or stale input requires a new envelope.
+
+Pod Exec, diagnostic Pods, local argv, and shell have separate policies. Check
+the exact Pod/container/path or image/destination, executable and argv, stdin/
+TTY/shell flags, output/time bounds, and RBAC. An OS sandbox does not establish
+remote Pod or Kubernetes safety, and an image allowlist does not establish
+NetworkPolicy enforcement.
+
+## A `v0.5` action outcome is unknown
+
+An external timeout, cancellation, transport failure, or cleanup uncertainty
+after the request may have left the operation applied. Kupilot records this as
+ambiguous or unknown and consumes the one-attempt authority. It never retries
+the execution automatically. Use an independently authorized bounded read to
+inspect current state, then create a fresh ActionEnvelope if another operation
+is still needed.
+
+API acceptance, progress, verified completion, failure, timeout, cleanup, and
+verification unavailable are separate states. A successful API response does
+not prove rollout or remediation success, and a failed verification does not
+rewrite an accepted request as unattempted.
+
+## `v0.5` Session compaction is blocked or degraded
+
+Each later AgentRun must receive direct eligible Messages that fit or one safe
+summary plus the complete eligible recent tail. Minimal mode sources that
+context only from the current process and does not persist model memory. If
+summary coverage is missing, corrupt, stale, out of order, or cannot be
+persisted, Kupilot must not guess, duplicate the current question, omit eligible
+history, or send oversized or silently truncated context. When compaction is
+required, the turn remains blocked or visibly degraded, no current-question-
+only model call is made, and the last committed Session state is preserved.
+
+Explicit resume itself performs zero model, Kubernetes, Tool, Reviewer,
+approval, process, or executor I/O. The next question transmits the required
+safe history only after current consent, scope, policy, coverage, and budget
+gates pass; a failed gate causes zero model calls. Historic scope, Evidence,
+permissions, Session rules, Reviewer decisions, ActionEnvelopes, approvals, and
+execution never regain authority.
+
 ## Terminal rendering is unreadable or lacks color
 
 Use `--no-color`, `NO_COLOR`, or `no_color: true`. Scope, consent, supervised
@@ -333,17 +399,22 @@ an alternate view.
 ## Network activity is unexpected
 
 Kupilot has no telemetry, analytics, crash reporting, update checker, hosted
-account, or Kupilot-operated control plane. Expected diagnosis destinations are:
+account, or Kupilot-operated control plane. Expected destinations, when their
+exact capabilities are enabled, are:
 
 - The Kubernetes API server for the explicitly selected kubeconfig Context.
-- The configured model origin after consent.
+- Each explicitly configured model-role origin after role-bound consent.
+- Explicit optional Prometheus or Loki origins after source policy and consent.
 - A kubeconfig-declared exec credential program, when present and allowed; that
   separate program may make its own connections.
+- A policy-selected local argv process, Pod Exec target, or diagnostic Pod
+  network target after its own permission and ActionEnvelope gates.
 
 Stop Kupilot and report privately under [SECURITY.md](../SECURITY.md) if the
 Kupilot process itself contacts another destination, forwards Authorization
 across origin, reads across Namespace outside the displayed `all` policy, or
-performs a Kubernetes write without the exact local approval flow.
+performs an external action without the exact permission, ActionEnvelope,
+durable pre-operation audit, and one-attempt flow.
 
 ## Exit codes
 

@@ -1,5 +1,11 @@
-# Kupilot accepts this typed version 1 schema. Interactive setup may add a
-# plaintext model.api_key to the local KUPILOT_HOME/config.yaml file.
+# This is the currently implemented typed version 1 schema. Interactive setup
+# may add a plaintext model.api_key to the local KUPILOT_HOME/config.yaml file.
+#
+# The accepted v0.5 contract adds named agent/reviewer profiles, permission
+# profiles, Session memory, optional data sources, and exact capability policy.
+# Their versioned schema is intentionally absent until implementation evidence
+# and migration tests exist. Do not add speculative v0.5 fields to this file;
+# the current strict parser will reject them.
 version: 1
 
 context: development
@@ -16,6 +22,7 @@ model:
   model: diagnostic-model
   # reasoning_effort: none
   temperature: 0.1
+  # Implemented v0.4 compatibility value, not a universal v0.5 model limit.
   max_output_tokens: 8192
   request_timeout_seconds: 300
   streaming: true

@@ -1,6 +1,9 @@
 # Kupilot User Guide
 
-This guide describes the current, reachable `v0.4` behavior.
+This guide distinguishes the current reachable `v0.4` behavior from the
+Accepted `v0.5` target. Named model roles, permission profiles, expanded
+capabilities, Session summarization, and generic ActionEnvelope execution are
+not reachable until their implementation and tests land.
 
 - [Getting Started](getting-started.md): build, configure, start, and use the
   single-screen TUI.
@@ -15,13 +18,16 @@ This guide describes the current, reachable `v0.4` behavior.
   endpoint, path, and logging schema.
 - [Operational and Diagnostic Capabilities](../diagnostic-capabilities.md): the
   typed resource catalog, regression scenarios, Evidence, and action boundary.
-- [Deployment Restart Approval](approval.md): exact target preparation, local
-  approval, one write attempt, and rollout verification.
+- [Permissions and Controlled Actions](approval.md): `v0.5` permission profiles,
+  Reviewer routing, ActionEnvelope, one-attempt execution, and verification,
+  plus the currently implemented Deployment restart boundary.
 - [Least-Privilege RBAC](../rbac/README.md): exact Kubernetes verbs, resources,
   subresources, and binding guidance.
 - [Troubleshooting](../troubleshooting.md): safe recovery from common startup,
   scope, permission, model, privacy, storage, and terminal failures.
 
-The current composition reads only through typed bounded capabilities and
-admits one supervised exact Deployment restart. It has no shell, kubectl, Pod
-Exec, generic write Tool, autonomous remediation, or reusable approval.
+The current composition reads only through seven typed bounded capabilities and
+admits one supervised exact Deployment restart. The Accepted `v0.5` target adds
+typed daily operations, explicitly gated Pod diagnostics and local argv, and a
+separate shell risk class without adding generic model authority, autonomous
+remediation, or reusable cross-Session approval.

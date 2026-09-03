@@ -1,14 +1,48 @@
 # Least-Privilege Kubernetes RBAC
 
-Kupilot reads only the typed operational catalog and has one separately gated
-Deployment restart. Do not grant `cluster-admin`, wildcard verbs or resources,
-Secret access, generic write permissions, Pod writes, or discovery permissions
-for convenience.
+This page defines the Accepted `v0.5` RBAC target and identifies the narrower
+fixtures currently present. The checked-in YAML still grants only the `v0.4`
+typed reads and one separately gated exact Deployment restart. It deliberately
+does not pre-grant `v0.5` metrics, CRD, Pod Exec, diagnostic Pod, scale,
+rollback, Pod delete, Node scheduling, or drain permissions.
+
+Do not grant `cluster-admin`, wildcard verbs or resources, Secret-value access,
+generic write permissions, or broad discovery for convenience.
 
 RBAC belongs to the kubeconfig identity. Kupilot does not create a
 ServiceAccount, RoleBinding, or ClusterRoleBinding because subjects and
 administration workflows are cluster-specific. The files here define reusable
 rules only; an administrator must review placeholders and create the binding.
+
+## `v0.5` capability-split target
+
+Each optional capability must have a separate reviewed fixture or documented
+rule set and must be bound only where enabled:
+
+| Capability | Exact Kubernetes RBAC shape |
+| --- | --- |
+| Built-in reads | Only the named API groups/resources and required `get`/`list`; no `watch`. |
+| Exact policy-admitted CRD | Named API group and plural resource with only the admitted `get`/`list`; local `describe` and query use those bounded projections, not extra generic verbs. No wildcard API group/resource. |
+| Events and logs | `events list` and `pods/log get` only where the corresponding data category is enabled. |
+| Pod/Node metrics | Exact metrics API resources and read verbs required by the typed projection. |
+| Sensitive Kubernetes reads | A dedicated exact rule only when Secret metadata, one ConfigMap key, or one non-credential environment value is enabled. Kubernetes RBAC cannot distinguish metadata or one key from values, so source projection, `review`, consent, and sink policy remain mandatory and Secret values remain denied. |
+| Container file or Pod Exec | `pods/exec create` only in exact admitted Namespaces; Application still binds Pod/container/path or argv. |
+| Diagnostic Pod | Namespaced Pod `create`, `get`, and `delete` only for the dedicated policy; image, security context, target, lifetime, and cleanup remain local controls. |
+| Scale | Exact controller read plus the selected `scale` subresource operation; resource names should be constrained where Kubernetes supports it. |
+| Restart/rollback | Exact Deployment and required ReplicaSet reads plus only the operation-specific Deployment mutation verb. |
+| Delete Pod | Exact namespaced Pod read/delete permission only for installations that enable the controller-owned-Pod operation. |
+| Cordon/uncordon | Exact Node read/patch permission for admitted Node names where practical. |
+| Drain | Exact Node read/patch, Pod reads, PDB reads, and eviction subresource permission required by the fixed plan; no wildcard or force shortcut. |
+
+RBAC cannot express field projection, CRD-field allowlists, exact exec argv,
+path and symlink rules, diagnostic image/destination policy, semantic mutation
+diffs, permission profiles, ActionEnvelope digest, durable audit, one-attempt
+behavior, or verification. Those remain independent mandatory Kupilot checks.
+
+Prometheus and Loki are non-Kubernetes data sources and use separate endpoint
+and credential policy. Restricted local `kubectl`, `helm`, or `argocd` argv
+uses the local user's kubeconfig identity and cannot be made safe by broadening
+RBAC. Shell remains a separate default-off critical capability.
 
 ## Choose a namespace policy first
 
@@ -29,7 +63,7 @@ application policy to `current` when cluster-wide namespaced visibility is not
 intended. Do not rely on RBAC alone to explain which policy is active; `/status`
 shows the immutable run policy.
 
-## Namespaced read surface
+## Current `v0.4` namespaced read surface
 
 <!-- markdownlint-disable MD013 -->
 
@@ -51,11 +85,11 @@ Kubernetes RBAC cannot restrict a ConfigMap GET to metadata fields or an
 EndpointSlice LIST to address-free fields. Kupilot's source allowlist and
 projection are independent mandatory controls.
 
-Neither namespaced fixture grants create, update, patch, delete,
+Neither current namespaced fixture grants create, update, patch, delete,
 deletecollection, watch, exec, attach, port-forward, ephemeral containers,
 TokenRequest, SubjectAccessReview, or Secret access.
 
-## Cluster-scoped read surface
+## Current `v0.4` cluster-scoped read surface
 
 [cluster-observer-cluster-role.yaml](cluster-observer-cluster-role.yaml) grants
 `get` and `list` for Namespace, Node, and PersistentVolume. Bind it only when
@@ -82,7 +116,7 @@ cluster-wide `events` list permission, normally supplied when the namespaced
 ClusterRole is bound with a ClusterRoleBinding. Without it, Kupilot reports an
 explicit permission gap.
 
-## Add the exact Deployment restart
+## Current `v0.4` exact Deployment restart
 
 [restart-role.yaml](restart-role.yaml) is the only write-bearing fixture. It
 grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
@@ -112,6 +146,9 @@ Kupilot never broadens a request after denial:
   Evidence branch explicit and incomplete.
 - Missing restart get or patch permission prevents preparation, execution, or
   verification at its exact stage; no broader credential or request is tried.
+- A future `v0.5` capability with no matching exact optional permission remains
+  unavailable. Kupilot does not retry with another identity, permission
+  profile, local command, or broader API.
 
 Raw API denial text is translated to a stable safe gap and is not copied into
 model content, ordinary logs, SQLite, audit, or the TUI.
@@ -123,8 +160,9 @@ code-owned Kind and API allowlist, immutable Context and namespace policy,
 strict model schemas, exact typed requests, generation gates, result
 projection, sensitive-data handling, finite budgets, and local write approval.
 
-Adding a verb, resource, subresource, cluster scope, or write is a product,
-security, privacy, configuration, fixture, and test change. Review
+Adding a verb, resource, subresource, cluster scope, Pod Exec, diagnostic Pod,
+or write is a product, security, privacy, configuration, fixture, and test
+change. Permission-profile selection never changes RBAC. Review
 [Security](../security.md), [Privacy](../privacy-overview.md), and
 [Operational Capabilities](../diagnostic-capabilities.md) before changing these
 rules.

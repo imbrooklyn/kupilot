@@ -1,19 +1,54 @@
 # Performance Baseline and Budgets
 
+- Status: Accepted `v0.5` target with implemented `v0.4` harnesses
+- Date: 2026-09-03
+
 ## Scope
 
-Kupilot measures six maintenance-sensitive surfaces: no-I/O CLI startup,
+The current implementation measures six maintenance-sensitive surfaces: no-I/O CLI startup,
 process memory, local SQLite migration and Session operations, the synthetic
 Diagnosis fixture matrix, bounded stream merge and rendering, and release
 binary size. These measurements protect admitted behavior from regression.
 They are not cross-machine service-level agreements, capacity claims, or a
 reason to add product complexity.
 
-The selectable compact, balanced, and extended run profiles and their hard
-Agent, model, Kubernetes, Tool, byte, item, retention, traversal, and timeout
+The `v0.5` target keeps selectable immutable finite profiles but makes their
+reservations role- and capability-aware. Agent, Reviewer, Agent-summary,
+Kubernetes, optional data-source, remote-exec, local-process, byte, item, line,
+sample, stream, retention, traversal, timeout, idle, and estimated/known cost
 ceilings remain operating and security limits. Performance work cannot relax
-them or bypass scope checks, normalization, redaction, Evidence validation,
-audit, approval, cancellation, or persistence safety.
+them or bypass scope/policy checks, normalization, redaction, consent, Evidence
+validation, permission routing, durable audit, one-attempt execution,
+cancellation, or persistence safety.
+
+Exact model context windows, input/output tokens, request and stream ceilings,
+summary triggers, latency, concurrency, and cost values are accepted only from
+the exact pinned Eino/OpenAI source and tests plus selected-endpoint evidence.
+The current global `8192` output value and middleware example defaults are not
+universal `v0.5` performance contracts.
+
+## Evidence levels for `v0.5`
+
+Performance and compatibility evidence are reported separately:
+
+1. Deterministic CI is the required proof for budgets, cancellation, exact
+   external call counts, memory bounds, request shapes, and safe failure. It
+   uses scripted models, request-recording fixtures, direct local process
+   fixtures, and temporary SQLite files without a real cluster, credential, or
+   public network.
+2. Opt-in tagged live integration may measure one exact Kubernetes, model,
+   Prometheus, Loki, kubectl, helm, or argocd version. Its result does not
+   generalize to another tag, endpoint, model, cluster, or platform.
+3. Model evaluation separately measures answer quality and Reviewer approval,
+   denial, escalation, latency, token use, and cost. It cannot replace
+   deterministic security or protocol tests.
+
+Before `v0.5` is release-ready, versioned harnesses must cover safe Session
+context selection, Eino ADK Runner and summarization, coverage/recent-tail
+memory, Agent/Reviewer/summary budget isolation, permission routing,
+ActionEnvelope revalidation and audit, process cancellation/join, and
+ambiguous-outcome verification. This document does not claim those harnesses or
+baselines already exist.
 
 ## Environment classes and comparison method
 
@@ -106,6 +141,8 @@ GOTOOLCHAIN=go1.25.13 go test -run '^$' \
 
 Collect SQLite and Diagnosis samples:
 
+<!-- markdownlint-disable MD013 -->
+
 ```sh
 GOTOOLCHAIN=go1.25.13 go test -run '^$' \
   -bench '^(BenchmarkSQLiteMigrationFreshV1|BenchmarkSQLiteDiagnosticLifecycleV1)$' \
@@ -117,6 +154,8 @@ GOTOOLCHAIN=go1.25.13 go test -run '^$' \
   -bench '^BenchmarkDiagnosisFixtureMatrixV1$' \
   -benchmem -benchtime=1x -count=10 ./internal/agent
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 Collect stream merge and render samples:
 
@@ -215,6 +254,8 @@ samples.
 - Raw benchmark output, RSS samples, profiles, and machine-specific summaries
   are reviewed locally for paths and external text before sharing and are not
   committed by default.
-- These workloads do not measure cloud cost, real model or cluster latency,
-  maximum cluster size, live monitoring, or concurrent users. They make no
-  latency, memory, or capacity promise across machines.
+- These currently implemented workloads do not measure cloud cost, real model
+  or cluster latency, optional data sources, remote/local execution, Session
+  compaction, Reviewer quality, maximum cluster size, live monitoring, or
+  concurrent users. They make no latency, memory, or capacity promise across
+  machines.

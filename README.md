@@ -1,197 +1,189 @@
 # Kupilot
 
 Kupilot is a local, single-process Kubernetes operations Agent with a
-conversational TUI. It turns natural-language requests into bounded typed
-Kubernetes observations, keeps verified Evidence separate from model
-interpretation, and returns the Markdown answer that best fits the question.
+conversational TUI. It turns natural-language intent into bounded typed
+observations and controlled actions, keeps deterministic Evidence separate from
+model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
-> The current `v0.4` candidate can read the admitted operational resource
-> catalog and can propose one supervised action: restarting an exact
-> Deployment. A restart is never autonomous. It requires a fresh local read,
-> digest-bound local approval, revalidation, durable pre-write audit, one PATCH
-> attempt, and separate rollout verification.
+> ADR-0044 through ADR-0047 and the canonical docs define the Accepted `v0.5`
+> target. The checked-in code, strict version 1 configuration, SQLite schema,
+> and RBAC fixtures still implement the narrower `v0.4` baseline. The new
+> capabilities are not yet available, tested, or release-ready.
 
-Kupilot is Agent-first. It is not k9s, a Kubernetes Dashboard, kubectl, a
-shell, an IDE, a controller, or a generic API client. There is no resource
-tree, YAML editor, command execution, Pod Exec, arbitrary REST request, dynamic
-plugin, or background reconciliation loop.
+Kupilot is Agent-first. It is not k9s, a Kubernetes Dashboard, a generic
+kubectl wrapper, a shell console, an IDE, a controller, or a generic API client.
+There is no primary resource tree, YAML editor, action dashboard, dynamic
+plugin, background reconciliation loop, or autonomous remediation.
 
-## Operational capability
+## Accepted `v0.5` direction
 
-The code-owned Tool catalog currently contains:
+The P0 capability catalog covers:
 
-- `get_resource`
-- `list_resources`
-- `get_events`
-- `get_pod_logs`
-- `get_previous_pod_logs`
-- `get_related_resources`
-- `get_cluster_overview`
+- typed built-in and exact policy-admitted CRD `get`, `list`, conversational
+  `describe`, and bounded query/count/table projections;
+- Events, current/previous/all-container non-following logs, bounded local log
+  search, and Pod/Node metrics;
+- explicitly configured optional Prometheus and Loki data sources;
+- bounded container-file reads, predefined Pod diagnostics, separately gated
+  Pod Exec, and diagnostic Pods;
+- typed restart, scale, rollback, one ordinary controller-owned Pod delete,
+  cordon, uncordon, and drain; and
+- default-off restricted direct argv for exact `kubectl`, `helm`, `argocd`, or
+  another policy-selected executable, with shell as a separate default-off
+  critical class.
 
-Direct typed reads cover these stable built-in resources:
+Every capability is code-owned, versioned, strictly decoded, scope-bound,
+projected, finite, consent-aware, and tested against its exact RBAC and external
+request. Model text cannot select arbitrary APIs, executables, images,
+destinations, YAML, commands, or limits. Generic patch/apply/edit/delete,
+wildcard commands or RBAC, Watch/informers, cross-Context calls, plugins, MCP,
+RAG, retrievers, and Multi-Agent orchestration remain outside P0.
 
-- Core `v1`: Namespace, Node, Pod, Service, PersistentVolumeClaim,
-  PersistentVolume, and ConfigMap metadata only.
-- `apps/v1`: Deployment, ReplicaSet, StatefulSet, and DaemonSet.
-- `batch/v1`: Job and CronJob.
-- `networking.k8s.io/v1`: Ingress.
-- `autoscaling/v2`: HorizontalPodAutoscaler.
-- `policy/v1`: PodDisruptionBudget.
+See [Operational and Diagnostic Capabilities](docs/diagnostic-capabilities.md)
+and [Version Scope](docs/scope.md) for the exact target.
 
-The working Namespace is always visible. `kubernetes.namespace_access` freezes
-each run to either `current` or `all`; the default is `all`. The latter permits
-an explicit different Namespace or explicit bounded all-Namespace list in the
-same Context only when Kubernetes RBAC also permits it. Cross-Context and
-cross-cluster calls remain prohibited.
+## Permission model
 
-Secret objects and data, ConfigMap values, container environment values,
-kubeconfig content, credentials, raw Kubernetes objects, arbitrary custom
-resources, discovery-driven APIs, and unbounded logs are not model-readable.
-See [Diagnostic Capabilities](docs/diagnostic-capabilities.md) and
-[Product Contract](docs/product.md) for the exact projection and action
-boundaries.
+The deterministic risk classes are `safe`, `review`, `critical`, and `deny`.
+The permission profiles are:
 
-## Build from source
+| Profile | `safe` | `review` | `critical` | `deny` |
+| --- | --- | --- | --- | --- |
+| `read-only` | Automatic | Human only for admitted sensitive reads | Denied | Denied |
+| `ask` (default) | Automatic | Human | Human | Denied |
+| `auto-review` | Automatic | Optional Reviewer or human escalation | Human | Denied |
+| `full-access` | Automatic | Automatic | Automatic | Denied |
+| `custom` | Exact route | Exact automatic/human/Reviewer/deny route | Exact automatic/human/deny route; human by default | Denied |
 
-No published release artifact or package-manager installation is supported.
-The verifiable installation path is a source build from a repository checkout.
+A profile routes only an already admitted and enabled operation. It never
+grants Kubernetes RBAC, broadens scope or consent, exposes credentials, lowers
+risk, enables a default-off capability, bypasses durable audit or revalidation,
+or overrides `deny`. `full-access` is explicit and never the default.
 
-Requirements:
+The optional Reviewer is a bounded decision input for `review`, not permission
+authority. It cannot review `critical`, create a Session rule, or call an
+executor. Timeout, malformed output, missing consent, stale policy, and other
+failures authorize nothing; there is no implicit fallback.
 
-- Go 1.25.0 or newer
-- macOS or Linux on `amd64` or `arm64`
-- A UTF-8-capable interactive terminal
+Every sensitive or effectful request is bound to an immutable versioned
+`ActionEnvelope`. Application performs fresh validation, decision matching,
+durable pre-operation audit, a final generation check, at most one external
+attempt, and separate verification. An ambiguous outcome is never retried
+automatically.
+
+## Models and Session context
+
+Kupilot retains one provider protocol kind, `openai_compatible`, with an
+explicit required `agent` profile and optional `approval_reviewer` profile.
+Profiles may use different explicit origins, credentials, consent tuples, and
+budgets. There is no provider auto-detection, router, fallback, load balancing,
+or cross-origin retry. Summarization reuses `agent`; no `context_compactor` role
+is prebuilt.
+
+The `v0.5` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
+message state, and summarization middleware inside the one Eino adapter. Kupilot
+does not build another conversation loop, memory manager, summary engine,
+checkpoint store, or framework facade. Until a stable Eino runner-managed
+Session passes the documented adoption gate, the existing safe SQLite Messages
+remain the durable source through a thin ordered bridge.
+
+Every question after the first in a Session receives one ordered, bounded
+representation of all retained eligible prior turns. Standard mode supplies it
+in process and after explicit resume; minimal mode supplies it only from the
+current process. Resume itself causes zero model, Kubernetes, Tool, Reviewer,
+approval, process, or executor I/O. The next question transmits history only
+after current consent, scope, policy, coverage, and budget checks; a failed gate
+causes zero model calls, never a current-question-only fallback. History never
+restores scope, ResourceRef, Evidence, permission rules, Reviewer decisions,
+ActionEnvelopes, approvals, execution, or generations as authority.
+
+## Current source build and runtime
+
+No current release archive or package-manager installation is supported. Build
+the checked-in implementation from a repository checkout:
 
 ```sh
 make build
 ./bin/kupilot --version
 ```
 
-`make build` writes `./bin/kupilot`. The contributor and CI toolchain uses an
-exact Go patch version; see [Contributing](CONTRIBUTING.md).
+Requirements are Go 1.25.0 or newer and macOS or Linux on `amd64` or `arm64`.
+The contributor and CI toolchain uses the exact patch version documented in
+[Development and CI Gates](docs/development.md).
 
-## Quick start
+The current `v0.4` binary supports its seven typed read Tools and one supervised
+`restart_deployment` action. It does not implement the broader Accepted `v0.5`
+catalog. `config.example.yaml` intentionally remains valid for the current
+strict version 1 parser and contains no speculative future fields.
 
-1. Grant only the required Kubernetes permissions from
-   [Least-Privilege RBAC](docs/rbac/README.md). Do not use `cluster-admin` for
-   Kupilot.
+Start a new Session with:
 
-2. Start a new Session:
+```sh
+./bin/kupilot
+```
 
-   ```sh
-   ./bin/kupilot
-   ```
-
-   A bare start never queries history. Automatically managed files stay below
-   `${KUPILOT_HOME:-$HOME/.kupilot}`. If model configuration is incomplete,
-   the TUI requests it with masked key input and discloses the difference
-   between process-only and plaintext local credential storage.
-
-3. Verify the Context and working Namespace. Before the first model-content
-   transfer, review the destination and exact enabled data categories.
-
-4. Ask an operational question. The transcript shows compact typed Tool steps
-   and a free-form Markdown answer. Use `/status` for the active capability
-   catalog, namespace policy, budget profile, usage, privacy, and storage
-   state.
-
-5. If the answer proposes `restart_deployment`, inspect the exact target,
-   reason, risk, expiry, and digest-bound request. Rejecting, ignoring, changing
-   scope, or letting the request expire performs no write.
-
-The [Getting Started Guide](docs/user-guide/getting-started.md) covers the full
-scope, consent, cancellation, and approval flow.
-
-## Runtime budgets
-
-Every AgentRun uses one immutable code-defined profile:
-
-| Profile | Wall clock | Steps | Tool calls | Model calls | Tool-result total |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `compact` | 2 min | 12 | 16 | 6 | 1 MiB |
-| `balanced` (default) | 10 min | 32 | 48 | 16 | 4 MiB |
-| `extended` | 30 min | 64 | 128 | 32 | 12 MiB |
-
-Independent per-request, item, log, graph, and output ceilings still apply.
-Profiles cannot be changed by the model or expanded during a run. See
-[Agent Runtime](docs/agent-runtime.md).
-
-## CLI and Session behavior
+A bare start never queries history. Use only the explicit current resume forms:
 
 ```text
-kupilot
 kupilot resume
 kupilot resume SESSION_ID
 kupilot resume --last
-kupilot cache clear
-kupilot version
-kupilot --version
-kupilot help
-kupilot help resume
-kupilot help cache
 ```
 
-- Resume restores bounded safe history and unverified scope/resource
-  candidates only. It never resumes a run, model stream, live client,
-  approval, or write.
-- Empty, cancelled, invalid, and non-resumable requests never fall back to a
-  new Session.
-- Session selection is local global history; it does not depend on the working
-  directory, repository, Context, Namespace, or crash state.
-- `help`, `version`, and `cache clear` short-circuit before business storage,
-  Kubernetes, model, and TUI initialization.
-- CLI arguments never accept a model key, kubeconfig, question, arbitrary
-  command, or approval token.
+Automatically managed files stay below
+`${KUPILOT_HOME:-$HOME/.kupilot}`. If current model configuration is incomplete,
+the TUI requests one endpoint, model, and masked key and discloses plaintext
+local credential storage before saving it. This is the implemented setup flow,
+not the future named-profile schema.
 
-See [Sessions and Scope](docs/user-guide/sessions-and-scope.md).
+## Scope, data, and storage
 
-## Data, storage, and network boundaries
+Every run uses one verified Context, one visible working Namespace, and one
+immutable namespace policy. `current` pins namespaced operations to that
+Namespace; `all` permits an explicit different Namespace or bounded all-
+Namespace read in the same Context only when the catalog and Kubernetes RBAC
+also permit it. Cross-Context and cross-cluster calls remain prohibited.
 
-Eligible processed content is sent directly to the configured model origin
-only after informed consent. Kupilot has no product telemetry, usage analytics,
-remote crash reporting, operated account, or control plane. The operational
-network paths are the selected Kubernetes API and configured model endpoint; a
-trusted kubeconfig exec credential program may have its own behavior outside
-Kupilot's control.
+Every model-bound field passes source allowlisting, project-owned projection,
+normalization, sensitive-value blocking or typed redaction, item/byte limits,
+neutral serialization, and final role/origin/category consent. Credentials,
+kubeconfig, Secret values, ServiceAccount tokens, raw objects, raw model
+traffic, raw Tool results, raw operational output, and framework values never
+become generic model, history, log, audit, SQLite, or child-environment data.
 
-SQLite stores bounded sanitized Session history and audit data. It does not
-store kubeconfig data, credentials, raw objects, raw Events, raw logs, raw
-model traffic, full prompts, or raw Tool results. Local SQLite, logs, exported
-summaries, and an explicitly saved model key are plaintext and are not claimed
-encrypted or forensically erasable.
+Kupilot has no product telemetry, analytics, remote crash reporting, operated
+account, update checker, or control plane. Local SQLite, logs, exports, and an
+explicitly saved key are plaintext and are not claimed encrypted,
+tamper-resistant, or forensically erasable. Terminal scrollback is owned by the
+terminal emulator and can outlive Kupilot deletion.
 
-The `/privacy` flow controls persistence mode, operational-detail retention,
-Session/history/database deletion, and explicit
-`kupilot.export-summary.v2` Markdown export. See
-[Privacy and Local Data](docs/user-guide/privacy-and-local-data.md).
+## Verification levels
 
-## Known boundaries
+Deterministic CI is the required correctness and security proof. It uses
+scripted models, request-recording Kubernetes and HTTP fixtures, direct process
+fixtures, fake clocks/barriers, and real temporary SQLite files without a real
+cluster, credential, or public network.
 
-- One local user, one process, one active AgentRun, one verified Context, one
-  working Namespace, and one immutable namespace policy per run.
-- Kubernetes 1.34.x, 1.35.x, and 1.36.x are supported for the documented stable
-  APIs. See [Kubernetes Compatibility](docs/kubernetes-compatibility.md).
-- Exactly one configured `openai_compatible` endpoint profile is supported.
-  Compatibility requires streaming Chat Completions-style responses and strict
-  structured Tool calls. See [Model Compatibility](docs/model-compatibility.md).
-- No Watch or informer, scheduled/background scan, live monitoring, arbitrary
-  selector, custom-resource discovery, Helm, port forwarding, shell, kubectl,
-  Pod Exec, plugin, MCP, RAG, or Multi-Agent orchestration.
-- Evidence is a bounded snapshot. RBAC denial, missing or stale data, disabled
-  container output, truncation, or model incompatibility can leave an explicit
-  gap instead of a definitive cause.
+Opt-in tagged live integration proves compatibility only for one exact
+dependency, endpoint, cluster, data source, or local tool. Model evaluation is
+separate evidence for Agent quality and Reviewer approval/denial/escalation,
+latency, and cost. Neither replaces deterministic CI or generalizes to an
+untested target.
 
 ## Documentation
 
-- [User Guide](docs/user-guide/README.md)
-- [Configuration](docs/configuration.md)
-- [Privacy Overview](docs/privacy-overview.md)
-- [Security Threat Model](docs/security.md)
-- [Least-Privilege RBAC](docs/rbac/README.md)
-- [Troubleshooting](docs/troubleshooting.md)
 - [Product Contract](docs/product.md)
 - [Version Scope](docs/scope.md)
+- [Architecture](docs/architecture.md)
+- [Security Threat Model](docs/security.md)
+- [Privacy Overview](docs/privacy-overview.md)
+- [Data Retention Contract](docs/data-retention.md)
+- [Configuration](docs/configuration.md)
+- [Model Compatibility](docs/model-compatibility.md)
+- [User Guide](docs/user-guide/README.md)
+- [Least-Privilege RBAC](docs/rbac/README.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 Security issues follow [Security Policy](SECURITY.md). Notable changes are in
 the [Changelog](CHANGELOG.md).

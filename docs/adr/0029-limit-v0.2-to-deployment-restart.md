@@ -1,7 +1,12 @@
 # ADR-0029: Limit `v0.2` to Deployment Restart
 
-- Status: Superseded by ADR-0037
+- Status: Superseded by ADR-0037 and ADR-0045
 - Date: 2026-08-08
+
+ADR-0037 removed the permanent exact-catalog freeze. ADR-0045 now supersedes
+the remaining restart-only product boundary for `v0.5` while retaining this
+ADR's restart semantic diff, target freshness, one-attempt behavior, and
+separate rollout verification as operation-specific requirements.
 
 ## Context
 
@@ -186,3 +191,4 @@ compatibility evidence.
 - [Security Threat Model](../security.md)
 - [ADR-0011: Keep `v0.1` Strictly Read-Only](0011-keep-v0.1-strictly-read-only.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)

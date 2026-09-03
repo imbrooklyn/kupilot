@@ -4,6 +4,13 @@
 - Date: 2026-08-30
 - Amended: 2026-09-02
 - Supersedes: ADR-0023
+- Amended by: ADR-0044 and ADR-0045
+
+ADR-0044 and ADR-0045 make permission selection, Reviewer delegation, exact
+approval, execution outcome, and verification P0 interactions for `v0.5`.
+`/permissions` and the expanded `/status` remain local bounded controls on the
+same low-chrome Agent-first screen. They do not add a resource browser, action
+dashboard, shell console, or second editor.
 
 ## Context
 
@@ -241,3 +248,5 @@ mouse-reporting mode in committed history.
 - [Codex terminal event stream](https://github.com/openai/codex/blob/main/codex-rs/tui/src/tui/event_stream.rs)
 - [Codex custom terminal](https://github.com/openai/codex/blob/main/codex-rs/tui/src/custom_terminal.rs)
 - [Product Contract](../product.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)

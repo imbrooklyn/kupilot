@@ -1,5 +1,15 @@
 # Kupilot Configuration
 
+- Status: Accepted `v0.5` target with a documented `v0.4` implementation
+  baseline
+- Date: 2026-09-03
+
+The current parser accepts only the version 1 schema documented below. The
+`v0.5` model-role, permission, data-source, Session-memory, and execution
+settings are accepted product semantics but do not yet have a usable YAML or
+environment schema. That exact schema and its migration must be derived and
+tested during implementation; unknown future-looking fields remain rejected.
+
 Kupilot uses one process-frozen Home for its automatically managed local files.
 `KUPILOT_HOME` selects an absolute, normalized directory; otherwise Kupilot
 uses `$HOME/.kupilot`. The fixed layout is:
@@ -16,7 +26,7 @@ storage locations. The version 1 schema has no configurable path fields. An
 explicit Session-summary export remains the only user-confirmed Kupilot write
 outside Home.
 
-## First start and interactive model setup
+## Current first start and interactive model setup
 
 A bare `kupilot` starts the TUI without requiring a configuration file, model
 endpoint, model identifier, or API key. When any model requirement is missing,
@@ -43,6 +53,16 @@ Adapter construction is local and network-free. The endpoint's complete stream
 and structured Tool compatibility is checked by the first consented model
 request; Kupilot does not probe, auto-detect, route, or fall back to another
 provider.
+
+For `v0.5`, the setup flow becomes role-aware: it must always produce one named
+`agent` profile and may produce one `approval_reviewer` profile. Each profile
+explicitly binds one `openai_compatible` model identifier, canonical origin,
+opaque credential reference, finite evidence-based limits, and exactly one
+consumer role. A Reviewer uses its own role-bound profile; that profile may
+explicitly repeat the Agent profile's origin, model, or credential reference,
+but it is not the `agent` profile and neither case is fallback or routing.
+Summarization alone reuses `agent` with a separate budget and does not create a
+`context_compactor` profile.
 
 ## Precedence and file selection
 
@@ -72,7 +92,48 @@ documents, nulls, aliases, and merges are rejected. A selected file must be a
 regular non-symlink file. Wider existing Unix permissions are accepted; Kupilot
 does not chmod or chown the file and warns that it may contain a plaintext key.
 
-## Version 1 fields
+## Accepted `v0.5` configuration semantics
+
+The future versioned schema must represent these project-owned concepts without
+generic maps or extension payloads:
+
+- named model profiles and fixed `agent` and optional `approval_reviewer` role
+  bindings;
+- one canonical origin and opaque credential reference per profile, with
+  role/origin/category consent and no auto-detection, fallback, router, load
+  balancer, or cross-origin retry;
+- permission profiles `read-only`, `ask`, `auto-review`, `full-access`, and
+  `custom`, with `ask` as the default and explicit high-risk confirmation for
+  full access or custom critical-auto rules;
+- exact versioned capability policy for built-ins and admitted CRDs, optional
+  Prometheus/Loki sources, sensitive reads, Pod diagnostics, diagnostic Pods,
+  typed remediation, restricted local argv, and the separate shell class;
+- exact Secret-metadata, ConfigMap-key, non-credential environment, and other
+  sensitive-source policy, with independent data-category and sink controls;
+- exact executable, argv/flag, fixed working directory, environment allowlist,
+  image, path, destination, data/sink, timeout, output, and RBAC-related policy
+  where a capability needs it;
+- Session memory mode `standard` or `minimal`, summary/coverage retention, and
+  independent Agent, Reviewer, summary, capability, process, time, byte, item,
+  stream, and cost budgets; and
+- current namespace access, kubeconfig exec-credential policy, logging, Home,
+  and credential protections.
+
+Default-off high-risk capabilities remain disabled even under `full-access`.
+Permission profiles route only admitted and enabled operations. Configuration
+cannot lower deterministic risk, override `deny`, grant Kubernetes RBAC,
+restore a Session rule, or bypass consent, audit, target revalidation, finite
+budgets, or scope and policy generations.
+
+Exact YAML names, nesting, environment variables, migration behavior, model
+token/context limits, stream limits, summary thresholds, and endpoint-specific
+values are deliberately not invented here. They require the pinned Eino/OpenAI
+component source and tests, selected endpoint evidence, strict parser and
+credential-spike results, and deterministic compatibility fixtures. Until that
+work lands, `config.example.yaml` remains a copyable example of the implemented
+version 1 parser only.
+
+## Implemented version 1 fields
 
 The complete YAML schema is shown in
 [the example configuration](../config.example.yaml). The tracked example omits
@@ -93,7 +154,7 @@ an actual key so it remains safe to copy and inspect.
 | `model.api_key` | Optional plaintext credential. It is extracted before Viper and is never part of the ordinary typed `Config` value. |
 | `model.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. Use it when a reasoning model must disable reasoning to combine Chat Completions with function Tools. |
 | `model.temperature` | `0.1`; accepted range `0` through `0.2`. |
-| `model.max_output_tokens` | `8192`; accepted range `1` through the same code-defined ceiling. The default avoids imposing a second, smaller truncation budget below the bounded response and run limits; configuration may tighten it. |
+| `model.max_output_tokens` | `8192`; accepted range `1` through the same code-defined `v0.4` ceiling. This is an implemented compatibility value, not a universal `v0.5` role or endpoint limit. |
 | `model.request_timeout_seconds` | `300`; accepted range `1` through `300`. The active budget profile and remaining run time apply a smaller per-call deadline when required. |
 | `model.streaming` | Fixed to `true`. |
 | `model.tool_calling_required` | Fixed to `true`. |

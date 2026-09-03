@@ -1,5 +1,10 @@
 # Getting Started
 
+This guide keeps the currently reachable `v0.4` startup commands while
+documenting the Accepted `v0.5` target. The new named model profiles,
+permissions, Session memory, data sources, execution, and remediation features
+are not available until their implementation and tests land.
+
 ## Requirements
 
 Kupilot currently supports local interactive use on macOS and Linux on `amd64`
@@ -9,12 +14,12 @@ and `arm64`. You need:
 - A UTF-8-capable terminal.
 - A local kubeconfig Context and an identity with the documented
   [least-privilege RBAC](../rbac/README.md).
-- One model endpoint that satisfies the
+- For the current binary, one model endpoint that satisfies the
   [Model Compatibility Contract](../model-compatibility.md).
 - Permission under your organization's policy to send the displayed diagnostic
   data categories to that model destination.
 
-Windows is experimental and is not part of the supported `v0.4` runtime gate.
+Windows is experimental and is not part of the supported runtime gate.
 Kupilot is not intended to run as a cluster controller, shared server, or
 container-only service.
 
@@ -30,7 +35,7 @@ make build
 The build is CGO-free and writes `./bin/kupilot`. No published archive or
 package-manager installation is supported.
 
-## Optional configuration and model setup
+## Current configuration and model setup
 
 No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
@@ -79,7 +84,7 @@ this process only. No credential-valued CLI option exists.
 See [Configuration](../configuration.md) for the full schema, Home layout,
 precedence, environment variables, endpoint rules, and credential boundary.
 
-## Grant Kubernetes access
+## Grant current Kubernetes access
 
 Choose `kubernetes.namespace_access: current` for working-Namespace-only reads,
 or `all` for explicit cross-Namespace and all-Namespace reads in the same
@@ -91,6 +96,12 @@ not use `cluster-admin` or grant wildcard writes.
 Kupilot also enforces its own Kind, Namespace, relationship, projection, and
 budget allowlists. RBAC remains an independent defense if another defect or
 local configuration grants a broader identity.
+
+The `v0.5` target uses capability-split RBAC for exact built-in/CRD reads,
+metrics, logs, Pod Exec, diagnostic Pods, scale, eviction, Node patch, and other
+optional actions. Existing YAML fixtures intentionally remain the current
+`v0.4` read and exact Deployment-restart permissions; do not broaden them in
+advance or use `cluster-admin`.
 
 ## Start a new Session
 
@@ -113,7 +124,36 @@ verified through an exact read before it becomes an active ClusterScope. Empty
 Namespace input never means all Namespaces. The configured namespace-access
 policy is frozen into each run and is visible through `/status`.
 
-## Complete the first-run flow
+## Accepted `v0.5` supervision flow
+
+When implemented, startup must produce one required named `agent` model profile
+and may produce one `approval_reviewer` profile. Each profile has an explicit
+origin, opaque credential, role-bound consent, and independent budget. There is
+no fallback or router. Summarization reuses `agent` rather than introducing a
+`context_compactor` role.
+
+The user reviews the verified Context and Namespace, namespace policy, and
+permission profile. `ask` is the default. `/permissions` is the planned local
+control; `full-access` is explicit and never enables a default-off capability
+or bypasses RBAC, consent, scope, audit, or hard denial.
+
+Every question after the first in a Session receives one ordered, bounded
+representation of all retained eligible safe history when such history exists.
+Standard Sessions supply it in process and after explicit resume; minimal
+Sessions supply it only from the current process. Resume itself performs zero
+model, Kubernetes, Tool, Reviewer, approval, process, or executor I/O. The next
+question sends history only after current consent, scope, policy, coverage, and
+budget gates pass; failure causes zero model calls and no current-question-only
+fallback. Historic scope, Evidence, permissions, rules, ActionEnvelopes, and
+execution never regain authority.
+
+Operational steps may include the P0 typed reads, logs, metrics, optional data
+sources, remote diagnostics, local argv, and remediation documented in
+[Operational Capabilities](../diagnostic-capabilities.md). Every sensitive or
+effectful request shows deterministic risk and an immutable ActionEnvelope;
+ambiguous attempts are never retried automatically.
+
+## Current `v0.4` first-run flow
 
 1. If model configuration is incomplete, complete the four-step endpoint,
    model, storage, and masked-key flow. Each field has a persistent label above
@@ -138,7 +178,7 @@ policy is frozen into each run and is visible through `/status`.
 Changing Context, Namespace, or the container-output privacy category cancels
 an active AgentRun and invalidates stale work before another transfer.
 
-## TUI commands
+## Current `v0.4` TUI commands
 
 The compile-time command registry is fixed:
 

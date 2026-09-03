@@ -5,6 +5,22 @@
 - Amended: 2026-09-02
 - Supersedes: ADR-0006
 - Amends: ADR-0010, ADR-0022, and ADR-0036
+- Amended by: ADR-0046 and ADR-0047
+
+ADR-0046 composes explicit `agent` and optional `approval_reviewer` consumers
+through this same boundary without adding a provider router or a second Eino
+adapter. ADR-0047 replaces the hand-written ReAct ownership described below
+with direct stable ADK `ChatModelAgent`, `Runner`, message state, and
+summarization middleware. Eino types remain confined here, and the current
+SQLite safe-message bridge remains the durable Session source until a stable
+runner-managed Session contract passes the adoption gate.
+
+ADR-0047 also narrows this ADR's earlier "no memory/checkpoint" constraint
+precisely: the boundary must not enable a provider-global or durable memory
+plug-in, checkpoint recovery, or a parallel persistence abstraction. It must
+directly use stable ADK in-run message state and summarization. Completed-turn
+Session persistence remains project-owned and does not make a checkpoint
+operational authority.
 
 ## Context
 
@@ -105,9 +121,12 @@ continues to own:
 
 The adapter accepts only the fixed Eino model and Tool options needed by the
 current run. It clears inherited callback state and enables no provider retry,
-fallback, tracing, memory, checkpoint, dynamic Tool, or global callback. Eino
-types remain private to `internal/agent/einoadapter` and do not enter Domain,
-Application, Tools, Kubernetes, persistence, CLI, or TUI.
+fallback, tracing, provider-global or durable memory plug-in, checkpoint
+recovery, dynamic Tool, or global callback. Under ADR-0047, this does not
+prohibit directly composed ADK in-run message state or summarization
+middleware; neither is resumable checkpoint authority. Eino types remain
+private to `internal/agent/einoadapter` and do not enter Domain, Application,
+Tools, Kubernetes, persistence, CLI, or TUI.
 
 Some compatible endpoints expose bounded reasoning fragments through Eino's
 paired `ReasoningContent` field and `reasoning-content` metadata even when the
@@ -195,3 +214,5 @@ Deterministic tests must prove:
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
 - [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)
 - [ADR-0036: Record Bounded Model Failure Diagnostics](0036-record-bounded-safe-model-failure-diagnostics.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](0047-reuse-eino-adk-for-session-context-and-summarization.md)

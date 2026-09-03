@@ -3,6 +3,14 @@
 - Status: Accepted
 - Date: 2026-08-30
 - Supersedes: ADR-0034
+- Amended by: ADR-0047
+
+ADR-0047 permits the `v0.5` export to include the versioned safe Session
+summary and coverage explanation while retaining all existing source
+allowlists, escaping, bounds, explicit confirmation, no-overwrite publication,
+and zero external operational I/O. Raw Eino state, prompts, model traffic,
+Tool/Exec/log output, Session rules, Reviewer response bytes, and execution
+authority remain excluded.
 
 ## Context
 
@@ -71,3 +79,4 @@ publication, audit-before-write, cancellation, and concurrent Session deletion.
 - [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](0038-use-free-form-answers-with-verified-evidence-metadata.md)
 - [Data Retention Contract](../data-retention.md)
 - [Privacy Overview](../privacy-overview.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](0047-reuse-eino-adk-for-session-context-and-summarization.md)

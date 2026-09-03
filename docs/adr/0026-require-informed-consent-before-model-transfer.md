@@ -2,6 +2,12 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0046
+
+ADR-0046 adds the fixed model consumer role to the exact consent tuple and
+applies origin canonicalization, category binding, invalidation, and zero-call
+failure independently to every named profile. Consent for one role or origin
+does not authorize another.
 
 ## Context
 
@@ -167,3 +173,4 @@ transport integration must preserve these properties.
 - [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](0046-use-named-model-roles-and-optional-auto-review.md)

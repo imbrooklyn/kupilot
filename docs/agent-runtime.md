@@ -1,10 +1,16 @@
 # Agent Runtime
 
-Kupilot runs one supervised ReAct-style AgentRun at a time. Eino is confined to
-`internal/agent/einoadapter`; the rest of the system sees project-owned run
-inputs, events, bound Tool calls, Evidence, outcomes, and safe errors.
+Kupilot runs one supervised AgentRun at a time. Stable Eino ADK
+`ChatModelAgent`, `Runner`, message state, Tool-message pairing, and
+summarization middleware are confined to `internal/agent/einoadapter`; the rest
+of the system sees project-owned Session context, run inputs, events, bound
+capabilities, Evidence, ActionEnvelopes, outcomes, and safe errors.
 
-The current protocol versions are:
+This is the accepted `v0.5` runtime target. The checked-in implementation is
+still the `v0.4` baseline and does not yet expose the expanded catalog,
+permission profiles, Reviewer, Session memory, or generic execution flow.
+
+The currently implemented `v0.4` protocol versions are:
 
 - System prompt: `kupilot-agent-policy-v7`
 - Capability catalog: `kupilot-operational-tools-v2`
@@ -16,25 +22,35 @@ Application creates an immutable RunInput containing:
 - run, Session, and user-message identifiers;
 - normalized user question;
 - verified Context, working Namespace, namespace-access policy, generation, and
-  activation time;
+  activation time, plus the independent policy generation;
 - optional selected ResourceRef;
 - exact prompt and capability-catalog versions;
-- model-transfer consent already checked by Application; and
-- one compact, balanced, or extended budget snapshot.
+- permission profile, deterministic capability/risk policy, and current-process
+  Session-rule snapshot;
+- exact named model roles/profiles, canonical origin hashes, and role/category
+  consent already checked by Application;
+- eligible ordered same-Session context and summary coverage; and
+- independent finite Agent, Reviewer, summary, capability, process, data, time,
+  byte, item, stream, and cost budget snapshots.
 
 The model cannot supply or modify these values. A Context, working-Namespace,
-or policy change invalidates the generation, cancels the old run, clears
-resource/action state, and rejects late results.
+or namespace-policy change invalidates scope generation. A permission,
+capability, Session-rule, relevant data-source, or origin-policy change
+invalidates policy generation. Both changes first clear dependent review,
+approval, and action state, then cancel old work and reject late results.
 
 ## Turn lifecycle
 
 1. Application durably creates the run before model or Kubernetes I/O.
 2. Runtime atomically reserves one Agent step and one model call.
-3. The model receives the trusted policy, safe conversation projection,
-   current scope metadata, complete seven-capability catalog, and remaining
-   code-owned ceilings.
-4. The Eino boundary drains one bounded model stream and asks Eino to assemble
-   exactly one assistant message. After each Eino-decoded content chunk passes
+3. Application selects eligible safe committed Session context. The adapter
+   gives the trusted policy, ordered context, current question exactly once,
+   current scope metadata, versioned capability catalog, and remaining code-
+   owned ceilings to Eino ADK `Runner`.
+4. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
+   iteration. The Eino boundary drains one bounded model stream and asks Eino
+   to assemble exactly one assistant message. After each Eino-decoded content
+   chunk passes
    stream validation, a passive projector may decode the first top-level
    `answer_markdown` string and publish only its normalized, sensitive-filtered,
    scope-current provisional text. The projector does not interpret response
@@ -48,14 +64,17 @@ resource/action state, and rejects late results.
    handler or Kubernetes I/O.
 6. The handler performs bounded typed I/O, projects and sanitizes locally, and
    creates Evidence only after the post-I/O scope gate.
-7. Tool results return through a project-owned envelope and the loop continues
-   until a final structured answer or a terminal policy outcome.
+7. Tool results return through a project-owned envelope and the ADK loop
+   continues until a final structured answer or a terminal policy outcome.
 8. The final answer is validated, persisted according to privacy mode, and
    atomically replaces any provisional transcript text. Structured same-Kind
    inventories with shared attributes default to one compact Markdown table per
-   Kind without requiring the user to request formatting.
+   Kind without requiring the user to request formatting. When needed, Eino
+   summarization middleware compacts eligible history through a separate
+   Agent-profile summary budget and project-owned coverage finalizer.
 
-Runtime performs no automatic model or Kubernetes retry. Local policy feedback
+Runtime performs no automatic model, Reviewer, Kubernetes, data-source, remote-
+exec, or local-process retry. Local policy feedback
 is not an I/O retry because the rejected batch never reached a handler. A model
 may make a new corrected selection as another bounded Agent decision; model,
 step, and consecutive no-progress budgets still apply and prevent an
@@ -63,8 +82,11 @@ indefinite correction loop.
 
 ## Capability binding
 
-The catalog contains exactly the seven capabilities documented in
-[Scope](scope.md). Every model schema is strict: all object properties are
+The `v0.5` catalog contains the categories documented in [Scope](scope.md):
+built-in and exact policy-admitted CRD reads/queries, Events and logs, metrics,
+explicit optional data sources, container files, Pod diagnostics, typed
+remediation, restricted local argv, and a separate shell risk class. Every
+model schema is strict: all object properties are
 declared, every property is required, optional values use explicit `null`, and
 additional properties are rejected.
 
@@ -73,9 +95,10 @@ Binding performs these checks before handler I/O:
 - known name and exact catalog version;
 - one complete JSON object with no duplicate, unknown, wrong-type, or overlong
   field;
-- code-defined Kind and API version;
+- code-defined built-in or exact policy-admitted API, operation, and risk;
 - explicit namespace semantics under the frozen policy;
-- no Context, endpoint, credential, raw selector, GVR, deadline, or hard-limit
+- no Context, endpoint, credential, raw selector, arbitrary GVR, executable,
+  image, network destination, command string, YAML, deadline, or hard-limit
   authority;
 - canonical argument serialization and digest; and
 - atomic run and per-capability budget reservation.
@@ -130,20 +153,32 @@ verified fact.
 
 ## Proposed actions
 
-The final response may contain at most one typed `restart_deployment` proposal.
-It must target the exact `apps/v1` Deployment name in the working Namespace and
-must not contain UID or resource version.
+The final response may contain only versioned typed proposals from the P0
+catalog: restart, scale, rollback, one controller-owned ordinary Pod delete,
+cordon, uncordon, drain, and separately admitted sensitive/remote/local
+operations. A proposal contains no UID, resource version, digest, Reviewer
+decision, approval, or executor authority.
 
-The proposal is not authority. Application asks a read-only trusted preparer to
-perform one fresh exact Deployment GET and derive UID, Pod-template
-fingerprint, and Deployment generation. Only that local intent may become a
-pending approval request. Preparation failure leaves the otherwise valid answer
-intact and performs no write.
+Application performs fresh target or executable-policy preparation and creates
+one immutable `ActionEnvelope`. Deterministic risk and the permission profile
+route it to automatic safe handling, a human, the optional Reviewer, a matching
+human Session rule, or denial. `ask` is the default. Reviewer routing is limited
+to `review`; `critical` remains human under `ask` and `auto-review`.
 
-Approval, execution, and rollout verification follow
-[Deployment Restart Approval](user-guide/approval.md).
+After a valid decision, Application rechecks the envelope, both generations,
+time, policy, target, and one-time state; atomically consumes authority and
+persists pre-operation audit; performs one final generation check; and reaches
+an executor at most once. Any pre-operation storage failure produces zero
+executor calls. Accepted, failed, and ambiguous outcomes are distinct and no
+external execution is retried automatically. Verification is separately
+bounded and cannot rewrite the attempt outcome. See
+[Permissions and Controlled Actions](user-guide/approval.md).
 
-## Budget profiles
+## Implemented `v0.4` budget profiles
+
+The following table records the current implementation. ADR-0044 retains the
+finite-profile and atomic-reservation principles but does not carry these small
+global values forward as universal `v0.5` limits.
 
 | Boundary | Compact | Balanced (default) | Extended | Hard ceiling |
 | --- | ---: | ---: | ---: | ---: |
@@ -166,16 +201,55 @@ Reservations happen before I/O. Completion accounts actual Tool-result bytes,
 accepted Evidence progress, and retryability. Once stopped, a budget cannot be
 reopened.
 
+For `v0.5`, Agent, Reviewer, Agent-summary, Tool, Kubernetes, data-source,
+remote-exec, local-process, item, line, sample, byte, stream, wall-time, idle,
+and estimated/known cost budgets are independently finite. Exact model context,
+input/output token, request, stream, summary-trigger, latency, concurrency, and
+cost values require evidence from the exact pinned Eino/OpenAI source/tests and
+selected endpoint. Missing token evidence never permits an unlimited request;
+conservative byte, call, time, and cost ceilings fail closed.
+
+## Session context and summarization
+
+Every AgentRun after the first question in a Session receives exactly one
+ordered, bounded representation of all retained eligible prior user and final
+assistant Messages. Standard mode sources it in process and, after explicit
+resume, across processes. Minimal mode sources it only from the current process
+and persists no model memory. Resume itself performs zero model, Kubernetes,
+Tool, Reviewer, approval, process, or executor I/O. The next submitted question
+sends the eligible representation only after current consent, scope, policy,
+coverage, and budget checks. A failed gate causes zero model calls and never a
+silent current-question-only fallback.
+
+The current question appears exactly once. Partial streams, Tool messages,
+raw model traffic, command output, approval dialogs, and framework objects are
+not replayed. Historic scope, ResourceRef, Evidence, permission rules, Reviewer
+decisions, ActionEnvelopes, approvals, execution, clients, and generations are
+never restored as authority.
+
+Eino summarization middleware produces a bounded safe summary plus a complete
+eligible recent tail. Project-owned coverage records the first/last covered
+Message IDs, ordered count, digest, versions, origin hash, profile, time, and
+degraded/truncation state. The summary call reuses `agent` with a separate
+non-streaming no-Tool one-attempt budget. If required compaction fails, runtime
+sends no oversized or silently truncated context and preserves the last
+committed state. The existing SQLite messages are the stable durable source
+until a non-prerelease Eino runner-managed Session passes ADR-0047's gate.
+
 ## Cancellation and stale work
 
-Every model and Kubernetes operation accepts the owning Context. Runtime checks
-the complete scope and generation before external I/O, after every return, and
-again when Application accepts an event.
+Every model, Reviewer, Kubernetes, data-source, remote-exec, and local-process
+operation accepts the owning Context. Runtime checks complete scope and every
+applicable scope/policy generation before external I/O, after every return, and
+again when Application accepts an event. Execution adds one final check after
+durable consumption and before the attempt.
 
-Cancellation, timeout, stale scope, terminal state, or budget exhaustion stops
-new work. Late stream fragments, Tool results, Evidence, Diagnosis objects, and
-approval proposals are discarded. Each goroutine has one owner, cancellation
-path, and bounded join path.
+Cancellation, timeout, stale scope or policy, terminal state, or budget
+exhaustion stops new work. Late stream fragments, Tool results, Evidence,
+Diagnosis objects, Reviewer decisions, Session rules, approvals,
+ActionEnvelopes, process output, and verification events are discarded. Each
+goroutine and child process has one owner, cancellation path, and bounded join
+path.
 
 ## Event ordering and TUI
 
@@ -188,13 +262,16 @@ for the hard Tool, Evidence, and model budgets but remains independently finite;
 the TUI receives a smaller projection because model-start and individual
 Evidence-acceptance events are not rendered as transcript entries.
 
-The transcript shows bounded provisional answer Markdown, compact Tool steps,
-safe warnings, the validated final Markdown answer, and typed approval state.
+The transcript shows bounded provisional answer Markdown, compact capability
+steps, safe warnings, the validated final Markdown answer, permission routing,
+Reviewer state, and typed action/verification state.
 The internal stream and the smaller UI projection have independent run-wide
 event ceilings; excess provisional refreshes may be omitted because the validated
-terminal answer replaces the draft. `/status` is a local Application query
-exposing the catalog, namespace policy, budget profile and usage, run state,
-privacy mode, and storage health without model or Kubernetes activity.
+terminal answer replaces the draft. `/status` and `/permissions` are local
+Application queries exposing the catalog, namespace and permission policy,
+model roles/origin hashes, memory and summary coverage, budgets and usage, run
+and action states, privacy, and storage health without model, Kubernetes,
+Reviewer, process, or executor activity.
 
 ## Failure classes
 
@@ -217,3 +294,7 @@ executor calls.
 - [ADR-0038](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
 - [ADR-0039](adr/0039-use-configurable-runtime-budget-profiles.md)
 - [ADR-0043](adr/0043-use-one-eino-runtime-boundary.md)
+- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

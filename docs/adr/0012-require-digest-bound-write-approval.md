@@ -2,6 +2,15 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Amended by: ADR-0045
+
+ADR-0045 generalizes this decision from the restart-specific intent and digest
+vector to a versioned `ActionEnvelope` with operation-specific schemas. The
+default-reject 60-second approve-once authority, deterministic digest binding,
+fresh revalidation, durable pre-operation audit, one external attempt,
+fail-closed ambiguous outcome, and separate verification remain normative.
+The restart-specific encoding below remains the historical `v0.4` contract; it
+is not the generic `v0.5` envelope schema.
 
 ## Context
 
@@ -203,3 +212,4 @@ must satisfy ADR-0029 in addition to these boundary tests.
 - [Data Retention Contract](../data-retention.md)
 - [ADR-0011: Keep `v0.1` Strictly Read-Only](0011-keep-v0.1-strictly-read-only.md)
 - [ADR-0029: Limit `v0.2` to Deployment Restart](0029-limit-v0.2-to-deployment-restart.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)

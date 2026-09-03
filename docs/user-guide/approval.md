@@ -1,85 +1,127 @@
-# Deployment Restart Approval
+# Permissions and Controlled Actions
 
-The current `v0.4` composition supports one supervised write:
-`restart_deployment` for one exact `apps/v1` Deployment in the working
-Namespace. It changes only the
-`kupilot.io/restartedAt` Pod-template annotation to a locally generated UTC
-value. It does not delete Pods, change replicas, edit images, scale, roll back,
-run a command, or accept a model-generated patch.
+This page defines the Accepted `v0.5` interaction target. The checked-in
+`v0.4` binary still exposes only one supervised `restart_deployment` action;
+the broader permission profiles, Reviewer, remote/local execution, and typed
+remediation are not yet available.
 
-## Review the proposal
+## Choose a permission profile
 
-The Agent can emit one typed restart suggestion, but it cannot approve or
-execute it. Before opening an approval, Kupilot performs one fresh exact
-Deployment GET and locally derives the UID, Pod-template fingerprint, and
-generation. Model output cannot supply those fields, a resource version, nonce,
-digest, annotation, timestamp, or patch. If preparation fails, the answer
-remains available and no approval or write is created.
+`ask` is the default. `/permissions` is the planned local control for reviewing
+and changing the profile and current-Session rules; `/status` reports the same
+bounded state without external I/O.
 
-The Approval Dialog displays the exact operation,
-Context, Namespace, scope generation, Deployment identity, current generation,
-Pod-template fingerprint, proposed fixed change, reason, risk, operation digest,
-and expiry. The dialog defaults to **Reject**.
+| Profile | Behavior |
+| --- | --- |
+| `read-only` | Runs safe reads automatically, asks a human for an admitted sensitive read, and denies writes, Pod Exec, diagnostic Pods, local processes, and shell. |
+| `ask` | Runs safe work automatically and asks the human for every `review` or `critical` request. |
+| `auto-review` | Sends `review` requests to the optional Reviewer, which may `approve`, `deny`, or `escalate_to_user`; `critical` remains human-reviewed. |
+| `full-access` | Runs admitted and enabled `review` and `critical` work without a per-action prompt after explicit high-risk selection. It never overrides `deny`. |
+| `custom` | Uses exact code/config routes. `review` may be automatic, human, Reviewer, or denied. `critical` may be automatic, human, or denied and defaults to human. |
 
-Use Tab or the arrow keys to move between Reject and Approve. Enter confirms the
-selected choice. Esc rejects. Approval expires exactly 60 seconds after proposal
-creation. Expired, rejected, cancelled, invalidated, and already-used approvals
-cannot be reopened or reused.
+A profile does not grant Kubernetes RBAC, enable a default-off capability,
+broaden Context/Namespace scope, add a model or data destination, change
+consent, expose a credential, lower deterministic risk, bypass audit or target
+revalidation, or turn a denied operation into an admitted one.
 
-Approving authorizes at most one fixed PATCH attempt. It does not authorize a
-successful rollout, a retry, another Deployment, or any follow-up operation.
-Immediately before the attempt, Kupilot verifies the durable approval, re-reads
-the Deployment, compares its UID, generation and Pod-template fingerprint, uses
-the fresh resource version as a concurrency precondition, and commits the
-consumed approval plus pre-operation audit. Any mismatch or pre-operation audit
-failure produces zero writes.
+The optional Reviewer is a decision input, not permission authority. It receives
+a minimal normalized action and policy projection, uses a strict non-streaming
+no-Tool response, and can act only on `review`. Missing configuration, missing
+consent, timeout, cancellation, malformed output, stale policy, or exhausted
+budget authorizes nothing and never falls back to the Agent or another model.
 
-## Understand execution and rollout states
+A human may create a narrow Session rule only for `review`. The rule binds an
+exact operation, scope, target/parameter or argv template, data/sink/network
+effects, ceilings, and expiry. It is revocable, valid only in the current
+process and Session, never created by a model or Reviewer, and never restored by
+resume.
 
-The dialog remains visible while the approved operation is attempted and
-verified. These states have different meanings:
+The inline auto-review states are `Reviewing`, `Approved`, `Denied`,
+`Escalated`, and `Timed out`; they are never styled as human decisions. A
+failure or timeout performs no action. The human review surface offers only
+approve once, an eligible narrow Session rule, deny, and cancel, and displays
+the exact envelope fields before any choice.
+
+## Review an ActionEnvelope
+
+Every sensitive or effectful request is normalized into one immutable
+versioned `ActionEnvelope`. The review shows its operation and schema version,
+risk, permission profile, exact Context/Namespace and generations, target
+identity, typed parameters or fixed executable plus argv, stdin/TTY/shell
+flags, data categories, sinks, network destinations, time/output limits,
+expiry, verification plan, and digest.
+
+The digest uses a versioned fixed-order length-prefixed canonical encoding and
+SHA-256. A human summary, model phrase, Reviewer rationale, JSON key order,
+raw YAML, map, or unnormalized command is never authority.
+
+Approve-once defaults to Reject, expires exactly 60 seconds after proposal
+creation, and is single-use. Approval of one envelope does not authorize a
+different target, parameter, destination, command, cleanup, retry, or follow-up
+operation. Changing scope or permission policy invalidates pending state before
+old work is cancelled.
+
+## Understand execution states
+
+Application revalidates the exact target or executable policy, checks the
+decision and digest, atomically consumes single-use authority and persists
+pre-operation audit, performs one final scope/policy-generation check, and then
+makes at most one external attempt.
 
 | State | Meaning |
 | --- | --- |
-| PATCH accepted | Kubernetes accepted the single fixed request. Rollout success is not yet known. |
-| PATCH failed | Kubernetes definitively rejected or conflicted with the request. Kupilot does not retry it. |
-| PATCH outcome unknown | Transport cancellation, timeout, or another ambiguous response prevents Kupilot from knowing whether the request took effect. It is never retried automatically. |
-| Rollout progress | Kupilot observed a changed bounded projection of target generation, updated replicas, and available replicas. |
-| Rollout succeeded | The target generation was observed and updated and available replicas both reached the post-PATCH target. |
-| Rollout failed | The target was replaced or changed again, or the Deployment reported `ProgressDeadlineExceeded` or `ReplicaFailure`. |
-| Rollout timed out | The 90-second observation window ended without verified success or a fixed failure. The PATCH remains accepted; timeout is not reported as PATCH failure or rollout success. |
-| Rollout unavailable | Cancellation, Context or Namespace change, permission loss, or a read failure stopped verification after an accepted PATCH. |
-| Result audit failed | Kupilot could not store required post-attempt audit metadata through its bounded idempotent procedure. Further verification stops and the PATCH is not repeated. |
+| Denied or rejected | No external attempt occurred. A hard denial cannot be overridden by another profile. |
+| Accepted | The external system accepted the single request; remediation success is not yet known. |
+| Failed | The external system definitively rejected or failed the attempt. Kupilot does not retry it automatically. |
+| Ambiguous or unknown | The request may have reached the external system, but timeout, cancellation, transport loss, or cleanup uncertainty prevents a definitive result. It is never retried automatically. |
+| Progress | A bounded verifier observed an intermediate state. It does not rewrite the attempt result. |
+| Verified | The operation-specific verification plan observed its success condition. |
+| Verification failed | A fixed failure condition was observed after an attempt. |
+| Verification timed out or unavailable | The attempt result remains separate; use an independently authorized read before proposing another action. |
+| Audit failed before execution | No executor call occurred. |
+| Result audit failed | The external attempt is not repeated; the durable pre-operation fact remains and the UI reports degraded audit. |
 
-The default observer polls the exact Deployment no faster than every two seconds
-for at most 90 seconds and 45 observations. A deployment composition may only
-shorten the window or poll more slowly. The observer uses no Watch, informer, or
-background controller and stops when its owning Context is cancelled.
-If no Deployment read completes before the window ends, timeout is reported
-without inventing replica counts.
+If an outcome is unknown, do not assume that repeating it is harmless. Inspect
+current state through a separately authorized bounded read and create a fresh
+ActionEnvelope only when another operation is still necessary.
 
-If verification times out or becomes unavailable, inspect the Deployment using
-an independently authorized read path before deciding whether to create a new
-proposal. Never assume that repeating the approval is harmless: the original
-PATCH may already have been accepted.
+## P0 action risk
 
-## Audit and local data
+| Operation | Base interaction |
+| --- | --- |
+| Restart one exact Deployment | `review`; only Kupilot's restart annotation changes. |
+| Scale one exact Deployment or StatefulSet | Positive delta of one is `review`; scale-to-zero or another delta is `critical`. |
+| Roll back one exact Deployment | `critical`; binds a freshly validated prior ReplicaSet revision. |
+| Delete one ordinary controller-owned Pod | `review`; force, grace-zero, bulk, unmanaged, static, and mirror cases are denied. |
+| Cordon or uncordon one exact Node | `review`; only `spec.unschedulable` changes. |
+| Drain one exact Node | `critical`; binds a complete bounded eligible Pod set and admits no force, delete-emptydir, or ignore-daemonset shortcut. |
+| Container-file read or predefined read-only Pod diagnostic | `review`, with exact path/argv and output policy. |
+| Other Pod Exec or diagnostic Pod | `critical`, default off. |
+| Restricted local argv | Default off; risk follows the exact admitted behavior. |
+| Shell | Separate `critical` class, default off; binds a policy-selected shell executable and one exact bounded command string. |
 
-Kupilot records fixed structured metadata for the proposal, local decision,
-consumed intent, PATCH accepted/failed/unknown result, changed rollout progress,
-and terminal verification result. Write-audit metadata is retained for 180 days
-under both standard and minimal persistence. It excludes raw Deployment objects,
-Pod-template data, resource versions, patch bodies, Kubernetes condition
-messages, response bodies, and vendor errors.
+Generic patch/apply/edit/delete, arbitrary YAML, model-selected executable,
+image, destination, command string or flags, and wildcard operations remain
+denied.
 
-The restart annotation is visible Kubernetes metadata. Kupilot does not claim
-that local SQLite audit data is encrypted, tamper-resistant, or forensically
-deleted.
+## RBAC and local policy
 
-## RBAC
+RBAC is an independent Kubernetes authorization layer. The `v0.5` target splits
+read, metrics, Pod log, Pod Exec, diagnostic Pod, scale, eviction, Node patch,
+and other optional permissions. Do not grant `cluster-admin` or wildcard
+resources/verbs. RBAC cannot enforce Kupilot's field projection, exact command,
+digest, one-attempt, or verification rules.
 
-Use the read rules required for the selected operational catalog and add only the exact namespaced
-Deployment rule documented in [Least-Privilege RBAC](../rbac/README.md). The
-provided restart Role restricts `get` and `patch` to one placeholder Deployment
-name. Do not grant wildcard writes, Deployment `update` or `delete`, Pod writes,
-Watch, or a ClusterRoleBinding.
+The current YAML fixtures remain the `v0.4` read and exact Deployment-restart
+examples. They deliberately do not pre-grant future capabilities. See
+[Least-Privilege RBAC](../rbac/README.md).
+
+## Current `v0.4` restart interaction
+
+The current binary prepares one exact `apps/v1` Deployment by reading its UID,
+Pod-template fingerprint, generation, and fresh resource version. The dialog
+defaults to Reject and binds the fixed restart operation for 60 seconds.
+Execution makes at most one annotation-only merge PATCH. PATCH accepted,
+failed, or unknown and rollout progress, success, failure, timeout, or
+unavailable remain separate. This is retained as the operation-specific
+foundation that the future common ActionEnvelope must generalize.

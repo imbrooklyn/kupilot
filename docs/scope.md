@@ -1,186 +1,235 @@
 # Kupilot Scope
 
-This document defines the executable `v0.4` product boundary. It replaces the
-MVP feature freeze while preserving local authority, projection, approval, and
-data-safety controls.
+- Status: Accepted `v0.5` target
+- Date: 2026-09-03
 
-## In scope for `v0.4`
+The current code remains the `v0.4` implementation baseline. The items below
+define the admitted `v0.5` implementation scope and must not be described as
+reachable until their code, configuration, RBAC, migrations, tests, and
+evidence gates pass.
 
-- A local, single-process, single-user TUI with one active AgentRun. Startup
-  clears the visible primary-terminal frame and anchors the composer at the
-  bottom. Completed bounded history enters terminal-owned scrollback exactly
-  once with one inert trailing separator row per immutable block, while the
-  live frame retains only provisional output and chrome; runtime drafts never
-  enter scrollback.
-- One configured `openai_compatible` model origin and the accepted streaming
-  structured-capability protocol.
-- One verified Kubernetes Context, one visible working Namespace, and one
-  immutable `current` or `all` namespace-access policy per run.
-- Startup Context resolution uses the effective configured Context, the last
-  successfully verified local Context, then kubeconfig `current-context`.
-  Without an explicit Namespace, the startup working Namespace is `default`.
-- Natural-language questions, bounded safe provisional answer streaming,
-  compact inline capability steps, cancellation, and atomic replacement by a
-  validated free-form Markdown answer.
-- A versioned code-owned read catalog over the built-in resource allowlist in
-  the Product Contract.
-- Cross-Namespace exact reads and bounded all-Namespace lists in the same
-  Context when the frozen namespace-access policy is `all`.
-- Cluster-scoped Namespace, Node, and PersistentVolume reads with exact
-  scope-aware Evidence.
-- One supervised `restart_deployment` action behind digest-bound approval,
-  target revalidation, durable audit, one execution attempt, and bounded
-  rollout verification.
-- Compact, balanced, and extended run-budget profiles with balanced as the
-  default and `/status` visibility.
-- Explicit Session resume, local SQLite persistence, informed model-transfer
-  consent, privacy modes, retention controls, redacted export, and deletion.
+## In scope for `v0.5`
+
+- One local process, one local user, one low-chrome Agent-first TUI, one active
+  AgentRun, and one verified Kubernetes Context at a time.
+- One visible working Namespace, one immutable `current` or `all` namespace
+  policy, one scope generation, and one policy generation per run.
+- A versioned strict capability catalog for reviewed stable built-in resources
+  and exact policy-admitted CRDs. No model-selected discovery or GVR.
+- Typed `get`, `list`, conversational `describe`, and bounded
+  query/count/table projections.
+- Related Events; current, previous, and explicit all-container non-following
+  logs; bounded local log search; and Pod and Node metrics.
+- Explicitly configured optional Prometheus and Loki sources, each with its own
+  endpoint, credential, query, data-category, consent, projection, and budget
+  policy.
+- Bounded container-file reads, predefined no-shell Pod diagnostics,
+  separately enabled Pod Exec, and bounded diagnostic Pods.
+- Typed restart, scale, rollback, one ordinary controller-owned Pod delete,
+  cordon, uncordon, and drain operations.
+- Default-off restricted direct argv integrations for exact `kubectl`, `helm`,
+  `argocd`, or another policy-selected local executable, plus a separate
+  default-off shell risk class.
+- Permission profiles `read-only`, `ask`, `auto-review`, `full-access`, and
+  `custom`; `ask` is the default.
+- A required `agent` model role, an optional `approval_reviewer` role, several
+  explicit named OpenAI-compatible profiles and origins, and no fallback or
+  routing.
+- Standard and minimal Session model-memory modes, explicit resume, direct Eino
+  ADK message-state and summarization reuse, bounded safe summary coverage and
+  recent tail, and capability-aware finite budgets.
+- Informed model-transfer consent, safe local SQLite persistence, retention,
+  deletion, redacted export, durable action audit, and local `/status` and
+  `/permissions` views.
 - macOS and Linux support on `amd64` and `arm64`; Windows remains experimental.
 
-## Read capability catalog
+## Capability contract
 
-The complete initial `v0.4` read catalog is:
+Every model-visible or locally selected capability is compile-time code-owned,
+versioned, strictly decoded, and bound to a task-specific consumer port. It
+must define:
 
-### `get_resource`
+1. the operational need and exact operation schema;
+2. exact API group, version, resource, Kind, verb, Namespace behavior, and RBAC,
+   or exact executable and argv policy;
+3. runtime-injected scope, policy, identity, deadlines, and hard ceilings;
+4. eligible and prohibited source fields, data categories, sinks, and network
+   destinations;
+5. projection, normalization, sensitive-value handling, consent, and retention;
+6. finite call, time, item, page, sample, line, byte, stream, traversal, output,
+   and cost limits;
+7. partial, cancellation, timeout, conflict, stale-generation, and ambiguous-
+   outcome behavior;
+8. deterministic Evidence or verification mapping; and
+9. request-recording success and zero-call denial tests.
 
-Reads one exact allowlisted resource and returns a bounded summary or diagnostic
-projection. Namespaced resources default to the working Namespace and may use
-an explicit Namespace under `all` policy. Cluster-scoped resources reject a
-Namespace argument.
+`describe` is a conversational result over typed projections and fixed
+relationships. Query/count/table uses code-defined fields and operators.
+Neither is a subprocess or an arbitrary selector/template language.
 
-### `list_resources`
+Lists and queries use safe server-side filtering where the exact API supports
+it. Runtime owns continuation tokens and pagination and enforces per-page and
+aggregate page, item, byte, and time ceilings. Partial or truncated results are
+explicit; a model cannot inject a continuation token or increase a ceiling.
 
-Lists one allowlisted Kind with an optional bounded name query and health
-filter. It accepts the working Namespace, an explicit Namespace, or the explicit
-all-Namespace marker when policy and resource scope allow it. It never accepts a
-raw selector or pagination token.
+Built-in membership and CRD policy are versioned independently from the model.
+An exact CRD policy names group, version, resource, Kind, namespaced or cluster
+scope, allowed verbs, allowed projected fields, limits, and Evidence mapping.
+No unknown or discovered CRD is available merely because RBAC permits it.
 
-### `get_cluster_overview`
+## Scope and policy generations
 
-Returns a bounded, typed Namespace and Node health summary. It is not API
-discovery and does not return Node addresses, provider IDs, allocatable values,
-taint values, annotations, or Namespace contents. Its limit is one combined
-total from 2 through 50, shared across the two fixed lists so neither Kind can
-consume the entire request.
+The working Namespace remains the default target and visible UI context:
 
-### `get_events`
+- `current` permits namespaced operations only in the working Namespace.
+- `all` permits a validated explicit Namespace and an explicit bounded all-
+  Namespace read in the same Context when the operation and RBAC allow it.
+- Cluster-scoped resources carry no fake Namespace.
+- No policy permits another Context in the same AgentRun.
 
-Returns recent bounded normalized Events for one exact allowlisted resource.
-The target Namespace follows the same explicit policy as `get_resource`.
+A Context, Namespace, or namespace-policy change advances scope generation
+before cancelling old work. A permission profile, capability policy, Session
+rule, relevant data-source policy, or origin-policy change advances policy
+generation before invalidating old work. Pending reviews, approvals, Session
+rules, ActionEnvelopes, and late results from either old generation are unusable.
 
-### `get_pod_logs`
+## Permission and risk scope
 
-Returns one non-following current container-output tail for one exact Pod and
-container. Container output remains disabled until the user enables its consent
-category. The Namespace is explicit and policy-bound.
+Risk classes are `safe`, `review`, `critical`, and `deny`; only deterministic
+code can classify them.
 
-### `get_previous_pod_logs`
+- `read-only` permits safe reads automatically and human-routed admitted
+  sensitive reads, while denying writes, Pod Exec, diagnostic Pods, and local
+  processes.
+- `ask` is the default and routes `review` and `critical` to the human.
+- `auto-review` routes only `review` to the optional Reviewer and keeps
+  `critical` human-routed.
+- `full-access` automatically routes admitted `review` and `critical` only
+  after explicit high-risk selection and policy permission.
+- `custom` defines exact routes without creating a capability or lowering its
+  risk. `critical` defaults to human and can never be Reviewer-routed.
 
-Uses the same bounds and policy as `get_pod_logs`, but requests the previous
-container instance.
+`deny` cannot be approved. A profile never grants RBAC, changes scope, enables a
+default-off operation, bypasses consent/audit/revalidation, or exposes a
+credential. Human Session rules are current-process, current-Session, expiring,
+revocable, and limited to exact `review` work; they are never resumed.
 
-### `get_related_resources`
+## Read and observability scope
 
-Follows only code-defined relationships from one exact root inside the root's
-Namespace. Relationship depth, nodes, and edges are runtime ceilings. It never
-performs recursive discovery or crosses Namespace boundaries implicitly.
+The P0 read surface includes reviewed built-in workload, batch, networking,
+storage, autoscaling, disruption, RBAC-status, and cluster-health projections;
+the exact implemented list must be published and tested before reachability.
+The catalog also includes the explicit CRD policy described above.
 
-Every capability has strict input decoding, canonical arguments, runtime-
-injected Context and ceilings, pre- and post-I/O generation checks, project-
-owned projection, sensitive-value handling, and deterministic Evidence.
+Events and all log modes are bounded and non-following. Log search is local over
+the bounded retrieved projection, not a second unbounded query. Pod and Node
+metrics have fixed sample and field projections. Prometheus and Loki are
+optional explicit data sources, not implicit fallbacks; a missing source leaves
+an honest gap.
 
-## Resource source allowlist
+A Secret may contribute only a safe metadata projection; Secret values,
+ServiceAccount tokens, kubeconfig, credentials, raw objects, generic YAML,
+managed fields, unrestricted annotations, device data, and unbounded output
+remain hard exclusions. An exact ConfigMap key or non-credential container
+environment value may be admitted only through a versioned policy, is at least
+`review`, and requires data-category consent and sink policy. Generic dumps,
+bulk values, and unlisted fields remain denied; redaction does not make them
+eligible.
 
-<!-- markdownlint-disable MD013 -->
+## Execution and remediation scope
 
-| API | Direct Kinds | Data boundary |
+The typed operations and their base risk are:
+
+| Operation | Target boundary | Base risk |
 | --- | --- | --- |
-| core `v1` | Namespace, Node, Pod, Service, PersistentVolumeClaim, PersistentVolume, ConfigMap | ConfigMap metadata only; no `data` or `binaryData`. Node addresses, images, provider IDs, system info, and volume source details are excluded. |
-| `apps/v1` | Deployment, ReplicaSet, StatefulSet, DaemonSet | Bounded metadata, replica status, conditions, and fixed relationships. No Pod template environment, volume source, or arbitrary annotations. |
-| `batch/v1` | Job, CronJob | Job status and conditions; CronJob activity and suspend state. No schedule or embedded Pod/Job template data. |
-| `networking.k8s.io/v1` | Ingress | Identity and creation time only; no class, rules, backends, addresses, arbitrary annotations, or Secret references. |
-| `autoscaling/v2` | HorizontalPodAutoscaler | Desired/current replica counts and one bounded failing-condition reason; no target identity or raw metrics. |
-| `policy/v1` | PodDisruptionBudget | Bounded desired/current health and disruption counts; no raw selector. |
+| Restart | One exact Deployment; only Kupilot's restart annotation | `review` |
+| Scale | One exact Deployment or StatefulSet | Positive delta of one is `review`; scale-to-zero or another delta is `critical` |
+| Rollback | One exact Deployment and freshly validated prior ReplicaSet revision | `critical` |
+| Delete Pod | One exact controller-owned ordinary Pod | `review`; force, grace-zero, bulk, unmanaged, static, and mirror Pods are denied |
+| Cordon/uncordon | One exact Node and only `spec.unschedulable` | `review` |
+| Drain | One exact Node and a bounded complete eligible Pod target set | `critical`; no force, delete-emptydir, or ignore-daemonset escape hatch |
 
-<!-- markdownlint-enable MD013 -->
+Container file read is `review`. Predefined read-only Pod diagnostic argv is
+`review`; other Pod Exec and diagnostic Pods are `critical` and default off.
+Restricted local argv is default off and risk-classified from exact behavior.
+It uses a policy-selected executable and argv, fixed validated working
+directory, allowlisted minimal environment, and finite process/output lifetime.
+Shell is always separate, `critical`, and default off; its own schema binds one
+exact bounded command string. OS sandboxing is not a substitute for Kubernetes
+scope, RBAC, remote target, network, data, and audit controls.
 
-EndpointSlice remains an indirect Service-read source and contributes readiness
-counts only. Secret is denied as both a direct and related source. Unknown and
-custom resources are denied before a Kubernetes call whenever locally
-decidable.
+Every such operation uses one immutable digest-bound `ActionEnvelope`, current
+target and generation revalidation, durable pre-operation audit, at most one
+external attempt, fail-closed unknown outcome, and a separate verification
+plan. Generic patch/apply/edit/delete/YAML and command fallback remain denied.
 
-## Namespace policy
+## Model and Session scope
 
-The working Namespace remains mandatory because it anchors default intent,
-resource selection, action targets, and the persistent footer.
+All profiles use the one `openai_compatible` protocol kind. Each role binds one
+explicit profile and origin. There is no automatic discovery, fallback, router,
+load balancing, cross-origin retry, or model-selected endpoint. Credentials are
+opaque and consent is role-, origin-, policy-, and category-bound.
 
-- `current` permits only that Namespace for namespaced resources and denies
-  all-Namespace lists locally.
-- `all` permits a validated explicit Namespace and the explicit all-Namespace
-  list marker. It does not bypass API-server RBAC.
-- Cluster-scoped resources use no Namespace and never inherit a fake one.
-- No policy permits another Context or cluster during the same run.
+Every AgentRun after the first question in a Session must receive one ordered,
+bounded representation of all retained eligible prior user and final assistant
+messages. Standard mode supplies it in process and after explicit cross-process
+resume; minimal mode supplies it only from same-process context and persists no
+model memory. Resume itself only loads local eligible history and unverified
+candidates; the next explicit question is the earliest possible model transfer.
+A failed consent, generation, coverage, or budget gate causes zero model calls,
+not a current-question-only fallback.
 
-A committed Context, working-Namespace, or namespace-policy change increments
-the generation, cancels the run, clears resource and approval state, and rejects
-late results at all three scope gates.
+History never restores operational authority. Eino ADK `ChatModelAgent`,
+`Runner`, message state, and summarization middleware are reused directly
+inside the sole adapter. The stable implementation path is the existing safe
+SQLite messages through a thin ordered bridge until a stable Eino runner-
+managed Session passes ADR-0047's adoption gate.
 
-## Action catalog
+## Finite budgets
 
-`restart_deployment` is the only currently composed write operation. It is
-proposed through typed Agent output and requires the approval contract in
-ADR-0012. The approved diff changes only `kupilot.io/restartedAt` on one exact
-Deployment Pod template.
-
-No current action performs scale, delete, apply, generic patch, rollback, exec,
-port forwarding, Helm, batch mutation, or automatic remediation. These are not
-permanent product prohibitions, but each requires a separate typed design and
-Accepted decision before it can enter the catalog.
-
-## Execution budgets
-
-The compact, balanced, and extended profiles and hard ceilings are normative in
-ADR-0039. Configuration selects a profile before a run. Model text, Tool output,
-and a partial result cannot expand it. `/status` shows usage and remaining run
-time; reaching a limit produces a safe partial answer or terminal explanation.
+Budget profiles remain immutable for a run and include independent Agent,
+Reviewer, summary, capability, Kubernetes, data-source, remote-exec, local-
+process, byte, item, line, sample, stream, wall-time, and cost reservations.
+Model or Tool output cannot expand them. Exact token windows, request/output
+tokens, stream behavior, and summary thresholds are not universal constants;
+they require tagged dependency source/tests and selected-endpoint evidence.
 
 ## Explicit non-goals
 
-- A primary resource table, tree, dashboard, full YAML view/editor, or raw log
-  browser.
-- Shell, kubectl, Pod Exec, command generation/execution, or arbitrary HTTP.
-- Watch, informer, continuous live monitoring, background scan, scheduled run,
-  or controller behavior.
-- Generic Kubernetes discovery exposed to the model, custom resources, dynamic
-  plugins, MCP, RAG, retrievers, or Multi-Agent orchestration.
-- Cross-cluster diagnosis or concurrent active AgentRuns.
-- Autonomous approval or remediation.
+- A primary resource table/tree, dashboard, full YAML view/editor, raw log
+  browser, action menu, shell console, or second editor.
+- Model-selected arbitrary Kubernetes API, selector, destination, image,
+  executable, flag, stdin, runner command, patch, YAML, or unlimited output;
+  the exact bounded command field of an explicitly enabled shell operation is
+  the only separate exception and remains `critical`.
+- Watch, informer, continuous monitoring, background scan, scheduled run,
+  controller behavior, or autonomous remediation.
+- Cross-cluster diagnosis or simultaneous active AgentRuns.
+- Dynamic plugins, MCP, RAG, retrievers, generic framework facades, or
+  Multi-Agent orchestration.
+- Provider auto-detection, fallback, routing, load balancing, or a Reviewer as
+  permission authority.
 
-## Capability admission gate
+## Evidence levels
 
-A new source or action must identify the operational need and document:
+Deterministic CI with scripted models, request-recording Kubernetes fixtures,
+local HTTP servers, direct process fixtures, and real temporary SQLite files is
+the required correctness and security proof. It uses no real cluster, model,
+credential, or public network.
 
-1. the exact typed API, verb, scope, and RBAC impact;
-2. strict model schema and runtime-injected authority;
-3. allowed and prohibited source fields;
-4. projection, normalization, sensitive-data, consent, and retention behavior;
-5. time, item, byte, call, retry, and traversal budgets;
-6. partial, cancellation, timeout, conflict, and stale-scope behavior;
-7. deterministic Evidence or action-state mapping;
-8. request-recording success and zero-call denial tests; and
-9. why the capability helps the conversational Agent rather than creating a
-   parallel cluster interface.
-
-An action must additionally define the semantic diff, digest fields, approval
-copy, TTL, revalidation, concurrency precondition, audit transaction, ambiguous
-outcome behavior, and verification states.
+Opt-in tagged live integration may establish compatibility for one exact
+Kubernetes/model/data-source/tool version. Model evaluation separately measures
+Agent quality and Reviewer decisions, escalation, cost, and latency. Neither
+live integration nor evaluation replaces deterministic CI or generalizes to an
+untested endpoint or version.
 
 ## References
 
 - [Product Contract](product.md)
 - [Architecture](architecture.md)
 - [Security Threat Model](security.md)
-- [Privacy Overview](privacy-overview.md)
-- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
-- [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)
+- [Operational and Diagnostic Capabilities](diagnostic-capabilities.md)
+- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

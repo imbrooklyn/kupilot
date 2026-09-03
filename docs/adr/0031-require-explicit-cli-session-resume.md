@@ -2,7 +2,15 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0042
+- Amended by: ADR-0042 and ADR-0047
+
+ADR-0047 requires the next explicitly submitted question in a resumed standard
+Session to include one ordered, bounded representation of all retained eligible
+safe history when such history exists and current role/origin/category consent,
+scope, policy, and budget checks pass. A failed gate causes zero model calls;
+resume itself still performs zero model, Kubernetes, Tool, Reviewer, approval,
+process, or executor I/O and restores no historic scope, Evidence, action,
+permission, or execution authority.
 
 ## Context
 
@@ -137,3 +145,4 @@ and the `help` and `version` short circuits.
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0042: Remember the Last Verified Kubernetes Context](0042-remember-the-last-verified-kubernetes-context.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](0047-reuse-eino-adk-for-session-context-and-summarization.md)

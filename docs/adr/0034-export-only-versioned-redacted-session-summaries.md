@@ -2,6 +2,11 @@
 
 - Status: Superseded by ADR-0041
 - Date: 2026-08-14
+- Amended by: ADR-0047 after supersession
+
+ADR-0047 further amends the current export contract through ADR-0041 by adding
+only the safe Session summary and coverage explanation. This document remains
+the historical v1 export decision and does not admit raw framework state.
 
 ## Context
 
@@ -145,6 +150,7 @@ fake clocks, and fake TUI consumers to cover:
 - [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
 - [ADR-0025: Enforce Data Retention and User Deletion](0025-enforce-data-retention-and-user-deletion.md)
 - [ADR-0031: Require Explicit CLI Session Resume](0031-require-explicit-cli-session-resume.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [Data Retention Contract](../data-retention.md)
 - [Privacy Overview](../privacy-overview.md)
 - [Security Threat Model](../security.md)

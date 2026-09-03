@@ -2,11 +2,16 @@
 
 These terms are canonical public product language.
 
+The checked-in implementation remains the `v0.4` baseline. Terms marked as
+`v0.5` targets describe the Accepted next implementation contract, not current
+reachability.
+
 ## AgentRun
 
 One bounded execution created for an operational question. Only one AgentRun is
 active at a time. It is bound to an immutable ClusterScope, capability catalog,
-consent tuple, and budget profile and is never silently resumed.
+consent tuple, permission policy generation, and budget profile and is never
+silently resumed.
 
 ## ClusterScope
 
@@ -46,7 +51,9 @@ input candidate, not proof of existence; a run capability must verify it.
 The local conversation container for messages and completed AgentRuns across
 launches. A Session is not live Kubernetes authority. Bare startup creates a
 new Session; explicit resume restores safe history and unverified candidates
-only.
+only. Under the `v0.5` target, every later question receives one ordered,
+bounded representation of retained eligible prior same-Session turns; resume
+itself performs no external I/O and historic state restores no authority.
 
 ## ToolInvocation
 
@@ -58,14 +65,38 @@ or mutation.
 ## Proposed action
 
 Descriptive typed output from the Agent. It carries no nonce, digest, target
-fingerprint, or executor authority. The current catalog admits only an exact
-Deployment restart proposal in the working Namespace.
+fingerprint, or executor authority. The current `v0.4` catalog admits only an
+exact Deployment restart proposal. The `v0.5` target admits only the typed P0
+operations in the Product Contract, each of which must first become a locally
+validated ActionEnvelope.
+
+## Permission profile
+
+A deterministic local routing policy for `safe`, `review`, `critical`, and
+`deny` operations. `ask` is the default. A profile does not create technical
+capability, grant Kubernetes RBAC, widen scope or consent, lower risk, or
+override a hard denial.
+
+## Reviewer
+
+The optional `approval_reviewer` model role. It may return a bounded decision
+input only for delegated `review` work. It is not permission authority, cannot
+review `critical` work, and receives no executor.
+
+## ActionEnvelope
+
+The immutable versioned local representation of one sensitive or effectful
+operation. Its canonical digest binds exact scope, policy, target, typed
+parameters or policy-owned executable and argv, effects, limits, expiry, and
+verification plan. Model prose, Reviewer rationale, and UI text cannot create
+or modify it.
 
 ## Approval
 
-A local, default-reject, 60-second, single-use request created only after fresh
-trusted target preparation. It binds the operation and target state through a
-versioned digest. Model or TUI prose cannot create it.
+A local, default-reject request whose approved state expires after 60 seconds
+and is single-use. It is created only after fresh target or executable-policy
+preparation and binds one ActionEnvelope through a versioned digest. Model,
+Reviewer, or TUI prose cannot create it.
 
 ## Agent-first
 

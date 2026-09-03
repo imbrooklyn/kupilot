@@ -3,6 +3,18 @@
 - Status: Accepted
 - Date: 2026-08-30
 - Supersedes: ADR-0009, ADR-0011, ADR-0024, and ADR-0029
+- Amended by: ADR-0044 and ADR-0045
+
+ADR-0044 defines the broader `v0.5` daily-operations P0 catalog, explicit CRD
+policy, observability sources, permission profiles, and capability-aware finite
+budgets. ADR-0045 admits typed remediation and controlled remote/local
+execution through `ActionEnvelope`. The strict versioned catalog, deterministic
+Evidence, explicit scope, bounded projection, and prohibition on dynamic model
+authority remain normative. The exact built-in list and restart-only examples
+below describe the earlier catalog revision. ADR-0044 also replaces the blanket
+ConfigMap-value and container-environment prohibition below with exact
+policy-admitted sensitive reads; safe Secret metadata is distinct from Secret
+values, which remain denied.
 
 ## Context
 
@@ -118,3 +130,5 @@ persistence failure, or ambiguous prior outcome.
 - [Security Threat Model](../security.md)
 - [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
 - [ADR-0014: Isolate Runs with ClusterScope Generation](0014-cluster-scope-generation-isolation.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)

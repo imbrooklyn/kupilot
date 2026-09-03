@@ -1,5 +1,10 @@
 # Supporting Observation Details
 
+This interaction remains normative for the Accepted `v0.5` target. The
+checked-in binary still exposes only `v0.4` Evidence sources; future CRD,
+metrics, optional data-source, file, remote diagnostic, and process projections
+must pass the same deterministic provenance and safe-display boundary.
+
 Internally, every confirmed fact remains bound to machine-checked Evidence from
 the current diagnostic run. The normal interface presents these records as
 supporting observations and does not expose their correlation identifiers. An
@@ -31,7 +36,7 @@ An available detail contains only these bounded fields:
 - historic Context and Namespace;
 - UTC observation time;
 - a friendly observation type such as `Condition`, `Kubernetes event`, or
-  `Service readiness`;
+  `Service readiness`, `Metric sample`, or `Diagnostic result`;
 - `complete` or `partial` status;
 - a warning only when sensitive values were filtered; and
 - a locally revalidated concise projection of at most 512 UTF-8 bytes.
@@ -52,7 +57,9 @@ bodies, and other non-allowlisted metadata.
 
 Explicitly resumed history can restore machine-checked links to retained
 supporting observations. It does not restore an active diagnostic run,
-cluster-read authority, live scope, or resource verification. A scope change
+cluster-read authority, live scope or policy generation, permission rule,
+Reviewer decision, ActionEnvelope, approval, execution, or resource
+verification. A scope or policy change
 closes any pending detail request, and late results cannot replace detail in the
 current Context.
 
@@ -63,7 +70,14 @@ reuses the fixed source allowlist, text normalizer, sensitive-value filter, and
 byte ceiling before creating the TUI ViewModel. Kupilot never reconstructs a
 detail from a raw Kubernetes object or raw persistence payload.
 
-Raw Tool results, complete container logs, YAML, Secret data, annotations, IP
-addresses, credentials, kubeconfig content, complete model traffic, and model
-responses are never eligible for this view. Missing data and identity mismatch
-fail closed with a fixed safe state rather than exposing adapter errors.
+Raw Tool results, complete container logs, metrics series, files, process
+output, optional-source responses, YAML, Secret values, unrestricted
+annotations, IP addresses, credentials, kubeconfig content, complete model
+traffic, and Reviewer responses are never eligible for this view. Missing data
+and identity mismatch fail closed with a fixed safe state rather than exposing
+adapter errors.
+
+Action acceptance, ambiguous outcome, progress, cleanup, and verification are
+typed runtime states, not Evidence fabricated from model prose. A later
+verification observation cannot rewrite whether an external attempt may have
+occurred.

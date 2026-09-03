@@ -1,5 +1,13 @@
 # Kubernetes Compatibility
 
+- Status: Accepted `v0.5` target with current dependency evidence
+- Date: 2026-09-03
+
+The checked-in runtime remains the `v0.4` implementation. The dependency pins
+and request mappings below describe current evidence; the broader `v0.5`
+capabilities are not reachable until exact client-go APIs, RBAC, projections,
+and deterministic fixtures are implemented and verified.
+
 Kupilot pins `k8s.io/client-go v0.35.7` together with matching `k8s.io/api` and
 `k8s.io/apimachinery` modules. The upstream module requires Go 1.25.0. Kupilot
 does not support mixed Kubernetes module minors.
@@ -20,6 +28,31 @@ client-go.
 Older and newer minors are outside the supported matrix. Discovery never
 expands the surface, and this matrix is not a claim that every client-go API is
 supported.
+
+## Accepted `v0.5` Kubernetes surface
+
+The target catalog adds reviewed stable built-ins and exact policy-admitted
+CRDs, conversational `describe`, bounded query/count/table, Events, current/
+previous/all-container logs and local search, Pod/Node metrics, container-file
+read, Pod diagnostics, diagnostic Pods, and typed restart/scale/rollback/Pod
+delete/cordon/uncordon/drain.
+
+The target also admits an exact safe Secret-metadata projection and, only under
+a separately consented `review` policy, one exact ConfigMap key or
+non-credential container environment value. Secret values, generic or bulk
+values, full objects, and credential-shaped data remain denied.
+
+Every built-in maps to a typed task-specific client-go operation. An exact CRD
+policy names group, version, resource, Kind, scope, verbs, projected fields,
+limits, and Evidence mapping; discovery may validate availability but never
+grants model authority. Any dynamic client required inside `internal/kube` is
+confined behind the exact consumer-owned CRD port and never crosses as GVR,
+object, REST, discovery, or generic operation authority.
+
+Optional Prometheus and Loki sources are not Kubernetes API calls and use their
+own explicitly configured boundaries. Restricted local `kubectl`, `helm`, or
+`argocd` argv is not a Kubernetes adapter fallback and cannot replace typed P0
+operations.
 
 ## Kubeconfig loading
 
@@ -44,7 +77,8 @@ inside `internal/kube`.
 
 Each selected Context owns a fresh bundle with:
 
-- User-Agent `kupilot/0.4`;
+- the currently implemented User-Agent `kupilot/0.4`, to be versioned with the
+  future `v0.5` runtime rather than changed by this documentation work;
 - QPS 5 and Burst 10;
 - a Kubernetes request deadline selected from the immutable run profile, at
   most 60 seconds and no later than the owning run deadline;
@@ -80,7 +114,7 @@ For run reads:
 - Kubernetes RBAC remains mandatory for every request.
 - Cluster-scoped references contain no Namespace.
 
-## Typed direct reads
+## Implemented `v0.4` typed direct reads
 
 <!-- markdownlint-disable MD013 -->
 
@@ -113,11 +147,15 @@ selector, continuation token, or Watch flag. All-Namespace behavior is a
 separate explicit boolean in the internal port, never inferred from an empty
 Namespace.
 
-Secret, arbitrary custom resources, admission objects, RBAC objects, generic
-discovery, and unknown API versions are denied before a Kubernetes call when
-locally decidable.
+Secret values, arbitrary custom resources without an exact policy entry,
+admission objects, generic discovery authority, and unknown API versions are
+denied before a Kubernetes call when locally decidable. The `v0.5` target's
+Secret-metadata, exact ConfigMap-key, non-credential environment, and
+RBAC-status projections each require explicit catalog fields and must never
+include credentials or authorization tokens. This does not change the current
+`v0.4` table above.
 
-## Events, logs, and relationships
+## Events, logs, metrics, and relationships
 
 - Events use an exact code-built `involvedObject` selector and return at most 50
   normalized entries. A cluster-scoped target may require a cluster-wide Event
@@ -125,12 +163,16 @@ locally decidable.
 - Current and previous Pod logs use exact namespaced `pods/log` GETs. There is
   no follow mode. Each call is capped at 200 lines, 15 minutes, and 64 KiB and
   additionally requires the enabled container-output consent category.
+- `v0.5` adds an explicit bounded all-container mode and local search over the
+  already bounded projection; neither follows output or expands its window.
+- Pod and Node metrics use the typed metrics API with fixed fields, sample and
+  byte limits, observation time, and explicit unavailable or stale state.
 - Relationship traversal is code-defined and remains within the root
   Namespace, at most two hops, 25 nodes, and 40 edges.
 - EndpointSlice contributes only address-free ready/not-ready counts through
   the fixed Service relationship.
 
-## Supervised Deployment restart
+## Implemented `v0.4` supervised Deployment restart
 
 The sole mutation adapter supports one exact `apps/v1` Deployment. Proposal
 preparation and post-approval revalidation use exact GETs. Execution uses one
@@ -142,20 +184,54 @@ version, template fingerprint, generation, or concurrency precondition. No
 automatic write retry is allowed. Rollout verification performs bounded exact
 Deployment GETs and never changes the prior write outcome.
 
+## Accepted `v0.5` remote diagnostics and remediation
+
+- Container-file read binds one exact Pod/container/path and denies unsafe
+  symlinks, credential and ServiceAccount paths, devices, and unsafe pseudo-
+  filesystems before returning a bounded projection.
+- Predefined read-only Pod diagnostics and separately gated other Pod Exec bind
+  exact Pod/container identity and argv and use the client-go remote-command
+  path without a shell. Stdin, TTY, output, time, data, sink, and network
+  effects are explicit.
+- Diagnostic Pods use a policy-selected pinned image, non-root security
+  context, no privilege, read-only root filesystem, no host mounts or host
+  network, finite resources and lifetime, disabled ServiceAccount-token
+  automount, exact in-cluster target, and separately audited create,
+  observation, delete, and ambiguous-cleanup states. An image allowlist is not
+  a NetworkPolicy guarantee.
+- Scale targets one exact Deployment or StatefulSet. Rollback targets one exact
+  Deployment and freshly validated ReplicaSet revision. Pod delete targets one
+  ordinary controller-owned Pod and denies force, grace-zero, bulk, unmanaged,
+  static, or mirror cases. Cordon/uncordon change only one Node's
+  `spec.unschedulable`. Drain binds one Node and a bounded complete eligible Pod
+  set and admits no force, delete-emptydir, or ignore-daemonset escape hatch.
+  Each pre-bound drain mutation is attempted and audited at most once.
+
+Every operation uses a versioned `ActionEnvelope`, fresh UID/resource-version
+or operation-specific fingerprint, scope and policy generations, durable pre-
+operation audit, at most one attempt, fail-closed ambiguous outcome, and a
+separate verification plan. Generic patch/apply/edit/delete/YAML is not an
+adapter API.
+
 ## Exec credential authentication
 
-Exec credential authentication is the only admitted external process. The
-program and arguments come only from the selected kubeconfig, execute directly
-without a shell, receive a filtered environment without the model key, have
-bounded output, and terminate with the owning request or bundle. `deny` rejects
-an exec-bearing Context before launch. Kupilot does not validate or control the
-external program's own network behavior.
+Exec credential authentication remains a distinct adapter-owned external
+process. Its program and arguments come only from the selected kubeconfig,
+execute directly without a shell, receive a filtered environment without model
+or Kubernetes credentials unrelated to authentication, have bounded output,
+and terminate with the owning request or bundle. `deny` rejects an exec-bearing
+Context before launch. The separate `v0.5` restricted local argv and shell
+capabilities never reuse credential-plugin output or authority. Kupilot does
+not validate or control an external program's own network behavior.
 
 ## Verification boundary
 
 Deterministic tests assert exact verbs, groups, versions, resource paths,
-Namespaces, subresources, selectors, limits, projections, cancellation, and
-zero-action denials. Request-recording HTTP fixtures supplement client-go
+Namespaces, subresources, selectors, bodies, preconditions, limits,
+projections, cancellation, scope/policy generation, remote-command settings,
+diagnostic-Pod security context and cleanup, and zero-action denials. Every
+typed action distinguishes attempt and verification and proves no automatic
+retry after ambiguity. Request-recording HTTP fixtures supplement client-go
 object fakes because the fake alone is not a security oracle.
 
 ## References
@@ -165,3 +241,5 @@ object fakes because the fake alone is not a security oracle.
 - [Least-Privilege RBAC](rbac/README.md)
 - [ADR-0007](adr/0007-use-client-go-behind-narrow-kubernetes-ports.md)
 - [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)

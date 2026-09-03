@@ -1,126 +1,146 @@
 # Operational and Diagnostic Capabilities
 
-Kupilot answers Kubernetes operational questions through a versioned catalog
-of typed, bounded capabilities. Support means the Agent can gather a safe
-Evidence path and explain what it observed. It does not guarantee that every
-incident has an observable cause or that model interpretation is correct.
+- Status: Accepted `v0.5` target
+- Date: 2026-09-03
 
-The [Product Contract](product.md) and [Scope](scope.md) are authoritative.
+The checked-in implementation remains the narrower `v0.4` catalog. This page
+defines the P0 capability target and must not be read as a claim that the new
+Tools, RBAC, configuration, migrations, or tests already exist.
+
+Kupilot answers operational questions through a versioned, compile-time
+catalog of typed, bounded capabilities. Support means the Agent can gather a
+safe Evidence path or present a controlled action. It does not guarantee that
+every incident has an observable cause or that model interpretation is correct.
 
 ## Common contract
 
-The visible result is free-form Markdown. It can be a one-line answer, table,
-comparison, checklist, or longer investigation. The local final-response
-protocol separately carries Evidence citations and typed proposed actions.
+Every entry has a strict schema, canonical arguments, immutable scope and
+policy generations, deterministic risk, runtime-injected ceilings, a task-
+specific consumer-owned port, project-owned projection, sensitive-data and
+consent treatment, stable partial/error behavior, deterministic Evidence or
+verification mapping, exact RBAC impact, and request-recording tests.
 
-Only deterministic Tool handlers create Evidence. User text, Kubernetes text,
-model prose, and a proposed action cannot create an observation, change scope,
-broaden a budget, grant approval, or claim execution. Permission denial,
-absence, stale data, conflict, sensitive-output blocking, partial data, and
-truncation remain visible gaps.
+Only deterministic local handling creates Evidence, permission, approval,
+attempt, or verification state. User text, Kubernetes text, model prose,
+Reviewer rationale, and an action proposal create no authority. Unknown,
+malformed, stale, sensitive, denied, and over-budget inputs fail closed.
 
-## Read catalog
+No capability accepts a Context, kubeconfig, credential, model origin,
+arbitrary GVR, raw selector, executable, image, destination, command string,
+YAML, stdin, deadline, hard limit, or generic payload from the model.
 
-| Capability | Operational use | Fixed boundary |
+## P0 read and observability matrix
+
+| Category | Operational use | Required boundary |
 | --- | --- | --- |
-| `get_resource` | Inspect one exact resource. | One allowlisted Kind and exact name; bounded summary or diagnostic projection. |
-| `list_resources` | Find or compare resources by safe name and health projection. | One Kind; bounded name query and health filter; no raw selector. |
-| `get_cluster_overview` | Summarize Namespace and Node health. | Two fixed typed lists share one combined 2-through-50 limit; no discovery, addresses, provider IDs, images, system data, or capacity maps. |
-| `get_events` | Correlate recent Kubernetes Events with one target. | Exact involved-object selector, bounded time and count, normalized projection. |
-| `get_pod_logs` | Inspect a current Pod container tail. | One exact Pod/container, no follow, consent required, strict line/window/byte limits. |
-| `get_previous_pod_logs` | Inspect a prior container instance. | Same constraints as current logs, with `previous=true`. |
-| `get_related_resources` | Follow controller, workload, Service, and readiness relationships. | Code-defined same-Namespace edges, at most two hops, 25 nodes, and 40 edges. |
+| Built-in `get`/`list` | Inspect and compare reviewed stable Kubernetes resources. | Exact typed API and project projection; explicit Namespace semantics; no raw object or discovery expansion. |
+| CRD `get`/`list`/`describe`/query | Inspect, explain, or compare an organization-approved custom resource. | Exact policy names group, version, resource, Kind, scope, verbs, fields, predicates, limits, and Evidence; absent entry is `deny`. `Describe` and query are local operations over the admitted projection. |
+| Conversational `describe` | Explain one resource using typed status, Events, and fixed relationships. | Assembled locally from admitted capabilities; never a kubectl subprocess or YAML dump. |
+| Query/count/table | Answer bounded inventory and comparison questions. | Code-defined fields, filters, aggregations, ordering, and limits; no arbitrary selector, JSONPath, template, or `jq`. |
+| Events | Correlate recent Events with an exact target or bounded scope. | Fixed selectors, time/count/byte bounds, normalization, and partial state. |
+| Current/previous/all-container logs | Inspect explicit bounded non-following container output. | Exact Pod/container set, line/window/byte limits, consent, normalization, sensitive blocking, and no raw persistence. Init or ephemeral containers are excluded unless the exact schema admits them. |
+| Log search | Find a bounded pattern in already bounded admitted output. | Local code-defined search; cannot expand source window or become a remote shell/regex denial-of-service path. |
+| Pod/Node metrics | Inspect bounded current resource usage and pressure signals. | Typed metrics API, fixed fields/samples, explicit unavailable/stale state, no unbounded time series, and no automatic Metrics Server installation. |
+| Prometheus | Query an explicitly configured optional metrics source. | Exact origin, credential, query templates, labels/fields, time range, samples, consent, and budget; no implicit fallback. |
+| Loki | Query an explicitly configured optional log source. | Exact origin, credential, query templates, labels/fields, range/line/byte bounds, consent, and budget; no implicit fallback. |
 
-Direct resources are Namespace, Node, Pod, Service,
-PersistentVolumeClaim, PersistentVolume, ConfigMap metadata, Deployment,
-ReplicaSet, StatefulSet, DaemonSet, Job, CronJob, Ingress,
-HorizontalPodAutoscaler, and PodDisruptionBudget.
+Source allowlisting occurs before projection, normalization, sensitive-value
+handling, limits, neutral serialization, and final role/origin/category consent.
+Lists and queries use safe server-side filtering where available and
+runtime-owned pagination with per-page and aggregate ceilings. Partial and
+truncated results are explicit. A Secret may contribute only a safe metadata
+projection; Secret values, ServiceAccount tokens, kubeconfig, raw objects,
+unrestricted annotations, and unbounded output remain hard exclusions. An
+exact ConfigMap key or non-credential container environment value is at least
+`review` and requires a versioned policy, category consent, and sink policy.
+Generic or bulk values remain denied; redaction alone never authorizes an
+unlisted source.
 
-Secret is never a source. ConfigMap `data` and `binaryData`, Pod environment
-values, credential references, raw objects, arbitrary annotations, custom
-resources, and discovery-expanded APIs remain unavailable.
+## P0 remote and local diagnostics
 
-## Namespace behavior
-
-Every run has one verified Context, one visible working Namespace, and one
-immutable namespace policy:
-
-- `current` pins every namespaced read to the working Namespace.
-- `all` also permits a validated explicit Namespace or explicit `*`
-  all-Namespace list in the same Context.
-
-`all` is an Application policy, not an RBAC bypass. Cluster-scoped Namespace,
-Node, and PersistentVolume references contain no fake Namespace. Cross-Context
-and cross-cluster calls are always denied.
-
-## Regression scenarios
-
-Kupilot retains deterministic sufficient- and limited-Evidence fixtures for
-these incident families:
-
-| Scenario | Typical Evidence path | Caution |
+| Capability | Base risk | Required boundary |
 | --- | --- | --- |
-| CrashLoopBackOff | Pod state, Events, previous/current logs, owner. | A log line alone does not prove the root cause. |
-| OOMKilled | Previous termination reason, exit code, restart count, previous logs. | Memory wording in logs does not confirm an OOM kill. |
-| ImagePullBackOff | Waiting reason and pull Events. | Secret data is never read; registry credential failure must remain a hypothesis unless projected Events support it. |
-| Pod Pending | Phase, scheduling condition, Events, owner, relevant Node status. | Missing Events do not prove capacity shortage. |
-| Readiness failure | Ready/container state, Unhealthy Events, bounded logs. | Service unavailability alone does not prove probe failure. |
-| Deployment unavailable | Replica counts/conditions, ReplicaSet and Pod graph, Events. | Controller state does not by itself identify the underlying Pod cause. |
-| Job failed | Job counts/condition, related Pods, Events, bounded logs when enabled. | A failed count does not prove an application error. |
-| Service without ready endpoints | Service projection, matching Pods, address-free EndpointSlice readiness counts. | Partial relationship data cannot prove a zero-backend conclusion. |
+| Container file read | `review` | Exact Pod UID/container/normalized path; rechecked in-container symlink resolution; deny credentials, ServiceAccount paths, devices, and unsafe pseudo-filesystems; bounded projected output. |
+| Predefined Pod diagnostic | `review` | One exact read-only policy-owned argv through client-go `pods/exec`; `stdin=false`, `tty=false`, `shell=false`; exact Pod UID/container; finite time/output and owned cancellation. |
+| Other Pod Exec | `critical`, default off | Exact Pod UID/container/executable/argv and data/network/sink effects; stdin, TTY, and shell default off; explicit enablement and decision; no shell smuggling or inherited credential. |
+| Diagnostic Pod | `critical`, default off | Policy-selected pinned image, Namespace, non-root/non-privileged context, read-only root filesystem, no host mounts/network, finite resources/time/output, disabled token automount, exact in-cluster target, and separately audited create/observe/delete/ambiguous-cleanup states. |
+| Restricted local argv | Risk from exact behavior; default off | Policy-selected executable and argv, direct launch with `shell=false`, fixed validated working directory, allowlisted minimal environment, no inherited stdin, owned process group, bounded output, cancellation, and join. |
+| Shell | `critical`, default off | Separate typed operation binding a policy-selected shell and exact bounded command string; never an argv fallback; only explicit full-access or exact custom critical-auto may omit a per-action prompt. |
 
-These fixtures are regression baselines, not a product whitelist. The broader
-typed resource catalog supports ordinary inventory summaries, cross-Namespace
-comparison, workload rollout analysis, Node pressure checks, CronJob/Job
-inspection, storage phase checks, Ingress identity lookup, autoscaling replica
-status, and disruption-budget analysis within the same safety boundaries.
+Restricted `kubectl`, `helm`, and `argocd` integrations are long-tail escape
+valves only when exact verbs, flags, files, destinations, output projections,
+and verification are policy-owned. Kubectl denies Context, kubeconfig,
+credential, token, and impersonation overrides; Helm admits no arbitrary values
+file, stdin, or plugin; Argo CD binds an explicit server origin, credential
+reference, application, revision, and consent. They never replace a typed
+restart, scale, rollback, Pod delete, cordon, uncordon, or drain. An
+operating-system sandbox is not equivalent to Kubernetes RBAC, remote Pod
+isolation, or NetworkPolicy.
 
-## Supervised action
+## P0 typed remediation
 
-The only composed mutation is `restart_deployment` for one exact `apps/v1`
-Deployment in the working Namespace. A typed suggestion triggers one fresh
-local read that derives UID, template fingerprint, and Deployment generation.
-It still performs no write.
+| Operation | Exact semantic boundary | Risk and verification |
+| --- | --- | --- |
+| Restart | One exact `apps/v1` Deployment; change only the Kupilot-owned Pod-template annotation. | `review`; bind UID, template fingerprint, generation, resource version; verify rollout separately. |
+| Scale | One exact Deployment or StatefulSet and an exact replica target. | Positive delta of one is `review`; scale-to-zero or another delta is `critical`; verify desired and observed state. |
+| Rollback | One exact Deployment and one freshly validated prior ReplicaSet revision. | `critical`; bind revision/fingerprints; verify rollout separately. |
+| Delete Pod | One exact ordinary controller-owned Pod. | `review`; force, grace-zero, bulk, unmanaged, static, mirror, or ambiguous ownership is denied; verify replacement/state separately. |
+| Cordon | One exact Node; set only `spec.unschedulable=true`. | `review`; bind UID/resource version and verify the exact field. |
+| Uncordon | One exact Node; set only `spec.unschedulable=false`. | `review`; bind UID/resource version and verify the exact field. |
+| Drain | One exact Node plus a bounded fully materialized eligible Pod set. | `critical`; bind Node/Pod identities, PDB/eviction plan, and exclusions; no force, delete-emptydir, or ignore-daemonset escape hatch. Each pre-bound side effect is attempted and audited at most once. |
 
-Execution requires a default-reject 60-second local approval, digest and nonce
-validation, fresh target revalidation, durable consumed-approval and pre-write
-audit, a final scope check, and at most one fixed merge PATCH. Request
-acceptance, rollout progress, timeout, failure, unknown outcome, and verified
-completion remain distinct states. Kupilot never retries a write automatically.
+Every sensitive or effectful operation first becomes an immutable versioned
+`ActionEnvelope`. Application alone performs policy, permission, fresh target,
+decision, digest, scope/policy generation, durable pre-operation audit, final
+revalidation, and one-attempt execution. Acceptance, failure, ambiguous
+outcome, progress, cleanup, timeout, and verified completion are distinct.
+There is no automatic execution retry.
 
-## Fixed per-capability ceilings
+Generic patch/apply/edit/delete, arbitrary YAML, taint/label/annotate/run,
+wildcard commands, model-selected image/network/executable/flag, cluster-admin,
+Watch/informers, background/scheduled work, and autonomous remediation remain
+denied.
 
-- One ToolResult: 64 KiB.
-- Resource summaries or Events: at most 50 per result.
-- Evidence: at most 100 items per result.
-- Pod logs: at most 200 lines, 15 minutes, and 64 KiB per call.
-- Relationships: two hops, 25 nodes, and 40 edges.
+## Permission routing
 
-Run-wide limits come from the selected compact, balanced, or extended profile;
-see [Agent Runtime](agent-runtime.md). A run can end earlier due to cancellation,
-stale scope, consent, RBAC, no progress, or a smaller remaining deadline.
+`ask` is the default. `read-only` cannot be escalated into mutation, Pod Exec,
+diagnostic Pod, or local process. `auto-review` delegates only `review` to an
+optional strict Reviewer and keeps `critical` human-routed. `full-access` and
+exact custom critical-auto rules require explicit high-risk selection and never
+enable a default-off capability or bypass scope, RBAC, consent, durable audit,
+revalidation, finite budgets, or hard denial.
 
-## Deterministic evaluation
+Human Session rules are narrow, expiring, revocable, limited to `review`, and
+valid only in the current process and Session. They are never created by a
+model or Reviewer and never restored by resume.
 
-Scripted model turns and synthetic Kubernetes observations pass through the
-production Agent adapter, Tool binding, projection, Evidence registry, and
-final-answer validator. They never require a real model or cluster.
+## Finite budgets
 
-The evaluator checks exact Tool names and order, accepted Evidence provenance,
-free-form answer assertions, citation validity, explicit gaps, typed action
-state, bounded output, and zero-call denials. Fixtures contain no real address,
-credential, Secret, kubeconfig, or production output.
+Each capability has independent call, item, page, sample, line, byte, result,
+stream, deadline, and repetition ceilings. Run profiles also reserve finite
+Agent, Reviewer, summary, Kubernetes, optional data-source, remote-exec, local-
+process, wall-time, and cost budgets before I/O. Exact model token and stream
+values require pinned dependency and endpoint evidence; no unresolved path is
+unlimited.
 
-## Remaining limitations
+## Evidence levels
 
-- No Watch, informer, background scan, continuous monitoring, or scheduled run.
-- No arbitrary selector, custom-resource discovery, raw YAML, shell, kubectl,
-  Pod Exec, port forwarding, Helm, or generic patch/apply/delete.
-- Container output is opt-in model content and remains sensitive even after
-  bounded processing.
-- Evidence is a timestamped snapshot and may become stale after observation.
-- Model protocol compatibility and model answer quality are separate concerns.
+Deterministic CI uses scripted models, request-recording Kubernetes and HTTP
+fixtures, direct child-process fixtures, fake clocks/barriers, and real
+temporary SQLite files. It proves exact success and zero-call denial behavior
+without a real cluster, model, credential, or public network.
 
-See [Kubernetes Compatibility](kubernetes-compatibility.md),
-[Model Compatibility](model-compatibility.md), and
-[Least-Privilege RBAC](rbac/README.md).
+Opt-in tagged live integration may prove compatibility for one exact cluster,
+endpoint, data source, or executable version. Model evaluation separately
+measures diagnostic quality and Reviewer decisions, false approval/denial,
+escalation, latency, and cost. Neither replaces deterministic CI or generalizes
+to an untested version.
+
+## References
+
+- [Product Contract](product.md)
+- [Scope](scope.md)
+- [Kubernetes Compatibility](kubernetes-compatibility.md)
+- [Least-Privilege RBAC](rbac/README.md)
+- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)

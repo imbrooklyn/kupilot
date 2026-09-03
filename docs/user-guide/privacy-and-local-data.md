@@ -1,5 +1,9 @@
 # Privacy and Local Data
 
+This page includes the Accepted `v0.5` privacy target. The checked-in `v0.4`
+binary does not yet expose named model roles, new sensitive categories,
+Session summarization, optional data sources, or remote/local execution.
+
 Kupilot orchestrates locally and connects directly to the selected Kubernetes
 API and configured model endpoint. Local orchestration does not mean all
 diagnostic data stays on the workstation. Review both cloud transfer and local
@@ -7,8 +11,8 @@ retention before using Kupilot with a cluster.
 
 ## Cloud model categories
 
-Before the first model-content request, `/privacy` displays the canonical model
-destination, policy version, current decision, and the exact included
+Before the first model-content request, `/privacy` displays the fixed model
+role, named profile, canonical destination, policy version, current decision, and the exact included
 categories using readable labels. The same dialog also displays local
 persistence and retention; those controls do not grant model-transfer consent.
 
@@ -19,8 +23,9 @@ context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
 
 1. `user_question`: the question after local normalization,
    sensitive-value handling, and byte limits.
-2. `safe_conversation_context`: bounded safe context for the current run,
-   including structured Tool results and Evidence when needed.
+2. `safe_conversation_context`: bounded safe context for the current run. The
+   implemented `v0.4` loop may add current-run structured Tool results and
+   Evidence; persisted Tool calls/results are never replayed as Session history.
 3. `resource_names_and_references`: Context, Namespace, and admitted resource
    names or references.
 4. `projected_kubernetes_status`: allowlisted status, conditions, counts,
@@ -30,15 +35,27 @@ context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
 6. `redacted_container_output`: bounded current or previous container-output
    facts after normalization and redaction.
 
+The implemented list above is the `v0.4` category baseline. `v0.5` must add
+separate versioned categories where needed for all-container/log-search output,
+Pod/Node metrics, safe Secret metadata, exact ConfigMap-key or non-credential
+container-environment values, optional Prometheus or Loki results, container
+files, remote diagnostics, local-process output, and resumed safe history.
+ConfigMap and environment values are at least `review` and require exact policy,
+category consent, and sink policy; generic or credential-bearing values remain
+denied. A Reviewer receives only the minimum normalized ActionEnvelope and
+policy facts by default, not raw cluster output or general Session history. No
+new category is implied by an existing broad label.
+
 The container-output category is disabled by default. In the privacy dialog,
 `L` toggles it. A toggle returns consent to pending and cancels an active run;
 press `A` only after reviewing and accepting the new exact category set. `R`
 rejects pending consent or revokes accepted consent. `Esc` cancels the review
 without granting authority.
 
-Consent binds the policy version, a hash of the canonical origin, and the whole
-enabled-category set. A destination, category, category meaning, or policy
-version change requires a new decision. Consent does not broaden Kubernetes
+Consent binds the policy version, model role, a hash of the canonical origin,
+and the whole enabled-category set. A profile, role, destination, category,
+category meaning, or policy version change requires a new decision. Agent
+consent cannot authorize a Reviewer at another origin. Consent does not broaden Kubernetes
 RBAC, add a Tool, make a prohibited source eligible, authorize a write, or
 guarantee that local redaction recognized every sensitive value.
 
@@ -48,13 +65,14 @@ The model-content contract excludes:
 
 - Kubeconfig contents, Kubernetes bearer tokens, client certificates, private
   keys, ServiceAccount token material, and exec credential output.
-- Kubernetes Secret objects and data, ConfigMap data, container environment
-  values, and referenced credential values.
+- Kubernetes Secret values, ServiceAccount tokens, credential-bearing
+  ConfigMap or environment values, and referenced credential values.
 - The model API key as content. It is used only as an authentication header for
   the validated configured origin.
 - Raw Kubernetes objects, full YAML, managed fields, unrestricted annotations,
   EndpointSlice addresses, and arbitrary API types.
-- Raw or unbounded Events and container output.
+- Raw or unbounded Events, logs, metrics, files, optional data-source results,
+  remote diagnostic output, and local process output.
 - Raw configuration, SQLite, local application-log, prompt, request, response,
   stream, header, and endpoint-error contents.
 
@@ -73,20 +91,24 @@ standard-persistence Session may keep:
 - Session and AgentRun metadata.
 - Locally processed committed user Messages and final validated assistant
   Messages.
+- A bounded safe Session summary and coverage metadata; eligible recent Message
+  rows remain the tail rather than being copied into a generic payload.
 - Structured Diagnoses.
 - Sanitized ToolInvocation metadata, accepted Evidence, and bounded model
   request metadata.
-- Allowlisted lifecycle audit and the consent tuple.
+- Allowlisted lifecycle audit, the consent tuple, and safe ActionEnvelope,
+  permission-decision, one-attempt, cleanup, and verification metadata.
 
-It does not persist raw container output, raw Events, raw Tool results, raw
-Kubernetes objects, assembled prompts, model streams, protocol bodies,
-credentials, or kubeconfig paths.
+It does not persist raw logs, metrics, files, optional-source responses,
+remote/local process output, raw Events, raw Tool results, raw Kubernetes
+objects, assembled prompts, model streams, protocol bodies, framework values,
+Reviewer response bytes, Session rules, credentials, or kubeconfig paths.
 
 Default logical retention is:
 
 | Data | Default lifetime |
 | --- | --- |
-| Safe Session history and Diagnosis | Until explicit deletion of that Session |
+| Safe Session history, summary/coverage, and Diagnosis | Until explicit deletion of that Session |
 | ToolInvocation, Evidence, and model-request detail | 30 days |
 | Run and lifecycle audit | 90 days |
 | Terminal approval and decision records, and approval/write audit | 180 days |
@@ -104,11 +126,20 @@ records earlier.
 
 `M` starts a new empty Session in the other persistence mode while no AgentRun
 is active. It never changes an existing Session's mode. Minimal persistence
-stores no user or assistant Message content, Diagnosis, Tool detail, Evidence,
-or model-request detail. Its necessary Session shell and required lifecycle,
-consent, approval, and write-audit records remain subject to their own retention
-rules. A minimal Session is unavailable to the resume picker, exact-ID resume,
-and `--last` across processes.
+stores no user or assistant Message content, summary, coverage, Diagnosis, Tool
+detail, Evidence, or model-request detail. Its necessary Session shell and
+required lifecycle, consent, permission, action, and execution-audit records
+remain subject to their own retention rules. A minimal Session is unavailable
+to the resume picker, exact-ID resume, and `--last` across processes.
+
+Under `v0.5`, standard-mode resume itself performs zero model, Kubernetes,
+Tool, Reviewer, approval, process, or executor I/O. On the next explicit
+question, when retained eligible safe history exists and current
+role/origin/category consent, scope, policy, coverage, and budget checks pass,
+Application must send exactly one ordered, bounded representation of that
+history. A failed gate causes zero model calls and no current-question-only
+fallback. Historic scope, Evidence, Session rules, Reviewer decisions,
+ActionEnvelopes, approvals, and execution never regain authority.
 
 ## Export a redacted Session summary
 
@@ -126,6 +157,8 @@ The deterministic `kupilot.export-summary.v2` Markdown projection may contain:
   timestamps, standard persistence mode, and historic display-only Context and
   Namespace.
 - Bounded, redacted committed user and final assistant text.
+- The bounded safe summary and coverage explanation, without raw framework or
+  model state.
 - The escaped final free-form answer Markdown, citation-backed compatibility
   metadata, validation warnings, and typed proposed operation/target display
   fields. Proposed actions contain no execution authority.
@@ -135,7 +168,8 @@ The deterministic `kupilot.export-summary.v2` Markdown projection may contain:
 It never includes raw Tool inputs or results, raw or complete container logs,
 raw Events, Kubernetes objects, full prompts, model requests, responses or
 streams, framework payloads, credentials, Secrets, kubeconfig data or paths,
-approval nonces or digests, UID, resource version, internal fingerprint,
+Reviewer response bytes, Session rules, approval nonces or digests, UID,
+resource version, internal fingerprint,
 execution authority, or arbitrary repository JSON.
 Kupilot does not call the model, Kubernetes, a Tool, an approval path, or an
 executor to create this summary.

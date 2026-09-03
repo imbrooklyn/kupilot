@@ -1,183 +1,246 @@
 # Kupilot Product Contract
 
+- Status: Accepted `v0.5` target
+- Date: 2026-09-03
+
+The checked-in implementation is still the `v0.4` baseline. This contract and
+ADR-0044 through ADR-0047 define the next implementation target; they do not
+claim that `v0.5` configuration, RBAC, runtime behavior, tests, or release
+artifacts already exist.
+
 ## Product definition
 
-Kupilot is a local, single-process Kubernetes operations Agent with a
-conversational terminal interface. A user asks an operational question in
-natural language, Kupilot chooses typed Kubernetes capabilities, shows the work
-inline, and returns the Markdown answer that best fits the question.
+Kupilot is a local, single-process, single-user Kubernetes operations Agent
+with a conversational terminal interface. A user states an operational intent,
+Kupilot chooses code-owned typed capabilities, shows the work and permission
+state inline, and returns bounded free-form Markdown backed by deterministic
+Evidence.
 
-Kupilot is designed for everyday cluster investigation and carefully supervised
-actions. It is not a resource browser with an assistant attached. The primary
-interaction remains a conversation, not a resource tree, dashboard, command
-palette, YAML editor, or embedded shell.
-
-The current product line is `v0.4`. It replaces the original diagnostic MVP's
-permanent six-Tool, five-Kind, current-Namespace, four-section answer, and
-90-second execution boundaries. The original security mechanisms are retained
-where they protect authority or data rather than merely restricting usefulness.
+Kupilot is designed for everyday investigation and explicitly controlled
+recovery. It is not a resource browser with an assistant attached. The primary
+interaction remains one low-chrome conversation, not a resource tree,
+dashboard, command palette, YAML editor, action menu, or shell console.
 
 ## Product principles
 
 1. **Agent-first interaction.** The user states intent and supervises visible
-   capability and action steps. Browsing Kubernetes objects is not a second
-   product center.
-2. **Typed authority, natural answers.** Model-visible capabilities and actions
-   use strict versioned schemas. The visible answer is free-form Markdown, not a
-   fixed report template.
-3. **Exact operational context.** Every run has one verified Context, one
-   working Namespace, one namespace-access policy, and one generation. The
-   footer keeps the Context and working Namespace visible; `/status` explains
-   the complete authority and budget snapshot.
-4. **Evidence remains runtime-owned.** Only deterministic local capability
-   handling creates Evidence. Model and user text cannot invent observations,
-   scope, approval, or execution state.
-5. **Broader access is explicit.** The `all` namespace policy admits explicitly
-   targeted cross-Namespace and bounded all-Namespace reads in the same
-   Context. It never means cross-cluster access, hidden background scans, or a
-   different Kubernetes identity.
-6. **Sensitive sources stay closed.** Kubernetes credentials, Secret objects
-   and data, ConfigMap values, environment values, raw objects, raw model
-   traffic, and unbounded output are not model content.
-7. **Writes are supervised transactions.** A model may propose only a
-   code-defined operation. Every write requires an exact target, local
-   digest-bound approval, fresh revalidation, durable pre-operation audit, one
-   execution attempt, and separate verification.
-8. **Budgets are visible operating controls.** Runs use an immutable compact,
-   balanced, or extended profile. Limits remain finite and locally enforced,
-   but the balanced default is sized for multi-resource investigations.
-9. **Local ownership and deletion.** Kupilot has no hosted control plane or
-   telemetry. Eligible local history follows the accepted retention and
-   deletion contract.
+   capability, review, action, and verification steps.
+2. **Typed authority, natural answers.** Capabilities and actions use strict
+   versioned schemas. The final answer is the Markdown shape that best answers
+   the question.
+3. **Exact operational context.** Every AgentRun has one verified Context, one
+   working Namespace, one namespace-access policy, one scope generation, and
+   one policy generation.
+4. **Runtime-owned Evidence and permission.** Only deterministic local handling
+   creates Evidence, classifies risk, or creates action authority. User text,
+   model prose, Reviewer output, and Kubernetes data remain untrusted.
+5. **Explicit breadth.** Built-in resources, exact policy-admitted CRDs,
+   optional data sources, sensitive reads, execution, and remediation are
+   admitted individually with projection, consent, RBAC, budget, and tests.
+6. **Permission is layered.** Technical capability, Kubernetes RBAC, data
+   consent, risk class, permission profile, human/Reviewer routing, audit, and
+   target revalidation remain separate gates.
+7. **Side effects are transactions.** Every sensitive or effectful operation
+   uses one immutable digest-bound `ActionEnvelope`, durable pre-operation
+   audit, at most one attempt, and separate outcome and verification states.
+8. **Framework-first Agent runtime.** Kupilot directly uses stable Eino ADK
+   Agent, Runner, message-state, and summarization facilities inside one
+   adapter boundary. It does not rebuild those facilities or add facades for
+   hypothetical framework replacement.
+9. **Finite capability-aware budgets.** Agent, Reviewer, summary, read, log,
+   metrics, remote-exec, local-process, item, byte, time, and cost limits remain
+   finite and visible. Exact model values require dependency and endpoint
+   evidence.
+10. **Local ownership and deletion.** Kupilot has no hosted control plane or
+    product telemetry. Eligible local history follows the retention, export,
+    and deletion contracts.
 
 ## Intended user journey
 
-1. The user starts `kupilot` for a new Session, or explicitly resumes safe local
-   history. A new start resolves the configured, remembered, or kubeconfig
-   current Context and verifies the `default` Namespace unless one was
-   configured explicitly.
-2. If needed, the single-screen TUI collects the model endpoint, model name,
-   and masked API key and discloses plaintext local storage before saving it.
-3. The user verifies a kubeconfig Context and working Namespace. The footer
-   keeps both visible.
-4. Before the first eligible model transfer, the user reviews the exact model
-   origin and data categories and grants or rejects consent.
-5. The user asks a question such as "which Nodes are under pressure?", "compare
-   failing workloads across Namespaces", or "why is checkout unavailable?".
-6. Kupilot creates one AgentRun with a frozen Context, working Namespace,
-   namespace-access policy, capability catalog, consent, and budget profile.
-7. Inline steps show bounded reads and any proposed action. While work is
-   active, a live row shows compact elapsed time and the `Esc` interrupt hint.
-   Once a final-answer envelope begins, bounded safe provisional Markdown
-   appears in the same Agent entry. The user may cancel the run at any time and
-   may inspect `/status` without causing external I/O.
-8. Kupilot replaces the provisional draft with a validated free-form Markdown
-   answer. Evidence detail and gaps remain inspectable without forcing every
-   response into a fixed layout. A partial, failed, cancelled, timed-out, or
-   stale stream never becomes committed assistant history.
-   The final answer ends with a full-width `Worked for` duration separator.
-   Completed safe history is inserted once above the live primary-terminal
-   frame. Every inserted immutable block ends with one inert separator row, so
-   submitted history remains distinct from live Working state and the final
-   `Worked for` row remains distinct from the composer. Completed history may
-   remain in terminal-owned scrollback after Kupilot exits.
-9. If the Agent proposes an admitted mutation, Kupilot displays a default-reject
-   approval bound to the exact target and operation. Request acceptance and
-   post-operation verification remain distinct.
+1. The user starts a new Session with bare `kupilot`, or explicitly resumes an
+   eligible standard Session. Resume itself performs no model, Kubernetes,
+   Tool, Reviewer, approval, process, or executor I/O.
+2. The single-screen TUI completes any required named model-profile setup. The
+   required `agent` and optional `approval_reviewer` profiles each bind one
+   explicit canonical origin and credential source.
+3. The user verifies a kubeconfig Context and working Namespace, reviews the
+   namespace policy, and selects a permission profile. `ask` is the default;
+   `full-access` is never selected implicitly.
+4. Before content leaves the workstation, the user reviews the exact model
+   role, canonical origin, and enabled data categories. Consent is separate for
+   each role and origin.
+5. The user asks an operational question. Application freezes scope, policy,
+   consent, catalog, and capability-aware budgets for one AgentRun.
+6. Inline steps show bounded reads, optional data-source access, and any
+   proposed sensitive or effectful action. `/status` and `/permissions` are
+   local views and cause no operational I/O.
+7. Kupilot validates the final free-form answer, its current-run Evidence
+   references, and any typed proposed action. Partial or invalid streams never
+   become committed assistant history.
+8. A `review` request is routed according to the permission profile. Under
+   `auto-review`, the optional Reviewer may `approve`, `deny`, or
+   `escalate_to_user`. A `critical` request remains human-reviewed under `ask`
+   and `auto-review`.
+9. An admitted action executes at most once after all current checks and
+   durable pre-operation audit. Acceptance, failure, ambiguous outcome,
+   progress, and verified completion remain different states.
+10. Every question after the first in a Session receives one ordered, bounded
+    representation of all retained eligible prior turns. Standard mode supports
+    this in process and after explicit cross-process resume; minimal mode only
+    in process. Resume sends nothing, and a failed consent, scope, policy,
+    coverage, or budget gate causes zero model calls rather than a silent
+    current-question-only fallback.
 
-## Operational read contract
+## P0 operational capability contract
 
-The versioned read catalog uses typed client-go operations and project-owned
-projections. The first `v0.4` source allowlist is:
+The `v0.5` P0 catalog covers these code-owned categories:
 
-- Namespace, Node, Pod, Service, PersistentVolumeClaim, PersistentVolume, and
-  ConfigMap metadata from core `v1`;
-- Deployment, ReplicaSet, StatefulSet, and DaemonSet from `apps/v1`;
-- Job and CronJob from `batch/v1`;
-- Ingress from `networking.k8s.io/v1`;
-- HorizontalPodAutoscaler from `autoscaling/v2`; and
-- PodDisruptionBudget from `policy/v1`.
+- typed built-in and exact policy-admitted CRD `get`, `list`, conversational
+  `describe`, and bounded query/count/table projections;
+- related Events; current, previous, and explicit all-container logs; and
+  bounded local log search;
+- Pod and Node metrics plus explicitly configured optional Prometheus and Loki
+  data sources;
+- a safe Secret-metadata projection and explicitly policy-admitted exact
+  ConfigMap keys or non-credential container environment values, with values
+  treated as sensitive reads rather than generic object dumps;
+- bounded container-file reads, predefined no-shell Pod diagnostics, separately
+  gated Pod Exec, and bounded diagnostic Pods;
+- typed restart, scale, rollback, single controller-owned ordinary Pod delete,
+  cordon, uncordon, and drain operations; and
+- default-off restricted direct argv integrations for exact `kubectl`, `helm`,
+  `argocd`, or another policy-selected executable, with shell as a separate
+  default-off `critical` class.
 
-Capabilities cover exact resource reads, bounded lists, recent Events, current
-and previous Pod log tails, code-defined relationships, and a bounded cluster
-overview for Namespace and Node health. Namespaced calls default to the working
-Namespace. Under the frozen `all` policy, the model may supply an explicit
-Namespace or request a bounded all-Namespace list. The runtime validates and
-canonicalizes that choice before Kubernetes I/O.
+Each capability names an operational need, exact source and operation, model
+fields, privacy category, projection, limits, errors, partial behavior,
+Evidence or verification mapping, RBAC, and deterministic tests. Optional does
+not mean dynamically discoverable. A model cannot supply a Context, credential,
+origin, arbitrary API, raw selector, executable, image, destination, YAML,
+stdin, deadline, or hard limit. Restricted argv remains policy-owned; only the
+separately enabled `critical` shell schema may carry one exact bounded command
+string, which is displayed and digest-bound like every other effectful
+parameter.
 
-No capability accepts a kubeconfig, credential, endpoint, Context, arbitrary
-GVR, raw selector, raw HTTP request, shell command, YAML document, pagination
-token, or unlimited result size. Kubernetes RBAC is still enforced by the API
-server and every denial remains visible.
+Generic patch/apply/edit/delete, arbitrary YAML, wildcard commands, Watch,
+informers, background scans, scheduled work, autonomous remediation,
+cross-Context calls, cluster-admin, wildcard RBAC, port forwarding, plugins,
+MCP, RAG, retrievers, and Multi-Agent orchestration remain outside P0.
 
-## Answer and Evidence contract
+## Permission contract
 
-The visible result is bounded Markdown. Kupilot does not prepend scope text or
-append `Confirmed facts`, `Hypotheses`, `Missing information`, and
-`Recommended actions` sections to every answer.
+Risk classes are `safe`, `review`, `critical`, and `deny`. Classification is a
+deterministic function of the versioned operation and normalized parameters,
+including data, sink, network, and side-effect characteristics.
 
-Structured inventories and comparisons containing multiple resources of the
-same Kind and shared attributes default to compact Markdown tables, one per
-Kind, even when the user does not explicitly request formatting. Prose and
-lists remain appropriate for non-tabular results, and the terminal renderer
-degrades tables safely when width is insufficient.
+| Profile | `safe` | `review` | `critical` | `deny` |
+| --- | --- | --- | --- | --- |
+| `read-only` | Automatic | Human only for admitted sensitive reads | Denied | Denied |
+| `ask` (default) | Automatic | Human | Human | Denied |
+| `auto-review` | Automatic | Reviewer, with human escalation | Human | Denied |
+| `full-access` | Automatic | Automatic | Automatic | Denied |
+| `custom` | Explicit route | Explicit route, including Reviewer | Exact automatic, human, or deny rule; human by default | Denied |
 
-The internal final-response envelope separately carries:
+Profiles route already admitted operations. They do not grant RBAC, enable a
+default-off capability, broaden scope or consent, expose credentials, change
+risk, bypass durable audit or revalidation, or override `deny`. `full-access`
+and a custom critical-auto rule require explicit high-risk selection and local
+policy permission.
 
-- the candidate Markdown answer;
-- claim-to-Evidence references; and
-- typed proposed actions.
+A Reviewer is an optional bounded decision input, not permission authority. It
+reviews only `review` envelopes through a strict non-streaming no-Tool response
+and cannot create Session rules, approve `critical`, or override deterministic
+policy. Failure is fail-closed; there is no implicit model fallback.
 
-Runtime validates current-run Evidence IDs and action schemas before accepting
-the result. Invalid citations are removed and produce a visible warning. A
-permission denial, truncation, sensitive-output block, stale result, budget
-stop, or unsupported source is stated honestly rather than hidden behind a
-confident answer.
+A human Session rule can cover only a narrow `review` operation in the current
+process and Session. It is revocable, expiring, generation-bound, never resumed,
+and never model- or Reviewer-created. Approve-once remains default reject,
+single-use, digest-bound, and valid for exactly 60 seconds.
 
-Evidence is a time-bounded projection, not a complete cluster truth. A
-successful AgentRun means that Kupilot followed its local authority, data, and
-protocol checks. It does not guarantee that a model identified the root cause.
+## Action and execution contract
 
-Terminal scrollback is owned by the user's terminal emulator, not by Kupilot's
-Session store. Starting a new Session, clearing history, deleting a Session, or
-using minimal persistence does not erase text that the terminal has already
-displayed.
+Every sensitive or effectful operation is represented by a versioned immutable
+`ActionEnvelope` binding operation and policy versions, risk and permission
+profile, Session/run/request identity, exact scope and both generations, target
+identity and fingerprints, typed parameters or fixed executable plus argv,
+stdin/TTY/shell flags, data/sink/network effects, finite limits, expiry, and a
+verification plan.
 
-## Supervised action contract
+Canonical fixed-order length-prefixed encoding and SHA-256 bind approval,
+review, audit, and execution. A map, raw JSON/YAML, human description, model
+text, or unnormalized command is never authority.
 
-`restart_deployment` is the first admitted `v0.4` action. It changes only the
-Kupilot-owned Pod-template restart annotation for one exact `apps/v1`
-Deployment. It accepts no patch, YAML, annotation key, timestamp, resource
-version, or arbitrary parameter from the model.
+Application alone performs schema and policy checks, routing, fresh target or
+executable validation, decision matching, final revalidation, atomic
+single-use consumption plus durable pre-operation audit, one final generation
+check, and at most one external attempt. Storage failure before the attempt
+means zero executor calls. Cancellation, timeout, conflict, restart, or an
+ambiguous result never triggers automatic execution retry. Verification is a
+separate bounded read phase and cannot rewrite the attempt outcome.
 
-An action proposal is not approval. Approval is local, defaults to rejection,
-expires after 60 seconds, is single-use, and binds the operation, policy,
-Context, Namespace, generation, target identity, target fingerprint, reason,
-and expiry. Kupilot re-reads the target, persists the consumed approval and
-pre-operation audit, performs one write attempt, and reports API acceptance and
-rollout verification separately.
+## Model and Session context contract
 
-Additional actions may be added only as independently reviewed typed
-transactions. Kupilot does not expose generic apply, patch, delete, exec, or
-command execution as an extension mechanism.
+Kupilot keeps one protocol kind, `openai_compatible`, while allowing several
+explicit named profiles and origins. The required `agent` and optional
+`approval_reviewer` roles select exactly one profile each. There is no provider
+auto-detection, router, fallback, load balancing, or cross-origin retry.
+Summarization reuses `agent` with an independent reserved budget; there is no
+prebuilt `context_compactor` role.
+
+Inside `internal/agent/einoadapter`, stable Eino ADK `ChatModelAgent`, `Runner`,
+message state, and summarization middleware own the framework conversation
+loop. The current stable path uses eligible messages from the existing SQLite
+repository through a thin selection and translation bridge. Runner-managed
+durable Session support may replace that bridge only after a non-prerelease tag
+passes the adoption gate in ADR-0047.
+
+Standard mode may persist a bounded safe summary, coverage metadata, and the
+eligible recent committed tail. Minimal mode persists no model memory. History
+never restores current scope, ResourceRef, Evidence, Tool state, permission
+rule, Reviewer decision, approval, ActionEnvelope, execution, or generation.
+Summary or compaction failure cannot cause an oversized or silently truncated
+model request.
+
+## Evidence, data, and network contract
+
+Only deterministic runtime handling creates Evidence. Model output can cite an
+accepted current-run Evidence identifier and propose an action, but it cannot
+create an observation, permission, or execution result. Historic Evidence is
+display-only.
+
+The visible result remains bounded free-form Markdown without mandatory report
+headings. Same-Kind inventories with shared attributes default to a compact
+table, while prose and lists remain available when they fit the question
+better. Denial, truncation, missing data, stale state, and unsupported sources
+remain explicit rather than being hidden behind a confident answer.
+
+Every model-bound field follows this local order: source allowlist,
+project-owned projection, text normalization and unsafe-control removal,
+sensitive-value block or typed redaction, hard item and byte limits, neutral
+serialization, and a final role/origin/category consent check.
+
+Credentials, kubeconfig, Secret values, ServiceAccount tokens, raw Kubernetes
+objects, raw model traffic, raw Tool results, raw Events/logs/process output,
+and framework objects never become generic model, history, log, audit, SQLite,
+or child-environment data. Specific sensitive sources may be admitted only by
+an explicit policy and category; credentials remain a hard denial.
 
 ## Product identity and non-goals
 
-Kupilot is intentionally not:
+Kupilot remains intentionally not:
 
-- k9s, a Kubernetes Dashboard, or a resource inventory application;
-- a kubectl wrapper, shell, terminal multiplexer, IDE, or YAML editor;
+- k9s, Kubernetes Dashboard, or a primary inventory application;
+- a generic kubectl wrapper, shell console, terminal multiplexer, IDE, YAML
+  editor, or arbitrary Kubernetes client;
 - a controller, operator, daemon, scheduled scanner, or autonomous remediation
   service;
 - a hosted service, cluster-resident component, multi-user control plane, or
-  telemetry collector;
-- a plugin host, MCP client, RAG system, arbitrary network agent, or Multi-Agent
-  orchestrator.
+  telemetry collector; or
+- a plugin host, MCP client, RAG system, arbitrary network agent, framework
+  abstraction kit, or Multi-Agent orchestrator.
 
-These non-goals constrain interaction and authority, not the usefulness of
-typed Kubernetes investigation. A new built-in resource or operation is
-admitted through explicit product, permission, privacy, budget, and test review
-rather than through a permanent low feature ceiling.
+These boundaries reject generic surfaces, not the reviewed typed capabilities
+needed for daily operations.
 
 ## References
 
@@ -186,9 +249,7 @@ rather than through a permanent low feature ceiling.
 - [Security Threat Model](security.md)
 - [Privacy Overview](privacy-overview.md)
 - [Data Retention Contract](data-retention.md)
-- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
-- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
-- [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0041: Export Free-Form Session Summaries](adr/0041-export-free-form-session-summaries.md)
-- [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

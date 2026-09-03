@@ -1,7 +1,11 @@
 # Kupilot Data Retention Contract
 
-- Status: Accepted for `v0.4`
-- Date: 2026-08-30
+- Status: Accepted target for `v0.5`
+- Date: 2026-09-03
+
+The checked-in SQLite schema and repositories remain the `v0.4`
+implementation. This contract admits the `v0.5` data categories but does not
+claim that their forward-only migration, retention code, or tests exist.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -42,6 +46,12 @@ disk encryption, and backup lifecycle remain the user's controls.
    terminal-owned display consequence, not a Kupilot-created durable store.
    Kupilot deletion controls cannot retract already displayed text from a
    terminal emulator, multiplexer, recorder, backup, or remote session.
+10. Historic Messages, summaries, Evidence, permission decisions,
+    ActionEnvelopes, and audit are context or history only. Persistence never
+    restores live scope, policy generation, Evidence authority, a Session rule,
+    approval, Reviewer decision, execution state, or retry authority.
+11. Stable Eino ADK owns in-run message state and summarization behavior; SQLite
+    stores only project-owned safe projections and never raw framework state.
 
 ## 2. Standard-persistence defaults
 
@@ -50,13 +60,13 @@ disk encryption, and backup lifecycle remain the user's controls.
 | Category | Default lifetime | Authoritative clock and behavior |
 | --- | --- | --- |
 | Last successfully verified Kubernetes Context preference | Until it is replaced by a later successful activation or the user deletes all local state | The single global Context display name is not Session-owned. Clear-history preserves it; delete-all-local-state removes it with SQLite. |
-| Session shell, safe Session summary, committed user Messages, final validated assistant Messages, and validated Diagnosis | Until the user deletes the Session or clears history | There is no automatic age expiry in the accepted default. Viewing or resuming does not create a second copy or restore live authority. |
+| Session shell, safe Session summary and coverage, committed user Messages, final validated assistant Messages, and validated Diagnosis | Until the user deletes the Session or clears history | There is no automatic age expiry in the accepted default. The recent tail is the eligible Message rows after coverage, not a copied generic payload. Viewing or resuming does not create a second copy or restore live authority. |
 | Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. The public control may only shorten the current value, including to 0 days, which keeps detail only in process memory. |
 | Ordinary read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
-| Terminal approval and decision records, and approval, pre-write intent, write-attempt, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because Kupilot is not a compliance ledger. Pending and approved requests are first made terminal by their owning lifecycle, never by retention cleanup. |
+| Terminal permission and decision records, and ActionEnvelope, pre-operation intent, execution-attempt, cleanup, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because Kupilot is not a compliance ledger. Pending authority is first made terminal by its owning lifecycle, never by retention cleanup. |
 | Explicit `kupilot.export-summary.v2` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
 | Optional plaintext model profile in `KUPILOT_HOME/config.yaml` | Until the user overwrites or removes the local configuration | This user-selected credential copy is outside SQLite and Session retention. Process-only setup and environment loading do not create it. |
-| Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any origin, category, or policy-version change requires confirmation again. |
+| Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, model role, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any profile, role, origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
 
 <!-- markdownlint-enable MD013 -->
@@ -113,12 +123,28 @@ Standard persistence may store:
   user opportunity to cancel the submission.
 - Final locally validated assistant content. Partial streams and invalid model
   drafts are not committed Messages.
-- A bounded safe Session summary.
+- A bounded safe Session summary and explicit coverage metadata: summary schema
+  and policy versions, covered first and last committed Message IDs, ordered
+  count, coverage digest, generation time, source Session ID, generating
+  `agent` profile name, canonical origin hash, and truncation, partial, or
+  degraded markers.
 
-Resume reconstructs a conversation container only. It never restores a client,
-live ClusterScope generation, model stream, Agent loop, ToolInvocation,
-cancel function, pending approval, or write. Saved scope and ResourceRef values
-must be selected and revalidated before a new run.
+The recent tail is selected from eligible committed Message rows after the
+coverage boundary. It is not duplicated into a generic summary payload.
+Coverage mismatch, changed ordering, deleted source Messages, corrupt metadata,
+or an unknown version fails closed rather than guessing a reconstruction.
+
+Resume reconstructs a conversation container only and performs zero model,
+Kubernetes, Tool, Reviewer, approval, process, or executor I/O. On the next
+explicit question, when retained eligible history exists and current
+role/origin/category consent, scope, policy generation, coverage, and budget
+checks pass, Application must transfer exactly one ordered, bounded
+representation of that history. A failed gate causes zero model calls and no
+current-question-only fallback. Resume never restores a client, live
+ClusterScope or policy generation, model stream, Agent loop, ToolInvocation,
+Evidence authority, cancel function, Session rule, Reviewer decision, pending
+approval, ActionEnvelope, execution, or retry. Saved scope and ResourceRef
+values must be selected and revalidated before a new run.
 
 ### 3.2 AgentRun and model-request metadata
 
@@ -128,10 +154,10 @@ Eligible run data is limited to:
   reason, timestamps, safe working-scope snapshot, optional ResourceRef,
   counters, truncation flags, prompt and capability-catalog versions, and
   `persistence_degraded` state.
-- Model-request identity, sequence, fixed provider kind, model identifier,
-  endpoint-origin hash, status, stable error class, bounded validated provider
-  request identifier, prompt and response fingerprints, optional token counts,
-  and timing metadata.
+- Model-request identity, sequence, fixed provider kind, named profile and
+  consumer role, model identifier, endpoint-origin hash, status, stable error
+  class, bounded validated provider request identifier, prompt and response
+  fingerprints, optional evidence-based token/cost counts, and timing metadata.
 
 There is no durable assembled prompt, raw request, raw response, stream, header,
 or endpoint error body. The endpoint origin itself belongs to typed local
@@ -178,23 +204,34 @@ safe scope or ResourceRef, and event-specific allowlisted scalar details. It is
 not an arbitrary logging channel and is not claimed to be append-only or
 tamper-resistant.
 
-A consent record contains the policy version, decision time, endpoint-origin
-hash, and eligible-category flags. It contains no endpoint credentials, API key,
-headers, model body, user question, or cluster data. It authorizes only the exact
-tuple and does not authorize a later category automatically.
+A consent record contains the policy version, model role, decision time,
+endpoint-origin hash, and eligible-category flags. It contains no endpoint
+credentials, API key, headers, model body, user question, or cluster data. It
+authorizes only the exact tuple and does not authorize a later role or category
+automatically.
 
-### 3.6 Approval and write audit
+### 3.6 Permission, ActionEnvelope, and execution audit
 
-Admitted action records may contain the fixed operation, immutable safe
-scope, exact target identity, canonical safe parameters, template fingerprint,
-operation digest, policy version, expiry, one-time state, bounded risk summary,
-decision, pre-operation intent outcome, external request outcome, and bounded
-verification outcome.
+Admitted action records may contain the envelope and operation schema versions,
+fixed operation, deterministic risk and permission profile, policy generation,
+immutable safe scope and scope generation, exact target identity and required
+fingerprint/revision/target-set facts, canonical safe typed parameters or a
+safe executable/argv fingerprint, data/sink/network categories, ceilings,
+verification-plan ID, operation digest, expiry, one-time state, bounded risk
+summary, actor category, decision, applicable Reviewer profile and canonical-
+origin hash, pre-operation intent outcome, external attempt outcome, cleanup
+state, and bounded verification outcome.
 
-They contain no arbitrary patch, raw Deployment, client-go value, credential,
-request body, or response body. Only a hash of the UI nonce is durable. Request
-acceptance, observed rollout progress, timeout, failure, and verified completion
-remain separate states.
+They contain no arbitrary patch, raw object, client-go or Eino value,
+credential, command string, process environment, request/response body, raw
+log, or process output. Only a hash of the UI nonce is durable. Reviewer output
+is retained only as an allowlisted decision and bounded safe rationale, never
+as authority bytes. Request acceptance, progress, timeout, failure, ambiguous
+outcome, cleanup, and verified completion remain separate states.
+
+Human Session rules are current-process authority and are not persisted for
+resume. Audit may retain the safe fact that a rule matched, but not a reusable
+rule or token.
 
 ## 4. Minimal-persistence
 
@@ -211,8 +248,9 @@ SQLite may store only:
 - Minimal allowlisted AuditEvents needed to explain lifecycle, consent, scope,
   policy denial, or a supervised write.
 - The consent tuple from Section 3.5.
-- The complete allowlisted approval and write audit metadata from
-  Section 3.6. Privacy mode never weakens the durable pre-write gate.
+- The complete allowlisted permission, ActionEnvelope, execution, and
+  verification audit metadata from Section 3.6. Privacy mode never weakens the
+  durable pre-operation gate.
 
 The following remains in memory only and is discarded at process exit:
 
@@ -221,6 +259,7 @@ The following remains in memory only and is discarded at process exit:
 - ToolInvocation purpose, arguments, summaries, and detail.
 - Evidence and model-request detail.
 - Safe model context assembled for the current run.
+- Safe summaries, coverage metadata, and recent-tail selection.
 
 The opaque request identity in a minimal run is lifecycle correlation, not a
 retained Message. Its retained-Message relationship is absent, and no Message
@@ -251,14 +290,15 @@ a crash bundle, or another Kupilot-created durable store:
 - Model API keys from every source outside the explicit Home configuration
   save. Even when locally saved, the key is never eligible for SQLite, Session
   content, audit, logs, exports, model content, or generic configuration values.
-- Kubernetes Secret objects or data, ConfigMap data, container environment
-  values, referenced credential values, and every source Kupilot is forbidden to
-  read.
+- Kubernetes Secret values, ServiceAccount tokens, credential-bearing
+  ConfigMap or environment values, referenced credential values, and every
+  source not explicitly admitted by a versioned capability and data policy.
 - Raw Kubernetes objects, full YAML, managed fields, unrestricted labels or
   annotations, discovery bodies, raw API request or response bodies, and
   client-go values.
-- Raw or complete sanitized container output, raw Event payloads, raw Tool
-  results, and adapter-local source DTOs.
+- Raw or complete sanitized logs, metrics, container files, remote or local
+  process output, Prometheus/Loki responses, Event payloads, raw Tool results,
+  and adapter-local source DTOs.
 - Assembled prompts, system instructions, raw model requests or responses, model
   SDK values, stream deltas, invalid drafts, partial assistant Messages, and
   capability-check bodies.
@@ -269,9 +309,10 @@ a crash bundle, or another Kupilot-created durable store:
   the user explicitly enables sensitive diagnostics.
 - Terminal byte streams, escape sequences, clipboard or device-control content,
   and model-selected styling.
-- Live clients, HTTP transports, database handles, transactions, Contexts,
-  cancellation functions, callbacks, channels, goroutines, framework messages,
-  and live scope authority.
+- Live clients, HTTP transports, process handles, database handles,
+  transactions, Contexts, cancellation functions, callbacks, channels,
+  goroutines, framework messages, Reviewer responses, Session rules, approval
+  tokens, and live scope or policy authority.
 
 The terminal-byte exclusion means Kupilot does not copy terminal output into
 SQLite, logs, exports, crash bundles, or another generic durable sink. It does
@@ -289,35 +330,41 @@ original is not kept for debugging.
 
 ## 6. Size limits
 
-Persistence is not a blob store. The implementation must enforce at least these
-per-record or aggregate maxima before a repository call:
+Persistence is not a blob store. Every Message, final answer, Diagnosis,
+summary, coverage set, Evidence fact, action/audit row, and export has a finite
+per-record and aggregate ceiling before a repository call. Capability, model-
+role, summary, process, and run byte budgets remain independent and may impose
+a smaller bound. Oversized input is rejected or explicitly truncated according
+to its field contract; it is never silently moved to a raw attachment or
+generic payload.
 
-- One committed user or system-notice Message: 64 KiB.
-- One committed final assistant Message: 128 KiB.
-- One complete validated Diagnosis, including Markdown and metadata: 128 KiB.
-- One safe summary: 4 KiB.
-- One Evidence fact: 2 KiB.
-- One complete `kupilot.export-summary.v2` Markdown file: 2 MiB after the final
-  redaction and output guard.
-
-The capability and run byte budgets in ADR-0039 remain independent and may
-impose a smaller bound. Oversized input is rejected or explicitly truncated
-according to its field contract; it is never silently moved to a raw attachment.
+The checked-in `v0.4` implementation currently uses 64 KiB for one user or
+system-notice Message, 128 KiB for one final assistant Message or complete
+Diagnosis, 4 KiB for one safe summary, 2 KiB for one Evidence fact, and 2 MiB
+for one `kupilot.export-summary.v2` document. Those values remain historical
+compatibility limits until the `v0.5` schema work establishes explicit finite
+values from retention, Eino middleware, endpoint, memory, and export evidence.
+In particular, `v0.5` must not treat the 4 KiB summary value or a character-to-
+token estimate as a universal long-context limit. No new persistence path is
+reachable while its exact byte ceiling is unresolved.
 
 ### 6.1 User-controlled redacted summary export
 
 ADR-0041 admits one durable output outside SQLite: an explicitly confirmed,
 versioned Markdown summary of the current resumable standard-persistence
 Session. Application projects a consistent SQLite snapshot through an explicit
-allowlist. Only safe Session display metadata, committed user and final
-assistant text, validated answer metadata and legacy compatible Diagnosis
-fields, and referenced Evidence summaries or expired markers are eligible.
+allowlist. Only safe Session display metadata, the versioned safe summary and
+coverage explanation, committed user and final assistant text, validated answer
+metadata and legacy compatible Diagnosis fields, and referenced Evidence
+summaries or expired markers are eligible.
 Every eligible free-text field is redacted and bounded before rendering, and
 the complete document is processed and capped again.
 
-Raw Tool input or output, raw or complete logs, raw Events, Kubernetes objects,
-full prompts, model traffic, credentials, Secrets, kubeconfig data or paths,
-approval authority, and arbitrary repository serialization remain ineligible.
+Raw Tool input or output, raw or complete logs, metrics, files or process
+output, raw Events, Kubernetes objects, full prompts, model traffic, framework
+state, credentials, Secrets, kubeconfig data or paths, Reviewer bytes, Session
+rules, approval authority, and arbitrary repository serialization remain
+ineligible.
 Minimal Sessions have no retained content eligible for this export.
 
 The content-free pre-export AuditEvent is ordinary read audit and follows its
@@ -343,10 +390,11 @@ Cleanup uses category-specific timestamps and explicit relationships, not a
 search through serialized content. In the same transaction, it reads the
 current typed operational-detail setting and applies that cutoff to expired
 ToolInvocations, Evidence, and model-request metadata; it removes ordinary read
-AuditEvents at 90 days and approval/write AuditEvents at 180 days. After every
-related AuditEvent has expired, it removes terminal approval and decision
-records at the same 180-day boundary. It never removes pending or approved
-authority; startup recovery first makes those requests terminal. Cleanup then
+AuditEvents at 90 days and ActionEnvelope/execution AuditEvents at 180 days.
+After every related AuditEvent has expired, it removes terminal envelope and
+decision records at the same 180-day boundary. It never removes pending or
+approved authority; startup recovery first makes those requests terminal.
+Cleanup then
 removes an otherwise empty minimal Session shell when no required retained
 record needs it.
 
@@ -365,10 +413,11 @@ behavior satisfies ADR-0018.
 
 Deleting a Session removes the complete Session-owned graph in one transaction:
 
-- Messages and Session summary.
+- Messages, Session summary, and coverage metadata.
 - AgentRuns and model-request metadata.
 - ToolInvocations, Evidence, and Diagnoses.
-- Session-linked approval and decision records.
+- Session-linked ActionEnvelope, approval, Reviewer-decision, and execution
+  records.
 - Session- and run-linked read, approval, write, and verification AuditEvents.
 - The Session row and every resume index entry.
 
@@ -438,8 +487,9 @@ not the SQLite adapter, decides whether a use case may continue.
 | Minimal-persistence terminal or required audit write | Show degraded state and do not claim terminal metadata is durable. The already-started investigation may finish in memory. |
 | History-only read | Fail the query safely; never return a partial or stale resume list. A new run is independent only if all mandatory startup and BeginRun gates still succeed. |
 | Explicit Session deletion or clear-history | Roll back the failed transaction and report not deleted. Do not hide a resume entry independently. |
-| Action proposal, decision, approved state, or pre-operation intent audit write | Fail closed with zero executor calls. |
-| Action result audit after the one external request | Never retry the external write automatically. Show request outcome as unknown or verification unavailable as appropriate, retain the durable pre-operation record, and retry only the audit write a fixed bounded number of times. |
+| Required summary or coverage write before an oversized context can be made safe | Preserve the last committed state, send no oversized or silently truncated model request, and report the turn blocked or degraded. |
+| Action proposal, review, decision, approved state, or pre-operation intent audit write | Fail closed with zero executor calls. |
+| Action result audit after the one external attempt | Never retry the external action automatically. Show the attempt outcome as unknown or verification unavailable as appropriate, retain the durable pre-operation record, and retry only the audit write under a fixed bounded idempotent policy. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -449,9 +499,10 @@ allowed only after a bounded storage health check and the normal BeginRun
 transaction succeed.
 
 On restart, every durably `running` AgentRun becomes `interrupted`, and every
-pending or approved-but-not-executed approval becomes terminal and non-executable.
-Startup never resumes an Agent loop, ToolInvocation, model stream, Kubernetes
-call, approval wait, or write request.
+pending or approved-but-not-executed envelope becomes terminal and non-
+executable. Startup never resumes an Agent loop, ToolInvocation, model stream,
+Kubernetes call, Reviewer decision, Session rule, approval wait, process, or
+execution request.
 
 Kupilot does not automatically delete, rename, overwrite, or recreate a database
 it cannot validate. Recovery that could discard data requires an explicit user
@@ -472,6 +523,10 @@ fake clock, and failure injection:
 - Minimal mode creates exactly the Session shell, recovery fields, consent, and
   minimum audit rows; no message, final answer, Diagnosis, Tool, Evidence, or
   model-request detail is durable or resumable.
+- Standard summary coverage selects ordered eligible Messages exactly once;
+  minimal mode stores no summary or coverage; corruption, deletion, stale
+  generation, or compaction failure never causes an oversized model request or
+  restoration of historic authority.
 - Picker, exact ID, and `--last` all exclude minimal Sessions according to their
   typed outcomes.
 - Session deletion cascades through model, Tool, Evidence, Diagnosis, approval,
@@ -520,3 +575,6 @@ before:
 - [ADR-0030: Use sqlx Inside the SQLite Adapter](adr/0030-use-sqlx-inside-the-sqlite-adapter.md)
 - [ADR-0041: Export Free-Form Session Summaries](adr/0041-export-free-form-session-summaries.md)
 - [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

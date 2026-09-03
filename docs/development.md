@@ -1,5 +1,13 @@
 # Development and CI Gates
 
+- Status: Accepted `v0.5` development contract
+- Date: 2026-09-03
+
+The commands below describe the currently implemented repository gates. The
+additional `v0.5` capability, permission, model-role, ADK Session, process, and
+ActionEnvelope matrices are required targets; this document does not claim
+that those tests or implementations already exist.
+
 Kupilot's local and hosted gates use the repository `Makefile` as their single
 command source. The hosted workflow invokes the same targets contributors run
 locally; it does not duplicate test selection or security policy in workflow
@@ -49,6 +57,47 @@ external action or sink counts. The security target selects the documented
 redactor, scope, Slash, endpoint, SQLite/WAL, terminal, model-text, and
 Diagnosis-persistence controls. The dependency guard runs the static import and
 single-supervised-write composition tests before verifying module checksums.
+
+## Framework-first and dependency gates
+
+Before implementing Agent memory, conversation iteration, or summarization,
+development must inspect `go.mod`, `go env GOMODCACHE`, and tagged source and
+tests for the exact Eino and Eino OpenAI versions. Stable Eino ADK
+`ChatModelAgent`, `Runner`, message state, Tool pairing, events, and
+summarization middleware must be reused directly inside
+`internal/agent/einoadapter`.
+
+Do not add another conversation/ReAct loop, `MemoryManager`, summary engine,
+generic checkpoint/event store, raw framework transcript, or framework-neutral
+Agent/memory facade. Runner-managed durable Session support may replace the
+thin existing-SQLite-message bridge only after a non-prerelease tag passes all
+adoption criteria in ADR-0047. A discussion, main branch, marketing page, or
+prerelease API is not sufficient dependency evidence.
+
+Every dependency or endpoint spike must record exact version, source/tests,
+Go compatibility, license, request/stream behavior, cancellation, limits,
+errors, and the commands actually run. A failed or unrun spike is never a
+successful compatibility claim.
+
+## `v0.5` evidence levels
+
+- Deterministic CI is mandatory and network-independent. It uses scripted model
+  and Reviewer behavior, request-recording Kubernetes/HTTP fixtures, direct
+  process fixtures, fake clocks/barriers, and real temporary SQLite files.
+- Tagged live integration is opt-in evidence for one exact dependency,
+  endpoint, data source, local tool, or cluster version. It cannot replace CI
+  or be generalized to another target.
+- Model evaluation is separate evidence for Agent quality and Reviewer false
+  approval/denial, escalation, latency, token use, and cost. It is not a
+  protocol, authority, or deterministic security gate.
+
+The `v0.5` deterministic matrix must cover every permission profile and risk
+class, Reviewer failure, Session rules, both generations, safe history and
+current-question-once, summarization coverage, each capability's exact request
+and projection, ActionEnvelope fields, durable pre-operation audit, at-most-one
+execution attempt, ambiguous outcomes, verification, process join, and
+prohibited-data absence. Every denial asserts the relevant external call count
+is zero.
 
 ## Hosted CI
 
@@ -114,4 +163,12 @@ The platform policy is defined by
 Security and privacy requirements remain normative in the
 [Security Threat Model](security.md) and [Privacy Overview](privacy-overview.md).
 The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
-a current release requires a fresh review of the `v0.4` reachable composition.
+a future `v0.5` release requires a fresh review of the actually reachable
+composition; Accepted documentation alone is not release evidence.
+
+## References
+
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)

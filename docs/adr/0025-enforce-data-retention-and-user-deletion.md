@@ -2,7 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-08
-- Amended by: ADR-0035 and ADR-0041
+- Amended by: ADR-0035, ADR-0041, ADR-0045, and ADR-0047
+
+ADR-0045 generalizes the retained supervised-write records below into bounded
+permission, ActionEnvelope, execution-attempt, cleanup, and verification audit
+for every admitted sensitive or effectful operation. ADR-0047 admits a bounded
+safe Session summary and explicit coverage metadata in standard mode. Both use
+the same 180-day action-audit and Session-lifetime conversation categories,
+minimal-mode exclusions, cascade deletion, and no-restored-authority rules.
 
 ## Context
 
@@ -181,3 +188,5 @@ Driver-specific PRAGMA and checkpoint behavior must satisfy ADR-0018.
 - [ADR-0018: Require One Pure-Go SQLite Driver](0018-require-one-pure-go-sqlite-driver.md)
 - [ADR-0041: Export Free-Form Session Summaries](0041-export-free-form-session-summaries.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](0047-reuse-eino-adk-for-session-context-and-summarization.md)

@@ -3,7 +3,13 @@
 - Status: Accepted
 - Date: 2026-08-28
 - Supersedes: ADR-0021
-- Amended by: ADR-0042
+- Amended by: ADR-0042 and ADR-0046
+
+ADR-0046 replaces the single active model-profile restriction with explicit
+named `agent` and optional `approval_reviewer` profiles, which may bind distinct
+canonical origins. Setup remains explicit and credential-safe, there is still
+no auto-detection, fallback, or router, and the exact `v0.5` schema and
+migration require implementation evidence before they become usable.
 
 ## Context
 
@@ -160,3 +166,4 @@ Deterministic tests must cover:
 - [ADR-0026: Require Informed Consent Before Model Transfer](0026-require-informed-consent-before-model-transfer.md)
 - [ADR-0033: Use Cobra for Fixed CLI Routing and Viper for Configuration](0033-use-cobra-for-cli-and-viper-for-configuration.md)
 - [ADR-0042: Remember the Last Verified Kubernetes Context](0042-remember-the-last-verified-kubernetes-context.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](0046-use-named-model-roles-and-optional-auto-review.md)

@@ -1,5 +1,10 @@
 # Sessions and Scope
 
+This page defines the Accepted `v0.5` Session-memory semantics while retaining
+the explicit CLI forms already implemented in `v0.4`. The checked-in binary
+does not yet use persisted history as model context or implement ADK
+summarization and coverage.
+
 ## A bare start is always new
 
 `kupilot` without a subcommand creates a new Session. It does not inspect the
@@ -55,8 +60,9 @@ Session as a fallback.
 
 `/privacy` displays the current persistence mode. Its mode control starts a new
 empty Session in standard or minimal mode; it does not mutate an existing
-Session. Minimal-persistence content is memory-only. Picker and `--last` exclude
-minimal Sessions, and exact resume returns `session_not_resumable`.
+Session. Minimal-persistence content and model memory are process-only. Picker
+and `--last` exclude minimal Sessions, and exact resume returns
+`session_not_resumable`.
 
 ## Delete a Session
 
@@ -67,23 +73,24 @@ Both paths show the exact target and require `Y`; `Esc` or `Enter` cancels with
 no deletion command.
 
 Deleting the current Session first cancels and waits for any starting, active,
-or terminal-but-not-yet-quiesced AgentRun and invalidates pending or
-approved-but-not-executed approval authority. A consuming approval denies
-deletion. After the Session graph commits as one SQLite
-transaction, the current Session or picker row is cleared. On database failure,
-the graph remains and the UI reports that it was not deleted. A restart never
-restores an AgentRun or approval authority; startup recovery makes persisted
-pending or approved-but-not-executed approvals terminal before lifecycle
-actions continue.
+or terminal-but-not-yet-quiesced AgentRun and invalidates pending Session
+rules, Reviewer decisions, ActionEnvelopes, and approved-but-not-executed
+authority. A consuming action denies deletion. After the Session graph commits
+as one SQLite transaction, the current Session or picker row is cleared. On
+database failure, the graph remains and the UI reports that it was not deleted.
+A restart never restores an AgentRun or approval authority; startup recovery
+makes persisted pending or approved-but-not-executed approvals terminal before
+lifecycle actions continue.
 
-Deletion removes the Session-owned conversation, run, Tool, Evidence, Diagnosis,
-approval, decision, and linked audit rows. It is logical deletion, not forensic
+Deletion removes the Session-owned conversation, safe summary and coverage,
+run, Tool, Evidence, Diagnosis, ActionEnvelope, approval, decision, execution,
+and linked audit rows. It is logical deletion, not forensic
 erasure of SQLite free pages, WAL, backups, snapshots, swap, or storage media.
 
 ## Export a Session summary
 
 The current standard-persistence Session can be exported from `/privacy` as the
-versioned, redacted Markdown summary documented in
+versioned, redacted Markdown summary and coverage explanation documented in
 [Privacy and Local Data](privacy-and-local-data.md). A historical Session must
 first be resumed explicitly; export does not add a Session page, CLI command,
 file browser, or second composer. It does not call the model or cluster and does
@@ -97,6 +104,8 @@ Resume loads only allowlisted safe history and historic candidates:
 - Committed, locally processed user Messages.
 - Final validated assistant Messages, free-form answers, and safe Diagnosis
   metadata.
+- A bounded safe summary, coverage metadata, and eligible recent committed tail
+  when the `v0.5` implementation requires compaction.
 - Safe Session metadata.
 - An unverified historic Context and Namespace candidate.
 - An unverified historic ResourceRef candidate when eligible.
@@ -106,16 +115,29 @@ Resume does not restore or replay:
 - An AgentRun, model stream, partial model output, or ToolInvocation.
 - A Kubernetes client, active generation, or live ClusterScope.
 - Current Evidence authority for a new run.
-- A cancel function, privacy review, approval, or write state.
+- A cancel function, permission profile authority, Session rule, Reviewer
+  decision, privacy review, ActionEnvelope, approval, process, execution, or
+  verification state.
 
 Historic Evidence may explain an old Diagnosis, but it is display-only in a
 resumed Session. A new confirmed fact must cite new Evidence from the new
 AgentRun.
 
-The command itself makes no model request, Tool call, or Kubernetes read.
-Selecting and accepting a saved scope is a later explicit action that performs
-normal scope verification. Supplying explicit `--context` or `--namespace`
-startup overrides also requests separate scope activation.
+The command itself makes no model request, Tool call, Reviewer request,
+Kubernetes read, local-process launch, approval, or executor call. Selecting
+and accepting a saved scope is a later explicit action that performs normal
+scope verification. Supplying explicit `--context` or `--namespace` startup
+overrides also requests separate scope activation.
+
+Under `v0.5`, every question after the first in a Session receives one ordered,
+bounded representation of all retained eligible safe history when such history
+exists. Application first checks the current named role/profile, canonical
+origin, exact data categories and consent, verified scope, scope and policy
+generations, coverage, and finite context/summary budget. A failed gate causes
+zero model calls and no current-question-only fallback. The current question is
+included exactly once. Partial streams, Tool calls/results, raw model traffic,
+command output, and approval dialogs are never replayed as conversation
+history.
 
 ## Saved-scope conflict
 
@@ -151,10 +173,16 @@ Evidence; the next AgentRun must verify it through a typed bounded capability.
 
 ## Resume privacy behavior
 
-Resume is not consent for a new model transfer. The configured canonical model
-origin, policy version, and exact enabled data-category set must still match an
-accepted consent record. A changed destination or category requires a new
-review before the next content request.
+Resume is not consent for a new model transfer. The configured model role,
+canonical origin, policy version, and exact enabled data-category set must
+still match an accepted consent record. A changed profile, role, destination,
+category, or meaning requires a new review before the next content request.
+
+Summarization reuses the `agent` model profile with an independent finite
+non-streaming no-Tool budget. If coverage is corrupt or required compaction
+fails, Kupilot preserves the last committed state and sends no oversized or
+silently truncated request. Runner-managed durable Session support is not used
+until a stable non-prerelease Eino tag passes ADR-0047's adoption gate.
 
 Session titles and historic scope names may themselves be sensitive local
 metadata. Picker rows are deliberately limited to a safe title, last activity,

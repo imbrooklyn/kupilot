@@ -1,8 +1,14 @@
 # ADR-0010: Support One OpenAI-Compatible Model Origin
 
-- Status: Accepted
+- Status: Superseded by ADR-0046
 - Date: 2026-08-08
-- Amended by: ADR-0035 and ADR-0043
+- Amended by: ADR-0035 and ADR-0043 before supersession
+
+ADR-0046 supersedes only this ADR's restriction to one configured model origin
+at a time. The one `openai_compatible` protocol kind, canonical-origin and
+transport controls, explicit configuration, credential confinement, consent,
+and prohibition on auto-detection, fallback, and routing remain normative for
+`v0.5`. This document otherwise records the historical single-origin decision.
 
 ## Context
 
@@ -128,3 +134,4 @@ compatibility documentation.
 - [ADR-0043: Use One Eino Runtime Boundary](0043-use-one-eino-runtime-boundary.md)
 - [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
 - [ADR-0022: Require a Chat Completions Streaming Tool Contract](0022-require-a-chat-completions-streaming-tool-contract.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](0046-use-named-model-roles-and-optional-auto-review.md)

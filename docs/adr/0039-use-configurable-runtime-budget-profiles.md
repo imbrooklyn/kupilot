@@ -4,6 +4,13 @@
 - Date: 2026-08-30
 - Amended: 2026-09-01
 - Supersedes: ADR-0016
+- Amended by: ADR-0044
+
+ADR-0044 retains immutable finite profiles and atomic pre-I/O reservation but
+replaces the `v0.4` small global ceilings with `v0.5` role- and capability-aware
+budgets. The table and universal `8192` token ceiling below remain historical
+implementation values, not endpoint-independent `v0.5` claims. Exact model and
+stream values require pinned dependency and selected-endpoint evidence.
 
 ## Context
 
@@ -97,3 +104,4 @@ any value above a hard ceiling fail before model or Kubernetes I/O.
 - [Architecture](../architecture.md)
 - [Security Threat Model](../security.md)
 - [Configuration](../configuration.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](0044-prioritize-daily-operations-and-adopt-permission-profiles.md)

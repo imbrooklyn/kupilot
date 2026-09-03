@@ -1,20 +1,27 @@
 # Kupilot Security Threat Model
 
-- Status: Accepted for Kupilot `v0.4`
-- Last updated: 2026-08-30
+- Status: Accepted target for Kupilot `v0.5`
+- Last updated: 2026-09-03
+
+The checked-in implementation remains the `v0.4` baseline. The broader reads,
+permission profiles, model roles, remote diagnostics, local processes, and
+typed remediation in this threat model are accepted targets, not claims of
+current reachability or completed security testing.
 
 ## 1. Scope and security posture
 
 Kupilot is a local, single-process, single-user Kubernetes operations Agent. It
-uses the selected user's kubeconfig identity, one configured model origin, a
-local SQLite database, and a conversational TUI. It can perform the typed reads
-and supervised actions in [Scope](scope.md); it is not a sandbox for arbitrary
-commands and does not claim that model output is trusted.
+uses the selected user's kubeconfig identity, explicit named model profiles and
+origins, a local SQLite database, and a conversational TUI. It may perform only
+the typed reads, controlled diagnostics, and supervised actions in
+[Scope](scope.md). It is not a sandbox for arbitrary commands and does not
+claim that model or Reviewer output is trusted.
 
-The `v0.4` posture deliberately allows more operational reads than the original
-MVP. Security therefore rests on explicit authority, source projection, scope
-generation, consent, bounded execution, and per-action approval rather than on
-an artificially small permanent feature catalog.
+The `v0.5` posture deliberately admits daily operational capabilities rather
+than relying on an artificially small feature catalog. Security rests on
+explicit code-owned authority, source projection, scope and policy generations,
+role-bound consent, finite budgets, permission routing, durable pre-operation
+audit, one-attempt execution, and separate verification.
 
 ## 2. Security objectives
 
@@ -23,21 +30,25 @@ Kupilot must:
 1. keep kubeconfig contents, Kubernetes credentials, model credentials, and
    exec-credential output out of model, TUI, ordinary logs, audit, SQLite, and
    child environments;
-2. ensure model and user text cannot choose a Context, widen namespace access,
-   register a capability, expand budgets, create Evidence, approve an action,
-   or call an executor;
+2. ensure model, Reviewer, Kubernetes, and user text cannot choose a Context,
+   widen namespace access, register or enable a capability, lower risk, expand
+   budgets, create Evidence or permission, or call an executor;
 3. prevent stale or cross-Context results from reaching model, persistence, or
    terminal sinks;
 4. read only code-allowlisted sources and project only reviewed fields before
    redaction or serialization;
-5. deny Secret objects and data, ConfigMap values, environment values, raw
-   objects, arbitrary APIs, arbitrary network requests, and shell execution;
-6. obtain origin- and category-bound informed consent before model-content
-   transfer;
+5. deny credentials, Secret values, ServiceAccount tokens, raw objects,
+   arbitrary APIs, arbitrary destinations, generic command or YAML payloads,
+   and unbounded output; any separately admitted sensitive source must have an
+   exact policy, category, projection, and sink contract;
+6. obtain role-, origin-, policy-, and category-bound informed consent before
+   every model-content transfer;
 7. keep runtime work finite, cancellable, observable through `/status`, and
    bounded by a frozen profile and hard ceilings;
-8. require exact local single-use approval and durable pre-operation audit for
-   every Kubernetes mutation;
+8. classify every sensitive or effectful operation as `safe`, `review`,
+   `critical`, or `deny`, route it under the frozen permission profile, and
+   require an exact immutable `ActionEnvelope` plus durable pre-operation audit
+   before execution;
 9. render all external text safely in a terminal and keep meaning independent
    of color; and
 10. retain and delete only the data admitted by the public retention contract.
@@ -83,8 +94,13 @@ Names and statuses are not public merely because they are not credentials.
    IDs, and action proposals are untrusted suggestions.
 6. **Application to SQLite and local files.** Only explicit bounded safe values
    cross. The local filesystem is not encrypted or tamper-proof.
-7. **Application approval to Kubernetes mutation.** This is a separate authority
-   boundary requiring durable state and fresh target checks.
+7. **Application policy to Reviewer.** The optional Reviewer receives only a
+   bounded review projection and can return a recommendation for `review` work;
+   it cannot create authority or review `critical` work.
+8. **Application approval to external execution.** Kubernetes mutations,
+   remote Pod diagnostics, diagnostic Pods, optional data-source requests, and
+   local argv are distinct boundaries requiring exact policy, durable state,
+   fresh validation, and owned cancellation.
 
 ## 5. Threat actors and assumptions
 
@@ -96,7 +112,9 @@ Relevant actors include:
 - a cluster user able to create crafted Kubernetes data;
 - a Kubernetes API server returning malformed, oversized, or changing data;
 - a local process able to alter configuration or files under the user's
-  account; and
+  account;
+- a compromised local executable, remote container, diagnostic image, optional
+  data source, or Reviewer endpoint; and
 - accidental operator selection of a broad Context, Namespace policy, RBAC
   identity, budget profile, or action.
 
@@ -111,13 +129,15 @@ restricts how it is launched and what environment and output it receives.
 ### T01: Model-selected arbitrary cluster access
 
 **Threat.** A model invents a Kind, GVR, selector, Namespace, Context, raw HTTP
-request, kubectl command, or shell command.
+request, executable, image, destination, kubectl argv, or shell command.
 
 **Controls.** Catalog names and versions are code-defined. Schemas reject
 unknown, duplicate, wrong-type, extra, and oversized fields. Context and access
 policy are runtime-injected. Namespace arguments are canonicalized and checked
-against the frozen `current` or `all` policy. Kubernetes uses typed task-specific
-ports with no dynamic client, REST builder, discovery fallback, or shell.
+against the frozen `current` or `all` policy. Kubernetes and process access use
+task-specific ports with no model-visible dynamic client, REST builder,
+discovery fallback, executable handle, or shell fallback. Exact policy-admitted
+CRDs and argv are locally selected before model input is bound.
 One atomic batch of known, structurally safe selections that fails semantic
 binding receives only fixed local policy feedback; rejected arguments are not
 echoed and Tool handler and Kubernetes call counts remain zero. Unknown,
@@ -139,16 +159,17 @@ published.
 
 ### T03: Sensitive source disclosure
 
-**Threat.** Secret data, ConfigMap values, environment variables, Node addresses,
-provider identifiers, raw object fields, or credentials reach a sink.
+**Threat.** Secret data, ConfigMap values, environment variables, files, Node
+addresses, provider identifiers, raw object fields, logs, metrics, process
+output, or credentials reach an unintended sink.
 
-**Controls.** Source allowlisting precedes projection. Secret reads and
-ConfigMap-value reads are denied before Kubernetes I/O when locally decidable.
-Each Kind has a reviewed project-owned projection. Node addresses, images,
-provider ID, system info, raw allocatable values, volume sources, arbitrary
-annotations, Pod-template environment, and secret references are omitted.
-Eligible text then passes normalization, sensitive-value block/redaction, and
-hard size limits before serialization.
+**Controls.** Source allowlisting precedes projection. Credential and Secret-
+value reads are denied before I/O when locally decidable. Each built-in, exact
+CRD, metrics source, log mode, file policy, and process result has a reviewed
+project-owned projection and explicit category. Sensitive fields that are not
+explicitly admitted are omitted. Eligible text then passes normalization,
+sensitive-value block/redaction, hard item/byte limits, neutral serialization,
+and a final role/origin/category consent check.
 
 ### T04: Prompt injection and false authority
 
@@ -172,21 +193,23 @@ model origin or with newly enabled categories.
 
 **Controls.** Endpoint canonicalization rejects userinfo, query strings,
 insecure TLS overrides, unsafe redirects, and non-loopback plain HTTP. Consent
-binds policy version, canonical origin hash, and exact categories. Origin,
-category, or meaning changes invalidate consent. Application checks consent and
-origin immediately before the first and every subsequent eligible transfer.
+binds policy version, model role, canonical origin hash, and exact categories.
+Profile, role, origin, category, or meaning changes invalidate consent and
+pending authority. Application checks the exact tuple immediately before every
+eligible transfer. There is no fallback or router to another origin.
 
 ### T06: Runaway Agent cost or API load
 
 **Threat.** Repetition, large lists, logs, model latency, or an adversarial
 stream consumes unbounded time, requests, memory, or spend.
 
-**Controls.** Compact, balanced, and extended profiles freeze finite counters
-and deadlines per run; all remain below code hard ceilings. Reservation is
-atomic and precedes I/O. Child deadlines are capped by remaining run time.
-Repeated-call, log-call, result-byte, item, traversal, no-progress, and terminal
-rules are independent. `/status` exposes usage without external calls. Model
-output cannot switch profile or grant an unlimited mode.
+**Controls.** Profiles freeze independent finite Agent, Reviewer, summary,
+capability, data-source, remote-exec, local-process, item, byte, stream, time,
+and cost counters. Reservation is atomic and precedes I/O. Child deadlines are
+capped by remaining ownership. Exact token and stream values require pinned
+dependency and endpoint evidence; conservative byte, call, and time limits
+remain mandatory. `/status` exposes usage without external calls. Model output
+cannot switch profile or grant an unlimited mode.
 
 ### T07: Terminal escape or misleading rendering
 
@@ -238,31 +261,40 @@ complete Diagnosis draft is checked again so escaped credential bytes in answer
 or metadata cannot enter Domain, persistence, UI terminal state, audit, or
 logs. A match fails the run with code-authored safe text.
 
-### T09: Unsafe kubeconfig exec credential launch
+### T09: Unsafe external process launch
 
-**Threat.** A kubeconfig credential plugin becomes a shell injection or receives
-unrelated secrets.
+**Threat.** A kubeconfig credential plugin, restricted argv integration, or
+shell request becomes command injection, receives unrelated secrets, escapes
+its cancellation owner, or produces unbounded output.
 
-**Controls.** Strict deny mode is available. Allow mode launches the exact
-program and arguments from the selected kubeconfig without a shell, supplies a
-minimal environment that omits the model key, bounds stdout/stderr, keeps output
-inside the credential decoder, and terminates with the owning Context. No other
-external-process capability exists.
+**Controls.** Kubeconfig exec authentication remains a distinct adapter-only
+exception whose executable and argv come solely from the selected kubeconfig.
+Other local execution is default off and uses one policy-selected executable
+and exact argv, `shell=false`, a fixed validated working directory, no inherited
+stdin, and an allowlisted minimal environment without model or Kubernetes
+credentials. It bounds stdout/stderr and owns the process group, timeout,
+cancellation, and join. Tool-specific policy blocks kubectl identity/context
+overrides, arbitrary Helm values/plugins, and unbound Argo CD origins. Shell is
+a separately named `critical` capability with its own exact bounded command
+field and cannot be smuggled through a restricted runner's `-c`, wrappers,
+files, stdin, flags, or environment.
 
-### T10: Unapproved, stale, replayed, or ambiguous write
+### T10: Unapproved, stale, replayed, or ambiguous operation
 
-**Threat.** Model or TUI text authorizes a mutation; an approval is replayed,
-expires, targets changed state, bypasses audit, retries a conflict, or repeats
-after an ambiguous outcome.
+**Threat.** Model, Reviewer, or TUI text authorizes a sensitive read, remote or
+local execution, or mutation; an approval is replayed, targets changed state,
+bypasses audit, retries a conflict, or repeats after an ambiguous outcome.
 
-**Controls.** Each action has a fixed semantic operation. Approval defaults to
-rejection, expires after 60 seconds, is single-use, and binds a versioned digest
-to run, Session, policy, complete scope, target identity, fingerprint,
-parameters, and expiry. Application checks nonce, digest, time, state, and
-scope; re-reads the target; durably consumes and pre-audits; checks scope again;
-and permits at most one execution. Conflict, audit failure, restart, mismatch,
-or ambiguity never triggers an automatic write retry. Request acceptance and
-verification are separate.
+**Controls.** Each operation has a fixed semantic schema and deterministic risk.
+An immutable `ActionEnvelope` binds run, Session, policy/profile, both
+generations, complete scope, exact target or executable, typed parameters,
+data/sink/network effects, limits, expiry, and verification plan. Approve-once
+defaults to rejection, expires after 60 seconds, and is single-use. Application
+checks decision routing, nonce, digest, time, state, policy, scope, and target;
+durably consumes and pre-audits; checks both generations again; and permits at
+most one external attempt. Conflict, audit failure, restart, mismatch, or
+ambiguity never triggers an automatic retry. Acceptance and verification are
+separate.
 
 ### T11: Persistence over-collection or unsafe recovery
 
@@ -288,6 +320,37 @@ where appropriate but do not cross safe sinks. Runtime policy does not branch
 on raw error strings. Sensitive diagnostics is a separate explicit local-log
 choice with documented residual risk.
 
+### T13: Reviewer becomes permission authority
+
+**Threat.** A Reviewer approves critical work, changes deterministic risk,
+creates a reusable rule, receives excessive operational data, or silently
+replaces human review after a failure.
+
+**Controls.** Reviewer delegation is limited to `review` under `auto-review` or
+an exact custom rule. Input is a minimal envelope projection. Output is strict,
+non-streaming, and no-Tool: `approve`, `deny`, or `escalate_to_user` with a
+bounded rationale. Malformed output, timeout, cancellation, consent or budget
+failure, and stale policy authorize nothing. `critical` is never
+Reviewer-routed, there is no fallback, and only deterministic Application state
+can create authority.
+
+### T14: Remote diagnostics escape local assumptions
+
+**Threat.** Pod Exec, container-file access, or a diagnostic Pod is treated as
+equivalent to a local operating-system sandbox, follows unsafe paths, inherits
+a ServiceAccount token, or contacts a model-selected destination.
+
+**Controls.** File access binds exact Pod UID/container/path and rechecks
+in-container symlink resolution, device, pseudo-filesystem, credential, size,
+and sink policy. Pod Exec binds one Pod, container, UID, executable, argv,
+stdin/TTY/shell flags, network/data effects, timeout, and output limit.
+Diagnostic Pods use policy-selected pinned images, non-root/non-privileged
+settings, a read-only root filesystem, no host mounts or host network, finite
+resources, disabled token automount, exact in-cluster destinations, and
+separately audited create, observation, delete, and ambiguous-cleanup states.
+An image allowlist is not a network sandbox; actual NetworkPolicy and CNI
+behavior remain separate evidence.
+
 ## 7. Kubernetes access matrix
 
 <!-- markdownlint-disable MD013 -->
@@ -296,15 +359,20 @@ choice with documented residual risk.
 | --- | --- | --- |
 | Namespace | Exact/bounded list; identity, phase, and one bounded reason | Contents, arbitrary annotations, finalizer details |
 | Node | Exact/bounded list; Ready/NotReady state and one bounded health reason | Addresses, provider ID, images, system info, taint values, raw capacity/allocatable maps |
-| Pod and controllers | Exact/bounded list; status, conditions, replica counts, fixed relationships | Environment values, volume sources, raw template, arbitrary annotations |
+| Pod and controllers | Exact/bounded list; status, conditions, replica counts, fixed relationships; one exact non-credential environment value only through a separately consented `review` policy | Generic or bulk environment values, credential values, volume sources, raw template, arbitrary annotations |
 | Service and Ingress | Service type and bounded ports; Ingress identity only; address-free Service readiness relationship | Endpoint and Ingress addresses, Ingress rules/backends, TLS Secret contents, arbitrary annotations |
 | PVC and PV | Identity and phase; PV may include one bounded status reason | Class, mode, capacity, claim details, credentials, CSI attributes, volume source, topology values |
-| ConfigMap | Identity and creation time only | `data`, `binaryData`, values |
+| ConfigMap | Identity and creation time; one exact key only through a separately consented `review` policy | Generic or bulk `data`/`binaryData`, credential values, object dump |
 | HPA and PDB | Replica/health/disruption counts and one bounded failing-condition reason | HPA target and raw metrics, raw selector, object bodies |
 | Event | Bounded normalized fields related to one target | Raw object, managed fields, arbitrary series payload |
 | Pod log | Non-following bounded current or previous tail after consent | Unbounded/follow stream, raw persistence, automatic sensitive-field bypass |
+| Pod and Node metrics | Bounded typed samples and reviewed fields | Unbounded time series, provider identifiers, or arbitrary metric query |
+| Exact policy-admitted CRD | Fixed group/version/resource/Kind/scope/verbs and projection | Discovery expansion, arbitrary GVR, object dump, or unreviewed field |
+| Prometheus or Loki | Explicit optional bounded query through its own source policy | Implicit fallback, arbitrary endpoint/query, credential forwarding, or unbounded response |
+| Container file | Exact bounded path and safe projection | Credential paths, unsafe symlinks, devices, pseudo-filesystems, or raw persistence |
+| Pod diagnostic | Exact Pod/container and policy-owned argv | Model-owned command string, unbounded output, hidden shell, or authority restoration |
 | EndpointSlice | Indirect address-free readiness counts only | Addresses and direct selection |
-| Secret | None | Object and data always denied |
+| Secret | Exact safe metadata projection only | Data, token, credential value, generic object, or automatic model transfer always denied |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -312,25 +380,34 @@ Kubernetes RBAC remains authoritative. Operators should grant only the resources
 and verbs needed for their chosen namespace policy and action catalog. A broad
 ClusterRole is not required when `current` mode and namespaced Roles suffice.
 
-## 8. Mutation safety
+## 8. Permission and execution safety
 
-The current action is `restart_deployment`, which changes only
-`spec.template.metadata.annotations.kupilot.io/restartedAt` on one exact
-Deployment with a fresh resource-version concurrency precondition. The model
-does not supply the patch, annotation, timestamp, UID, generation, or resource
-version.
+The deterministic risk classes are `safe`, `review`, `critical`, and `deny`.
+The default permission profile is `ask`. `auto-review` delegates only `review`;
+`critical` remains human-reviewed. `full-access` and exact custom critical-auto
+rules require explicit high-risk selection and cannot bypass capability
+enablement, scope, RBAC, consent, audit, revalidation, or `deny`. `read-only`
+cannot be approved into mutation or process access.
 
-Future mutations do not inherit approval merely because they are Kubernetes
-writes. Each needs an Accepted schema and threat review covering target,
-parameters, semantic diff, risk copy, digest fields, revalidation, audit,
-one-attempt behavior, and verification.
+The typed P0 mutation catalog is restart, scale, rollback, one controller-owned
+ordinary Pod delete, cordon, uncordon, and drain. Each uses its own exact
+semantic diff and verification plan under the common `ActionEnvelope` flow.
+Restart still changes only Kupilot's Pod-template annotation. Generic patch,
+apply, edit, YAML, arbitrary delete, and model-generated command surfaces are
+denied.
+
+Predefined read-only Pod diagnostics, other Pod Exec, diagnostic Pods,
+restricted local argv, and shell remain separate schemas and risk classes.
+Typed operations are preferred. No decision for one envelope authorizes a
+different target, parameter, command, attempt, or cleanup.
 
 ## 9. Privacy and retention interactions
 
 Broader resource access does not automatically enable broader model transfer.
 Consent categories still govern conversation, resource references and status,
-Events, and container output. Container output remains separately disabled by
-default.
+Events, logs, metrics, files, optional data sources, process output, and resumed
+context. Sensitive categories and high-risk capabilities remain separately
+disabled by default.
 
 Standard persistence retains only bounded validated answers and safe metadata
 for the durations in [Data Retention](data-retention.md). Minimal persistence
@@ -342,15 +419,18 @@ durable content record merely because it is viewed.
 Tests must use synthetic canaries and deterministic fake clocks, clients,
 barriers, and temporary databases. Required proof includes:
 
-- exact Kubernetes requests and projections for each allowlisted source;
-- zero Kubernetes calls for Secret, ConfigMap data, unknown API, malformed
-  Namespace, `current`-policy cross-Namespace, and stale pre-call paths;
-- zero model content calls before valid consent or after origin/category change;
+- exact Kubernetes, optional data-source, remote-exec, and local-process
+  requests and projections for each allowlisted source;
+- zero external calls for credentials, Secret values, unknown API/CRD,
+  malformed Namespace, `current`-policy cross-Namespace, stale scope/policy,
+  disallowed path/image/destination/argv, and shell-smuggling paths;
+- zero model content calls before valid role/origin/category consent or after
+  any bound value changes;
 - zero Tool/handler calls for malformed or invented structured calls;
-- exact compact, balanced, extended, hard-ceiling, cancellation, timeout,
-  byte, repetition, and no-progress accounting;
-- zero executor calls for every approval, target, scope, time, state, audit, and
-  replay denial;
+- exact role- and capability-aware hard-ceiling, cancellation, timeout, byte,
+  item, process, repetition, no-progress, and cost accounting;
+- the complete permission-profile, risk, Reviewer, Session-rule, and generation
+  matrix, with zero executor calls for every denied or failed path;
 - no credential or prohibited canary in model, TUI, error, log, audit, SQLite,
   child-process, or export sinks;
 - terminal-safe rendering across dark, light, ANSI-16, and `NO_COLOR`, including
@@ -359,8 +439,11 @@ barriers, and temporary databases. Required proof includes:
   Unicode and JSON escapes, exact credentials, sensitive patterns, terminal
   controls, cancellation, timeout, stale scope, Tool-turn reset, event limits,
   final replacement, and scrollback exclusion; and
-- restart recovery that never restores a run, stream, live generation,
-  approval authority, or write retry.
+- standard/minimal memory, summary coverage, and explicit resume that never
+  restore a run, stream, live generation, Evidence, permission rule,
+  ActionEnvelope, approval authority, or execution retry; and
+- every typed action's revalidation, one-attempt, ambiguous-outcome, audit, and
+  independent verification states.
 
 ## 11. Residual risks
 
@@ -369,6 +452,12 @@ barriers, and temporary databases. Required proof includes:
   not recognize.
 - `all` namespace policy can expose more metadata when RBAC also permits it.
 - Longer profiles can increase spend and API load within their finite limits.
+- A Reviewer can make an incorrect approval, denial, or escalation recommendation;
+  deterministic risk and hard-deny policy still bound its effect.
+- Pod Exec, diagnostic Pods, local processes, and shell can affect remote or
+  local systems when explicitly enabled, even after correct review.
+- An image or executable allowlist does not by itself provide network or
+  operating-system isolation.
 - Local SQLite, logs, configuration, and exports are not encrypted.
 - Visible conversation may remain in terminal-emulator scrollback after
   Kupilot exits, changes Session, or deletes its own stored history.
@@ -394,3 +483,7 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
 - [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
 - [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)
+- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
+- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
