@@ -26,6 +26,44 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	evidence[1].Category = domain.EvidenceCategoryEvent
 	evidence[1].Truncated = true
 	evidence[1].Fingerprint = domain.SHA256Hex("second-normalized-evidence")
+	customSourcePath := "status.state"
+	evidence = append(evidence, domain.Evidence{
+		ID:           "00000000-0000-7000-8000-000000003008",
+		RunID:        invocation.RunID,
+		InvocationID: invocation.ID,
+		Category:     domain.EvidenceCategoryResourceStatus,
+		Scope:        invocation.Scope,
+		Resource: domain.ResourceRef{
+			APIVersion: "example.test/v1", Kind: "Widget", Namespace: invocation.Scope.Namespace,
+			Name: "sample-widget", UID: "widget-uid", ResourceVersion: "8",
+		},
+		ResourceType: domain.ResourceType{
+			ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets",
+			Kind: "Widget", Scope: domain.ResourceScopeNamespaced,
+		},
+		PolicyVersion: domain.ResourcePolicyVersion, PolicyGeneration: 9,
+		Fact: "The projected Widget state is Ready.", SourcePath: &customSourcePath,
+		Partial: true, Fingerprint: domain.SHA256Hex("custom-resource-evidence"),
+		ObservedAt: time.UnixMilli(204).UTC(),
+	})
+	observedFrom := time.UnixMilli(202).UTC()
+	observedThrough := time.UnixMilli(205).UTC()
+	observabilitySourcePath := "api/v1/query_range#pod_cpu_usage"
+	evidence = append(evidence, domain.Evidence{
+		ID:           "00000000-0000-7000-8000-000000003009",
+		RunID:        invocation.RunID,
+		InvocationID: invocation.ID,
+		Category:     domain.EvidenceCategoryPrometheus,
+		Scope:        invocation.Scope,
+		Resource: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: invocation.Scope.Namespace, Name: "sample-pod",
+		},
+		PolicyVersion: domain.ObservabilityPolicyVersion, PolicyGeneration: 9,
+		Fact: "The admitted CPU series contains one bounded sample.", SourcePath: &observabilitySourcePath,
+		SourceOriginHash: domain.SHA256Hex("https://prometheus.example"), Series: "container=app",
+		ObservedFrom: &observedFrom, ObservedThrough: &observedThrough,
+		Fingerprint: domain.SHA256Hex("observability-evidence"), ObservedAt: observedThrough,
+	})
 	invocation.EvidenceCount = len(evidence)
 	if err := tools.Save(context.Background(), invocation, evidence); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -72,8 +110,12 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	if !reflect.DeepEqual(listedEvidence, evidence) {
 		t.Fatalf("ListByInvocation() = %#v", listedEvidence)
 	}
-	if listedEvidence[1].DetailState() != domain.EvidenceDetailPartial {
-		t.Fatal("truncated Evidence did not remain explicitly partial")
+	if listedEvidence[1].DetailState() != domain.EvidenceDetailPartial || listedEvidence[2].DetailState() != domain.EvidenceDetailPartial ||
+		listedEvidence[2].ResourceType != evidence[2].ResourceType || listedEvidence[2].PolicyGeneration != 9 ||
+		listedEvidence[3].SourceOriginHash != evidence[3].SourceOriginHash || listedEvidence[3].Series != "container=app" ||
+		listedEvidence[3].ObservedFrom == nil || !listedEvidence[3].ObservedFrom.Equal(observedFrom) ||
+		listedEvidence[3].ObservedThrough == nil || !listedEvidence[3].ObservedThrough.Equal(observedThrough) {
+		t.Fatalf("resource Evidence provenance = %#v", listedEvidence)
 	}
 
 	if _, err := tools.GetByID(context.Background(), "00000000-0000-7000-8000-000000003099"); !errors.Is(err, ErrToolInvocationNotFound) {

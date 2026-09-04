@@ -1,0 +1,98 @@
+{
+  "name": "node_pressure_sufficient",
+  "question": "Is example-node under resource pressure?",
+  "scope_namespace": "example-namespace",
+  "target": {
+    "api_version": "v1",
+    "kind": "Node",
+    "namespace": "",
+    "name": "example-node"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-node\",\"namespace\":null,\"purpose\":\"Inspect the current Node pressure conditions.\",\"resource_type\":\"nodes\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The projected MemoryPressure condition is True.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000002201",
+            "category": "condition",
+            "fact": "Node example-node has MemoryPressure=True with reason KubeletHasInsufficientMemory.",
+            "source_path": "projected.status.conditions",
+            "severity": "warning",
+            "supports": [
+              "node_memory_pressure_true",
+              "node_usage_may_contribute"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_node_metrics",
+      "arguments_json": "{\"node_name\":\"example-node\",\"purpose\":\"Inspect current Node CPU and memory usage.\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 200,
+        "data_json": "{\"availability\":\"available\",\"cpu_millicores\":1750,\"memory_bytes\":8589934592,\"source_trust\":\"untrusted_external_data\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000002202",
+            "category": "metric_snapshot",
+            "fact": "The current Metrics API snapshot reports 1750 CPU millicores and 8589934592 memory bytes for Node example-node.",
+            "source_path": "apis/metrics.k8s.io/v1beta1/nodes/example-node",
+            "observed_from_offset_ms": 140,
+            "observed_through_offset_ms": 190,
+            "severity": "info",
+            "supports": [
+              "node_usage_snapshot_observed",
+              "node_usage_may_contribute"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "- The projected MemoryPressure condition is True for example-node.\n- A current bounded Metrics API snapshot reports 1750 CPU millicores and 8589934592 memory bytes.\n\nCurrent Node usage may contribute, but this snapshot does not identify why MemoryPressure is True. Confidence: low. To verify: Fresh pressure conditions, bounded usage, and workload Evidence align in the same window.\n\nNo per-workload usage or eviction Evidence was collected. Impact: No workload can be identified as the cause.\n\nSuggested next step: Correlate fresh pressure conditions with bounded usage and workload Evidence. Risk: Cordon or drain would mutate scheduling and is not part of this read-only investigation. Before acting: Do not change the Node from this observation alone.",
+    "evidence_citations": [
+      {
+        "claim": "The projected MemoryPressure condition is True for example-node.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002201"
+        ]
+      },
+      {
+        "claim": "A current bounded Metrics API snapshot reports 1750 CPU millicores and 8589934592 memory bytes.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002202"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "node_memory_pressure_true"},
+      {"index": 1, "assertion": "node_usage_snapshot_observed"}
+    ],
+    "hypotheses": [
+      {"index": 0, "assertion": "node_usage_may_contribute"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "correlate_node_conditions"}
+    ]
+  },
+  "required_confirmed_assertions": [
+    "node_memory_pressure_true",
+    "node_usage_snapshot_observed"
+  ],
+  "required_missing_kinds": [],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

@@ -10,10 +10,14 @@ This document defines the accepted `v0.5` privacy target and distinguishes it
 from current reachability. The checked-in implementation now has typed named
 Agent and optional Reviewer profiles, role/origin/category consent, safe Session
 context and summarization, and deterministic permission/Reviewer routing for the
-existing supervised Deployment restart. Expanded data sources, public
-permission controls, and new execution paths remain targets and are not claimed
-reachable. Kupilot does not claim that redaction recognizes every sensitive
-value or that a model or data provider follows its local retention schedule.
+existing supervised Deployment restart. It also implements broad, bounded
+built-in and exact configured CRD resource projections plus deterministic
+Events, logs, metrics, Prometheus, and Loki safety pipelines. Review-class log
+and optional-source calls remain fail-closed under the default `ask`
+composition until the public permission flow can create and consume their
+ActionEnvelopes. New execution paths remain targets. Kupilot does not claim
+that redaction recognizes every sensitive value or that a model or data
+provider follows its local retention schedule.
 
 > [!IMPORTANT]
 > Context and Namespace names, resource names, Node and workload status,
@@ -59,8 +63,8 @@ categories, including:
 - `resource_names_and_references`: the Context, working and explicitly targeted
   Namespaces, allowlisted resource names, Kinds, and safe identity fields;
 - `projected_kubernetes_status`: reviewed status, conditions, counts,
-  timestamps, fixed relationship summaries, and exact safe Secret metadata for
-  allowlisted built-in resources;
+  timestamps, fixed relationship summaries, exact policy-admitted scalar CRD
+  fields, and safe Secret identity and creation metadata;
 - `projected_kubernetes_events`: bounded related Event fields after
   normalization, unsafe-control removal, redaction, and truncation;
 - `redacted_container_output`: bounded current, previous, explicit all-container,
@@ -77,7 +81,12 @@ categories, including:
 Under namespace-access policy `all`, an answer may include projected metadata
 from more than the working Namespace. Each item retains its actual Namespace.
 Cluster-scoped Namespace, Node, and PersistentVolume references are identified
-as cluster-scoped rather than assigned a fake Namespace.
+as cluster-scoped rather than assigned a fake Namespace. Evidence records the
+exact API identity, configured scope, applicable policy generation, source
+path, observation time, and partial/redaction state. External-source Evidence
+also records only the canonical origin hash, normalized series identity, and
+query window. Internal discovery bodies, generated PromQL/LogQL, and
+continuation tokens are not model content.
 
 Resource names and operational text may themselves be sensitive. Redaction
 reduces risk but cannot guarantee recognition of every private value.

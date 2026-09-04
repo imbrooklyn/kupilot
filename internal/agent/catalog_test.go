@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
@@ -19,6 +18,10 @@ func TestToolCatalogIsExactStrictAndPolicyBound(t *testing.T) {
 		domain.ToolNameGetEvents,
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetPodMetrics,
+		domain.ToolNameGetNodeMetrics,
+		domain.ToolNameQueryPrometheus,
+		domain.ToolNameQueryLoki,
 		domain.ToolNameGetRelatedResources,
 		domain.ToolNameGetClusterOverview,
 	}
@@ -41,17 +44,17 @@ func TestToolCatalogIsExactStrictAndPolicyBound(t *testing.T) {
 	}
 	listDescription := specifications[1].Description
 	for _, required := range []string{
-		"code-allowlisted Kubernetes Kind",
-		"Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume",
-		"namespace=*",
-		"frozen namespace-access policy",
+		"local resource_type ID",
+		"code-defined field/operator predicates",
+		"Raw selectors and continuation tokens are not accepted",
+		"'*' requires namespace_access=all",
 	} {
 		if !strings.Contains(listDescription, required) {
 			t.Fatalf("list_resources description missing %q", required)
 		}
 	}
-	if !strings.Contains(specifications[6].Description, "which Nodes and/or Namespaces exist") {
-		t.Fatalf("get_cluster_overview description = %q", specifications[6].Description)
+	if !strings.Contains(specifications[10].Description, "which Nodes and/or Namespaces exist") {
+		t.Fatalf("get_cluster_overview description = %q", specifications[10].Description)
 	}
 
 	copyOfCatalog := ToolSpecifications()
@@ -72,31 +75,31 @@ func TestToolCatalogNullableDefaultsCanonicalizeLocally(t *testing.T) {
 		{
 			name:      "get resource",
 			tool:      domain.ToolNameGetResource,
-			arguments: `{"detail":null,"purpose":"Inspect the selected Pod.","resource":{"api_version":null,"kind":"Pod","name":"sample-pod"}}`,
-			want:      []string{`"api_version":"v1"`, `"detail":"diagnostic"`},
+			arguments: `{"detail":null,"name":"sample-pod","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
+			want:      []string{`"detail":"describe"`, `"namespace":"test-namespace"`, `"resource_type":"pods"`},
 		},
 		{
 			name:      "list resources",
 			tool:      domain.ToolNameListResources,
-			arguments: `{"health_filter":null,"kind":"Pod","limit":null,"name_query":null,"purpose":"Find bounded Pod candidates."}`,
-			want:      []string{`"health_filter":"abnormal"`, `"limit":20`},
+			arguments: `{"filters":null,"format":null,"limit":null,"namespace":null,"purpose":"Find bounded Pod candidates.","resource_type":"pods"}`,
+			want:      []string{`"filters":[]`, `"format":"list"`, `"limit":20`, `"resource_type":"pods"`},
 		},
 		{
 			name:      "get events",
 			tool:      domain.ToolNameGetEvents,
-			arguments: `{"limit":null,"purpose":"Inspect recent Pod events.","resource":{"api_version":null,"kind":"Pod","name":"sample-pod","uid":null},"since_seconds":null}`,
+			arguments: `{"limit":null,"purpose":"Inspect recent Pod events.","reason":null,"resource":{"api_version":null,"kind":"Pod","name":"sample-pod","namespace":null,"uid":null},"since_seconds":null,"type":null}`,
 			want:      []string{`"api_version":"v1"`, `"limit":30`, `"since_seconds":3600`},
 		},
 		{
 			name:      "get Pod logs",
 			tool:      domain.ToolNameGetPodLogs,
-			arguments: `{"container":null,"pod_name":"sample-pod","purpose":"Inspect current Pod logs.","since_seconds":null,"tail_lines":null}`,
+			arguments: `{"container":null,"container_mode":null,"include_ephemeral":null,"include_init":null,"namespace":null,"pod_name":"sample-pod","purpose":"Inspect current Pod logs.","search":null,"since_seconds":null,"tail_lines":null}`,
 			want:      []string{`"since_seconds":900`, `"tail_lines":200`},
 		},
 		{
 			name:      "get previous Pod logs",
 			tool:      domain.ToolNameGetPreviousPodLogs,
-			arguments: `{"container":null,"pod_name":"sample-pod","purpose":"Inspect previous Pod logs.","since_seconds":null,"tail_lines":null}`,
+			arguments: `{"container":null,"container_mode":null,"include_ephemeral":null,"include_init":null,"namespace":null,"pod_name":"sample-pod","purpose":"Inspect previous Pod logs.","search":null,"since_seconds":null,"tail_lines":null}`,
 			want:      []string{`"since_seconds":900`, `"tail_lines":200`},
 		},
 		{
@@ -176,7 +179,7 @@ func TestToolBindingClassifiesMalformedArgumentsSeparatelyFromCorrectablePolicyD
 	_, malformedErr := BindToolCall(input, invocationID(30), ToolSelection{
 		ID:            "call-malformed-known-tool",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"},"surprise":true}`,
+		ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods","surprise":true}`,
 	})
 	if !errors.Is(malformedErr, ErrToolPolicyDenied) || !errors.Is(malformedErr, ErrToolArgumentsRejected) {
 		t.Fatalf("malformed known-Tool error = %v", malformedErr)
@@ -185,11 +188,90 @@ func TestToolBindingClassifiesMalformedArgumentsSeparatelyFromCorrectablePolicyD
 	_, policyErr := BindToolCall(input, invocationID(31), ToolSelection{
 		ID:            "call-correctable-policy",
 		Name:          domain.ToolNameListResources,
-		ArgumentsJSON: `{"health_filter":"any","kind":"Node","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Nodes."}`,
+		ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Nodes.","resource_type":"nodes"}`,
 	})
 	if !errors.Is(policyErr, ErrToolPolicyDenied) || errors.Is(policyErr, ErrToolArgumentsRejected) {
 		t.Fatalf("correctable policy error = %v", policyErr)
 	}
+}
+
+func TestBroadResourceBindingDenialsCallNoHandler(t *testing.T) {
+	base := testRunInput(t, "Inspect cluster resources.")
+	sensitive := testRunInputWithSensitiveResourcePolicy(t, base)
+	tool := &fakeTool{result: func(call BoundToolCall) domain.ToolResult {
+		return testToolResult(t, call, testEvidenceID, base.Scope().ActivatedAt)
+	}}
+	handlers := testToolHandlers(tool)
+	tests := []struct {
+		name      string
+		input     RunInput
+		tool      domain.ToolName
+		arguments string
+	}{
+		{name: "missing required namespace", input: base, tool: domain.ToolNameGetResource, arguments: `{"detail":"describe","name":"sample-pod","purpose":"Inspect one Pod.","resource_type":"pods"}`},
+		{name: "duplicate resource type", input: base, tool: domain.ToolNameGetResource, arguments: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods","resource_type":"nodes"}`},
+		{name: "duplicate nested filter", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[{"field":"phase","field":"name","operator":"equals","value":"Running"}],"format":"list","limit":20,"namespace":null,"purpose":"List Pods.","resource_type":"pods"}`},
+		{name: "missing filter value", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[{"field":"phase","operator":"equals"}],"format":"list","limit":20,"namespace":null,"purpose":"List Pods.","resource_type":"pods"}`},
+		{name: "unknown resource type", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List resources.","resource_type":"invented"}`},
+		{name: "model selected group", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","group":"example.test","limit":20,"namespace":null,"purpose":"List resources.","resource_type":"pods"}`},
+		{name: "model selected verb", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List resources.","resource_type":"pods","verb":"watch"}`},
+		{name: "model selected subresource", input: base, tool: domain.ToolNameGetResource, arguments: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods","subresource":"status"}`},
+		{name: "raw selector", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List resources.","raw_selector":"metadata.name=sample-pod","resource_type":"pods"}`},
+		{name: "raw JSONPath", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","jsonpath":"{.items[*]}","limit":20,"namespace":null,"purpose":"List resources.","resource_type":"pods"}`},
+		{name: "malformed continuation", input: base, tool: domain.ToolNameListResources, arguments: `{"continuation":"!!!","filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List resources.","resource_type":"pods"}`},
+		{name: "cross namespace under current policy", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":"other-namespace","purpose":"List Pods.","resource_type":"pods"}`},
+		{name: "all namespaces under current policy", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":"*","purpose":"List Pods.","resource_type":"pods"}`},
+		{name: "namespace on cluster resource", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Nodes.","resource_type":"nodes"}`},
+		{name: "unknown projected field", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[{"field":"spec","operator":"equals","value":"raw"}],"format":"list","limit":20,"namespace":null,"purpose":"List Pods.","resource_type":"pods"}`},
+		{name: "invalid typed predicate", input: base, tool: domain.ToolNameListResources, arguments: `{"filters":[{"field":"desired","operator":"greater_than","value":"many"}],"format":"list","limit":20,"namespace":null,"purpose":"List Deployments.","resource_type":"deployments"}`},
+		{name: "sensitive projected field", input: sensitive, tool: domain.ToolNameListResources, arguments: `{"filters":[{"field":"credential_ref","operator":"equals","value":"sample"}],"format":"list","limit":20,"namespace":null,"purpose":"List Widgets.","resource_type":"widgets"}`},
+	}
+	for index, current := range tests {
+		t.Run(current.name, func(t *testing.T) {
+			bound, err := BindToolCall(current.input, invocationID(index+40), ToolSelection{
+				ID: "denied-broad-read", Name: current.tool, ArgumentsJSON: current.arguments,
+			})
+			if err == nil {
+				handler, resolveErr := handlers.Resolve(bound.Name())
+				if resolveErr == nil {
+					_ = handler.Execute(context.Background(), bound)
+				}
+				t.Fatal("BindToolCall() error = nil")
+			}
+			if !errors.Is(err, ErrToolPolicyDenied) || tool.Calls() != 0 {
+				t.Fatalf("binding error/handler calls = %v/%d", err, tool.Calls())
+			}
+		})
+	}
+}
+
+func testRunInputWithSensitiveResourcePolicy(t *testing.T, base RunInput) RunInput {
+	t.Helper()
+	entries := base.ResourcePolicies().Entries()
+	entries = append(entries, domain.ResourcePolicy{
+		Type: domain.ResourceType{
+			ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets",
+			Kind: "Widget", Scope: domain.ResourceScopeNamespaced,
+		},
+		Verbs: []domain.ResourceVerb{domain.ResourceVerbGet, domain.ResourceVerbList},
+		Fields: []domain.ResourceFieldPolicy{
+			{ID: "name", Path: "metadata.name", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataMetadata, SelectorSource: domain.ResourceSelectorField, SelectorKey: "metadata.name", Operators: []domain.ResourceFilterOperator{domain.ResourceFilterEquals}},
+			{ID: "credential_ref", Path: "spec.credentialRef", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataSensitive, SelectorSource: domain.ResourceSelectorNone, Operators: []domain.ResourceFilterOperator{domain.ResourceFilterEquals}},
+		},
+		Limits: domain.ResourceQueryLimits{MaxPages: 2, PageItems: 20, PageBytes: 256 * 1024, MaxItems: 40, MaxBytes: 1 << 20, MaxReturned: 20},
+	})
+	catalog, err := domain.NewResourcePolicyCatalog(domain.ResourcePolicyVersion, entries)
+	if err != nil {
+		t.Fatalf("NewResourcePolicyCatalog() error = %v", err)
+	}
+	input, err := NewRunInputWithPolicyContext(
+		base.RunID(), base.SessionID(), base.RequestMessageID(), base.Question(), base.Scope(), base.Resource(),
+		base.BudgetLimits(), base.Conversation(), catalog, base.PolicyGeneration(),
+	)
+	if err != nil {
+		t.Fatalf("NewRunInputWithPolicyContext() error = %v", err)
+	}
+	return input
 }
 
 func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
@@ -201,15 +283,28 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	if !strings.Contains(call.ArgumentsJSON(), `"namespace":"test-namespace"`) {
 		t.Fatalf("canonical arguments do not contain the runtime-resolved Namespace: %s", call.ArgumentsJSON())
 	}
-	if !strings.Contains(call.ArgumentsJSON(), `"api_version":"v1"`) || !strings.Contains(call.ArgumentsJSON(), `"detail":"diagnostic"`) {
+	if !strings.Contains(call.ArgumentsJSON(), `"resource_type":"pods"`) || !strings.Contains(call.ArgumentsJSON(), `"detail":"describe"`) {
 		t.Fatalf("canonical arguments did not inject defaults: %s", call.ArgumentsJSON())
 	}
 	ceilings := call.Ceilings()
 	if ceilings.RequestTimeout != input.BudgetLimits().ToolRequestTimeout ||
 		ceilings.MaxResultBytes != domain.MaxToolResultBytes ||
 		ceilings.MaxEvidenceItems != domain.MaxEvidenceItemsPerResult ||
-		ceilings.MaxResourceItems != 50 || ceilings.MaxEventItems != 50 ||
-		ceilings.MaxLogLines != 200 || ceilings.MaxLogWindow != 15*time.Minute ||
+		ceilings.MaxResourceItems != input.BudgetLimits().ResourceReturnedItems ||
+		ceilings.MaxResourceScannedItems != input.BudgetLimits().ResourceScannedItems ||
+		ceilings.MaxResourcePages != input.BudgetLimits().ResourcePages ||
+		ceilings.MaxResourcePageItems != input.BudgetLimits().ResourcePageItems ||
+		ceilings.MaxResourcePageBytes != input.BudgetLimits().ResourcePageBytes ||
+		ceilings.MaxResourceBytes != input.BudgetLimits().ResourceBytes || ceilings.MaxEventItems != 50 ||
+		ceilings.MaxEventPages != input.BudgetLimits().EventPages || ceilings.MaxEventPageItems != input.BudgetLimits().EventPageItems ||
+		ceilings.MaxEventPageBytes != input.BudgetLimits().EventPageBytes || ceilings.MaxEventBytes != input.BudgetLimits().EventBytes ||
+		ceilings.MaxLogLines != input.BudgetLimits().DataSourceLines || ceilings.MaxLogContainers != input.BudgetLimits().LogContainers ||
+		ceilings.MaxLogBytes != input.BudgetLimits().LogBytes || ceilings.MaxLogWindow != input.BudgetLimits().DataSourceWindow ||
+		ceilings.MaxMetricContainers != input.BudgetLimits().MetricContainers || ceilings.MaxMetricBytes != input.BudgetLimits().MetricBytes ||
+		ceilings.MaxDataSourcePages != input.BudgetLimits().DataSourcePages || ceilings.MaxDataSourceSeries != input.BudgetLimits().DataSourceSeries ||
+		ceilings.MaxDataSourceSamples != input.BudgetLimits().DataSourceSamples || ceilings.MaxDataSourceLines != input.BudgetLimits().DataSourceLines ||
+		ceilings.MaxDataSourceBytes != input.BudgetLimits().DataSourceBytes || ceilings.MaxDataSourceWindow != input.BudgetLimits().DataSourceWindow ||
+		ceilings.MaxDataSourceStep != input.BudgetLimits().DataSourceStep ||
 		ceilings.MaxRelationshipHops != 2 || ceilings.MaxRelationshipNodes != 25 || ceilings.MaxRelationshipEdges != 40 {
 		t.Fatalf("bound ceilings = %#v", ceilings)
 	}
@@ -217,7 +312,7 @@ func TestToolCallBindingInjectsScopeCeilingsAndCanonicalDefaults(t *testing.T) {
 	boundedList, err := BindToolCall(input, invocationID(1), ToolSelection{
 		ID:            "call-2",
 		Name:          domain.ToolNameListResources,
-		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":5,"purpose":"Find bounded Pod candidates."}`,
+		ArgumentsJSON: `{"filters":[],"format":"list","limit":5,"namespace":null,"purpose":"Find bounded Pod candidates.","resource_type":"pods"}`,
 	})
 	if err != nil {
 		t.Fatalf("BindToolCall(list with request limit) error = %v", err)
@@ -234,13 +329,13 @@ func TestToolCallBindingCanonicalizesNeutralProviderJSON(t *testing.T) {
 	selection := ToolSelection{
 		ID:            "call-noncanonical",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: ` { "resource": { "name": "sample-pod", "kind": "Pod" }, "purpose": "Inspect the selected Pod." } `,
+		ArgumentsJSON: ` { "resource_type": "pods", "purpose": "Inspect the selected Pod.", "namespace": null, "name": "sample-pod", "detail": null } `,
 	}
 	bound, err := BindToolCall(input, testInvocationID, selection)
 	if err != nil {
 		t.Fatalf("BindToolCall(noncanonical provider JSON) error = %v", err)
 	}
-	if got := bound.ArgumentsJSON(); strings.HasPrefix(got, " ") || strings.Contains(got, `"name":"sample-pod","kind"`) {
+	if got := bound.ArgumentsJSON(); strings.HasPrefix(got, " ") || !strings.Contains(got, `"name":"sample-pod"`) {
 		t.Fatalf("bound arguments were not canonicalized: %q", got)
 	}
 	if err := bound.Validate(); err != nil {
@@ -253,8 +348,8 @@ func TestToolCallBindingPreservesSingleItemListsAndRequiresTwoItemOverview(t *te
 	list, err := BindToolCall(input, invocationID(1), ToolSelection{
 		ID:   "call-list-one",
 		Name: domain.ToolNameListResources,
-		ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":1,"name_query":null,` +
-			`"namespace":null,"purpose":"Inspect one Pod."}`,
+		ArgumentsJSON: `{"filters":[],"format":"list","limit":1,"namespace":null,` +
+			`"purpose":"Inspect one Pod.","resource_type":"pods"}`,
 	})
 	if err != nil || !strings.Contains(list.ArgumentsJSON(), `"limit":1`) {
 		t.Fatalf("BindToolCall(single list) = %#v, %v", list, err)
@@ -278,7 +373,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	bound, err := BindToolCall(input, testInvocationID, ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":` + string(purposeJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":` + string(purposeJSON) + `,"resource_type":"pods"}`,
 	})
 	if err != nil {
 		t.Fatalf("BindToolCall(sensitive replacement) error = %v", err)
@@ -295,7 +390,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	_, err = BindToolCall(input, invocationID(4), ToolSelection{
 		ID:            "call-4",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":` + string(controlJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":` + string(controlJSON) + `,"resource_type":"pods"}`,
 	})
 	if !errors.Is(err, ErrToolPolicyDenied) {
 		t.Fatalf("BindToolCall(control purpose) error = %v, want %v", err, ErrToolPolicyDenied)
@@ -308,7 +403,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	listed, err := BindToolCall(input, invocationID(2), ToolSelection{
 		ID:            "call-2",
 		Name:          domain.ToolNameListResources,
-		ArgumentsJSON: `{"kind":"Pod","name_query":` + string(queryJSON) + `,"purpose":"Find matching Pods."}`,
+		ArgumentsJSON: `{"filters":[{"field":"phase","operator":"contains","value":` + string(queryJSON) + `}],"format":"list","limit":20,"namespace":null,"purpose":"Find matching Pods.","resource_type":"pods"}`,
 	})
 	if err != nil || strings.Contains(listed.ArgumentsJSON(), canary) || !strings.Contains(listed.ArgumentsJSON(), "[REDACTED]") {
 		t.Fatalf("sanitized list_resources call/error = %#v/%v", listed, err)
@@ -324,7 +419,7 @@ func TestToolCallBindingSanitizesOrBlocksModelFreeTextBeforeHandler(t *testing.T
 	_, err = BindToolCall(input, invocationID(3), ToolSelection{
 		ID:            "call-3",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":` + string(blockedJSON) + `,"resource":{"kind":"Pod","name":"sample-pod"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":` + string(blockedJSON) + `,"resource_type":"pods"}`,
 	})
 	if !errors.Is(err, ErrSensitiveModelTextBlocked) ||
 		strings.Contains(err.Error(), blockedCanary) || strings.Contains(err.Error(), blockedPurpose) {
@@ -337,7 +432,7 @@ func FuzzBindToolCallStrictSchema(f *testing.F) {
 		name      string
 		arguments string
 	}{
-		{name: string(domain.ToolNameGetResource), arguments: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`},
+		{name: string(domain.ToolNameGetResource), arguments: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`},
 		{name: string(domain.ToolNameGetResource), arguments: `{"namespace":"other","purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`},
 		{name: string(domain.ToolNameGetResource), arguments: `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","kind":"Secret","name":"sample-pod"}}`},
 		{name: string(domain.ToolNameListResources), arguments: `{"kind":"Pod","limit":51,"purpose":"Find Pods."}`},

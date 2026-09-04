@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestToolsKeepConsumerOwnedBoundaries(t *testing.T) {
@@ -121,5 +123,21 @@ func TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape(t *testin
 			}
 			return true
 		})
+	}
+}
+
+func TestEvidenceTypeDoesNotReplaceInvalidExplicitAPIIdentity(t *testing.T) {
+	t.Parallel()
+
+	invalid := domain.ResourceType{
+		ID: "pods", Version: "v1", Resource: "secrets", Kind: "Pod",
+		Scope: domain.ResourceScopeNamespaced, BuiltIn: true,
+	}
+	if got := effectiveEvidenceResourceType(evidenceTemplate{resourceType: invalid}); got != invalid {
+		t.Fatalf("effective Evidence resource type = %#v, want invalid explicit identity %#v", got, invalid)
+	}
+	legacy := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"}
+	if got := effectiveEvidenceResourceType(evidenceTemplate{resource: legacy}); got != domain.BuiltInResourceType(domain.ResourceKindPod) {
+		t.Fatalf("legacy inferred Evidence resource type = %#v", got)
 	}
 }

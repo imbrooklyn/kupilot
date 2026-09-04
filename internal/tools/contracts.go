@@ -140,10 +140,45 @@ type ResourceReader interface {
 	ListResources(context.Context, ResourceListRequest) (ResourceObservationList, error)
 }
 
+// ResourceQueryRequest binds one immutable query to the exact catalog entry
+// that authorized it. No vendor GVR, request builder, or continuation token
+// crosses this port.
+type ResourceQueryRequest struct {
+	Policy domain.ResourcePolicy
+	Query  domain.ResourceQuery
+	Detail ResourceDetail
+}
+
+func (request ResourceQueryRequest) Validate() error {
+	if request.Policy.Validate() != nil || request.Query.Validate() != nil || !request.Policy.AllowsQuery(request.Query) {
+		return ErrInvalidResourceRead
+	}
+	if request.Query.Verb == domain.ResourceVerbGet {
+		if !request.Detail.valid() {
+			return ErrInvalidResourceRead
+		}
+	} else if request.Detail != "" {
+		return ErrInvalidResourceRead
+	}
+	return nil
+}
+
+// ResourceQueryReader is the broad-read Kubernetes port. Pagination remains
+// wholly inside its implementation and cannot be supplied by the model.
+type ResourceQueryReader interface {
+	QueryResources(context.Context, ResourceQueryRequest) (ResourceQueryObservation, error)
+}
+
 // ScopeGuard checks the complete immutable scope before and after each reader
 // call. Application may implement this port without crossing into Tools.
 type ScopeGuard interface {
 	Current(context.Context, domain.ClusterScope) bool
+}
+
+// PolicyGenerationGuard rejects work after any permission, catalog, data, or
+// origin policy generation change.
+type PolicyGenerationGuard interface {
+	CurrentPolicyGeneration(context.Context, domain.PolicyGeneration) bool
 }
 
 // EvidenceIDSource supplies Application-generated UUIDv7 Evidence identifiers.
@@ -161,7 +196,9 @@ type TextProcessor interface {
 // two resource handlers. Context is never stored here.
 type ResourceToolDependencies struct {
 	Reader      ResourceReader
+	QueryReader ResourceQueryReader
 	ScopeGuard  ScopeGuard
+	PolicyGuard PolicyGenerationGuard
 	EvidenceIDs EvidenceIDSource
 	Text        TextProcessor
 	Now         func() time.Time
@@ -174,6 +211,13 @@ func (dependencies ResourceToolDependencies) validate() error {
 	}
 	now := dependencies.Now()
 	if now.IsZero() || now.Location() != time.UTC || now.UnixMilli() < 0 {
+		return ErrInvalidResourceToolDependencies
+	}
+	return nil
+}
+
+func (dependencies ResourceToolDependencies) validateQuery() error {
+	if dependencies.validate() != nil || dependencies.QueryReader == nil || dependencies.PolicyGuard == nil {
 		return ErrInvalidResourceToolDependencies
 	}
 	return nil
@@ -272,7 +316,64 @@ type ResourceObservation struct {
 	Conditions   []ConditionObservation
 	Containers   []ContainerObservation
 	ServicePorts []ServicePortObservation
+	Fields       []ResourceFieldObservation
 	Truncated    bool
+}
+
+// ResourceFieldObservation is one exact policy-projected scalar. Value is
+// still untrusted source data and is processed again before model egress.
+type ResourceFieldObservation struct {
+	Field     string
+	Path      string
+	Scalar    domain.ResourceScalarType
+	DataClass domain.ResourceDataClass
+	Value     ExternalText
+	Present   bool
+}
+
+// ResourceQueryObservation is the complete broad-read response. Page carries
+// aggregate budget/provenance state; Items carry only projected values.
+type ResourceQueryObservation struct {
+	Page  domain.ResourcePage
+	Items []ResourceObservation
+}
+
+func (observation ResourceQueryObservation) Validate(request ResourceQueryRequest) error {
+	if request.Validate() != nil || observation.Page.Validate(request.Query) != nil || len(observation.Items) != len(observation.Page.Items) {
+		return ErrInvalidResourceRead
+	}
+	for index, item := range observation.Items {
+		if item.validate() != nil || !sameResourceSummary(item.Summary, observation.Page.Items[index]) || item.Summary.EffectiveType() != request.Policy.Type {
+			return ErrInvalidResourceRead
+		}
+		seen := make(map[string]struct{}, len(item.Fields))
+		for _, field := range item.Fields {
+			policyField, found := request.Policy.Field(field.Field)
+			if !found || policyField.DataClass == domain.ResourceDataSensitive || field.Path != policyField.Path ||
+				field.Scalar != policyField.Scalar || field.DataClass != policyField.DataClass || !field.Value.valid(maxProjectedTextBytes) ||
+				!field.Present && field.Value.Value != "" {
+				return ErrInvalidResourceRead
+			}
+			if _, duplicate := seen[field.Field]; duplicate {
+				return ErrInvalidResourceRead
+			}
+			seen[field.Field] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func sameResourceSummary(left, right domain.ResourceSummary) bool {
+	if left.Type != right.Type || left.Reference != right.Reference || !left.CreatedAt.Equal(right.CreatedAt) ||
+		left.Status != right.Status || len(left.Owners) != len(right.Owners) {
+		return false
+	}
+	for index := range left.Owners {
+		if left.Owners[index] != right.Owners[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // ResourceObservationList is one bounded reader response before model filtering.
@@ -588,11 +689,12 @@ func sameRelatedTarget(request, result domain.ResourceRef) bool {
 }
 
 func zeroResourceObservation(observation ResourceObservation) bool {
-	return observation.Summary.Reference == (domain.ResourceRef{}) && observation.Summary.CreatedAt.IsZero() &&
+	return observation.Summary.Type == (domain.ResourceType{}) && observation.Summary.Reference == (domain.ResourceRef{}) && observation.Summary.CreatedAt.IsZero() &&
 		observation.Summary.Status == (domain.ResourceStatus{}) && len(observation.Summary.Owners) == 0 &&
 		observation.Generation == (OptionalInt64{}) &&
 		observation.LabelCount == 0 && len(observation.Labels) == 0 && observation.Status == (ResourceDiagnosticStatus{}) &&
-		len(observation.Conditions) == 0 && len(observation.Containers) == 0 && len(observation.ServicePorts) == 0 && !observation.Truncated
+		len(observation.Conditions) == 0 && len(observation.Containers) == 0 && len(observation.ServicePorts) == 0 &&
+		len(observation.Fields) == 0 && !observation.Truncated
 }
 
 func validRelatedIdentity(value string, maximumBytes int) bool {
@@ -706,6 +808,7 @@ func (observation ResourceObservation) validate() error {
 	if observation.Summary.Validate() != nil || observation.LabelCount < len(observation.Labels) || observation.LabelCount < 0 ||
 		len(observation.Labels) > maxProjectedLabels || len(observation.Conditions) > maxProjectedConditions ||
 		len(observation.Containers) > maxProjectedContainers || len(observation.ServicePorts) > maxProjectedServicePorts ||
+		len(observation.Fields) > domain.MaxResourceFields ||
 		!observation.Generation.valid() || !optionalCountValid(observation.Status.Current) || !optionalCountValid(observation.Status.Updated) ||
 		!optionalCountValid(observation.Status.Unavailable) || !optionalCountValid(observation.Status.Parallelism) ||
 		!optionalCountValid(observation.Status.BackoffLimit) || !optionalCountValid(observation.Status.SelectorKeyCount) ||
@@ -740,6 +843,13 @@ func (observation ResourceObservation) validate() error {
 	for _, port := range observation.ServicePorts {
 		if port.Port < 1 || port.Port > 65535 || !port.Name.valid(maxProjectedTextBytes) ||
 			!port.Protocol.valid(maxProjectedTextBytes) || !port.TargetPort.valid(maxProjectedTextBytes) {
+			return ErrInvalidResourceRead
+		}
+	}
+	for _, field := range observation.Fields {
+		if field.Field == "" || field.Path == "" || !field.Scalar.Valid() || !field.DataClass.Valid() ||
+			field.DataClass == domain.ResourceDataSensitive || !field.Value.valid(maxProjectedTextBytes) ||
+			!field.Present && field.Value.Value != "" {
 			return ErrInvalidResourceRead
 		}
 	}
@@ -952,13 +1062,20 @@ func measureResult(call BoundToolCall, result ToolResult) (ToolResult, error) {
 }
 
 type evidenceTemplate struct {
-	category       domain.EvidenceCategory
-	resource       domain.ResourceRef
-	fact           string
-	sourcePath     string
-	severity       *domain.EvidenceSeverity
-	redactionCount int
-	truncated      bool
+	category         domain.EvidenceCategory
+	resource         domain.ResourceRef
+	resourceType     domain.ResourceType
+	policyVersion    string
+	fact             string
+	sourcePath       string
+	sourceOriginHash string
+	series           string
+	observedFrom     *time.Time
+	observedThrough  *time.Time
+	severity         *domain.EvidenceSeverity
+	redactionCount   int
+	truncated        bool
+	partial          bool
 }
 
 func materializeEvidence(
@@ -1015,21 +1132,67 @@ func evidenceFromTemplate(
 		copied := template.sourcePath
 		sourcePath = &copied
 	}
-	return domain.Evidence{
-		ID:             identifier,
-		RunID:          call.RunID(),
-		InvocationID:   call.InvocationID(),
-		Category:       template.category,
-		Scope:          call.Scope().Snapshot(),
-		Resource:       template.resource,
-		Fact:           template.fact,
-		SourcePath:     sourcePath,
-		Severity:       template.severity,
-		RedactionCount: template.redactionCount,
-		Truncated:      template.truncated,
-		Fingerprint:    domain.SHA256Hex(string(template.category) + "\n" + template.fact + "\n" + template.sourcePath),
-		ObservedAt:     observed,
+	policyVersion := effectiveEvidencePolicyVersion(template)
+	resourceType := effectiveEvidenceResourceType(template)
+	fingerprintParts := []string{
+		string(template.category), template.fact, template.sourcePath, template.sourceOriginHash, template.series,
+		template.resource.APIVersion, template.resource.Kind, template.resource.Namespace, template.resource.Name,
+		template.resource.UID, template.resource.ResourceVersion,
+		resourceType.Group, resourceType.Version, resourceType.Resource, resourceType.Kind, string(resourceType.Scope),
+		policyVersion, fmt.Sprint(call.PolicyGeneration()),
 	}
+	if template.observedFrom != nil && template.observedThrough != nil {
+		fingerprintParts = append(fingerprintParts, template.observedFrom.Format(time.RFC3339Nano), template.observedThrough.Format(time.RFC3339Nano))
+	}
+	return domain.Evidence{
+		ID:               identifier,
+		RunID:            call.RunID(),
+		InvocationID:     call.InvocationID(),
+		Category:         template.category,
+		Scope:            call.Scope().Snapshot(),
+		Resource:         template.resource,
+		ResourceType:     resourceType,
+		PolicyVersion:    policyVersion,
+		PolicyGeneration: call.PolicyGeneration(),
+		Fact:             template.fact,
+		SourcePath:       sourcePath,
+		SourceOriginHash: template.sourceOriginHash,
+		Series:           template.series,
+		ObservedFrom:     copyTimePointer(template.observedFrom),
+		ObservedThrough:  copyTimePointer(template.observedThrough),
+		Severity:         template.severity,
+		RedactionCount:   template.redactionCount,
+		Truncated:        template.truncated,
+		Partial:          template.partial,
+		Fingerprint:      domain.SHA256Hex(strings.Join(fingerprintParts, "\n")),
+		ObservedAt:       observed,
+	}
+}
+
+func effectiveEvidencePolicyVersion(template evidenceTemplate) string {
+	if template.policyVersion != "" {
+		return template.policyVersion
+	}
+	return domain.ResourcePolicyVersion
+}
+
+func copyTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func effectiveEvidenceResourceType(template evidenceTemplate) domain.ResourceType {
+	if template.resourceType != (domain.ResourceType{}) {
+		return template.resourceType
+	}
+	kind, found := domain.ResourceKindForReference(template.resource)
+	if !found {
+		return domain.ResourceType{}
+	}
+	return domain.BuiltInResourceType(kind)
 }
 
 func finalizePlannedResult(call BoundToolCall, observed time.Time, result ToolResult) ToolResult {

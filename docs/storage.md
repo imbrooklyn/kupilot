@@ -109,6 +109,18 @@ failure metadata. Startup recovery restores no authority from either table.
 Terminal rows in the legacy archive participate in the same bounded 180-day
 approval cleanup as generalized approvals.
 
+Migration 8 extends accepted Evidence with nullable exact resource-type
+identity, resource-policy version and generation, and explicit partial state.
+It preserves legacy Evidence as the narrower historic form and adds no raw
+object, discovery response, selector, continuation token, or generic payload.
+
+Migration 9 extends accepted Evidence with the observability-policy version,
+canonical source-origin hash, normalized series identity, and observation
+window. It also binds optional Prometheus and Loki origin hashes into the
+role-scoped consent row and returns migrated consent to pending. It stores no
+raw Event, log, metric, PromQL/LogQL, response body, credential, or continuation
+token.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
 `approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
@@ -135,10 +147,13 @@ model traffic, raw Tool results, arbitrary patches, or framework objects.
 Token-count metadata is numeric usage information and never authentication
 material. JSON columns are purpose-specific bounded projections; they do not
 make an otherwise prohibited source eligible for storage.
-ResourceRef projections are limited to the current code-owned API-version and
-Kind allowlist. Namespaced Evidence records its exact observed Namespace, which
-may differ from the working Namespace only for a run whose frozen policy
-allowed it; cluster-scoped references contain no Namespace.
+ResourceRef projections are limited to the code-owned built-in or exact
+configured resource-policy catalog frozen for the run. Namespaced Evidence
+records its exact observed Namespace, which may differ from the working
+Namespace only for a run whose frozen policy allowed it; cluster-scoped
+references contain no Namespace. Broad resource Evidence additionally stores
+the exact API identity, policy version and generation, and partial state, never
+the raw Kubernetes object or continuation token.
 
 ## Repository contracts
 
@@ -188,7 +203,7 @@ bounded the source data:
 | Action approval | Explicit bounded ActionEnvelope identity, scope and policy generations, target facts, effect bitsets, limits, typed-parameter kind and digest, nonce hash, lifecycle state, and decision metadata. No raw typed parameter, executable, argv, command, environment, external output, or generic payload is accepted. Legacy unexecuted restart authority is made terminal by migration 7. |
 | Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
 | ToolInvocation | One of the seven admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
-| Evidence | A project-owned ResourceRef projection, category, concise fact, source path, severity, redaction and truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. |
+| Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. |
 | Diagnosis | Validated free-form Markdown, claim-to-Evidence citations, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every retained confirmed fact cites same-run Evidence when written. |
 | AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, approval, and write-safety event types. |
 | Setting | `retention.operational_detail_days` is a schema-version-1 integer from 0 through 3,650. `scope.last_context` is a schema-version-1 strict JSON object containing one Context display name. Both use injected UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |

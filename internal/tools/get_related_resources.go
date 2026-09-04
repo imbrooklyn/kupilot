@@ -132,6 +132,7 @@ func (tool *GetRelatedResourcesTool) Execute(ctx context.Context, call BoundTool
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
@@ -453,6 +454,7 @@ func fitRelatedResult(
 				}
 				for index := range result.Evidence {
 					result.Evidence[index].Truncated = true
+					result.Evidence[index].Partial = true
 				}
 			}
 			measured, measureErr := measureResult(call, result)

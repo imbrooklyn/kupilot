@@ -147,6 +147,14 @@ func cloneEvidence(evidence domain.Evidence) domain.Evidence {
 		value := *evidence.Severity
 		cloned.Severity = &value
 	}
+	if evidence.ObservedFrom != nil {
+		value := *evidence.ObservedFrom
+		cloned.ObservedFrom = &value
+	}
+	if evidence.ObservedThrough != nil {
+		value := *evidence.ObservedThrough
+		cloned.ObservedThrough = &value
+	}
 	return cloned
 }
 

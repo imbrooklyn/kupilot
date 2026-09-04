@@ -45,22 +45,27 @@ func (result UIScopeResult) Validate() error {
 // UIStatusResult is the current safe in-memory status projection. Historic
 // scope metadata and pending resume candidates are intentionally excluded.
 type UIStatusResult struct {
-	Session                  *UISessionState
-	Context                  string
-	Namespace                string
-	NamespaceAccess          domain.NamespaceAccessPolicy
-	ScopeGeneration          int64
-	ReadOnly                 bool
-	RunID                    domain.AgentRunID
-	RunActive                bool
-	CapabilityCatalogVersion string
-	PersistenceDegraded      bool
-	Budget                   UIBudgetStatus
-	ModelContext             UIModelContextStatus
-	AgentModel               UIModelRoleStatus
-	ReviewerModel            UIModelRoleStatus
-	Permission               UIPermissionStatus
-	Action                   *UIActionStatus
+	Session                    *UISessionState
+	Context                    string
+	Namespace                  string
+	NamespaceAccess            domain.NamespaceAccessPolicy
+	ScopeGeneration            int64
+	ReadOnly                   bool
+	RunID                      domain.AgentRunID
+	RunActive                  bool
+	CapabilityCatalogVersion   string
+	ResourcePolicyVersion      string
+	ObservabilityPolicyVersion string
+	ResourceTypeCount          int
+	PrometheusEnabled          bool
+	LokiEnabled                bool
+	PersistenceDegraded        bool
+	Budget                     UIBudgetStatus
+	ModelContext               UIModelContextStatus
+	AgentModel                 UIModelRoleStatus
+	ReviewerModel              UIModelRoleStatus
+	Permission                 UIPermissionStatus
+	Action                     *UIActionStatus
 }
 
 // UIPermissionStatus is a content-free local policy snapshot.
@@ -139,6 +144,31 @@ type UIBudgetStatus struct {
 	ToolResultBytesMaximum   int
 	LogCallsUsed             int
 	LogCallsMaximum          int
+	LogContainersMaximum     int
+	LogBytesMaximum          int
+	EventPagesMaximum        int
+	EventPageItemsMaximum    int
+	EventPageBytesMaximum    int
+	EventBytesMaximum        int
+	MetricCallsUsed          int
+	MetricCallsMaximum       int
+	MetricContainersMaximum  int
+	MetricBytesMaximum       int
+	DataSourceCallsUsed      int
+	DataSourceCallsMaximum   int
+	DataSourcePagesMaximum   int
+	DataSourceSeriesMaximum  int
+	DataSourceSamplesMaximum int
+	DataSourceLinesMaximum   int
+	DataSourceBytesMaximum   int
+	DataSourceWindowMillis   int64
+	DataSourceStepMillis     int64
+	ResourcePagesMaximum     int
+	ResourcePageItemsMaximum int
+	ResourcePageBytesMaximum int
+	ResourceScannedMaximum   int
+	ResourceReturnedMaximum  int
+	ResourceBytesMaximum     int
 }
 
 // UICommandOutcome contains only the typed result shapes used by delivery.
@@ -392,6 +422,9 @@ func (result UIStatusResult) valid() bool {
 		result.Context == "" && result.NamespaceAccess != "" || result.Context != "" && !result.NamespaceAccess.Valid() ||
 		result.Context != "" && (!domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace)) ||
 		result.RunActive != result.RunID.Valid() || result.CapabilityCatalogVersion != agent.ToolCatalogVersion ||
+		result.ResourcePolicyVersion != domain.ResourcePolicyVersion ||
+		result.ObservabilityPolicyVersion != domain.ObservabilityPolicyVersion ||
+		result.ResourceTypeCount < len(domain.BuiltInResourcePolicies()) || result.ResourceTypeCount > domain.MaxResourcePolicyEntries ||
 		!result.Budget.valid() || !result.ModelContext.valid(result.Session != nil) ||
 		!result.AgentModel.valid(true) || !result.ReviewerModel.valid(false) ||
 		!result.Permission.valid(result.Session != nil) || result.Action != nil && !result.Action.valid() {
@@ -461,7 +494,33 @@ func (status UIBudgetStatus) valid() bool {
 		validBudgetCounter(status.ReviewerCallsUsed, status.ReviewerCallsMaximum) &&
 		validBudgetCounter(status.ReviewerCostUnitsUsed, status.ReviewerCostUnitsMaximum) &&
 		validBudgetCounter(status.ToolResultBytesUsed, status.ToolResultBytesMaximum) &&
-		validBudgetCounter(status.LogCallsUsed, status.LogCallsMaximum)
+		validBudgetCounter(status.LogCallsUsed, status.LogCallsMaximum) &&
+		status.LogContainersMaximum > 0 && status.LogContainersMaximum <= domain.MaxObservabilityLogContainers &&
+		status.LogBytesMaximum > 0 && status.LogBytesMaximum <= domain.MaxObservabilityBytes &&
+		status.EventPagesMaximum > 0 && status.EventPagesMaximum <= domain.MaxObservabilityPages &&
+		status.EventPageItemsMaximum > 0 && status.EventPageItemsMaximum <= domain.MaxObservabilityLines &&
+		status.EventPageBytesMaximum > 0 && status.EventPageBytesMaximum <= domain.MaxObservabilityBytes &&
+		status.EventBytesMaximum >= status.EventPageBytesMaximum && status.EventBytesMaximum <= domain.MaxObservabilityBytes &&
+		validBudgetCounter(status.MetricCallsUsed, status.MetricCallsMaximum) &&
+		status.MetricContainersMaximum > 0 && status.MetricContainersMaximum <= domain.MaxMetricContainers &&
+		status.MetricBytesMaximum > 0 && status.MetricBytesMaximum <= domain.MaxObservabilityBytes &&
+		validBudgetCounter(status.DataSourceCallsUsed, status.DataSourceCallsMaximum) &&
+		status.DataSourcePagesMaximum > 0 && status.DataSourcePagesMaximum <= domain.MaxObservabilityPages &&
+		status.DataSourceSeriesMaximum > 0 && status.DataSourceSeriesMaximum <= domain.MaxObservabilitySeries &&
+		status.DataSourceSamplesMaximum > 0 && status.DataSourceSamplesMaximum <= domain.MaxObservabilitySamples &&
+		status.DataSourceLinesMaximum > 0 && status.DataSourceLinesMaximum <= domain.MaxObservabilityLines &&
+		status.DataSourceBytesMaximum > 0 && status.DataSourceBytesMaximum <= domain.MaxObservabilityBytes &&
+		status.DataSourceWindowMillis > 0 && status.DataSourceWindowMillis <= domain.MaxObservabilityWindow.Milliseconds() &&
+		status.DataSourceStepMillis > 0 && status.DataSourceStepMillis <= domain.MaxObservabilityStep.Milliseconds() &&
+		status.ResourcePagesMaximum > 0 && status.ResourcePagesMaximum <= domain.MaxResourceQueryPages &&
+		status.ResourcePageItemsMaximum > 0 && status.ResourcePageItemsMaximum <= domain.MaxResourcePageItems &&
+		status.ResourcePageBytesMaximum > 0 && status.ResourcePageBytesMaximum <= domain.MaxResourcePageBytes &&
+		status.ResourceScannedMaximum > 0 && status.ResourceScannedMaximum <= domain.MaxResourceQueryItems &&
+		status.ResourceReturnedMaximum > 0 && status.ResourceReturnedMaximum <= domain.MaxResourceSummaries &&
+		status.ResourceBytesMaximum > 0 && status.ResourceBytesMaximum <= domain.MaxResourceQueryBytes &&
+		status.ResourcePageItemsMaximum <= status.ResourceScannedMaximum &&
+		status.ResourceReturnedMaximum <= status.ResourceScannedMaximum &&
+		status.ResourcePageBytesMaximum <= status.ResourceBytesMaximum
 }
 
 // ModelBudgetEvidenceBasis is the exact content-free status value used while

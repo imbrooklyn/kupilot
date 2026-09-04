@@ -1,15 +1,20 @@
 # Kupilot Data Retention Contract
 
 - Status: Accepted target for `v0.5`
-- Date: 2026-09-04
+- Date: 2026-09-05
 
-The checked-in SQLite schema is now at forward-only migration 7. It implements
+The checked-in SQLite schema is now at forward-only migration 9. It implements
 the safe Session-summary/coverage record, role-scoped consent, named
 model-request metadata, and minimal generalized ActionEnvelope, approval, and
-Reviewer-decision metadata described here. Only the existing typed Deployment
-restart is composed through the action lifecycle. Data-source and new execution
-records remain accepted targets unless separately identified as implemented;
-this document does not make them reachable.
+Reviewer-decision metadata described here. Migration 8 adds bounded exact API
+identity, resource-policy version/generation, and partial state to accepted
+resource Evidence. Migration 9 adds the observability-policy version,
+source-origin hash, normalized series identity, observation window, and exact
+source-consent origin hashes; it adds no raw Kubernetes/data-source payload,
+query, credential, or continuation token. Only the existing typed Deployment
+restart is composed through the action lifecycle. New execution records remain
+accepted targets unless separately identified as implemented; this document
+does not make them reachable.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -177,17 +182,21 @@ Eligible operational detail is limited to:
   arguments and digest, status, timestamps,
   stable error class, safe summary, byte and Evidence counters, and truncation
   metadata.
-- Accepted Evidence identity and provenance, safe ResourceRef and source path,
+- Accepted Evidence identity and provenance, exact bounded API
+  group/version/resource/Kind/scope and applicable resource- or
+  observability-policy version/generation, safe ResourceRef and source path,
+  optional source-origin hash, normalized series identity and query window,
   concise projected fact, observation time, optional resource version,
-  deterministic severity, redaction and truncation metadata, and normalization
-  fingerprint.
+  deterministic severity, partial/redaction/truncation metadata, and
+  normalization fingerprint.
 
 There is no generic Tool input or ToolResult body. A concise Evidence fact may be
 derived from an eligible Event or bounded container output, but the source
-payload and excerpt are not durable. Model-supplied scope, endpoint, credential,
-deadline, arbitrary Kind, access policy, and hard limits are not model-supplied
-canonical Tool arguments. An explicit target Namespace is canonical only after
-runtime policy validation.
+payload and excerpt are not durable. Kubernetes discovery responses, raw
+objects, and continuation tokens are not durable. Model-supplied scope,
+endpoint, credential, deadline, arbitrary Kind, access policy, and hard limits
+are not model-supplied canonical Tool arguments. An explicit target Namespace
+is canonical only after runtime policy validation.
 
 ### 3.4 Diagnosis
 

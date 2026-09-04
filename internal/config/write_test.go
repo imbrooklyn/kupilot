@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *testing.T) {
@@ -113,6 +115,112 @@ func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing
 	if !strings.Contains(string(content), "version: 2") || !strings.Contains(string(content), "approval_reviewer:") ||
 		strings.Contains(string(content), "\nmodel:\n") {
 		t.Fatalf("saved schema is not version 2: %s", content)
+	}
+}
+
+func TestSaveModelProfilesPreservesOnlyExplicitFileDataSourceCredentials(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "home")
+	paths := pathsForHome(root)
+	base := Defaults()
+	base.Observability.Prometheus = &DataSourceConfig{
+		Endpoint: "https://prometheus.example.test", CredentialReference: DataSourceCredentialPrometheus,
+		Queries: []string{string(domain.QueryPrometheusPodCPUUsage)}, RequestTimeoutSeconds: 5,
+	}
+	base.Observability.Loki = &DataSourceConfig{
+		Endpoint: "https://loki.example.test", CredentialReference: DataSourceCredentialLoki,
+		Queries: []string{string(domain.QueryLokiPodLogs)}, RequestTimeoutSeconds: 5,
+	}
+	agentKey, _ := NewSecretValue("saved-agent-key-generated")
+	prometheusKey, _ := NewSecretValue("saved-prometheus-key-generated")
+	lokiKey, _ := NewSecretValue("saved-loki-key-generated")
+	defer agentKey.Destroy()
+	defer prometheusKey.Destroy()
+	defer lokiKey.Destroy()
+	if err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
+		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+	}, &agentKey, nil, &prometheusKey, &lokiKey); err != nil {
+		t.Fatalf("SaveModelProfilesWithDataSources() error = %v", err)
+	}
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.Credentials.Prometheus == nil || loaded.Credentials.Prometheus.Source != CredentialSourceFile || !loaded.Credentials.Prometheus.Value.IsSet() ||
+		loaded.Credentials.Loki == nil || loaded.Credentials.Loki.Source != CredentialSourceFile || !loaded.Credentials.Loki.Value.IsSet() ||
+		loaded.Observability.Prometheus == nil || loaded.Observability.Prometheus.Origin != "https://prometheus.example.test" ||
+		loaded.Observability.Loki == nil || loaded.Observability.Loki.Origin != "https://loki.example.test" {
+		t.Fatalf("loaded observability settings/credentials = %#v/%#v", loaded.Observability, loaded.Credentials)
+	}
+	encoded, err := json.Marshal(loaded.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "saved-prometheus-key-generated") || strings.Contains(string(encoded), "saved-loki-key-generated") {
+		t.Fatal("non-sensitive Config serialization contains an observability credential")
+	}
+}
+
+func TestSaveModelProfilesDoesNotCopyEnvironmentDataSourceCredentials(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "home")
+	paths := pathsForHome(root)
+	base := Defaults()
+	base.Observability.Prometheus = &DataSourceConfig{
+		Endpoint: "https://prometheus.example.test", CredentialReference: DataSourceCredentialPrometheus,
+		Queries: []string{string(domain.QueryPrometheusPodCPUUsage)}, RequestTimeoutSeconds: 5,
+	}
+	agentKey, _ := NewSecretValue("saved-agent-key-generated")
+	defer agentKey.Destroy()
+	if err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
+		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+	}, &agentKey, nil, nil, nil); err != nil {
+		t.Fatalf("SaveModelProfilesWithDataSources() error = %v", err)
+	}
+	content, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "saved-environment-source-key") || strings.Contains(string(content), "api_key: saved-environment-source-key") {
+		t.Fatal("configuration copied an environment-only observability credential")
+	}
+	environment := map[string]string{PrometheusAPIKeyEnvironmentVariable: "saved-environment-source-key"}
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(environment), Unsetenv: func(name string) error {
+		delete(environment, name)
+		return nil
+	}})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.Credentials.Prometheus == nil || loaded.Credentials.Prometheus.Source != CredentialSourceEnvironment || !loaded.Credentials.Prometheus.Value.IsSet() {
+		t.Fatalf("loaded Prometheus credential = %#v", loaded.Credentials.Prometheus)
+	}
+}
+
+func TestSaveModelProfilesRejectsMismatchedDataSourceCredentialBeforePublication(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "home")
+	paths := pathsForHome(root)
+	base := Defaults()
+	base.Observability.Prometheus = &DataSourceConfig{
+		Endpoint: "https://prometheus.example.test", CredentialReference: DataSourceCredentialNone,
+		Queries: []string{string(domain.QueryPrometheusPodCPUUsage)}, RequestTimeoutSeconds: 5,
+	}
+	agentKey, _ := NewSecretValue("saved-agent-key-generated")
+	prometheusKey, _ := NewSecretValue("mismatched-prometheus-key-generated")
+	defer agentKey.Destroy()
+	defer prometheusKey.Destroy()
+	err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
+		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+	}, &agentKey, nil, &prometheusKey, nil)
+	assertSafeError(t, err, ClassInternal, "config_write_invalid")
+	if _, statErr := os.Lstat(root); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid credential binding created Home: %v", statErr)
 	}
 }
 

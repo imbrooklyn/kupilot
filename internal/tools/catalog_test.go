@@ -22,6 +22,10 @@ func TestReadOnlyToolSchemasRemainExactStrictPolicyBoundAndPurposeBound(t *testi
 		domain.ToolNameGetEvents:           false,
 		domain.ToolNameGetPodLogs:          false,
 		domain.ToolNameGetPreviousPodLogs:  false,
+		domain.ToolNameGetPodMetrics:       false,
+		domain.ToolNameGetNodeMetrics:      false,
+		domain.ToolNameQueryPrometheus:     false,
+		domain.ToolNameQueryLoki:           false,
 		domain.ToolNameGetRelatedResources: false,
 		domain.ToolNameGetClusterOverview:  false,
 	}
@@ -58,18 +62,23 @@ func TestReadOnlyToolSchemasRemainExactStrictPolicyBoundAndPurposeBound(t *testi
 	}
 }
 
-func TestReadOnlyToolCatalogBuildsExactlySevenConcreteHandlers(t *testing.T) {
+func TestReadOnlyToolCatalogBuildsExactlyElevenConcreteHandlers(t *testing.T) {
 	t.Parallel()
 
 	resourceReader := &fakeResourceReader{}
 	eventReader := &fakeEventReader{}
 	logReader := &fakePodLogReader{}
+	metricReader := &fakeMetricReader{}
+	prometheusReader := &fakePrometheusReader{}
+	lokiReader := &fakeLokiReader{}
 	relatedReader := &fakeRelatedResourceReader{}
 	guard := &sequenceScopeGuard{}
 	handlers, err := NewReadOnlyToolCatalog(ReadOnlyToolCatalogDependencies{
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs:      logDependencies(logReader, guard, LogPolicyAllowed),
+		Metrics:   metricDependencies(metricReader, guard),
+		Sources:   sourceDependencies(prometheusReader, lokiReader, guard),
 		Related:   relatedDependencies(relatedReader, guard),
 	})
 	if err != nil || handlers.Validate() != nil {
@@ -81,6 +90,10 @@ func TestReadOnlyToolCatalogBuildsExactlySevenConcreteHandlers(t *testing.T) {
 		domain.ToolNameGetEvents,
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetPodMetrics,
+		domain.ToolNameGetNodeMetrics,
+		domain.ToolNameQueryPrometheus,
+		domain.ToolNameQueryLoki,
 		domain.ToolNameGetRelatedResources,
 		domain.ToolNameGetClusterOverview,
 	}
@@ -106,6 +119,9 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 	resourceReader := &fakeResourceReader{}
 	eventReader := &fakeEventReader{}
 	logReader := &fakePodLogReader{}
+	metricReader := &fakeMetricReader{}
+	prometheusReader := &fakePrometheusReader{}
+	lokiReader := &fakeLokiReader{}
 	relatedReader := &fakeRelatedResourceReader{}
 	guard := &sequenceScopeGuard{}
 	logPolicy := &staticLogPolicy{decision: LogPolicyAllowed}
@@ -113,9 +129,11 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs: LogToolDependencies{
-			Reader: logReader, ScopeGuard: guard, EvidenceIDs: &sequenceEvidenceIDs{},
+			Reader: logReader, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{},
 			Text: security.NewRedactor(), Policy: logPolicy, Now: func() time.Time { return testObservedAt },
 		},
+		Metrics: metricDependencies(metricReader, guard),
+		Sources: sourceDependencies(prometheusReader, lokiReader, guard),
 		Related: relatedDependencies(relatedReader, guard),
 	})
 	if err != nil {
@@ -189,11 +207,11 @@ func TestResourceToolBindingCanonicalizesDefaultsWithPolicyBoundNamespace(t *tes
 
 	input := testRunInput(t, 0)
 	getCall := boundGetCall(t, input, `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
-	if got := getCall.ArgumentsJSON(); got != `{"detail":"diagnostic","purpose":"Inspect one Pod.","resource":{"api_version":"v1","kind":"Pod","name":"sample-pod","namespace":"team-a"}}` {
+	if got := getCall.ArgumentsJSON(); got != `{"detail":"describe","name":"sample-pod","namespace":"team-a","purpose":"Inspect one Pod.","resource_type":"pods"}` {
 		t.Fatalf("canonical get_resource arguments = %s", got)
 	}
 	listCall := boundListCall(t, input, `{"kind":"Pod","purpose":"Find abnormal Pods."}`)
-	if got := listCall.ArgumentsJSON(); got != `{"health_filter":"abnormal","kind":"Pod","limit":20,"namespace":"team-a","purpose":"Find abnormal Pods."}` {
+	if got := listCall.ArgumentsJSON(); got != `{"filters":[],"format":"list","limit":20,"namespace":"team-a","purpose":"Find abnormal Pods.","resource_type":"pods"}` {
 		t.Fatalf("canonical list_resources arguments = %s", got)
 	}
 	for _, value := range []string{getCall.ArgumentsJSON(), listCall.ArgumentsJSON()} {

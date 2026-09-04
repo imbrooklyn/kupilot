@@ -1,0 +1,14 @@
+# Optional v0.5 one-Node metrics fixture. Replace both resourceNames together.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kupilot-node-metrics
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    resourceNames: ["replace-with-node-name"]
+    verbs: ["get"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    resourceNames: ["replace-with-node-name"]
+    verbs: ["get"]

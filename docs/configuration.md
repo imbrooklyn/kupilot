@@ -1,16 +1,18 @@
 # Kupilot Configuration
 
-- Status: Accepted `v0.5` contract with the named-model runtime slice
-  implemented; permission and expanded-capability configuration remains target
-- Date: 2026-09-04
+- Status: Accepted `v0.5` contract with named-model, read, and observability
+  policy configuration implemented
+- Date: 2026-09-05
 
 The current parser writes strict schema version 2 and reads schema version 1
 through a deterministic in-memory compatibility migration. Loading never
 rewrites a user file; the next explicit interactive save writes version 2 and
 does not carry the historical v1 output-token default into the new schema.
-Version 2 implements typed `agent` and optional `approval_reviewer` profiles.
-Permission, data-source, and expanded capability policy fields remain outside
-the implemented schema and unknown future-looking fields are rejected.
+Version 2 implements typed `agent` and optional `approval_reviewer` profiles,
+exact `kubernetes.resource_policies` entries for approved CRDs, and the two
+fixed optional `observability.prometheus` and `observability.loki` slots.
+Remote diagnostic and expanded execution policy fields remain outside the
+implemented schema; unknown future-looking fields are rejected.
 
 Kupilot uses one process-frozen Home for its automatically managed local files.
 `KUPILOT_HOME` selects an absolute, normalized directory; otherwise Kupilot
@@ -44,11 +46,12 @@ the placeholder. `Ctrl+C` or `Esc` cancels an editable step. During in-flight
 runtime construction, either key requests cancellation and keeps the current
 runtime unless the replacement has already crossed its disclosed commit point.
 
-`save` discloses that the Agent key and any existing file-sourced Reviewer key
-will be plaintext and not encrypted, then atomically writes those named keys
-and the effective typed settings to `KUPILOT_HOME/config.yaml`. It never writes
-an environment-sourced Reviewer key implicitly. `session` keeps the new Agent
-key only in the current Kupilot process. `/model` repeats Agent setup.
+`save` discloses that the Agent key and any existing file-sourced Reviewer,
+Prometheus, and Loki keys will be plaintext and not encrypted, then atomically
+writes those named keys and the effective typed settings to
+`KUPILOT_HOME/config.yaml`. It never writes an environment-sourced Reviewer or
+optional-source key implicitly. `session` keeps the new Agent key only in the
+current Kupilot process. `/model` repeats Agent setup.
 Reconfiguration cancels and joins an active AgentRun, constructs one
 replacement runtime, invalidates Agent consent if the canonical model origin
 changed, and closes the prior runtime after the swap.
@@ -111,12 +114,16 @@ extension payloads:
 - current namespace access, kubeconfig exec-credential policy, logging, Home,
   and credential protections; and
 - the existing `compact`, `balanced`, and `extended` run-budget selection,
-  now consumed by independent Agent, Agent-summary, and Reviewer reservations.
+  now consumed by independent Agent, Agent-summary, Reviewer, and broad
+  Kubernetes page/item/byte ceilings; and
+- an optional finite list of exact CRD read policies. Built-in resource
+  policies remain code-owned and cannot be replaced by configuration.
 
-Permission profiles, expanded capability policies, optional data sources, and
-execution settings remain accepted targets for later scoped work. They are not
-silently accepted by the version 2 parser and this document does not claim
-those runtime paths are implemented.
+Public permission controls, remote diagnostic policies, and expanded execution
+settings remain accepted targets for later scoped work. They are not silently
+accepted by the version 2 parser. Optional data-source configuration constructs
+only the bounded client and policy; it cannot bypass consent, permission,
+ActionEnvelope, or sink gates.
 
 Default-off high-risk capabilities remain disabled even under `full-access`.
 Permission profiles route only admitted and enabled operations. Configuration
@@ -161,6 +168,20 @@ an actual key so it remains safe to copy and inspect.
 | `models.approval_reviewer.api_key` | Optional plaintext key only when `credential_ref: approval_reviewer`; it conflicts with `credential_ref: agent`. |
 | `kubernetes.exec_credentials` | `allow`; may be set to `deny`. It never selects or supplies a command. |
 | `kubernetes.namespace_access` | `all`; may be tightened to `current`. `all` permits explicit cross-Namespace and all-Namespace reads in the same Context only when RBAC also permits them. |
+| `kubernetes.resource_policies` | Empty by default. Optional exact CRD entries are combined with, but cannot replace, the code-owned built-in catalog. At most 47 configured entries fit beneath the complete 64-entry hard cap. No environment or CLI override exists. |
+| `kubernetes.resource_policies[].id` | Required unique model-visible local ID of 1–63 lowercase letters, digits, or internal hyphens. It cannot collide with a built-in ID or API identity. |
+| `group`, `version`, `resource`, `kind`, `scope` in a resource policy | Required exact non-core CRD API identity. `scope` is `namespaced` or `cluster`; discovery only verifies this identity and never broadens it. Subresources are rejected. |
+| `kubernetes.resource_policies[].verbs` | One or both of `get` and `list`; no write verb is accepted. |
+| `kubernetes.resource_policies[].fields` | One to 32 exact scalar projections. Every field names a local ID, dot-separated `metadata`, `spec`, or `status` path, scalar type (`string`, `integer`, `decimal`, `boolean`, or `timestamp`), data class (`metadata`, `status`, `spec`, or `sensitive`), selector source, operators, and an explicit Evidence flag. Credential-, Secret-, token-, password-, API-key-, private-key-, access-key-, and environment-shaped paths must be classified `sensitive`; sensitive fields cannot create Evidence and are not reachable through the broad-read Tools. |
+| `selector_source`, `selector_key`, and `operators` in a resource field | `none`, exact Kubernetes `field`, or exact `label`. Field selectors are limited to `metadata.name` or `metadata.namespace` with equality/inequality. Label selectors use one exact configured key and equality, inequality, or existence. Other declared operators are evaluated locally over the already admitted scalar projection. Raw selectors and expressions are absent. |
+| `kubernetes.resource_policies[].limits` | Required positive `max_pages`, `page_items`, `page_bytes`, `max_items`, `max_bytes`, and `max_returned`. Hard caps are 8 pages, 100 items/page, 1 MiB/page, 500 scanned items, 4 MiB total, and 50 returned items. The frozen run profile may tighten every value. |
+| `observability.prometheus` | Optional fixed Prometheus slot. Its `endpoint` must be one canonical HTTPS origin or an explicit loopback HTTP origin, with no path, user information, query, or fragment. |
+| `observability.prometheus.credential_ref` | `none` or `prometheus`. The latter requires exactly one plaintext file key or `KUPILOT_PROMETHEUS_API_KEY`; the value is extracted into an opaque source-owned wrapper. |
+| `observability.prometheus.queries` | One or more unique code-owned IDs: `pod_cpu_usage`, `pod_memory_working_set`, `pod_network_receive_rate`, or `pod_network_transmit_rate`. Raw PromQL is not a schema field. |
+| `observability.loki` | Optional fixed Loki slot with the same canonical-origin rule and no implicit fallback from Kubernetes logs. |
+| `observability.loki.credential_ref` | `none` or `loki`. The latter requires exactly one plaintext file key or `KUPILOT_LOKI_API_KEY`; credentials never enter ordinary Config values. |
+| `observability.loki.queries` | One or more unique code-owned IDs; the implemented ID is `pod_logs`. Raw LogQL and regex are not schema fields. |
+| `observability.*.request_timeout_seconds` | Required integer from 1 through 60. The frozen run deadline and source budget may tighten it. Redirects are always denied. |
 | `logging.enabled` | `true`; may be disabled. |
 | `logging.level` | `info`; `warn` and `error` are also accepted. Debug logging is unavailable. |
 | `logging.sensitive_diagnostics` | `false`; when explicitly enabled, terminal model failures may add bounded endpoint, model, provider-error, and full Go stack details to the local log. |
@@ -196,6 +217,9 @@ The admitted environment variables are:
   `KUPILOT_MODEL_API_KEY`, and `KUPILOT_APPROVAL_REVIEWER_API_KEY`.
 - Kubernetes: `KUPILOT_EXEC_CREDENTIALS` and
   `KUPILOT_NAMESPACE_ACCESS`.
+- Optional source credentials: `KUPILOT_PROMETHEUS_API_KEY` and
+  `KUPILOT_LOKI_API_KEY`. Source origins and query IDs have no environment or
+  CLI override.
 - Logging: `KUPILOT_LOG_ENABLED` and `KUPILOT_LOG_LEVEL`.
 
 The CLI exposes only `--config`, `--context`, `--namespace`, and `--no-color`
@@ -236,26 +260,30 @@ Because no version has been released with the retired filesystem layout,
 Kupilot performs no legacy path discovery. This is separate from the supported
 schema version 1 to version 2 in-memory configuration migration.
 
-## Model API key boundary
+## Credential boundary
 
 An Agent API key may come from masked TUI input,
 `models.agent.api_key` in the selected file, or exactly one of
 `KUPILOT_AGENT_API_KEY` and its legacy `KUPILOT_MODEL_API_KEY` alias. An
 independent Reviewer key may come from
 `models.approval_reviewer.api_key` or
-`KUPILOT_APPROVAL_REVIEWER_API_KEY`. Environment values have highest
-credential precedence. Kupilot reads every present role key once into a
-separate opaque wrapper and removes all admitted key entries from its process
-environment before validation completes. It never writes an
-environment-sourced value back to disk automatically.
+`KUPILOT_APPROVAL_REVIEWER_API_KEY`. An enabled optional source with its fixed
+credential reference may use `observability.prometheus.api_key` or
+`observability.loki.api_key`, overridden by `KUPILOT_PROMETHEUS_API_KEY` or
+`KUPILOT_LOKI_API_KEY`. Environment values have highest credential precedence.
+Kupilot reads every present key once into a separate opaque wrapper and removes
+all admitted key entries from its process environment before validation
+completes. It never writes an environment-sourced value back to disk
+automatically.
 
-The file extractor removes both role `api_key` fields before the strict typed
+The file extractor removes all four fixed `api_key` fields before the strict typed
 configuration decoder sees the bytes. Ordinary typed configuration, Domain
 values, TUI transcript and history, errors, logs, audit, SQLite, model content,
-and child-process environments never contain either key. Each guarded model
-transport uses only its bound wrapper for the validated same-origin
-Authorization header. Present empty, control-bearing, space-bearing, ambiguous,
-or values larger than 4096 bytes are rejected by the credential boundary.
+and child-process environments never contain any key. Each guarded model or
+optional-source transport uses only its bound wrapper for the validated
+same-origin Authorization header. Present empty, control-bearing, space-bearing,
+ambiguous, or values larger than 4096 bytes are rejected by the credential
+boundary.
 
 A locally saved key is deliberately plaintext. It may be exposed by wider
 permissions, another same-user process, filesystem inspection, backups, or

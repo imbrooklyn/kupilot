@@ -283,7 +283,7 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 			call, err := BindToolCall(input, invocationID(index), ToolSelection{
 				ID:            fmt.Sprintf("call-%d", index+1),
 				Name:          domain.ToolNameGetPodLogs,
-				ArgumentsJSON: fmt.Sprintf(`{"pod_name":"sample-pod-%d","purpose":"Inspect bounded current logs."}`, index),
+				ArgumentsJSON: fmt.Sprintf(`{"container":null,"container_mode":null,"include_ephemeral":null,"include_init":null,"namespace":null,"pod_name":"sample-pod-%d","purpose":"Inspect bounded current logs.","search":null,"since_seconds":null,"tail_lines":null}`, index),
 			})
 			if err != nil {
 				t.Fatalf("BindToolCall(log %d) error = %v", index, err)
@@ -298,7 +298,7 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 		oneMore, err := BindToolCall(input, invocationID(limits.LogCalls), ToolSelection{
 			ID:            "call-log-over",
 			Name:          domain.ToolNameGetPreviousPodLogs,
-			ArgumentsJSON: `{"pod_name":"sample-pod-over","purpose":"Inspect bounded previous logs."}`,
+			ArgumentsJSON: `{"container":null,"container_mode":null,"include_ephemeral":null,"include_init":null,"namespace":null,"pod_name":"sample-pod-over","purpose":"Inspect bounded previous logs.","search":null,"since_seconds":null,"tail_lines":null}`,
 		})
 		if err != nil {
 			t.Fatalf("BindToolCall(log over) error = %v", err)
@@ -333,6 +333,7 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		{name: "summary timeout", mutate: func(limits *RunBudgetLimits) { limits.SummaryRequestTimeout++ }},
 		{name: "Tool timeout", mutate: func(limits *RunBudgetLimits) { limits.ToolRequestTimeout++ }},
 		{name: "log calls", mutate: func(limits *RunBudgetLimits) { limits.LogCalls++ }},
+		{name: "resource page bytes", mutate: func(limits *RunBudgetLimits) { limits.ResourcePageBytes++ }},
 	}
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
@@ -364,6 +365,29 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		SummaryRequestTimeout: 500 * time.Millisecond,
 		ToolRequestTimeout:    500 * time.Millisecond,
 		LogCalls:              1,
+		LogContainers:         1,
+		LogBytes:              512,
+		EventPages:            1,
+		EventPageItems:        1,
+		EventPageBytes:        512,
+		EventBytes:            512,
+		MetricCalls:           1,
+		MetricContainers:      1,
+		MetricBytes:           512,
+		DataSourceCalls:       1,
+		DataSourcePages:       1,
+		DataSourceSeries:      1,
+		DataSourceSamples:     1,
+		DataSourceLines:       1,
+		DataSourceBytes:       512,
+		DataSourceWindow:      time.Minute,
+		DataSourceStep:        15 * time.Second,
+		ResourcePages:         1,
+		ResourcePageItems:     1,
+		ResourcePageBytes:     512,
+		ResourceScannedItems:  1,
+		ResourceReturnedItems: 1,
+		ResourceBytes:         1024,
 	}
 	if err := tightened.Validate(); err != nil {
 		t.Fatalf("tightened RunBudgetLimits.Validate() error = %v", err)

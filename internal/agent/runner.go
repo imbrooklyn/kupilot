@@ -26,6 +26,9 @@ type RunInput struct {
 	question         string
 	scope            domain.ClusterScope
 	resource         *domain.ResourceRef
+	resourcePolicies domain.ResourcePolicyCatalog
+	observability    domain.ObservabilityPolicyCatalog
+	policyGeneration domain.PolicyGeneration
 	budgetLimits     RunBudgetLimits
 	promptVersion    string
 	catalogVersion   string
@@ -193,12 +196,57 @@ func NewRunInputWithContext(
 	budgetLimits RunBudgetLimits,
 	conversation ConversationContext,
 ) (RunInput, error) {
+	return NewRunInputWithPolicyContext(
+		runID, sessionID, requestMessageID, question, scope, resource, budgetLimits, conversation,
+		domain.DefaultResourcePolicyCatalog(), 1,
+	)
+}
+
+// NewRunInputWithPolicyContext freezes the complete read-policy and
+// permission-generation snapshot selected by Application for this run.
+func NewRunInputWithPolicyContext(
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	requestMessageID domain.MessageID,
+	question string,
+	scope domain.ClusterScope,
+	resource *domain.ResourceRef,
+	budgetLimits RunBudgetLimits,
+	conversation ConversationContext,
+	resourcePolicies domain.ResourcePolicyCatalog,
+	policyGeneration domain.PolicyGeneration,
+) (RunInput, error) {
+	return NewRunInputWithOperationalPolicyContext(
+		runID, sessionID, requestMessageID, question, scope, resource, budgetLimits, conversation,
+		resourcePolicies, domain.DisabledObservabilityPolicyCatalog(), policyGeneration,
+	)
+}
+
+// NewRunInputWithOperationalPolicyContext freezes all read and external-source
+// policy selected by Application for one run. Optional sources remain disabled
+// unless their exact policy is present in this snapshot.
+func NewRunInputWithOperationalPolicyContext(
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	requestMessageID domain.MessageID,
+	question string,
+	scope domain.ClusterScope,
+	resource *domain.ResourceRef,
+	budgetLimits RunBudgetLimits,
+	conversation ConversationContext,
+	resourcePolicies domain.ResourcePolicyCatalog,
+	observability domain.ObservabilityPolicyCatalog,
+	policyGeneration domain.PolicyGeneration,
+) (RunInput, error) {
 	input := RunInput{
 		runID:            runID,
 		sessionID:        sessionID,
 		requestMessageID: requestMessageID,
 		question:         question,
 		scope:            scope,
+		resourcePolicies: resourcePolicies,
+		observability:    observability,
+		policyGeneration: policyGeneration,
 		budgetLimits:     budgetLimits,
 		promptVersion:    SystemPromptVersion,
 		catalogVersion:   ToolCatalogVersion,
@@ -218,7 +266,7 @@ func NewRunInputWithContext(
 func (input RunInput) Validate() error {
 	if !input.runID.Valid() || !input.sessionID.Valid() || !input.requestMessageID.Valid() ||
 		input.scope.Validate() != nil || !domain.ValidModelText(input.question, domain.MaxModelInputMessageBytes, false) ||
-		input.budgetLimits.Validate() != nil ||
+		input.resourcePolicies.Validate() != nil || input.observability.Validate() != nil || !input.policyGeneration.Valid() || input.budgetLimits.Validate() != nil ||
 		input.promptVersion != SystemPromptVersion || input.catalogVersion != ToolCatalogVersion {
 		return ErrInvalidRunInput
 	}
@@ -255,6 +303,32 @@ func (input RunInput) Resource() *domain.ResourceRef {
 	resource := *input.resource
 	return &resource
 }
+
+// ResourcePolicies returns a defensive copy of the exact catalog frozen for
+// this run.
+func (input RunInput) ResourcePolicies() domain.ResourcePolicyCatalog {
+	copy, _ := domain.NewResourcePolicyCatalog(input.resourcePolicies.Version(), input.resourcePolicies.Entries())
+	return copy
+}
+
+// ObservabilityPolicies returns a defensive copy of the fixed optional-source
+// catalog frozen for this run.
+func (input RunInput) ObservabilityPolicies() domain.ObservabilityPolicyCatalog {
+	catalog, _ := domain.NewObservabilityPolicyCatalog(
+		policyOrEmpty(input.observability, domain.DataSourcePrometheus),
+		policyOrEmpty(input.observability, domain.DataSourceLoki),
+	)
+	return catalog
+}
+
+func policyOrEmpty(catalog domain.ObservabilityPolicyCatalog, kind domain.DataSourceKind) domain.DataSourcePolicy {
+	policy, _ := catalog.Resolve(kind)
+	return policy
+}
+
+// PolicyGeneration returns the permission/data-policy generation frozen for
+// this run.
+func (input RunInput) PolicyGeneration() domain.PolicyGeneration { return input.policyGeneration }
 
 // BudgetLimits returns the frozen, non-expanding runtime limits.
 func (input RunInput) BudgetLimits() RunBudgetLimits { return input.budgetLimits }

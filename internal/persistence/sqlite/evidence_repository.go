@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -16,8 +17,10 @@ const (
 		INSERT INTO evidence_items (
 			id, run_id, invocation_id, category, resource_ref_json, fact,
 			source_path, severity, resource_version, redaction_count,
-			truncated, fingerprint, observed_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			truncated, fingerprint, observed_at_ms, resource_type_json,
+			resource_policy_version, policy_generation, partial,
+			source_origin_hash, series, observed_from_ms, observed_through_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getEvidenceByIDSQL = `
 		SELECT
@@ -26,6 +29,12 @@ const (
 			e.fact AS fact, e.source_path AS source_path, e.severity AS severity,
 			e.resource_version AS resource_version,
 			e.redaction_count AS redaction_count, e.truncated AS truncated,
+			e.resource_type_json AS resource_type_json,
+			e.resource_policy_version AS resource_policy_version,
+			e.policy_generation AS policy_generation, e.partial AS partial,
+			e.source_origin_hash AS source_origin_hash, e.series AS series,
+			e.observed_from_ms AS observed_from_ms,
+			e.observed_through_ms AS observed_through_ms,
 			e.fingerprint AS fingerprint, e.observed_at_ms AS observed_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -45,6 +54,12 @@ const (
 			e.fact AS fact, e.source_path AS source_path, e.severity AS severity,
 			e.resource_version AS resource_version,
 			e.redaction_count AS redaction_count, e.truncated AS truncated,
+			e.resource_type_json AS resource_type_json,
+			e.resource_policy_version AS resource_policy_version,
+			e.policy_generation AS policy_generation, e.partial AS partial,
+			e.source_origin_hash AS source_origin_hash, e.series AS series,
+			e.observed_from_ms AS observed_from_ms,
+			e.observed_through_ms AS observed_through_ms,
 			e.fingerprint AS fingerprint, e.observed_at_ms AS observed_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -78,6 +93,14 @@ type evidenceRow struct {
 	ResourceVersion        sql.NullString `db:"resource_version"`
 	RedactionCount         int            `db:"redaction_count"`
 	Truncated              int64          `db:"truncated"`
+	ResourceTypeJSON       sql.NullString `db:"resource_type_json"`
+	ResourcePolicyVersion  sql.NullString `db:"resource_policy_version"`
+	PolicyGeneration       sql.NullInt64  `db:"policy_generation"`
+	Partial                int64          `db:"partial"`
+	SourceOriginHash       string         `db:"source_origin_hash"`
+	Series                 string         `db:"series"`
+	ObservedFromMS         sql.NullInt64  `db:"observed_from_ms"`
+	ObservedThroughMS      sql.NullInt64  `db:"observed_through_ms"`
 	Fingerprint            string         `db:"fingerprint"`
 	ObservedAtMS           int64          `db:"observed_at_ms"`
 	ScopeContext           string         `db:"scope_context"`
@@ -154,7 +177,14 @@ func (repository *EvidenceRepository) ListByInvocation(ctx context.Context, invo
 }
 
 func insertEvidence(ctx context.Context, tx *sqlx.Tx, evidence domain.Evidence) error {
-	resourceJSON, err := encodeSelectedResource(&evidence.Resource)
+	if evidence.Validate() != nil {
+		return domain.ErrInvalidEvidence
+	}
+	resourceJSON, err := encodeEvidenceResource(evidence.Resource)
+	if err != nil {
+		return err
+	}
+	resourceTypeJSON, err := encodeEvidenceResourceType(evidence.ResourceType)
 	if err != nil {
 		return err
 	}
@@ -174,33 +204,56 @@ func insertEvidence(ctx context.Context, tx *sqlx.Tx, evidence domain.Evidence) 
 		boolInteger(evidence.Truncated),
 		evidence.Fingerprint,
 		evidence.ObservedAt.UTC().UnixMilli(),
+		nullableString(resourceTypeJSON),
+		nullableString(evidence.PolicyVersion),
+		nullablePolicyGeneration(evidence.PolicyGeneration),
+		boolInteger(evidence.Partial),
+		evidence.SourceOriginHash,
+		evidence.Series,
+		nullableTime(evidence.ObservedFrom),
+		nullableTime(evidence.ObservedThrough),
 	)
 	return err
 }
 
 func (row evidenceRow) domainEvidence() (domain.Evidence, error) {
-	resource, err := decodeSelectedResource(sql.NullString{String: row.ResourceRefJSON, Valid: true})
-	if err != nil || resource == nil || row.Truncated != 0 && row.Truncated != 1 ||
+	resourceType, err := decodeEvidenceResourceType(row.ResourceTypeJSON)
+	if err != nil {
+		return domain.Evidence{}, domain.ErrInvalidEvidence
+	}
+	resource, err := decodeEvidenceResource(row.ResourceRefJSON, resourceType)
+	if err != nil || row.Truncated != 0 && row.Truncated != 1 || row.Partial != 0 && row.Partial != 1 ||
 		row.InvocationRunID != row.RunID || row.InvocationStartedAtMS.Valid != row.InvocationFinishedAtMS.Valid {
 		return domain.Evidence{}, domain.ErrInvalidEvidence
 	}
-	if row.ResourceVersion.Valid != (resource.ResourceVersion != "") || row.ResourceVersion.Valid && row.ResourceVersion.String != resource.ResourceVersion {
+	if row.ResourceVersion.Valid != (resource.ResourceVersion != "") || row.ResourceVersion.Valid && row.ResourceVersion.String != resource.ResourceVersion ||
+		row.ResourcePolicyVersion.Valid != row.PolicyGeneration.Valid || row.ObservedFromMS.Valid != row.ObservedThroughMS.Valid {
 		return domain.Evidence{}, domain.ErrInvalidEvidence
 	}
+	observedFrom := timePointerFromNull(row.ObservedFromMS)
+	observedThrough := timePointerFromNull(row.ObservedThroughMS)
 	value := domain.Evidence{
-		ID:             domain.EvidenceID(row.ID),
-		RunID:          domain.AgentRunID(row.RunID),
-		InvocationID:   domain.ToolInvocationID(row.InvocationID),
-		Category:       domain.EvidenceCategory(row.Category),
-		Scope:          domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
-		Resource:       *resource,
-		Fact:           row.Fact,
-		SourcePath:     stringPointer(row.SourcePath),
-		Severity:       evidenceSeverityPointer(row.Severity),
-		RedactionCount: row.RedactionCount,
-		Truncated:      row.Truncated == 1,
-		Fingerprint:    row.Fingerprint,
-		ObservedAt:     time.UnixMilli(row.ObservedAtMS).UTC(),
+		ID:               domain.EvidenceID(row.ID),
+		RunID:            domain.AgentRunID(row.RunID),
+		InvocationID:     domain.ToolInvocationID(row.InvocationID),
+		Category:         domain.EvidenceCategory(row.Category),
+		Scope:            domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
+		Resource:         resource,
+		ResourceType:     resourceType,
+		PolicyVersion:    row.ResourcePolicyVersion.String,
+		PolicyGeneration: domain.PolicyGeneration(row.PolicyGeneration.Int64),
+		Fact:             row.Fact,
+		SourcePath:       stringPointer(row.SourcePath),
+		SourceOriginHash: row.SourceOriginHash,
+		Series:           row.Series,
+		ObservedFrom:     observedFrom,
+		ObservedThrough:  observedThrough,
+		Severity:         evidenceSeverityPointer(row.Severity),
+		RedactionCount:   row.RedactionCount,
+		Truncated:        row.Truncated == 1,
+		Partial:          row.Partial == 1,
+		Fingerprint:      row.Fingerprint,
+		ObservedAt:       time.UnixMilli(row.ObservedAtMS).UTC(),
 	}
 	if err := value.Validate(); err != nil {
 		return domain.Evidence{}, err
@@ -211,6 +264,82 @@ func (row evidenceRow) domainEvidence() (domain.Evidence, error) {
 		return domain.Evidence{}, domain.ErrInvalidEvidence
 	}
 	return value, nil
+}
+
+type evidenceResourceTypeJSON struct {
+	ID       string               `json:"id"`
+	Group    string               `json:"group"`
+	Version  string               `json:"version"`
+	Resource string               `json:"resource"`
+	Kind     string               `json:"kind"`
+	Scope    domain.ResourceScope `json:"scope"`
+	BuiltIn  bool                 `json:"built_in"`
+}
+
+func encodeEvidenceResource(reference domain.ResourceRef) (string, error) {
+	encoded, err := json.Marshal(resourceRefToJSON(reference))
+	if err != nil || len(encoded) == 0 || len(encoded) > 4096 {
+		return "", domain.ErrInvalidEvidence
+	}
+	return string(encoded), nil
+}
+
+func decodeEvidenceResource(encoded string, resourceType domain.ResourceType) (domain.ResourceRef, error) {
+	var wire resourceRefJSON
+	if decodeStrictJSON(encoded, &wire) != nil {
+		return domain.ResourceRef{}, domain.ErrInvalidEvidence
+	}
+	reference := wire.domainResourceRef()
+	if resourceType == (domain.ResourceType{}) {
+		if reference.Validate() != nil {
+			return domain.ResourceRef{}, domain.ErrInvalidEvidence
+		}
+	} else if domain.ValidateResourceRefForType(reference, resourceType) != nil {
+		return domain.ResourceRef{}, domain.ErrInvalidEvidence
+	}
+	return reference, nil
+}
+
+func encodeEvidenceResourceType(resourceType domain.ResourceType) (string, error) {
+	if resourceType == (domain.ResourceType{}) {
+		return "", nil
+	}
+	if resourceType.Validate() != nil {
+		return "", domain.ErrInvalidEvidence
+	}
+	encoded, err := json.Marshal(evidenceResourceTypeJSON{
+		ID: resourceType.ID, Group: resourceType.Group, Version: resourceType.Version,
+		Resource: resourceType.Resource, Kind: resourceType.Kind, Scope: resourceType.Scope, BuiltIn: resourceType.BuiltIn,
+	})
+	if err != nil || len(encoded) == 0 || len(encoded) > 4096 {
+		return "", domain.ErrInvalidEvidence
+	}
+	return string(encoded), nil
+}
+
+func decodeEvidenceResourceType(value sql.NullString) (domain.ResourceType, error) {
+	if !value.Valid {
+		return domain.ResourceType{}, nil
+	}
+	var wire evidenceResourceTypeJSON
+	if decodeStrictJSON(value.String, &wire) != nil {
+		return domain.ResourceType{}, domain.ErrInvalidEvidence
+	}
+	resourceType := domain.ResourceType{
+		ID: wire.ID, Group: wire.Group, Version: wire.Version, Resource: wire.Resource,
+		Kind: wire.Kind, Scope: wire.Scope, BuiltIn: wire.BuiltIn,
+	}
+	if resourceType.Validate() != nil {
+		return domain.ResourceType{}, domain.ErrInvalidEvidence
+	}
+	return resourceType, nil
+}
+
+func nullablePolicyGeneration(value domain.PolicyGeneration) any {
+	if !value.Valid() {
+		return nil
+	}
+	return int64(value)
 }
 
 func optionalEvidenceSeverity(value *domain.EvidenceSeverity) string {

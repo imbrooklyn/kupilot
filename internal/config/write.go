@@ -16,14 +16,28 @@ type ModelProfile struct {
 }
 
 type writableConfig struct {
-	Version    int                   `yaml:"version"`
-	Context    string                `yaml:"context,omitempty"`
-	Namespace  string                `yaml:"namespace,omitempty"`
-	NoColor    bool                  `yaml:"no_color"`
-	Runtime    RuntimeConfig         `yaml:"runtime"`
-	Models     writableModelProfiles `yaml:"models"`
-	Kubernetes KubernetesConfig      `yaml:"kubernetes"`
-	Logging    LoggingConfig         `yaml:"logging"`
+	Version       int                         `yaml:"version"`
+	Context       string                      `yaml:"context,omitempty"`
+	Namespace     string                      `yaml:"namespace,omitempty"`
+	NoColor       bool                        `yaml:"no_color"`
+	Runtime       RuntimeConfig               `yaml:"runtime"`
+	Models        writableModelProfiles       `yaml:"models"`
+	Kubernetes    KubernetesConfig            `yaml:"kubernetes"`
+	Observability writableObservabilityConfig `yaml:"observability,omitempty"`
+	Logging       LoggingConfig               `yaml:"logging"`
+}
+
+type writableObservabilityConfig struct {
+	Prometheus *writableDataSourceConfig `yaml:"prometheus,omitempty"`
+	Loki       *writableDataSourceConfig `yaml:"loki,omitempty"`
+}
+
+type writableDataSourceConfig struct {
+	Endpoint              string                        `yaml:"endpoint"`
+	CredentialReference   DataSourceCredentialReference `yaml:"credential_ref"`
+	Queries               []string                      `yaml:"queries"`
+	RequestTimeoutSeconds int                           `yaml:"request_timeout_seconds"`
+	APIKey                string                        `yaml:"api_key,omitempty"`
 }
 
 type writableModelProfiles struct {
@@ -65,6 +79,23 @@ func SaveModelProfiles(
 	agentSecret *SecretValue,
 	reviewerFileSecret *SecretValue,
 ) error {
+	return SaveModelProfilesWithDataSources(ctx, paths, base, profile, agentSecret, reviewerFileSecret, nil, nil)
+}
+
+// SaveModelProfilesWithDataSources preserves only explicitly file-sourced
+// optional-source credentials during the same atomic profile update. Nil
+// credentials remain omitted so environment-sourced values are never copied
+// into the Home configuration.
+func SaveModelProfilesWithDataSources(
+	ctx context.Context,
+	paths Paths,
+	base Config,
+	profile ModelProfile,
+	agentSecret *SecretValue,
+	reviewerFileSecret *SecretValue,
+	prometheusFileSecret *SecretValue,
+	lokiFileSecret *SecretValue,
+) error {
 	if ctx == nil || ctx.Err() != nil {
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
 	}
@@ -80,8 +111,12 @@ func SaveModelProfiles(
 	}
 	document := writableConfig{
 		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor, Runtime: base.Runtime,
-		Models:     writableModelProfiles{Agent: writableProfile(base.Models.Agent)},
-		Kubernetes: base.Kubernetes, Logging: base.Logging,
+		Models: writableModelProfiles{Agent: writableProfile(base.Models.Agent)}, Kubernetes: base.Kubernetes,
+		Observability: writableObservabilityConfig{
+			Prometheus: writableDataSource(base.Observability.Prometheus),
+			Loki:       writableDataSource(base.Observability.Loki),
+		},
+		Logging: base.Logging,
 	}
 	if base.Models.ApprovalReviewer != nil {
 		reviewer := writableProfile(*base.Models.ApprovalReviewer)
@@ -101,17 +136,70 @@ func SaveModelProfiles(
 			return err
 		}
 	}
-	content, err := yaml.Marshal(document)
-	document.Models.Agent.APIKey = ""
-	if document.Models.ApprovalReviewer != nil {
-		document.Models.ApprovalReviewer.APIKey = ""
+	if err := bindWritableDataSourceSecret(
+		document.Observability.Prometheus,
+		DataSourceCredentialPrometheus,
+		prometheusFileSecret,
+	); err != nil {
+		clearWritableSecrets(&document)
+		return err
 	}
+	if err := bindWritableDataSourceSecret(
+		document.Observability.Loki,
+		DataSourceCredentialLoki,
+		lokiFileSecret,
+	); err != nil {
+		clearWritableSecrets(&document)
+		return err
+	}
+	content, err := yaml.Marshal(document)
+	clearWritableSecrets(&document)
 	if err != nil || len(content) > MaxConfigFileBytes {
 		zeroBytes(content)
 		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not encode the local configuration safely.")
 	}
 	defer zeroBytes(content)
 	return publishConfiguration(ctx, paths, content)
+}
+
+func writableDataSource(source *DataSourceConfig) *writableDataSourceConfig {
+	if source == nil {
+		return nil
+	}
+	return &writableDataSourceConfig{
+		Endpoint: source.Endpoint, CredentialReference: source.CredentialReference,
+		Queries: append([]string(nil), source.Queries...), RequestTimeoutSeconds: source.RequestTimeoutSeconds,
+	}
+}
+
+func bindWritableDataSourceSecret(
+	destination *writableDataSourceConfig,
+	wantReference DataSourceCredentialReference,
+	secret *SecretValue,
+) error {
+	if secret == nil || !secret.IsSet() {
+		return nil
+	}
+	if destination == nil || destination.CredentialReference != wantReference {
+		return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not bind an observability credential to the local configuration update.")
+	}
+	return secret.Use(func(value string) { destination.APIKey = value })
+}
+
+func clearWritableSecrets(document *writableConfig) {
+	if document == nil {
+		return
+	}
+	document.Models.Agent.APIKey = ""
+	if document.Models.ApprovalReviewer != nil {
+		document.Models.ApprovalReviewer.APIKey = ""
+	}
+	if document.Observability.Prometheus != nil {
+		document.Observability.Prometheus.APIKey = ""
+	}
+	if document.Observability.Loki != nil {
+		document.Observability.Loki.APIKey = ""
+	}
 }
 
 func writableProfile(profile ModelProfileConfig) writableModelProfile {

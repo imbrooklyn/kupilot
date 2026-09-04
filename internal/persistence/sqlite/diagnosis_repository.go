@@ -37,7 +37,7 @@ const (
 		WHERE d.run_id = ?
 	`
 	getDiagnosisEvidenceStateSQL = `
-		SELECT run_id, truncated, observed_at_ms
+		SELECT run_id, CASE WHEN truncated = 1 OR partial = 1 THEN 1 ELSE 0 END AS truncated, observed_at_ms
 		FROM evidence_items
 		WHERE id = ?
 	`
@@ -47,7 +47,7 @@ const (
 			MIN(e.observed_at_ms) AS observed_from_ms,
 			MAX(e.observed_at_ms) AS observed_to_ms,
 			CASE
-				WHEN COALESCE(MAX(e.truncated), 0) = 1 OR COALESCE((
+				WHEN COALESCE(MAX(e.truncated), 0) = 1 OR COALESCE(MAX(e.partial), 0) = 1 OR COALESCE((
 					SELECT MAX(t.truncated)
 					FROM tool_invocations AS t
 					WHERE t.run_id = ?

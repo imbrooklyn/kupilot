@@ -13,18 +13,21 @@ import (
 
 const (
 	loadPrivacySQL = `
-		SELECT role, policy_version, origin_hash, categories_json, decision, decided_at_ms, schema_version
+		SELECT role, policy_version, origin_hash, prometheus_origin_hash,
+			loki_origin_hash, categories_json, decision, decided_at_ms, schema_version
 		FROM privacy_consents
 		WHERE role = ?
 	`
 	savePrivacySQL = `
 		INSERT INTO privacy_consents (
-			role, policy_version, origin_hash, categories_json,
-			decision, decided_at_ms, schema_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			role, policy_version, origin_hash, prometheus_origin_hash,
+			loki_origin_hash, categories_json, decision, decided_at_ms, schema_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (role) DO UPDATE SET
 			policy_version = excluded.policy_version,
 			origin_hash = excluded.origin_hash,
+			prometheus_origin_hash = excluded.prometheus_origin_hash,
+			loki_origin_hash = excluded.loki_origin_hash,
 			categories_json = excluded.categories_json,
 			decision = excluded.decision,
 			decided_at_ms = excluded.decided_at_ms,
@@ -33,13 +36,15 @@ const (
 )
 
 type privacyRow struct {
-	Role           string `db:"role"`
-	PolicyVersion  string `db:"policy_version"`
-	OriginHash     string `db:"origin_hash"`
-	CategoriesJSON string `db:"categories_json"`
-	Decision       string `db:"decision"`
-	DecidedAtMS    int64  `db:"decided_at_ms"`
-	SchemaVersion  int    `db:"schema_version"`
+	Role                 string `db:"role"`
+	PolicyVersion        string `db:"policy_version"`
+	OriginHash           string `db:"origin_hash"`
+	PrometheusOriginHash string `db:"prometheus_origin_hash"`
+	LokiOriginHash       string `db:"loki_origin_hash"`
+	CategoriesJSON       string `db:"categories_json"`
+	Decision             string `db:"decision"`
+	DecidedAtMS          int64  `db:"decided_at_ms"`
+	SchemaVersion        int    `db:"schema_version"`
 }
 
 // PrivacyRepository persists only the exact application-owned consent tuple.
@@ -81,7 +86,8 @@ func (repository *PrivacyRepository) LoadPrivacy(ctx context.Context) (applicati
 		)
 	}
 	record := application.PrivacyRecord{
-		Role: domain.ModelRole(row.Role), PolicyVersion: row.PolicyVersion, OriginHash: row.OriginHash, Categories: categories,
+		Role: domain.ModelRole(row.Role), PolicyVersion: row.PolicyVersion, OriginHash: row.OriginHash,
+		PrometheusOriginHash: row.PrometheusOriginHash, LokiOriginHash: row.LokiOriginHash, Categories: categories,
 		Decision: application.PrivacyDecision(row.Decision), DecidedAt: time.UnixMilli(row.DecidedAtMS).UTC(),
 		SchemaVersion: row.SchemaVersion,
 	}
@@ -106,7 +112,8 @@ func (repository *PrivacyRepository) SavePrivacy(ctx context.Context, record app
 		return application.ErrPrivacyRecord
 	}
 	result, err := repository.db.handle.ExecContext(
-		ctx, savePrivacySQL, record.Role, record.PolicyVersion, record.OriginHash, string(categories),
+		ctx, savePrivacySQL, record.Role, record.PolicyVersion, record.OriginHash,
+		record.PrometheusOriginHash, record.LokiOriginHash, string(categories),
 		record.Decision, record.DecidedAt.UTC().UnixMilli(), record.SchemaVersion,
 	)
 	if err != nil {

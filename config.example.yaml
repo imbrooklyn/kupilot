@@ -1,7 +1,8 @@
 # This is the implemented strict version 2 schema. Interactive Agent setup may
 # add a plaintext models.agent.api_key to KUPILOT_HOME/config.yaml. An existing
-# file-sourced approval_reviewer key is preserved only when the setup disclosure
-# names it. Environment-sourced keys are never written implicitly.
+# file-sourced approval_reviewer, Prometheus, and Loki keys are preserved only
+# when the setup disclosure names them. Environment-sourced keys are never
+# written implicitly.
 version: 2
 
 context: development
@@ -46,6 +47,64 @@ kubernetes:
   # all permits explicit cross-Namespace and all-Namespace reads when RBAC
   # allows them; current pins namespaced reads to the working Namespace.
   namespace_access: all
+
+  # Optional exact CRD policies extend the code-owned read catalog. Discovery
+  # validates an entry but cannot create one. Sensitive fields are classified
+  # here for denial; broad resource reads never return them.
+  # resource_policies:
+  #   - id: widgets
+  #     group: operations.example.com
+  #     version: v1
+  #     resource: widgets
+  #     kind: Widget
+  #     scope: namespaced
+  #     verbs: [get, list]
+  #     fields:
+  #       - id: state
+  #         path: status.state
+  #         scalar: string
+  #         data_class: status
+  #         selector_source: none
+  #         operators: [contains, equals]
+  #         evidence: true
+  #       - id: app_name
+  #         path: metadata.labels.app_name
+  #         scalar: string
+  #         data_class: metadata
+  #         selector_source: label
+  #         selector_key: app.kubernetes.io/name
+  #         operators: [equals, exists, not_equals]
+  #         evidence: false
+  #       - id: credential_ref
+  #         path: spec.credentialRef
+  #         scalar: string
+  #         data_class: sensitive
+  #         selector_source: none
+  #         operators: []
+  #         evidence: false
+  #     limits:
+  #       max_pages: 4
+  #       page_items: 50
+  #       page_bytes: 262144
+  #       max_items: 200
+  #       max_bytes: 1048576
+  #       max_returned: 50
+
+# Optional sources are two fixed slots. Each endpoint is a bare canonical
+# origin; redirects, raw PromQL/LogQL, arbitrary headers, and URL paths are
+# denied. File api_key values are plaintext; prefer the matching one-shot
+# KUPILOT_PROMETHEUS_API_KEY or KUPILOT_LOKI_API_KEY environment variable.
+# observability:
+#   prometheus:
+#     endpoint: https://prometheus.example.invalid
+#     credential_ref: none
+#     queries: [pod_cpu_usage, pod_memory_working_set]
+#     request_timeout_seconds: 15
+#   loki:
+#     endpoint: https://loki.example.invalid
+#     credential_ref: none
+#     queries: [pod_logs]
+#     request_timeout_seconds: 15
 
 logging:
   enabled: true

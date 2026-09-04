@@ -340,23 +340,45 @@ func (owner ResourceOwner) validFor(child ResourceKind) bool {
 // GET and LIST operations. It contains no labels, annotations, selectors,
 // environment, volumes, addresses, messages, or raw Kubernetes values.
 type ResourceSummary struct {
+	// Type carries exact API identity for broad-read results. Older built-in
+	// projections may omit it; EffectiveType then derives the one code-owned
+	// built-in identity from Reference.
+	Type      ResourceType
 	Reference ResourceRef
 	CreatedAt time.Time
 	Status    ResourceStatus
 	Owners    []ResourceOwner
 }
 
+// EffectiveType returns the explicit exact API identity, or the deterministic
+// built-in identity for legacy typed projections.
+func (summary ResourceSummary) EffectiveType() ResourceType {
+	if summary.Type != (ResourceType{}) {
+		if summary.Type.Validate() != nil {
+			return ResourceType{}
+		}
+		return summary.Type
+	}
+	kind, ok := ResourceKindForReference(summary.Reference)
+	if !ok {
+		return ResourceType{}
+	}
+	return BuiltInResourceType(kind)
+}
+
 // Validate checks the complete projection and its fixed owner relationships.
 func (summary ResourceSummary) Validate() error {
-	kind, ok := ResourceKindForReference(summary.Reference)
-	if !ok || ValidateLiveResourceRef(summary.Reference) != nil || !summary.Status.valid() || len(summary.Owners) > maxResourceOwners {
+	resourceType := summary.EffectiveType()
+	if resourceType.Validate() != nil || ValidateResourceRefForType(summary.Reference, resourceType) != nil ||
+		!summary.Status.valid() || len(summary.Owners) > maxResourceOwners {
 		return ErrInvalidResourceSummary
 	}
 	if !summary.CreatedAt.IsZero() && (summary.CreatedAt.Location() != time.UTC || summary.CreatedAt.UnixMilli() < 0) {
 		return ErrInvalidResourceSummary
 	}
+	kind := ResourceKind(summary.Reference.Kind)
 	for _, owner := range summary.Owners {
-		if !owner.validFor(kind) {
+		if !resourceType.BuiltIn || !owner.validFor(kind) {
 			return ErrInvalidResourceSummary
 		}
 	}

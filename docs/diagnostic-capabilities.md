@@ -1,11 +1,13 @@
 # Operational and Diagnostic Capabilities
 
-- Status: Accepted `v0.5` target
-- Date: 2026-09-03
+- Status: Accepted `v0.5` target; read and observability slices implemented
+- Date: 2026-09-05
 
-The checked-in implementation remains the narrower `v0.4` catalog. This page
-defines the P0 capability target and must not be read as a claim that the new
-Tools, RBAC, configuration, migrations, or tests already exist.
+The checked-in implementation now includes the broad built-in/CRD resource
+read and query slice and the deterministic Events, logs, Metrics API,
+Prometheus, and Loki adapters. This page also defines later P0 capabilities;
+remote/local diagnostics and additional remediation rows must not be read as
+claims that those Tools are reachable.
 
 Kupilot answers operational questions through a versioned, compile-time
 catalog of typed, bounded capabilities. Support means the Agent can gather a
@@ -44,6 +46,31 @@ YAML, stdin, deadline, hard limit, or generic payload from the model.
 | Prometheus | Query an explicitly configured optional metrics source. | Exact origin, credential, query templates, labels/fields, time range, samples, consent, and budget; no implicit fallback. |
 | Loki | Query an explicitly configured optional log source. | Exact origin, credential, query templates, labels/fields, range/line/byte bounds, consent, and budget; no implicit fallback. |
 
+The first four rows are implemented through the fixed resource get/list Tool
+names: one local `resource_type` selects a frozen exact policy, `detail`
+selects summary or normalized describe output, and `format` selects bounded
+list, count, or table data. Filters use only policy field IDs, closed operators,
+and scalar values. Safe server selectors are built only for exact metadata
+field or label mappings; the same predicates are evaluated again over the
+allowlisted projection. CRD discovery validates one exact configured API and
+cannot grant another one.
+
+Events now support exact target, Namespace, time, reason, and type filters with
+runtime-owned pagination, deduplication, series/count normalization, and
+explicit partial state. Current and previous Pod logs support one or all
+explicit containers, including separately selected init and ephemeral
+containers, with bounded literal search. Pod and Node metrics use exact typed
+Metrics API reads and normalized integer CPU/memory quantities. Prometheus and
+Loki use only configured canonical origins and code-owned query IDs.
+
+The default `ask` composition routes container output and optional external
+data-source access to permission review. Until the later permission delivery
+surface can create and consume the required `ActionEnvelope`, those
+review-class calls fail closed before external I/O. Deterministic adapter and
+Tool tests exercise the post-authorization path without claiming live endpoint
+or cluster integration. No remote diagnostic, local process, or new write
+operation is added here.
+
 Source allowlisting occurs before projection, normalization, sensitive-value
 handling, limits, neutral serialization, and final role/origin/category consent.
 Lists and queries use safe server-side filtering where available and
@@ -55,6 +82,12 @@ exact ConfigMap key or non-credential container environment value is at least
 `review` and requires a versioned policy, category consent, and sink policy.
 Generic or bulk values remain denied; redaction alone never authorizes an
 unlisted source.
+
+The implemented broad-read Secret and ConfigMap Tool paths request
+`PartialObjectMetadata` only. ConfigMap data, environment values, credential
+references, and every configured field classified `sensitive` remain denied
+because the separate sensitive-read permission, category-consent, and sink
+path is not part of this slice.
 
 ## P0 remote and local diagnostics
 
@@ -129,6 +162,11 @@ Deterministic CI uses scripted models, request-recording Kubernetes and HTTP
 fixtures, direct child-process fixtures, fake clocks/barriers, and real
 temporary SQLite files. It proves exact success and zero-call denial behavior
 without a real cluster, model, credential, or public network.
+
+The diagnosis fixture matrix covers bounded CPU and memory snapshots, service
+and network source checks, rollout progress, CrashLoop and OOM signals, Jobs,
+and Node pressure. Sufficient and intentionally limited Evidence variants keep
+confirmed facts distinct from hypotheses when a source is absent or partial.
 
 Opt-in tagged live integration may prove compatibility for one exact cluster,
 endpoint, data source, or executable version. Model evaluation separately

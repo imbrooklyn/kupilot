@@ -1,0 +1,29 @@
+{
+  "scenario": "Pod network observation for Service investigation",
+  "minimum_evidence": [
+    "One bounded code-owned Prometheus network series tied to an exact Pod and query window."
+  ],
+  "tool_order": [
+    "query_prometheus"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "pod_network_receive_series_observed", "meaning": "A bounded receive-rate series was observed for the exact Pod and window."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "traffic_change_possible", "meaning": "A traffic change may be relevant but requires Service and application Evidence."},
+    {"id": "network_state_unknown", "meaning": "Network behavior remains unknown when source permission is absent."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "network_sample_proves_service_outage", "meaning": "One network sample proves a Service outage or application cause."},
+    {"id": "raw_promql_known", "meaning": "Generated PromQL or a model-supplied query is treated as Evidence."},
+    {"id": "action_executed", "meaning": "Kupilot changed the Service, Pod, or data source."}
+  ],
+  "recommended_actions": [
+    {"id": "correlate_service_evidence", "meaning": "Correlate the bounded series with Service readiness and application Evidence."},
+    {"id": "obtain_source_permission", "meaning": "Obtain exact consent and permission for the configured source."}
+  ],
+  "permission_or_missing_paths": [
+    "If source consent or permission is absent, perform zero source calls and report the gap.",
+    "A generated query is code-owned request logic, not an observed fact."
+  ]
+}

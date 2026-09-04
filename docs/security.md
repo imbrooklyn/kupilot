@@ -1,15 +1,18 @@
 # Kupilot Security Threat Model
 
 - Status: Accepted target for Kupilot `v0.5`
-- Last updated: 2026-09-04
+- Last updated: 2026-09-05
 
 The checked-in implementation now includes named model roles, role-scoped
 consent, safe Session context/summarization, deterministic permission routing,
-and the common ActionEnvelope/approval foundation. Only the existing typed
-Deployment restart is composed through that foundation. Broader reads,
-permission delivery interactions, remote diagnostics, local processes, and
-expanded typed remediation in this threat model remain accepted targets, not
-claims of current reachability or completed security testing.
+the common ActionEnvelope/approval foundation, broad policy-bound built-in and
+exact CRD resource reads, and deterministic read-only observability adapters.
+Only the existing typed Deployment restart is composed through the action
+foundation. Review-class log and optional data-source operations remain
+fail-closed in the default `ask` composition until permission delivery can bind
+and consume their ActionEnvelopes. Remote diagnostics, local processes, and
+expanded typed remediation remain accepted targets, not claims of current
+reachability or completed live integration testing.
 
 ## 1. Scope and security posture
 
@@ -141,6 +144,11 @@ against the frozen `current` or `all` policy. Kubernetes and process access use
 task-specific ports with no model-visible dynamic client, REST builder,
 discovery fallback, executable handle, or shell fallback. Exact policy-admitted
 CRDs and argv are locally selected before model input is bound.
+For an exact CRD, discovery validates only the configured
+group/version/resource/Kind/scope contract; it cannot register another API,
+verb, subresource, field, or ceiling. Typed predicates produce only
+policy-owned field or label selectors, and continuation tokens stay inside the
+Kubernetes adapter.
 One atomic batch of known, structurally safe selections that fails semantic
 binding receives only fixed local policy feedback; rejected arguments are not
 echoed and Tool handler and Kubernetes call counts remain zero. Unknown,
@@ -169,8 +177,11 @@ output, or credentials reach an unintended sink.
 **Controls.** Source allowlisting precedes projection. Credential and Secret-
 value reads are denied before I/O when locally decidable. Each built-in, exact
 CRD, metrics source, log mode, file policy, and process result has a reviewed
-project-owned projection and explicit category. Sensitive fields that are not
-explicitly admitted are omitted. Eligible text then passes normalization,
+project-owned projection and explicit category. The current broad resource
+path admits only scalar `metadata`, `status`, and `spec` paths, rejects a
+credential-shaped path unless it is classified sensitive, never exposes a
+sensitive field to the model, and reads Secret identity through metadata-only
+transport. Eligible text then passes normalization,
 sensitive-value block/redaction, hard item/byte limits, neutral serialization,
 and a final role/origin/category consent check.
 
@@ -212,7 +223,11 @@ and cost counters. Reservation is atomic and precedes I/O. Child deadlines are
 capped by remaining ownership. Exact token and stream values require pinned
 dependency and endpoint evidence; conservative byte, call, and time limits
 remain mandatory. `/status` exposes usage without external calls. Model output
-cannot switch profile or grant an unlimited mode.
+cannot switch profile or grant an unlimited mode. Broad resource lists send a
+server-side `limit`, keep continuation private, and enforce independent
+per-response bytes plus cumulative pages, scanned items, returned items, bytes,
+and time. A reached post-page ceiling yields explicit partial Evidence instead
+of silently presenting a complete result.
 
 ### T07: Terminal escape or misleading rendering
 
@@ -382,6 +397,11 @@ behavior remain separate evidence.
 Kubernetes RBAC remains authoritative. Operators should grant only the resources
 and verbs needed for their chosen namespace policy and action catalog. A broad
 ClusterRole is not required when `current` mode and namespaced Roles suffice.
+The checked-in paths implement the built-in and exact configured CRD rows, safe
+Secret metadata, bounded Events and logs, typed Pod/Node metrics, and explicit
+Prometheus/Loki source adapters. Review-class operations still require the
+separate permission, consent, sink, and ActionEnvelope path described below.
+Remote diagnostics, local processes, and new write rows remain later work.
 
 ## 8. Permission and execution safety
 

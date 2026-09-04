@@ -161,6 +161,11 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *te
 			t.Fatalf("composition contains forbidden capability %q", forbidden)
 		}
 	}
+	for _, forbiddenAuthority := range []string{"return tools.LogPolicyAllowed", "return tools.ObservationPolicyAllowed"} {
+		if strings.Contains(mainSource, forbiddenAuthority) {
+			t.Fatalf("composition grants review-class read authority without an ActionEnvelope: %q", forbiddenAuthority)
+		}
+	}
 
 	providerConstructors := 0
 	providerPath := ""

@@ -14,7 +14,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *testing.T) {
+func TestListResourcesSummarizesSortsAndCreatesDeterministicEvidence(t *testing.T) {
 	canary := strings.Repeat("generated", 5)
 	healthy := resourceObservation(domain.ResourceKindPod, "healthy-pod")
 	abnormalB := resourceObservation(domain.ResourceKindPod, "broken-b")
@@ -36,12 +36,12 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 	}
 	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"abnormal","kind":"Pod","purpose":"Find abnormal Pods."}`)
 	result := tool.Execute(context.Background(), call)
-	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 2 ||
-		len(result.ResourceSummaries) != 2 {
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 3 ||
+		len(result.ResourceSummaries) != 3 {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
 	}
 	if strings.Contains(result.DataJSON, canary) || !strings.Contains(result.DataJSON, "[REDACTED]") ||
-		!strings.Contains(result.DataJSON, `"matched_count":2`) || !strings.Contains(result.DataJSON, `"returned_count":2`) ||
+		!strings.Contains(result.DataJSON, `"matched_count":3`) || !strings.Contains(result.DataJSON, `"returned_count":3`) ||
 		!strings.Contains(result.DataJSON, `"source_trust":"untrusted_external_data"`) {
 		t.Fatalf("safe list data = %s", result.DataJSON)
 	}
@@ -55,19 +55,19 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 	if err := json.Unmarshal([]byte(result.DataJSON), &decoded); err != nil {
 		t.Fatalf("json.Unmarshal(DataJSON) error = %v", err)
 	}
-	if len(decoded.Items) != 2 {
+	if len(decoded.Items) != 3 {
 		t.Fatalf("decoded items = %#v", decoded.Items)
 	}
 	names := make([]string, len(decoded.Items))
 	for index, item := range decoded.Items {
 		names[index] = item.Reference.Name
 	}
-	if !sort.StringsAreSorted(names) || strings.Join(names, ",") != "broken-a,broken-b" {
+	if !sort.StringsAreSorted(names) || strings.Join(names, ",") != "broken-a,broken-b,healthy-pod" {
 		t.Fatalf("returned names = %#v", names)
 	}
 	for index, evidence := range result.Evidence {
 		if evidence.Category != domain.EvidenceCategoryResourceStatus || evidence.Resource.Name != names[index] ||
-			evidence.SourcePath == nil || *evidence.SourcePath != "projected.status" || strings.Contains(evidence.Fact, canary) {
+			evidence.SourcePath == nil || *evidence.SourcePath != "status.phase" || strings.Contains(evidence.Fact, canary) {
 			t.Fatalf("Evidence[%d] = %#v", index, evidence)
 		}
 		if summary := result.ResourceSummaries[index]; summary.Reference != evidence.Resource ||
@@ -81,6 +81,69 @@ func TestListResourcesFiltersSummarizesSortsAndCreatesDeterministicEvidence(t *t
 	}
 	if strings.Contains(message, "resource_summaries") {
 		t.Fatalf("local presentation summaries entered the model envelope: %s", message)
+	}
+}
+
+func TestListResourcesUsesExactCRDEvidenceMapping(t *testing.T) {
+	resourceType := domain.ResourceType{
+		ID: "widgets", Group: "ops.example.com", Version: "v1", Resource: "widgets", Kind: "Widget",
+		Scope: domain.ResourceScopeNamespaced,
+	}
+	policy := domain.ResourcePolicy{
+		Type: resourceType, Verbs: []domain.ResourceVerb{domain.ResourceVerbGet, domain.ResourceVerbList},
+		Fields: []domain.ResourceFieldPolicy{
+			{ID: "name", Path: "metadata.name", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataMetadata, SelectorSource: domain.ResourceSelectorField, SelectorKey: "metadata.name", Operators: []domain.ResourceFilterOperator{domain.ResourceFilterEquals}},
+			{ID: "note", Path: "spec.note", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataSpec, SelectorSource: domain.ResourceSelectorNone},
+			{ID: "state", Path: "status.state", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataStatus, SelectorSource: domain.ResourceSelectorNone, Evidence: true},
+		},
+		Limits: domain.ResourceQueryLimits{MaxPages: 2, PageItems: 10, PageBytes: 32 * 1024, MaxItems: 20, MaxBytes: 64 * 1024, MaxReturned: 10},
+	}
+	catalog, err := domain.NewResourcePolicyCatalog(domain.ResourcePolicyVersion, []domain.ResourcePolicy{policy})
+	if err != nil {
+		t.Fatalf("NewResourcePolicyCatalog() error = %v", err)
+	}
+	conversation, err := agent.NewConversationContext(testSessionID, nil, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
+	input, err := agent.NewRunInputWithPolicyContext(
+		testRunID, testSessionID, testMessageID, "Inspect approved custom resources.",
+		domain.ClusterScope{Context: "test-context", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: testActivatedAt},
+		nil, agent.DefaultRunBudgetLimits(), conversation, catalog, 9,
+	)
+	if err != nil {
+		t.Fatalf("NewRunInputWithPolicyContext() error = %v", err)
+	}
+	reader := &fakeResourceReader{queryFn: func(_ context.Context, request ResourceQueryRequest) (ResourceQueryObservation, error) {
+		if request.Policy.Type != resourceType || request.Query.Namespace != "team-a" || request.Query.Verb != domain.ResourceVerbList {
+			t.Fatalf("QueryResources() request = %#v", request)
+		}
+		summary := domain.ResourceSummary{Type: resourceType, Reference: domain.ResourceRef{
+			APIVersion: "ops.example.com/v1", Kind: "Widget", Namespace: "team-a", Name: "sample-widget",
+		}}
+		observation := ResourceObservation{Summary: summary, Fields: []ResourceFieldObservation{
+			{Field: "note", Path: "spec.note", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataSpec, Value: ExternalText{Value: "ordinary"}, Present: true},
+			{Field: "state", Path: "status.state", Scalar: domain.ResourceScalarString, DataClass: domain.ResourceDataStatus, Value: ExternalText{Value: "Ready"}, Present: true},
+		}}
+		return ResourceQueryObservation{
+			Page:  domain.ResourcePage{Type: resourceType, Items: []domain.ResourceSummary{summary}, PagesRead: 1, ScannedItems: 1, MatchedItems: 1},
+			Items: []ResourceObservation{observation},
+		}, nil
+	}}
+	tool, err := NewListResourcesTool(testDependencies(reader, &sequenceScopeGuard{}))
+	if err != nil {
+		t.Fatalf("NewListResourcesTool() error = %v", err)
+	}
+	call := boundListCall(t, input, `{"filters":[],"format":"table","limit":1,"namespace":"team-a","purpose":"Compare approved Widgets.","resource_type":"widgets"}`)
+	result := tool.Execute(context.Background(), call)
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 1 {
+		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
+	}
+	evidence := result.Evidence[0]
+	if evidence.ResourceType != resourceType || evidence.PolicyVersion != domain.ResourcePolicyVersion || evidence.PolicyGeneration != 9 ||
+		evidence.SourcePath == nil || *evidence.SourcePath != "status.state" || !strings.Contains(evidence.Fact, "state is Ready") ||
+		strings.Contains(evidence.Fact, "ordinary") {
+		t.Fatalf("Evidence = %#v", evidence)
 	}
 }
 

@@ -3,8 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"sort"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -12,8 +11,8 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
-// ListResourcesTool returns bounded candidate summaries from one fixed Kind in
-// the active Namespace. It is not a resource browser.
+// ListResourcesTool returns bounded candidate summaries from one exact
+// policy-admitted resource type. It is not a resource browser.
 type ListResourcesTool struct {
 	dependencies ResourceToolDependencies
 }
@@ -22,16 +21,16 @@ var _ agent.Tool = (*ListResourcesTool)(nil)
 
 // NewListResourcesTool validates the immutable dependencies for list_resources.
 func NewListResourcesTool(dependencies ResourceToolDependencies) (*ListResourcesTool, error) {
-	if dependencies.validate() != nil {
+	if dependencies.validateQuery() != nil {
 		return nil, ErrInvalidResourceToolDependencies
 	}
 	return &ListResourcesTool{dependencies: dependencies}, nil
 }
 
-// Execute performs one selector-free bounded list, then filters and orders the
-// projected summaries locally before Evidence creation.
+// Execute performs one typed, bounded query. The Kubernetes adapter may use
+// only policy-derived server selectors and owns every continuation token.
 func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) ToolResult {
-	if tool == nil || tool.dependencies.validate() != nil || call.Validate() != nil {
+	if tool == nil || tool.dependencies.validateQuery() != nil || call.Validate() != nil {
 		return ToolResult{}
 	}
 	observed := observedAt(tool.dependencies, call)
@@ -48,8 +47,14 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
-	observations, readErr := tool.dependencies.Reader.ListResources(ctx, request)
+	if !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	queryResult, readErr := tool.dependencies.QueryReader.QueryResources(ctx, request)
 	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	if !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	if ctx.Err() != nil {
@@ -58,35 +63,16 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 	if readErr != nil {
 		return failedResult(call, observed, classifyFailure(ctx, readErr))
 	}
-	if observations.validate(request) != nil {
+	if queryResult.Validate(request) != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
 	}
-	sort.Slice(observations.Items, func(left, right int) bool {
-		leftReference := observations.Items[left].Summary.Reference
-		rightReference := observations.Items[right].Summary.Reference
-		return leftReference.Namespace+"\x00"+leftReference.Name < rightReference.Namespace+"\x00"+rightReference.Name
-	})
-	filtered := make([]ResourceObservation, 0, min(len(observations.Items), request.Limit))
-	matchedCount := 0
-	for _, observation := range observations.Items {
-		if arguments.NameQuery != "" && !strings.Contains(strings.ToLower(observation.Summary.Reference.Name), strings.ToLower(arguments.NameQuery)) {
-			continue
-		}
-		if arguments.HealthFilter == "abnormal" && !resourceAbnormal(observation.Summary) {
-			continue
-		}
-		matchedCount++
-		if len(filtered) < request.Limit {
-			filtered = append(filtered, observation)
-		}
-	}
-	data, summaries, templates, warnings, processingLimited, err := tool.project(filtered, arguments, matchedCount)
+	data, summaries, templates, warnings, processingLimited, err := tool.project(queryResult.Items, request.Policy, arguments, queryResult.Page)
 	if err != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
 	reason := ""
-	if observations.Truncated || len(observations.Items) > request.Limit || arguments.Limit > request.Limit || matchedCount > len(filtered) {
-		reason = itemLimitReason
+	if queryResult.Page.Partial {
+		reason = queryResult.Page.Reason
 	} else if processingLimited {
 		reason = fieldLimitReason
 	}
@@ -113,6 +99,7 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
@@ -121,36 +108,46 @@ func (tool *ListResourcesTool) Execute(ctx context.Context, call BoundToolCall) 
 
 type listResourceItem struct {
 	CreatedAt string                `json:"created_at,omitempty"`
+	Fields    []safeResourceField   `json:"fields"`
 	Reference safeResourceReference `json:"reference"`
 	Status    safeResourceStatus    `json:"status"`
 }
 
 type listResourcesData struct {
-	HealthFilter    string             `json:"health_filter"`
-	InstructionLike bool               `json:"instruction_like"`
-	Items           []listResourceItem `json:"items"`
-	Kind            string             `json:"kind"`
-	MatchedCount    int                `json:"matched_count"`
-	NameQuery       string             `json:"name_query,omitempty"`
-	RedactionCount  int                `json:"redaction_count"`
-	ReturnedCount   int                `json:"returned_count"`
-	SourceTrust     string             `json:"source_trust"`
-	Truncated       bool               `json:"truncated"`
+	APIVersion      string                   `json:"api_version"`
+	Filters         []resourceFilterArgument `json:"filters"`
+	Format          domain.ResourceView      `json:"format"`
+	InstructionLike bool                     `json:"instruction_like"`
+	Items           []listResourceItem       `json:"items"`
+	Kind            string                   `json:"kind"`
+	MatchedCount    int                      `json:"matched_count"`
+	ObservedBytes   int                      `json:"observed_bytes"`
+	PagesRead       int                      `json:"pages_read"`
+	PartialReason   string                   `json:"partial_reason,omitempty"`
+	RedactionCount  int                      `json:"redaction_count"`
+	Resource        string                   `json:"resource"`
+	ResourceType    string                   `json:"resource_type"`
+	ReturnedCount   int                      `json:"returned_count"`
+	ScannedCount    int                      `json:"scanned_count"`
+	Scope           domain.ResourceScope     `json:"resource_scope"`
+	SourceTrust     string                   `json:"source_trust"`
+	Truncated       bool                     `json:"truncated"`
 }
 
 func (tool *ListResourcesTool) project(
 	observations []ResourceObservation,
+	policy domain.ResourcePolicy,
 	arguments listResourcesArguments,
-	matchedCount int,
+	page domain.ResourcePage,
 ) (listResourcesData, []domain.ResourceSummary, []evidenceTemplate, []domain.ToolResultWarning, bool, error) {
+	resourceType := page.Type
 	data := listResourcesData{
-		HealthFilter:  arguments.HealthFilter,
-		Items:         make([]listResourceItem, 0, len(observations)),
-		Kind:          arguments.Kind,
-		MatchedCount:  matchedCount,
-		NameQuery:     arguments.NameQuery,
-		SourceTrust:   security.UntrustedDataClass,
-		ReturnedCount: len(observations),
+		APIVersion: resourceType.APIVersion(), Filters: append([]resourceFilterArgument(nil), arguments.Filters...),
+		Format: arguments.Format, Items: make([]listResourceItem, 0, len(observations)), Kind: resourceType.Kind,
+		MatchedCount: page.MatchedItems, ObservedBytes: page.ObservedBytes, PagesRead: page.PagesRead,
+		PartialReason: page.Reason, Resource: resourceType.Resource, ResourceType: resourceType.ID,
+		ReturnedCount: len(observations), ScannedCount: page.ScannedItems, Scope: resourceType.Scope,
+		SourceTrust: security.UntrustedDataClass, Truncated: page.Truncated,
 	}
 	metadata := textMetadata{}
 	warnings := []domain.ToolResultWarning{}
@@ -172,7 +169,15 @@ func (tool *ListResourcesTool) project(
 		if current.blocked {
 			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
 		}
-		item := listResourceItem{Reference: reference, Status: status}
+		fields, current, err := getProjector.safeFields(observation.Fields)
+		if err != nil {
+			return listResourcesData{}, nil, nil, nil, false, err
+		}
+		metadata.merge(current)
+		if current.blocked {
+			warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
+		}
+		item := listResourceItem{Fields: fields, Reference: reference, Status: status}
 		if !observation.Summary.CreatedAt.IsZero() {
 			item.CreatedAt = observation.Summary.CreatedAt.Format(time.RFC3339Nano)
 		}
@@ -180,12 +185,13 @@ func (tool *ListResourcesTool) project(
 	}
 	data.InstructionLike = metadata.instructionLike
 	data.RedactionCount = metadata.redactions
-	data.Truncated = metadata.truncated || metadata.blocked
+	data.Truncated = data.Truncated || metadata.truncated || metadata.blocked
 	summaries := make([]domain.ResourceSummary, 0, len(data.Items))
 	templates := make([]evidenceTemplate, 0, len(data.Items))
 	for index, item := range data.Items {
 		reference := domainReference(item.Reference)
 		summary := domain.ResourceSummary{
+			Type:      observations[index].Summary.EffectiveType(),
 			Reference: reference,
 			CreatedAt: observations[index].Summary.CreatedAt,
 			Status:    domainResourceStatus(item.Status),
@@ -194,12 +200,24 @@ func (tool *ListResourcesTool) project(
 			return listResourcesData{}, nil, nil, nil, false, ErrInvalidResourceRead
 		}
 		summaries = append(summaries, summary)
-		fact, factTruncated := boundedEvidenceFact(resourceStatusFact(item.Reference, item.Status))
+		factText := fmt.Sprintf("%s %s was observed.", item.Reference.Kind, item.Reference.Name)
+		sourcePath := "metadata.name"
+		for _, field := range item.Fields {
+			policyField, admitted := policy.Field(field.Field)
+			if field.Value == nil || !admitted || !policyField.Evidence {
+				continue
+			}
+			factText = fmt.Sprintf("The projected %s %s field %s is %s.", item.Reference.Kind, item.Reference.Name, field.Field, *field.Value)
+			sourcePath = field.Path
+			break
+		}
+		fact, factTruncated := boundedEvidenceFact(factText)
 		templates = append(templates, evidenceTemplate{
 			category:       domain.EvidenceCategoryResourceStatus,
+			resourceType:   observations[index].Summary.EffectiveType(),
 			resource:       reference,
 			fact:           fact,
-			sourcePath:     "projected.status",
+			sourcePath:     sourcePath,
 			severity:       resourceStatusSeverity(item.Reference.Kind, item.Status),
 			redactionCount: item.Status.redactionCount,
 			truncated:      item.Status.truncated || factTruncated,
@@ -261,6 +279,7 @@ func fitListResourcesResult(
 				}
 				for index := range result.Evidence {
 					result.Evidence[index].Truncated = true
+					result.Evidence[index].Partial = true
 				}
 			}
 			measured, measureErr := measureResult(call, result)

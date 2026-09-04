@@ -72,17 +72,26 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	identifiers := newIntegrationIDs()
 	scope := newIntegrationScope()
 	kubernetes := &integrationKube{canary: canary}
+	resourcePolicies := integrationResourcePolicies{}
 	redactor := security.NewRedactor()
 	toolHandlers, err := tools.NewReadOnlyToolCatalog(tools.ReadOnlyToolCatalogDependencies{
 		Resources: tools.ResourceToolDependencies{
-			Reader: kubernetes, ScopeGuard: scope, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
+			Reader: kubernetes, QueryReader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies,
+			EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
 		},
 		Events: tools.EventToolDependencies{
-			Reader: kubernetes, ScopeGuard: scope, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
+			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
 		},
 		Logs: tools.LogToolDependencies{
-			Reader: kubernetes, ScopeGuard: scope, EvidenceIDs: identifiers, Text: redactor,
+			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Text: redactor,
 			Policy: deniedIntegrationLogPolicy{}, Now: clock.Now,
+		},
+		Metrics: tools.MetricToolDependencies{
+			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Now: clock.Now,
+		},
+		Sources: tools.DataSourceToolDependencies{
+			Prometheus: kubernetes, Loki: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies,
+			Policy: deniedIntegrationObservationPolicy{}, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
 		},
 		Related: tools.RelatedToolDependencies{
 			Reader: kubernetes, ScopeGuard: scope, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
@@ -130,7 +139,8 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scope,
 		Runner: agentAdapter, Identifiers: identifiers, AuditIdentifiers: identifiers,
-		Questions: redactor, Privacy: privacyManager, UIEvents: uiEvents, Observer: observer, Now: clock.Now,
+		Questions: redactor, Privacy: privacyManager, RunResourcePolicies: resourcePolicies,
+		UIEvents: uiEvents, Observer: observer, Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
@@ -728,17 +738,13 @@ func (model *integrationModel) ServeHTTP(writer http.ResponseWriter, request *ht
 	switch step % 2 {
 	case 0:
 		arguments, _ := json.Marshal(struct {
-			Purpose  string `json:"purpose"`
-			Resource struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			} `json:"resource"`
+			Detail       string  `json:"detail"`
+			Name         string  `json:"name"`
+			Namespace    *string `json:"namespace"`
+			Purpose      string  `json:"purpose"`
+			ResourceType string  `json:"resource_type"`
 		}{
-			Purpose: toolPurpose,
-			Resource: struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			}{Kind: "Pod", Name: "sample-pod"},
+			Detail: "describe", Name: "sample-pod", Purpose: toolPurpose, ResourceType: "pods",
 		})
 		writeIntegrationModelChunk(writer, map[string]any{
 			"choices": []any{map[string]any{
@@ -834,6 +840,19 @@ type integrationKube struct {
 	getCalls int
 }
 
+type integrationResourcePolicies struct{}
+
+func (integrationResourcePolicies) ResourcePolicySnapshot(ctx context.Context) (domain.ResourcePolicyCatalog, domain.PolicyGeneration, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return domain.ResourcePolicyCatalog{}, 0, false
+	}
+	return domain.DefaultResourcePolicyCatalog(), 1, true
+}
+
+func (integrationResourcePolicies) CurrentPolicyGeneration(ctx context.Context, generation domain.PolicyGeneration) bool {
+	return ctx != nil && ctx.Err() == nil && generation == 1
+}
+
 func (reader *integrationKube) ReadResource(_ context.Context, request tools.ResourceReadRequest) (tools.ResourceObservation, error) {
 	reader.mu.Lock()
 	reader.getCalls++
@@ -864,6 +883,29 @@ func (*integrationKube) ListResources(context.Context, tools.ResourceListRequest
 	return tools.ResourceObservationList{}, errors.New("unexpected list_resources call")
 }
 
+func (reader *integrationKube) QueryResources(ctx context.Context, request tools.ResourceQueryRequest) (tools.ResourceQueryObservation, error) {
+	if request.Validate() != nil || request.Query.Verb != domain.ResourceVerbGet {
+		return tools.ResourceQueryObservation{}, errors.New("unexpected integration resource query")
+	}
+	observation, err := reader.ReadResource(ctx, tools.ResourceReadRequest{
+		Scope: request.Query.Scope,
+		Reference: domain.ResourceRef{
+			APIVersion: request.Policy.Type.APIVersion(), Kind: request.Policy.Type.Kind,
+			Namespace: request.Query.Namespace, Name: request.Query.Name,
+		},
+		Detail: request.Detail,
+	})
+	if err != nil {
+		return tools.ResourceQueryObservation{}, err
+	}
+	observation.Summary.Type = request.Policy.Type
+	page := domain.ResourcePage{
+		Type: request.Policy.Type, Items: []domain.ResourceSummary{observation.Summary},
+		PagesRead: 1, ScannedItems: 1, MatchedItems: 1,
+	}
+	return tools.ResourceQueryObservation{Page: page, Items: []tools.ResourceObservation{observation}}, nil
+}
+
 func (*integrationKube) ReadEvents(context.Context, tools.EventReadRequest) (tools.EventObservationList, error) {
 	return tools.EventObservationList{}, errors.New("unexpected get_events call")
 }
@@ -876,6 +918,18 @@ func (*integrationKube) ReadRelatedResources(context.Context, tools.RelatedReadR
 	return tools.RelatedObservationGraph{}, errors.New("unexpected related-resource call")
 }
 
+func (*integrationKube) ReadMetrics(context.Context, tools.MetricReadRequest) (tools.MetricObservation, error) {
+	return tools.MetricObservation{}, errors.New("unexpected metrics call")
+}
+
+func (*integrationKube) QueryPrometheus(context.Context, tools.PrometheusReadRequest) (tools.PrometheusObservation, error) {
+	return tools.PrometheusObservation{}, errors.New("unexpected Prometheus call")
+}
+
+func (*integrationKube) QueryLoki(context.Context, tools.LokiReadRequest) (tools.LokiObservation, error) {
+	return tools.LokiObservation{}, errors.New("unexpected Loki call")
+}
+
 func (reader *integrationKube) resourceCalls() int {
 	reader.mu.Lock()
 	defer reader.mu.Unlock()
@@ -886,6 +940,12 @@ type deniedIntegrationLogPolicy struct{}
 
 func (deniedIntegrationLogPolicy) AuthorizeLogRead(context.Context, tools.LogPolicyRequest) tools.LogPolicyDecision {
 	return tools.LogPolicyDenied
+}
+
+type deniedIntegrationObservationPolicy struct{}
+
+func (deniedIntegrationObservationPolicy) AuthorizeObservation(context.Context, tools.ObservationPolicyRequest) tools.ObservationPolicyDecision {
+	return tools.ObservationPolicyDenied
 }
 
 type integrationUIEvents struct {

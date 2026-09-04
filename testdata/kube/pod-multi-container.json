@@ -23,6 +23,13 @@
         "name": "sidecar",
         "image": "registry.invalid/sample/sidecar:v1"
       }
+    ],
+    "ephemeralContainers": [
+      {
+        "name": "debugger",
+        "image": "registry.invalid/sample/debugger:v1",
+        "targetContainerName": "app"
+      }
     ]
   },
   "status": {
@@ -76,6 +83,20 @@
         "state": {
           "running": {
             "startedAt": "2026-01-02T03:03:00Z"
+          }
+        }
+      }
+    ],
+    "ephemeralContainerStatuses": [
+      {
+        "name": "debugger",
+        "image": "registry.invalid/sample/debugger:v1",
+        "imageID": "",
+        "ready": true,
+        "restartCount": 0,
+        "state": {
+          "running": {
+            "startedAt": "2026-01-02T03:04:10Z"
           }
         }
       }

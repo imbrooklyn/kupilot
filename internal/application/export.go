@@ -146,14 +146,18 @@ type ExportDiagnosisRecord struct {
 
 // ExportEvidenceRecord is one independently eligible accepted Evidence derivative.
 type ExportEvidenceRecord struct {
-	ID             domain.EvidenceID
-	Category       domain.EvidenceCategory
-	Resource       domain.ResourceRef
-	Fact           string
-	SourcePath     string
-	ObservedAt     time.Time
-	RedactionCount int
-	Truncated      bool
+	ID               domain.EvidenceID
+	Category         domain.EvidenceCategory
+	Resource         domain.ResourceRef
+	ResourceType     domain.ResourceType
+	PolicyVersion    string
+	PolicyGeneration domain.PolicyGeneration
+	Fact             string
+	SourcePath       string
+	ObservedAt       time.Time
+	RedactionCount   int
+	Truncated        bool
+	Partial          bool
 }
 
 // SessionExportSnapshot is one consistent SQLite allowlist projection.
@@ -233,18 +237,21 @@ type ExportSummaryDiagnosis struct {
 
 // ExportSummaryEvidence is one available or expired referenced Evidence projection.
 type ExportSummaryEvidence struct {
-	ID         domain.EvidenceID
-	State      domain.EvidenceDetailState
-	Category   domain.EvidenceCategory
-	APIVersion string
-	Kind       string
-	Namespace  string
-	Name       string
-	Fact       string
-	SourcePath string
-	ObservedAt time.Time
-	Redacted   bool
-	Truncated  bool
+	ID               domain.EvidenceID
+	State            domain.EvidenceDetailState
+	Category         domain.EvidenceCategory
+	ResourceType     domain.ResourceType
+	APIVersion       string
+	Kind             string
+	Namespace        string
+	Name             string
+	PolicyVersion    string
+	PolicyGeneration domain.PolicyGeneration
+	Fact             string
+	SourcePath       string
+	ObservedAt       time.Time
+	Redacted         bool
+	Truncated        bool
 }
 
 // ProjectExportSummary applies the field allowlist, per-field redaction, and source caps.
@@ -368,15 +375,22 @@ func ProjectExportSummary(
 			}
 			path = pathResult.Value
 		}
-		namespace, processErr := processExportSingleLine(processor, record.Resource.Namespace, 63)
-		if processErr != nil || namespace.Value == "" {
+		resourceType, typeOK := exportEvidenceResourceType(record)
+		if !typeOK {
 			return ExportSummary{}, ErrInvalidExportSummary
+		}
+		namespace := exportProcessedText{}
+		if resourceType.Namespaced() {
+			namespace, processErr = processExportSingleLine(processor, record.Resource.Namespace, 63)
+			if processErr != nil || namespace.Value == "" {
+				return ExportSummary{}, ErrInvalidExportSummary
+			}
 		}
 		name, processErr := processExportSingleLine(processor, record.Resource.Name, 253)
 		if processErr != nil || name.Value == "" {
 			return ExportSummary{}, ErrInvalidExportSummary
 		}
-		evidenceTruncated := record.Truncated || fact.Truncated || pathResult.Truncated || namespace.Truncated || name.Truncated
+		evidenceTruncated := record.Truncated || record.Partial || fact.Truncated || pathResult.Truncated || namespace.Truncated || name.Truncated
 		state := domain.EvidenceDetailAvailable
 		if evidenceTruncated {
 			state = domain.EvidenceDetailPartial
@@ -384,8 +398,9 @@ func ProjectExportSummary(
 		summary.Truncated = summary.Truncated || evidenceTruncated
 		summary.Evidence = append(summary.Evidence, ExportSummaryEvidence{
 			ID: id, State: state, Category: record.Category,
-			APIVersion: record.Resource.APIVersion, Kind: record.Resource.Kind,
+			ResourceType: resourceType, APIVersion: record.Resource.APIVersion, Kind: record.Resource.Kind,
 			Namespace: namespace.Value, Name: name.Value,
+			PolicyVersion: record.PolicyVersion, PolicyGeneration: record.PolicyGeneration,
 			Fact: fact.Value, SourcePath: path, ObservedAt: record.ObservedAt.UTC().Truncate(time.Millisecond),
 			Redacted:  record.RedactionCount > 0 || fact.Redacted || pathResult.Redacted || namespace.Redacted || name.Redacted,
 			Truncated: evidenceTruncated,
@@ -401,6 +416,11 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 		!validExportContextSummary(summary.ContextSummary, summary.Session.ID) || len(summary.Messages) > MaxExportMessages ||
 		len(summary.Diagnoses) > MaxExportDiagnoses || len(summary.Evidence) > MaxExportEvidence {
 		return nil, ErrInvalidExportSummary
+	}
+	for _, evidence := range summary.Evidence {
+		if !validExportSummaryEvidence(evidence) {
+			return nil, ErrInvalidExportSummary
+		}
 	}
 	var builder strings.Builder
 	builder.Grow(min(MaxExportSummaryBytes, maxExportMarkdownOverhead+len(summary.Messages)*maxExportMessageBytes))
@@ -479,7 +499,15 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 			continue
 		}
 		fmt.Fprintf(&builder, "- Category: `%s`\n", evidence.Category)
-		fmt.Fprintf(&builder, "- Resource: `%s %s/%s` (`%s`)\n", evidence.Kind, evidence.Namespace, evidence.Name, evidence.APIVersion)
+		resourceName := evidence.Name
+		if evidence.Namespace != "" {
+			resourceName = evidence.Namespace + "/" + evidence.Name
+		}
+		fmt.Fprintf(&builder, "- Resource: `%s %s` (`%s`)\n", evidence.Kind, resourceName, evidence.APIVersion)
+		fmt.Fprintf(&builder, "- API resource: `%s %s` (`%s`)\n", evidence.ResourceType.APIVersion(), evidence.ResourceType.Resource, evidence.ResourceType.Scope)
+		if evidence.PolicyVersion != "" {
+			fmt.Fprintf(&builder, "- Evidence policy: `%s` (generation `%d`)\n", evidence.PolicyVersion, evidence.PolicyGeneration)
+		}
 		fmt.Fprintf(&builder, "- Observed at: `%s`\n", exportTimestamp(evidence.ObservedAt))
 		fmt.Fprintf(&builder, "- Redacted: `%t`\n- Truncated: `%t`\n", evidence.Redacted, evidence.Truncated)
 		if evidence.SourcePath != "" {
@@ -550,9 +578,46 @@ func validExportContextSummary(summary *ExportSummaryContext, sessionID domain.S
 }
 
 func validExportEvidence(record ExportEvidenceRecord) bool {
-	return record.ID.Valid() && record.Category.Valid() && domain.ValidateLiveResourceRef(record.Resource) == nil &&
+	resourceType, ok := exportEvidenceResourceType(record)
+	return ok && record.ID.Valid() && record.Category.Valid() && domain.ValidateResourceRefForType(record.Resource, resourceType) == nil &&
+		validEvidencePolicyBinding(record.PolicyVersion, record.PolicyGeneration) &&
 		validCoordinatorTime(record.ObservedAt) && record.RedactionCount >= 0 &&
-		utf8.ValidString(record.Fact) && strings.TrimSpace(record.Fact) != "" && utf8.ValidString(record.SourcePath)
+		utf8.ValidString(record.Fact) && strings.TrimSpace(record.Fact) != "" && utf8.ValidString(record.SourcePath) &&
+		(record.PolicyVersion != domain.ObservabilityPolicyVersion ||
+			allowedUIEvidenceSourcePath(record.Category, record.Resource, record.PolicyVersion, record.SourcePath))
+}
+
+func validExportSummaryEvidence(evidence ExportSummaryEvidence) bool {
+	if !evidence.ID.Valid() || !evidence.State.Valid() {
+		return false
+	}
+	if evidence.State == domain.EvidenceDetailExpired {
+		return evidence == (ExportSummaryEvidence{ID: evidence.ID, State: domain.EvidenceDetailExpired})
+	}
+	reference := domain.ResourceRef{
+		APIVersion: evidence.APIVersion, Kind: evidence.Kind,
+		Namespace: evidence.Namespace, Name: evidence.Name,
+	}
+	return evidence.Category.Valid() && evidence.ResourceType.Validate() == nil &&
+		domain.ValidateResourceRefForType(reference, evidence.ResourceType) == nil &&
+		validEvidencePolicyBinding(evidence.PolicyVersion, evidence.PolicyGeneration) &&
+		validCoordinatorTime(evidence.ObservedAt) && evidence.ObservedAt.Location() == time.UTC &&
+		utf8.ValidString(evidence.Fact) && strings.TrimSpace(evidence.Fact) != "" && len(evidence.Fact) <= maxExportEvidenceFactBytes &&
+		utf8.ValidString(evidence.SourcePath) && len(evidence.SourcePath) <= maxExportEvidencePathBytes &&
+		(evidence.PolicyVersion != domain.ObservabilityPolicyVersion ||
+			allowedUIEvidenceSourcePath(evidence.Category, reference, evidence.PolicyVersion, evidence.SourcePath)) &&
+		(evidence.State == domain.EvidenceDetailPartial) == evidence.Truncated
+}
+
+func exportEvidenceResourceType(record ExportEvidenceRecord) (domain.ResourceType, bool) {
+	if record.ResourceType != (domain.ResourceType{}) {
+		return record.ResourceType, record.ResourceType.Validate() == nil
+	}
+	kind, found := domain.ResourceKindForReference(record.Resource)
+	if !found {
+		return domain.ResourceType{}, false
+	}
+	return domain.BuiltInResourceType(kind), true
 }
 
 type exportProcessedText struct {

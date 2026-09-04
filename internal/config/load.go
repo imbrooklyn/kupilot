@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/imbrooklyn/kupilot/internal/domain"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -25,10 +26,14 @@ type LoadOptions struct {
 }
 
 type extractedCredentials struct {
-	agent         SecretValue
-	agentFound    bool
-	reviewer      SecretValue
-	reviewerFound bool
+	agent           SecretValue
+	agentFound      bool
+	reviewer        SecretValue
+	reviewerFound   bool
+	prometheus      SecretValue
+	prometheusFound bool
+	loki            SecretValue
+	lokiFound       bool
 }
 
 func (credentials *extractedCredentials) destroy() {
@@ -37,6 +42,8 @@ func (credentials *extractedCredentials) destroy() {
 	}
 	credentials.agent.Destroy()
 	credentials.reviewer.Destroy()
+	credentials.prometheus.Destroy()
+	credentials.loki.Destroy()
 }
 
 // Load applies defaults, a strict versioned YAML file, admitted environment
@@ -58,21 +65,39 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		LookupEnv: lookup, Unsetenv: options.Unsetenv,
 		Variables: []string{ApprovalReviewerAPIKeyEnvironmentVariable},
 	}
+	prometheusEnvironment := &EnvironmentSecretSource{
+		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variables: []string{PrometheusAPIKeyEnvironmentVariable},
+	}
+	lokiEnvironment := &EnvironmentSecretSource{
+		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variables: []string{LokiAPIKeyEnvironmentVariable},
+	}
 	agentEnvironmentCredential, agentEnvironmentFound, agentEnvironmentErr := agentEnvironment.ReadOptional()
 	reviewerEnvironmentCredential, reviewerEnvironmentFound, reviewerEnvironmentErr := reviewerEnvironment.ReadOptional()
-	if agentEnvironmentErr != nil || reviewerEnvironmentErr != nil {
+	prometheusEnvironmentCredential, prometheusEnvironmentFound, prometheusEnvironmentErr := prometheusEnvironment.ReadOptional()
+	lokiEnvironmentCredential, lokiEnvironmentFound, lokiEnvironmentErr := lokiEnvironment.ReadOptional()
+	if agentEnvironmentErr != nil || reviewerEnvironmentErr != nil || prometheusEnvironmentErr != nil || lokiEnvironmentErr != nil {
 		agentEnvironmentCredential.Destroy()
 		reviewerEnvironmentCredential.Destroy()
+		prometheusEnvironmentCredential.Destroy()
+		lokiEnvironmentCredential.Destroy()
 		if agentEnvironmentErr != nil {
 			return Loaded{}, agentEnvironmentErr
 		}
-		return Loaded{}, reviewerEnvironmentErr
+		if reviewerEnvironmentErr != nil {
+			return Loaded{}, reviewerEnvironmentErr
+		}
+		if prometheusEnvironmentErr != nil {
+			return Loaded{}, prometheusEnvironmentErr
+		}
+		return Loaded{}, lokiEnvironmentErr
 	}
 	environmentCredentialsTransferred := false
 	defer func() {
 		if !environmentCredentialsTransferred {
 			agentEnvironmentCredential.Destroy()
 			reviewerEnvironmentCredential.Destroy()
+			prometheusEnvironmentCredential.Destroy()
+			lokiEnvironmentCredential.Destroy()
 		}
 	}()
 
@@ -185,6 +210,71 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		credentials.ApprovalReviewer = &reviewerCredential
 	}
 
+	bindDataSourceCredential := func(
+		kind domain.DataSourceKind,
+		configured *DataSourceConfig,
+		reference DataSourceCredentialReference,
+		fileValue SecretValue,
+		fileFound bool,
+		environmentValue SecretValue,
+		environmentFound bool,
+	) (*DataSourceCredential, error) {
+		if configured == nil {
+			fileValue.Destroy()
+			environmentValue.Destroy()
+			if fileFound || environmentFound {
+				return nil, newSafeError(ClassConfigurationInvalid, "config_data_source_credential_unbound", "load_configuration", "An observability API key requires its explicit observability source configuration.")
+			}
+			return nil, nil
+		}
+		credential := &DataSourceCredential{Kind: kind, Reference: configured.CredentialReference}
+		if configured.CredentialReference == DataSourceCredentialNone {
+			fileValue.Destroy()
+			environmentValue.Destroy()
+			if fileFound || environmentFound {
+				return nil, newSafeError(ClassConfigurationInvalid, "config_data_source_credential_conflict", "load_configuration", "An observability source with credential_ref none must not define an API key.")
+			}
+			return credential, nil
+		}
+		if configured.CredentialReference != reference {
+			fileValue.Destroy()
+			environmentValue.Destroy()
+			return nil, newSafeError(ClassConfigurationInvalid, "config_data_source_credential_invalid", "load_configuration", "An observability credential reference does not match its source.")
+		}
+		credential.Value = fileValue
+		if fileFound {
+			credential.Source = CredentialSourceFile
+		}
+		if environmentFound {
+			fileValue.Destroy()
+			credential.Value = environmentValue
+			credential.Source = CredentialSourceEnvironment
+		}
+		if !credential.Value.IsSet() {
+			return nil, newSafeError(ClassConfigurationInvalid, "config_data_source_credential_missing", "load_configuration", "An observability source credential reference requires its fixed API key source.")
+		}
+		return credential, nil
+	}
+	credentials.Prometheus, err = bindDataSourceCredential(
+		domain.DataSourcePrometheus, config.Observability.Prometheus, DataSourceCredentialPrometheus,
+		fileCredentials.prometheus, fileCredentials.prometheusFound,
+		prometheusEnvironmentCredential, prometheusEnvironmentFound,
+	)
+	if err != nil {
+		credentials.Destroy()
+		fileCredentials.loki.Destroy()
+		lokiEnvironmentCredential.Destroy()
+		return Loaded{}, err
+	}
+	credentials.Loki, err = bindDataSourceCredential(
+		domain.DataSourceLoki, config.Observability.Loki, DataSourceCredentialLoki,
+		fileCredentials.loki, fileCredentials.lokiFound, lokiEnvironmentCredential, lokiEnvironmentFound,
+	)
+	if err != nil {
+		credentials.Destroy()
+		return Loaded{}, err
+	}
+
 	if err := ctx.Err(); err != nil {
 		credentials.Destroy()
 		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
@@ -197,7 +287,7 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; Kupilot will respect the existing user-managed permissions.")
 	}
 	if permissionsWider {
-		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain plaintext model API keys.")
+		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain plaintext model or observability API keys.")
 	}
 	if config.Logging.SensitiveDiagnostics {
 		warnings = append(warnings, "Sensitive model diagnostics are enabled; local logs may contain endpoint details, provider error content, and source paths.")
@@ -233,14 +323,27 @@ type legacyModelConfig struct {
 }
 
 type configV2Document struct {
-	Version    int                 `yaml:"version"`
-	Context    *string             `yaml:"context,omitempty"`
-	Namespace  *string             `yaml:"namespace,omitempty"`
-	NoColor    *bool               `yaml:"no_color,omitempty"`
-	Runtime    *runtimeDocument    `yaml:"runtime,omitempty"`
-	Models     *modelsDocument     `yaml:"models"`
-	Kubernetes *kubernetesDocument `yaml:"kubernetes,omitempty"`
-	Logging    *loggingDocument    `yaml:"logging,omitempty"`
+	Version       int                    `yaml:"version"`
+	Context       *string                `yaml:"context,omitempty"`
+	Namespace     *string                `yaml:"namespace,omitempty"`
+	NoColor       *bool                  `yaml:"no_color,omitempty"`
+	Runtime       *runtimeDocument       `yaml:"runtime,omitempty"`
+	Models        *modelsDocument        `yaml:"models"`
+	Kubernetes    *kubernetesDocument    `yaml:"kubernetes,omitempty"`
+	Observability *observabilityDocument `yaml:"observability,omitempty"`
+	Logging       *loggingDocument       `yaml:"logging,omitempty"`
+}
+
+type observabilityDocument struct {
+	Prometheus *dataSourceDocument `yaml:"prometheus,omitempty"`
+	Loki       *dataSourceDocument `yaml:"loki,omitempty"`
+}
+
+type dataSourceDocument struct {
+	Endpoint              *string                        `yaml:"endpoint"`
+	CredentialReference   *DataSourceCredentialReference `yaml:"credential_ref"`
+	Queries               *[]string                      `yaml:"queries"`
+	RequestTimeoutSeconds *int                           `yaml:"request_timeout_seconds"`
 }
 
 type runtimeDocument struct {
@@ -269,8 +372,9 @@ type modelProfileDocument struct {
 }
 
 type kubernetesDocument struct {
-	ExecCredentials *string `yaml:"exec_credentials,omitempty"`
-	NamespaceAccess *string `yaml:"namespace_access,omitempty"`
+	ExecCredentials  *string                           `yaml:"exec_credentials,omitempty"`
+	NamespaceAccess  *string                           `yaml:"namespace_access,omitempty"`
+	ResourcePolicies *[]KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty"`
 }
 
 type loggingDocument struct {
@@ -372,6 +476,20 @@ func applyRootDocument(config *Config, document configV2Document) {
 		if document.Kubernetes.NamespaceAccess != nil {
 			config.Kubernetes.NamespaceAccess = *document.Kubernetes.NamespaceAccess
 		}
+		if document.Kubernetes.ResourcePolicies != nil {
+			config.Kubernetes.ResourcePolicies = append(
+				[]KubernetesResourcePolicyConfig(nil),
+				(*document.Kubernetes.ResourcePolicies)...,
+			)
+		}
+	}
+	if document.Observability != nil {
+		if document.Observability.Prometheus != nil {
+			config.Observability.Prometheus = applyDataSourceDocument(document.Observability.Prometheus)
+		}
+		if document.Observability.Loki != nil {
+			config.Observability.Loki = applyDataSourceDocument(document.Observability.Loki)
+		}
 	}
 	if document.Logging != nil {
 		if document.Logging.Enabled != nil {
@@ -384,6 +502,26 @@ func applyRootDocument(config *Config, document configV2Document) {
 			config.Logging.SensitiveDiagnostics = *document.Logging.SensitiveDiagnostics
 		}
 	}
+}
+
+func applyDataSourceDocument(document *dataSourceDocument) *DataSourceConfig {
+	if document == nil {
+		return nil
+	}
+	result := &DataSourceConfig{RequestTimeoutSeconds: DefaultDataSourceTimeoutSeconds}
+	if document.Endpoint != nil {
+		result.Endpoint = *document.Endpoint
+	}
+	if document.CredentialReference != nil {
+		result.CredentialReference = *document.CredentialReference
+	}
+	if document.Queries != nil {
+		result.Queries = append([]string(nil), (*document.Queries)...)
+	}
+	if document.RequestTimeoutSeconds != nil {
+		result.RequestTimeoutSeconds = *document.RequestTimeoutSeconds
+	}
+	return result
 }
 
 func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocument) ModelProfileConfig {
@@ -486,6 +624,25 @@ func extractSensitiveConfig(content []byte) ([]byte, extractedCredentials, int, 
 			if reviewer := mappingValue(models, "approval_reviewer"); reviewer != nil {
 				var err error
 				credentials.reviewer, credentials.reviewerFound, err = extractProfileCredential(reviewer)
+				if err != nil {
+					credentials.destroy()
+					return nil, extractedCredentials{}, version, err
+				}
+			}
+		}
+		observability := mappingValue(root, "observability")
+		if observability != nil {
+			if prometheus := mappingValue(observability, "prometheus"); prometheus != nil {
+				var err error
+				credentials.prometheus, credentials.prometheusFound, err = extractProfileCredential(prometheus)
+				if err != nil {
+					credentials.destroy()
+					return nil, extractedCredentials{}, version, err
+				}
+			}
+			if loki := mappingValue(observability, "loki"); loki != nil {
+				var err error
+				credentials.loki, credentials.lokiFound, err = extractProfileCredential(loki)
 				if err != nil {
 					credentials.destroy()
 					return nil, extractedCredentials{}, version, err
@@ -609,7 +766,11 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 				return false
 			}
 		case "kubernetes":
-			if !validKubernetesYAML(value) {
+			if !validKubernetesYAML(value, version == CurrentVersion) {
+				return false
+			}
+		case "observability":
+			if version != CurrentVersion || !validObservabilityYAML(value, allowCredential) {
 				return false
 			}
 		case "logging":
@@ -621,6 +782,29 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 		}
 	}
 	return versionSeen
+}
+
+func validObservabilityYAML(node *yaml.Node, allowCredential bool) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		return (key == "prometheus" || key == "loki") && validDataSourceYAML(value, allowCredential)
+	})
+}
+
+func validDataSourceYAML(node *yaml.Node, allowCredential bool) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "endpoint", "credential_ref":
+			return yamlString(value)
+		case "api_key":
+			return allowCredential && yamlString(value)
+		case "queries":
+			return validStringSequenceYAML(value, domain.MaxObservabilityQueryTemplates)
+		case "request_timeout_seconds":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "endpoint", "credential_ref", "queries", "request_timeout_seconds")
 }
 
 func validRuntimeYAML(node *yaml.Node) bool {
@@ -658,10 +842,108 @@ func validModelYAML(node *yaml.Node, allowCredential, named bool) bool {
 	})
 }
 
-func validKubernetesYAML(node *yaml.Node) bool {
+func validKubernetesYAML(node *yaml.Node, allowResourcePolicies bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
-		return (key == "exec_credentials" || key == "namespace_access") && yamlString(value)
+		switch key {
+		case "exec_credentials", "namespace_access":
+			return yamlString(value)
+		case "resource_policies":
+			return allowResourcePolicies && validResourcePoliciesYAML(value)
+		default:
+			return false
+		}
 	})
+}
+
+func validResourcePoliciesYAML(node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content)+len(domain.BuiltInResourcePolicies()) > domain.MaxResourcePolicyEntries {
+		return false
+	}
+	for _, entry := range node.Content {
+		if !validResourcePolicyYAML(entry) {
+			return false
+		}
+	}
+	return true
+}
+
+func validResourcePolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "id", "group", "version", "resource", "kind", "scope":
+			return yamlString(value)
+		case "verbs":
+			return validStringSequenceYAML(value, 2)
+		case "fields":
+			return validResourceFieldsYAML(value)
+		case "limits":
+			return validResourceLimitsYAML(value)
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "id", "group", "version", "resource", "kind", "scope", "verbs", "fields", "limits")
+}
+
+func validResourceFieldsYAML(node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) > domain.MaxResourceFields {
+		return false
+	}
+	for _, field := range node.Content {
+		if !validYAMLMapping(field, func(key string, value *yaml.Node) bool {
+			switch key {
+			case "id", "path", "scalar", "data_class", "selector_source", "selector_key":
+				return yamlString(value)
+			case "operators":
+				return validStringSequenceYAML(value, 4)
+			case "evidence":
+				return yamlScalar(value, "!!bool")
+			default:
+				return false
+			}
+		}) || !yamlMappingContainsEvery(field, "id", "path", "scalar", "data_class", "selector_source", "operators", "evidence") {
+			return false
+		}
+	}
+	return true
+}
+
+func validResourceLimitsYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "max_pages", "page_items", "page_bytes", "max_items", "max_bytes", "max_returned":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "max_pages", "page_items", "page_bytes", "max_items", "max_bytes", "max_returned")
+}
+
+func yamlMappingContainsEvery(node *yaml.Node, names ...string) bool {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return false
+	}
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index < len(node.Content); index += 2 {
+		seen[node.Content[index].Value] = struct{}{}
+	}
+	for _, name := range names {
+		if _, found := seen[name]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func validStringSequenceYAML(node *yaml.Node, maximum int) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) > maximum {
+		return false
+	}
+	for _, value := range node.Content {
+		if !yamlString(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func validLoggingYAML(node *yaml.Node) bool {

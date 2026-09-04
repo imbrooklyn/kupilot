@@ -73,7 +73,7 @@ func testBoundCall(t *testing.T, input RunInput, invocationID domain.ToolInvocat
 	call, err := BindToolCall(input, invocationID, ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"` + podName + `"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"` + podName + `","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
 	})
 	if err != nil {
 		t.Fatalf("BindToolCall() error = %v", err)
@@ -141,6 +141,10 @@ func testToolHandlers(tool Tool) ToolHandlers {
 		GetEvents:           tool,
 		GetPodLogs:          tool,
 		GetPreviousPodLogs:  tool,
+		GetPodMetrics:       tool,
+		GetNodeMetrics:      tool,
+		QueryPrometheus:     tool,
+		QueryLoki:           tool,
 		GetRelatedResources: tool,
 		GetClusterOverview:  tool,
 	}

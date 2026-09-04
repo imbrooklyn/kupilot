@@ -34,20 +34,31 @@ var (
 // EventReadRequest is one exact policy-admitted Event observation. The
 // target, cutoff, and limit are runtime-derived and contain no raw selector.
 type EventReadRequest struct {
-	Scope     domain.ClusterScope
-	Reference domain.ResourceRef
-	NotBefore time.Time
-	Limit     int
+	Scope            domain.ClusterScope
+	PolicyGeneration domain.PolicyGeneration
+	Reference        domain.ResourceRef
+	NotBefore        time.Time
+	Limit            int
+	Reason           string
+	Type             string
+	MaxPages         int
+	PageItems        int
+	PageBytes        int
+	MaxBytes         int
 }
 
 // Validate rejects generic, cross-Namespace, and expanding Event reads before
 // an adapter action.
 func (request EventReadRequest) Validate() error {
 	kind, allowed := domain.ResourceKindForReference(request.Reference)
-	if request.Scope.Validate() != nil || !allowed || !kind.Valid() ||
+	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || !allowed || !kind.Valid() ||
 		domain.ValidateLiveResourceRef(request.Reference) != nil || !request.Scope.AllowsReference(request.Reference) ||
+		kind.ClusterScoped() && request.Scope.NamespaceAccess != domain.NamespaceAccessAll ||
 		request.NotBefore.IsZero() || request.NotBefore.Location() != time.UTC || request.NotBefore.UnixMilli() < 0 ||
-		request.Limit < 1 || request.Limit > 50 {
+		request.Limit < 1 || request.Limit > 50 || !domain.ValidModelText(request.Reason, 128, true) ||
+		request.Type != "" && request.Type != "Normal" && request.Type != "Warning" ||
+		request.MaxPages < 1 || request.MaxPages > domain.MaxObservabilityPages || request.PageItems < 1 || request.PageItems > 100 ||
+		request.PageBytes < 1 || request.PageBytes > domain.MaxObservabilityBytes || request.MaxBytes < request.PageBytes || request.MaxBytes > domain.MaxObservabilityBytes {
 		return ErrInvalidEventRead
 	}
 	return nil
@@ -75,12 +86,16 @@ type EventObservationList struct {
 	Items             []EventObservation
 	UIDFilterDegraded bool
 	Truncated         bool
+	Pages             int
+	SourceBytes       int
+	PartialReason     string
 }
 
 // Validate checks the complete source projection against the exact request.
 func (list EventObservationList) Validate(request EventReadRequest) error {
 	if request.Validate() != nil || domain.ValidateLiveResourceRef(list.Target) != nil ||
-		!sameEventTarget(request.Reference, list.Target) || len(list.Items) > 50 {
+		!sameEventTarget(request.Reference, list.Target) || len(list.Items) > 50 || list.Pages < 1 || list.Pages > request.MaxPages ||
+		list.SourceBytes < 0 || list.SourceBytes > request.MaxBytes || !domain.ValidModelText(list.PartialReason, 64, true) {
 		return ErrInvalidEventRead
 	}
 	for _, item := range list.Items {
@@ -119,13 +134,14 @@ type EventReader interface {
 type EventToolDependencies struct {
 	Reader      EventReader
 	ScopeGuard  ScopeGuard
+	PolicyGuard PolicyGenerationGuard
 	EvidenceIDs EvidenceIDSource
 	Text        TextProcessor
 	Now         func() time.Time
 }
 
 func (dependencies EventToolDependencies) validate() error {
-	if dependencies.Reader == nil || dependencies.ScopeGuard == nil || dependencies.EvidenceIDs == nil ||
+	if dependencies.Reader == nil || dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil || dependencies.EvidenceIDs == nil ||
 		dependencies.Text == nil || dependencies.Now == nil {
 		return ErrInvalidEventToolDependencies
 	}
@@ -169,11 +185,11 @@ func (tool *GetEventsTool) Execute(ctx context.Context, call BoundToolCall) Tool
 	if ctx.Err() != nil {
 		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
 	}
-	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) || !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	observations, readErr := tool.dependencies.Reader.ReadEvents(ctx, request)
-	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) || !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	if ctx.Err() != nil {
@@ -184,6 +200,11 @@ func (tool *GetEventsTool) Execute(ctx context.Context, call BoundToolCall) Tool
 	}
 	if observations.Validate(request) != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+	}
+	for _, item := range observations.Items {
+		if item.LastObservedAt.After(observed) {
+			return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+		}
 	}
 	data, templates, warnings, reason, projectErr := tool.project(observations, arguments, request)
 	if projectErr != nil {
@@ -216,6 +237,7 @@ func (tool *GetEventsTool) Execute(ctx context.Context, call BoundToolCall) Tool
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
@@ -233,8 +255,10 @@ type eventResourceArgument struct {
 type getEventsArguments struct {
 	Limit        int                   `json:"limit"`
 	Purpose      string                `json:"purpose"`
+	Reason       string                `json:"reason"`
 	Resource     eventResourceArgument `json:"resource"`
 	SinceSeconds int                   `json:"since_seconds"`
+	Type         string                `json:"type"`
 }
 
 func decodeGetEventsCall(call BoundToolCall, observed time.Time) (getEventsArguments, EventReadRequest, error) {
@@ -243,7 +267,8 @@ func decodeGetEventsCall(call BoundToolCall, observed time.Time) (getEventsArgum
 	}
 	var arguments getEventsArguments
 	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() ||
-		arguments.Limit < 1 || arguments.Limit > 50 || arguments.SinceSeconds < 60 || arguments.SinceSeconds > 86400 {
+		arguments.Limit < 1 || arguments.Limit > 50 || arguments.SinceSeconds < 60 || arguments.SinceSeconds > 86400 ||
+		!domain.ValidModelText(arguments.Reason, 128, true) || arguments.Type != "" && arguments.Type != "Normal" && arguments.Type != "Warning" {
 		return getEventsArguments{}, EventReadRequest{}, ErrInvalidCanonicalArguments
 	}
 	reference := domain.ResourceRef{
@@ -258,10 +283,17 @@ func decodeGetEventsCall(call BoundToolCall, observed time.Time) (getEventsArgum
 		notBefore = time.UnixMilli(0).UTC()
 	}
 	request := EventReadRequest{
-		Scope:     call.Scope(),
-		Reference: reference,
-		NotBefore: notBefore,
-		Limit:     min(arguments.Limit, call.Ceilings().MaxEventItems, 50),
+		Scope:            call.Scope(),
+		PolicyGeneration: call.PolicyGeneration(),
+		Reference:        reference,
+		NotBefore:        notBefore,
+		Limit:            min(arguments.Limit, call.Ceilings().MaxEventItems, 50),
+		Reason:           arguments.Reason,
+		Type:             arguments.Type,
+		MaxPages:         call.Ceilings().MaxEventPages,
+		PageItems:        call.Ceilings().MaxEventPageItems,
+		PageBytes:        call.Ceilings().MaxEventPageBytes,
+		MaxBytes:         call.Ceilings().MaxEventBytes,
 	}
 	if request.Validate() != nil {
 		return getEventsArguments{}, EventReadRequest{}, ErrInvalidCanonicalArguments
@@ -296,6 +328,8 @@ type getEventsData struct {
 	SourceTrust       string                `json:"source_trust"`
 	Truncated         bool                  `json:"truncated"`
 	UIDFilterDegraded bool                  `json:"uid_filter_degraded"`
+	Pages             int                   `json:"pages"`
+	SourceBytes       int                   `json:"source_bytes"`
 }
 
 func (tool *GetEventsTool) project(
@@ -314,6 +348,8 @@ func (tool *GetEventsTool) project(
 		SinceSeconds:      arguments.SinceSeconds,
 		SourceTrust:       security.UntrustedDataClass,
 		UIDFilterDegraded: observations.UIDFilterDegraded,
+		Pages:             observations.Pages,
+		SourceBytes:       observations.SourceBytes,
 	}
 	metadata := resourceMetadata
 	warnings := []domain.ToolResultWarning{}
@@ -323,6 +359,9 @@ func (tool *GetEventsTool) project(
 	aggregated := make(map[string]safeEventItem, len(observations.Items))
 	for _, observation := range observations.Items {
 		if observation.LastObservedAt.Before(request.NotBefore) {
+			continue
+		}
+		if request.Reason != "" && observation.Reason.Value != request.Reason || request.Type != "" && observation.Type.Value != request.Type {
 			continue
 		}
 		item, current, projectErr := tool.safeEvent(observation)
@@ -368,13 +407,15 @@ func (tool *GetEventsTool) project(
 		}
 		return eventSortKey(data.Items[left]) < eventSortKey(data.Items[right])
 	})
-	reason := ""
+	reason := observations.PartialReason
 	if len(data.Items) > request.Limit {
 		data.Items = data.Items[:request.Limit]
 		reason = itemLimitReason
 	}
 	if observations.Truncated {
-		reason = itemLimitReason
+		if reason == "" {
+			reason = itemLimitReason
+		}
 	}
 	if observations.UIDFilterDegraded {
 		warnings = appendWarning(warnings, eventUIDDegradedReason, "The Event read could not apply an exact target UID filter.")
@@ -403,17 +444,28 @@ func (tool *GetEventsTool) project(
 		if strings.EqualFold(item.Type, "Warning") {
 			severity = domain.EvidenceSeverityWarning
 		}
+		from, through := item.firstObserved, item.lastObserved
 		templates = append(templates, evidenceTemplate{
-			category:       domain.EvidenceCategoryEvent,
-			resource:       reference,
-			fact:           fact,
-			sourcePath:     "projected.events",
-			severity:       stableSeverity(severity),
-			redactionCount: item.redactionCount,
-			truncated:      item.truncated || factTruncated,
+			category:        domain.EvidenceCategoryEvent,
+			resource:        reference,
+			policyVersion:   domain.ObservabilityPolicyVersion,
+			fact:            fact,
+			sourcePath:      eventSourcePath(reference),
+			observedFrom:    &from,
+			observedThrough: &through,
+			severity:        stableSeverity(severity),
+			redactionCount:  item.redactionCount,
+			truncated:       item.truncated || factTruncated,
 		})
 	}
 	return data, templates, warnings, reason, nil
+}
+
+func eventSourcePath(reference domain.ResourceRef) string {
+	if reference.Namespace == "" {
+		return "api/v1/events"
+	}
+	return "api/v1/namespaces/" + reference.Namespace + "/events"
 }
 
 func (tool *GetEventsTool) safeEvent(observation EventObservation) (safeEventItem, textMetadata, error) {
@@ -542,6 +594,7 @@ func fitEventResult(
 				}
 				for index := range result.Evidence {
 					result.Evidence[index].Truncated = true
+					result.Evidence[index].Partial = true
 				}
 			}
 			measured, measureErr := measureResult(call, result)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestGetPodLogsReturnsSanitizedBoundedTailAndConciseEvidence(t *testing.T) {
 		"token=" + canary + "\nfinal line\n"
 	reader := &fakePodLogReader{readFn: func(_ context.Context, request PodLogReadRequest) (PodLogObservation, error) {
 		if request.Scope.Namespace != "team-a" || request.PodName != "sample-pod" || request.Container != "app" ||
-			request.Previous || request.TailLines != 4 || request.SinceSeconds != 900 || request.LimitBytes != domain.MaxToolResultBytes {
+			request.Previous || request.TailLines != 4 || request.SinceSeconds != 900 || request.LimitBytes != 256*1024 {
 			t.Fatalf("ReadPodLog() request = %#v", request)
 		}
 		return PodLogObservation{
@@ -84,7 +85,7 @@ func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) 
 		call, bindErr := agent.BindToolCall(input, invocationID, agent.ToolSelection{
 			ID:            fmt.Sprintf("call-log-budget-%d", index),
 			Name:          domain.ToolNameGetPodLogs,
-			ArgumentsJSON: fmt.Sprintf(`{"pod_name":"sample-pod-%d","purpose":"Inspect one bounded log tail."}`, index),
+			ArgumentsJSON: completeLogArguments(t, fmt.Sprintf(`{"pod_name":"sample-pod-%d","purpose":"Inspect one bounded log tail."}`, index)),
 		})
 		if bindErr != nil {
 			t.Fatalf("agent.BindToolCall(%d) error = %v", index, bindErr)
@@ -99,7 +100,7 @@ func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) 
 	excess, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000020099", agent.ToolSelection{
 		ID:            "call-log-budget-excess",
 		Name:          domain.ToolNameGetPreviousPodLogs,
-		ArgumentsJSON: `{"pod_name":"sample-pod-third","purpose":"Inspect one bounded previous log tail."}`,
+		ArgumentsJSON: completeLogArguments(t, `{"pod_name":"sample-pod-third","purpose":"Inspect one bounded previous log tail."}`),
 	})
 	if err != nil {
 		t.Fatalf("agent.BindToolCall(third) error = %v", err)
@@ -114,7 +115,7 @@ func TestRunBudgetRejectsExcessLogReadBeforeHandlerOrReaderAction(t *testing.T) 
 
 func TestGetPodLogsAppliesRuntimeWindowAndByteCeilings(t *testing.T) {
 	reader := &fakePodLogReader{readFn: func(_ context.Context, request PodLogReadRequest) (PodLogObservation, error) {
-		if request.TailLines != 200 || request.SinceSeconds != 900 || request.LimitBytes != domain.MaxToolResultBytes {
+		if request.TailLines != 200 || request.SinceSeconds != 3600 || request.LimitBytes != 256*1024 {
 			t.Fatalf("ReadPodLog() request = %#v", request)
 		}
 		return PodLogObservation{
@@ -134,8 +135,8 @@ func TestGetPodLogsAppliesRuntimeWindowAndByteCeilings(t *testing.T) {
 
 func TestGetPodLogsReportsRuntimeWindowTightening(t *testing.T) {
 	reader := &fakePodLogReader{readFn: func(_ context.Context, request PodLogReadRequest) (PodLogObservation, error) {
-		if request.SinceSeconds != 900 {
-			t.Fatalf("ReadPodLog() since_seconds = %d, want 900", request.SinceSeconds)
+		if request.SinceSeconds != 21600 {
+			t.Fatalf("ReadPodLog() since_seconds = %d, want 21600", request.SinceSeconds)
 		}
 		return PodLogObservation{
 			Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable,
@@ -144,7 +145,7 @@ func TestGetPodLogsReportsRuntimeWindowTightening(t *testing.T) {
 	}}
 	tool, _ := NewGetPodLogsTool(logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed))
 	result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
-		`{"container":"app","pod_name":"sample-pod","purpose":"Inspect a tightened log window.","since_seconds":3600}`))
+		`{"container":"app","pod_name":"sample-pod","purpose":"Inspect a tightened log window.","since_seconds":86400}`))
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != logWindowLimitReason {
 		t.Fatalf("Execute() window result = %#v, validation = %v", result, result.Validate())
 	}
@@ -238,11 +239,146 @@ func TestGetPodLogsDiscardsRawContentAfterScopeBecomesStale(t *testing.T) {
 	}
 }
 
+func TestGetPodLogsDiscardsRawContentWhenPostflightAuthorizationChanges(t *testing.T) {
+	t.Parallel()
+
+	for _, current := range []struct {
+		name      string
+		decision  LogPolicyDecision
+		wantClass domain.SafeErrorClass
+	}{
+		{name: "consent revoked", decision: LogPolicyConsentRequired, wantClass: domain.SafeErrorClassConsentRequired},
+		{name: "permission changed", decision: LogPolicyPermissionRequired, wantClass: domain.SafeErrorClassPolicyDenied},
+		{name: "read denied", decision: LogPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied},
+		{name: "invalid decision", decision: LogPolicyDecision("generated"), wantClass: domain.SafeErrorClassInternal},
+	} {
+		current := current
+		t.Run(current.name, func(t *testing.T) {
+			canary := strings.Repeat("postflight-log-canary", 3)
+			reader := &fakePodLogReader{readFn: func(context.Context, PodLogReadRequest) (PodLogObservation, error) {
+				return PodLogObservation{Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable, Content: boundedPodLogContent(t, canary)}, nil
+			}}
+			ids := &sequenceEvidenceIDs{}
+			policy := &sequenceLogPolicy{decisions: []LogPolicyDecision{LogPolicyAllowed, current.decision}}
+			dependencies := logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed)
+			dependencies.Policy, dependencies.EvidenceIDs = policy, ids
+			tool, _ := NewGetPodLogsTool(dependencies)
+			result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
+				`{"container":"app","pod_name":"sample-pod","purpose":"Inspect current logs."}`))
+			if result.Validate() != nil || result.Error == nil || result.Error.Class != current.wantClass || reader.count() != 1 || policy.count() != 2 || ids.count() != 0 ||
+				len(result.Evidence) != 0 || strings.Contains(fmt.Sprintf("%#v", result), canary) {
+				t.Fatalf("Execute() result/reader/policy/ids = %#v/%d/%d/%d", result, reader.count(), policy.count(), ids.count())
+			}
+		})
+	}
+}
+
+func TestGetPodLogsAllContainersProjectsInitEphemeralSearchAndEvidence(t *testing.T) {
+	canary := strings.Repeat("runtime-all-log-canary", 3)
+	reader := &fakePodLogReader{readManyFn: func(_ context.Context, request PodLogsReadRequest) (PodLogsObservation, error) {
+		if request.Scope.Namespace != "team-a" || request.PolicyGeneration != 1 || request.Namespace != "team-a" || request.PodName != "sample-pod" ||
+			request.Previous || !request.IncludeInit || !request.IncludeEphemeral || request.TailLines != 10 || request.SinceSeconds != 600 ||
+			request.MaxContainers != 8 || request.LimitBytes != 256*1024 {
+			t.Fatalf("ReadPodLogs() request = %#v", request)
+		}
+		return PodLogsObservation{
+			Pod: podLogTarget(), SourceBytes: 512,
+			Items: []PodLogObservation{
+				{Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable, Content: boundedPodLogContent(t, "discard\nmatch app token="+canary)},
+				{Pod: podLogTarget(), Container: "setup", InitContainer: true, Availability: PodLogAvailable, Content: boundedPodLogContent(t, "match init")},
+				{Pod: podLogTarget(), Container: "debugger", EphemeralContainer: true, Availability: PodLogAvailable, Content: boundedPodLogContent(t, "match ephemeral\ndiscard")},
+			},
+		}, nil
+	}}
+	policy := &staticLogPolicy{decision: LogPolicyAllowed}
+	dependencies := logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed)
+	dependencies.Policy = policy
+	tool, err := NewGetPodLogsTool(dependencies)
+	if err != nil {
+		t.Fatalf("NewGetPodLogsTool() error = %v", err)
+	}
+	call := boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
+		`{"container":null,"container_mode":"all","include_ephemeral":true,"include_init":true,"namespace":null,"pod_name":"sample-pod","purpose":"Inspect all admitted Pod containers.","search":"match","since_seconds":600,"tail_lines":10}`)
+	result := tool.Execute(context.Background(), call)
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || reader.count() != 0 || reader.manyCount() != 1 || policy.count() != 2 || len(result.Evidence) != 3 {
+		t.Fatalf("Execute() result/single/many/policy = %#v/%d/%d/%d", result, reader.count(), reader.manyCount(), policy.count())
+	}
+	var data struct {
+		ContainerCount int `json:"container_count"`
+		Containers     []struct {
+			Container          string `json:"container"`
+			Content            string `json:"content"`
+			InitContainer      bool   `json:"init_container"`
+			EphemeralContainer bool   `json:"ephemeral_container"`
+		} `json:"containers"`
+	}
+	if err := json.Unmarshal([]byte(result.DataJSON), &data); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if data.ContainerCount != 3 || len(data.Containers) != 3 || !data.Containers[1].InitContainer || !data.Containers[2].EphemeralContainer ||
+		strings.Contains(data.Containers[0].Content, "discard") || strings.Contains(result.DataJSON, canary) || !strings.Contains(data.Containers[0].Content, "[REDACTED]") {
+		t.Fatalf("safe all-container data = %s", result.DataJSON)
+	}
+	for index, evidence := range result.Evidence {
+		if evidence.Category != domain.EvidenceCategoryLogExcerpt || evidence.Resource != podLogTarget() || evidence.SourcePath == nil ||
+			!strings.Contains(*evidence.SourcePath, ":"+data.Containers[index].Container) || strings.Contains(evidence.Fact, canary) {
+			t.Fatalf("Evidence[%d] = %#v", index, evidence)
+		}
+	}
+}
+
+func TestGetPodLogsAllContainersPropagatesPartialAndPolicyDenial(t *testing.T) {
+	reader := &fakePodLogReader{readManyFn: func(context.Context, PodLogsReadRequest) (PodLogsObservation, error) {
+		return PodLogsObservation{
+			Pod: podLogTarget(), SourceBytes: 128, Partial: true, Truncated: true, PartialReason: "container_limit",
+			Items: []PodLogObservation{{Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable, Content: boundedPodLogContent(t, "bounded line")}},
+		}, nil
+	}}
+	tool, _ := NewGetPodLogsTool(logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed))
+	arguments := `{"container":null,"container_mode":"all","include_ephemeral":false,"include_init":false,"namespace":null,"pod_name":"sample-pod","purpose":"Inspect bounded Pod containers.","search":null,"since_seconds":600,"tail_lines":10}`
+	result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs, arguments))
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != "container_limit" ||
+		reader.manyCount() != 1 || len(result.Evidence) != 1 || !result.Evidence[0].Partial || !result.Evidence[0].Truncated {
+		t.Fatalf("Execute() partial result/many = %#v/%d", result, reader.manyCount())
+	}
+
+	deniedReader := &fakePodLogReader{}
+	denied, _ := NewGetPodLogsTool(logDependencies(deniedReader, &sequenceScopeGuard{}, LogPolicyConsentRequired))
+	result = denied.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs, arguments))
+	if result.Validate() != nil || result.Error == nil || result.Error.Class != domain.SafeErrorClassConsentRequired || deniedReader.manyCount() != 0 || deniedReader.count() != 0 {
+		t.Fatalf("Execute() denied result/single/many = %#v/%d/%d", result, deniedReader.count(), deniedReader.manyCount())
+	}
+}
+
 func logDependencies(reader PodLogReader, guard ScopeGuard, decision LogPolicyDecision) LogToolDependencies {
 	return LogToolDependencies{
-		Reader: reader, ScopeGuard: guard, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
+		Reader: reader, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
 		Policy: &staticLogPolicy{decision: decision}, Now: func() time.Time { return eventObservedAt },
 	}
+}
+
+type sequenceLogPolicy struct {
+	mu        sync.Mutex
+	decisions []LogPolicyDecision
+	calls     int
+}
+
+func (policy *sequenceLogPolicy) AuthorizeLogRead(context.Context, LogPolicyRequest) LogPolicyDecision {
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	policy.calls++
+	if len(policy.decisions) == 0 {
+		return LogPolicyDenied
+	}
+	decision := policy.decisions[0]
+	policy.decisions = policy.decisions[1:]
+	return decision
+}
+
+func (policy *sequenceLogPolicy) count() int {
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	return policy.calls
 }
 
 func podLogTarget() domain.ResourceRef {

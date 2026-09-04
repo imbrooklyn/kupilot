@@ -224,6 +224,44 @@ func TestEvidenceRegistryRejectsCrossRunAndDuplicateEvidence(t *testing.T) {
 	}
 }
 
+func TestEvidenceRegistryOwnsObservabilityWindow(t *testing.T) {
+	input := testRunInput(t, "Inspect recent Pod events.")
+	call := testBoundCall(t, input, testInvocationID, "sample-pod")
+	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(2_000).UTC())
+	source := "/api/v1/namespaces/team-a/events"
+	observedFrom := time.UnixMilli(1_000).UTC()
+	observedThrough := time.UnixMilli(1_500).UTC()
+	result.Evidence[0].Category = domain.EvidenceCategoryEvent
+	result.Evidence[0].PolicyVersion = domain.ObservabilityPolicyVersion
+	result.Evidence[0].PolicyGeneration = call.PolicyGeneration()
+	result.Evidence[0].SourcePath = &source
+	result.Evidence[0].ObservedFrom = &observedFrom
+	result.Evidence[0].ObservedThrough = &observedThrough
+	if err := result.Validate(); err != nil {
+		t.Fatalf("ToolResult.Validate() error = %v", err)
+	}
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if _, err := registry.AcceptToolResult(call, result); err != nil {
+		t.Fatalf("AcceptToolResult() error = %v", err)
+	}
+
+	*result.Evidence[0].ObservedFrom = time.UnixMilli(100).UTC()
+	*result.Evidence[0].ObservedThrough = time.UnixMilli(200).UTC()
+	snapshot, err := registry.snapshot()
+	if err != nil {
+		t.Fatalf("snapshot() error = %v", err)
+	}
+	accepted := snapshot.items[testEvidenceID]
+	if accepted.ObservedFrom == nil || accepted.ObservedThrough == nil ||
+		!accepted.ObservedFrom.Equal(time.UnixMilli(1_000).UTC()) ||
+		!accepted.ObservedThrough.Equal(time.UnixMilli(1_500).UTC()) {
+		t.Fatalf("accepted observation window = %v through %v", accepted.ObservedFrom, accepted.ObservedThrough)
+	}
+}
+
 func TestEvidenceRegistryRejectsUnsafeAndPreactivationEvidence(t *testing.T) {
 	input := testRunInput(t, "Inspect the selected Pod.")
 	call := testBoundCall(t, input, testInvocationID, "sample-pod")

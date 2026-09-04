@@ -1,0 +1,75 @@
+{
+  "name": "pod_cpu_memory_sufficient",
+  "question": "What are the current CPU and memory observations for example-pod?",
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_pod_metrics",
+      "arguments_json": "{\"namespace\":null,\"pod_name\":\"example-pod\",\"purpose\":\"Inspect current CPU and memory usage.\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"availability\":\"available\",\"cpu_millicores\":250,\"memory_bytes\":134217728,\"source_trust\":\"untrusted_external_data\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000002001",
+            "category": "metric_snapshot",
+            "fact": "The current Metrics API snapshot reports 250 CPU millicores and 134217728 memory bytes for Pod example-pod.",
+            "source_path": "apis/metrics.k8s.io/v1beta1/namespaces/example-namespace/pods/example-pod",
+            "observed_from_offset_ms": 40,
+            "observed_through_offset_ms": 90,
+            "severity": "info",
+            "supports": [
+              "pod_cpu_snapshot_observed",
+              "pod_memory_snapshot_observed",
+              "resource_pressure_possible"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "- The current Metrics API snapshot reports 250 CPU millicores for example-pod.\n- The same bounded snapshot reports 134217728 memory bytes.\n\nResource pressure remains possible only after comparison with workload limits and a longer permitted trend. Confidence: low. To verify: A bounded trend and the workload resource configuration show sustained usage near an applicable limit.\n\nNo workload requests, limits, or historical trend was collected. Impact: This snapshot does not establish saturation or the cause of any earlier failure.\n\nSuggested next step: Compare the snapshot with bounded workload requests and limits, then collect a permitted trend if needed. Risk: Reading more bounded observations is non-mutating, but changing resources outside Kupilot may replace Pods. Before acting: Keep the active scope fixed and do not treat this single snapshot as a threshold.",
+    "evidence_citations": [
+      {
+        "claim": "The current Metrics API snapshot reports 250 CPU millicores for example-pod.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002001"
+        ]
+      },
+      {
+        "claim": "The same bounded snapshot reports 134217728 memory bytes.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002001"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "pod_cpu_snapshot_observed"},
+      {"index": 1, "assertion": "pod_memory_snapshot_observed"}
+    ],
+    "hypotheses": [
+      {"index": 0, "assertion": "resource_pressure_possible"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "compare_resource_configuration"}
+    ]
+  },
+  "required_confirmed_assertions": [
+    "pod_cpu_snapshot_observed",
+    "pod_memory_snapshot_observed"
+  ],
+  "required_missing_kinds": [],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

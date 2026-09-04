@@ -11,7 +11,7 @@
     {
       "call_id": "call-1",
       "name": "get_resource",
-      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect Pod phase and scheduling conditions.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-pod\",\"namespace\":null,\"purpose\":\"Inspect Pod phase and scheduling conditions.\",\"resource_type\":\"pods\"}",
       "result": {
         "status": "success",
         "observed_offset_ms": 100,
@@ -44,7 +44,7 @@
     {
       "call_id": "call-2",
       "name": "get_events",
-      "arguments_json": "{\"purpose\":\"Inspect recent scheduling Events.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "arguments_json": "{\"limit\":null,\"purpose\":\"Inspect recent scheduling Events.\",\"reason\":null,\"resource\":{\"api_version\":null,\"kind\":\"Pod\",\"name\":\"example-pod\",\"namespace\":null,\"uid\":null},\"since_seconds\":null,\"type\":null}",
       "result": {
         "status": "success",
         "observed_offset_ms": 200,

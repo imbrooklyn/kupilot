@@ -69,13 +69,16 @@ func (target fixtureTarget) resourceRef() domain.ResourceRef {
 }
 
 type fixtureEvidence struct {
-	ID         domain.EvidenceID       `json:"id"`
-	Category   domain.EvidenceCategory `json:"category"`
-	Fact       string                  `json:"fact"`
-	SourcePath string                  `json:"source_path"`
-	Severity   domain.EvidenceSeverity `json:"severity"`
-	Truncated  bool                    `json:"truncated"`
-	Supports   []string                `json:"supports"`
+	ID                      domain.EvidenceID       `json:"id"`
+	Category                domain.EvidenceCategory `json:"category"`
+	Fact                    string                  `json:"fact"`
+	SourcePath              string                  `json:"source_path"`
+	Series                  string                  `json:"series"`
+	ObservedFromOffsetMS    *int64                  `json:"observed_from_offset_ms"`
+	ObservedThroughOffsetMS *int64                  `json:"observed_through_offset_ms"`
+	Severity                domain.EvidenceSeverity `json:"severity"`
+	Truncated               bool                    `json:"truncated"`
+	Supports                []string                `json:"supports"`
 }
 
 type fixtureToolResult struct {
@@ -110,6 +113,7 @@ type fixtureAnnotations struct {
 type conversationFixture struct {
 	Name                        string                          `json:"name"`
 	Question                    string                          `json:"question"`
+	ScopeNamespace              string                          `json:"scope_namespace"`
 	Target                      fixtureTarget                   `json:"target"`
 	Steps                       []fixtureStep                   `json:"steps"`
 	Diagnosis                   json.RawMessage                 `json:"diagnosis"`
@@ -312,6 +316,28 @@ func TestDiagnosisFixtureCanary(t *testing.T) {
 func diagnosisScenarioExpectations() []diagnosisScenarioExpectation {
 	return []diagnosisScenarioExpectation{
 		{
+			name: "cpu-memory",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameGetPodMetrics,
+			},
+			forbiddenAssertions: []string{"current_usage_proves_oom", "raw_quantity_known", "action_executed"},
+		},
+		{
+			name: "network-service",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameQueryPrometheus,
+			},
+			forbiddenAssertions: []string{"network_sample_proves_service_outage", "raw_promql_known", "action_executed"},
+		},
+		{
+			name: "node-pressure",
+			toolOrder: []domain.ToolName{
+				domain.ToolNameGetResource,
+				domain.ToolNameGetNodeMetrics,
+			},
+			forbiddenAssertions: []string{"usage_proves_pressure_cause", "unobserved_workload_cause", "action_executed"},
+		},
+		{
 			name: "crashloop",
 			toolOrder: []domain.ToolName{
 				domain.ToolNameGetResource,
@@ -451,20 +477,29 @@ func assertUniqueRubricItems(t testing.TB, label string, items []rubricItem) {
 
 func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioRun {
 	t.Helper()
+	scopeNamespace := fixture.ScopeNamespace
+	if scopeNamespace == "" {
+		scopeNamespace = fixture.Target.Namespace
+	}
 	if fixture.Name == "" || fixture.Question == "" || len(fixture.Steps) == 0 || len(fixture.Diagnosis) == 0 ||
-		fixture.Target.Namespace == "" || fixture.Target.Name == "" {
+		scopeNamespace == "" || fixture.Target.Name == "" {
 		t.Fatalf("conversation fixture is incomplete: %#v", fixture)
 	}
 	clock := newFixtureClock(evalBaseTime)
 	scope := domain.ClusterScope{
 		Context:         "example-context",
-		Namespace:       fixture.Target.Namespace,
+		Namespace:       scopeNamespace,
 		NamespaceAccess: domain.NamespaceAccessCurrent,
 		Generation:      7,
 		ActivatedAt:     evalBaseTime,
 	}
 	resource := fixture.Target.resourceRef()
-	input, err := agentcore.NewRunInput(
+	conversation, err := agentcore.NewConversationContext(evalSessionID, nil, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
+	observability := fixtureObservabilityPolicies(t, fixture.Steps)
+	input, err := agentcore.NewRunInputWithOperationalPolicyContext(
 		evalRunID,
 		evalSessionID,
 		evalMessageID,
@@ -472,6 +507,10 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 		scope,
 		&resource,
 		agentcore.DefaultRunBudgetLimits(),
+		conversation,
+		domain.DefaultResourcePolicyCatalog(),
+		observability,
+		1,
 	)
 	if err != nil {
 		t.Fatalf("NewRunInput() error = %v", err)
@@ -483,7 +522,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	if err != nil {
 		t.Fatalf("config.NewSecretValue() error = %v", err)
 	}
-	tool := &scriptedKubeTool{t: t, base: evalBaseTime, clock: clock, target: resource, steps: fixture.Steps}
+	tool := &scriptedKubeTool{t: t, base: evalBaseTime, clock: clock, scopeNamespace: scopeNamespace, target: resource, steps: fixture.Steps}
 	guard := &fixtureScopeGuard{scope: scope}
 	sink := &fixtureEventSink{}
 	adapter, err := einoadapter.New(einoadapter.Config{
@@ -534,6 +573,36 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	}
 }
 
+func fixtureObservabilityPolicies(t testing.TB, steps []fixtureStep) domain.ObservabilityPolicyCatalog {
+	t.Helper()
+	var prometheus, loki domain.DataSourcePolicy
+	for _, step := range steps {
+		switch step.Name {
+		case domain.ToolNameQueryPrometheus:
+			prometheus = domain.DataSourcePolicy{
+				Kind: domain.DataSourcePrometheus, OriginHash: domain.SHA256Hex("https://prometheus.fixture"),
+				Queries: []domain.ObservabilityQueryID{
+					domain.QueryPrometheusPodCPUUsage,
+					domain.QueryPrometheusPodMemoryWorkingSet,
+					domain.QueryPrometheusPodNetworkReceiveRate,
+					domain.QueryPrometheusPodNetworkTransmitRate,
+				},
+				RequestTimeout: time.Second,
+			}
+		case domain.ToolNameQueryLoki:
+			loki = domain.DataSourcePolicy{
+				Kind: domain.DataSourceLoki, OriginHash: domain.SHA256Hex("https://loki.fixture"),
+				Queries: []domain.ObservabilityQueryID{domain.QueryLokiPodLogs}, RequestTimeout: time.Second,
+			}
+		}
+	}
+	catalog, err := domain.NewObservabilityPolicyCatalog(prometheus, loki)
+	if err != nil {
+		t.Fatalf("NewObservabilityPolicyCatalog() error = %v", err)
+	}
+	return catalog
+}
+
 func fixedFixtureHandlers(tool agentcore.Tool) agentcore.ToolHandlers {
 	return agentcore.ToolHandlers{
 		GetResource:         tool,
@@ -541,6 +610,10 @@ func fixedFixtureHandlers(tool agentcore.Tool) agentcore.ToolHandlers {
 		GetEvents:           tool,
 		GetPodLogs:          tool,
 		GetPreviousPodLogs:  tool,
+		GetPodMetrics:       tool,
+		GetNodeMetrics:      tool,
+		QueryPrometheus:     tool,
+		QueryLoki:           tool,
 		GetRelatedResources: tool,
 		GetClusterOverview:  tool,
 	}
@@ -645,8 +718,8 @@ func (model *scriptedConversationModel) ServeHTTP(writer http.ResponseWriter, re
 	switch callIndex {
 	case 0:
 		if len(captured.Messages) < 2 || captured.Messages[0].Role != "system" ||
-			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 7 {
-			model.t.Errorf("initial model request does not contain the fixed policy and seven Tools")
+			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 11 {
+			model.t.Errorf("initial model request does not contain the fixed policy and eleven Tools")
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -719,13 +792,14 @@ func (model *scriptedConversationModel) RequestCount() int {
 }
 
 type scriptedKubeTool struct {
-	t      testing.TB
-	mu     sync.Mutex
-	base   time.Time
-	clock  *fixtureClock
-	target domain.ResourceRef
-	steps  []fixtureStep
-	calls  []agentcore.BoundToolCall
+	t              testing.TB
+	mu             sync.Mutex
+	base           time.Time
+	clock          *fixtureClock
+	scopeNamespace string
+	target         domain.ResourceRef
+	steps          []fixtureStep
+	calls          []agentcore.BoundToolCall
 }
 
 func (tool *scriptedKubeTool) Execute(_ context.Context, call agentcore.BoundToolCall) domain.ToolResult {
@@ -737,8 +811,8 @@ func (tool *scriptedKubeTool) Execute(_ context.Context, call agentcore.BoundToo
 		tool.t.Fatalf("unexpected Tool call at index %d: %q", index, call.Name())
 	}
 	step := tool.steps[index]
-	if call.Name() != step.Name || call.ModelCallID() != step.CallID || call.Scope().Namespace != tool.target.Namespace ||
-		!strings.Contains(call.ArgumentsJSON(), `"namespace":"`+tool.target.Namespace+`"`) ||
+	if call.Name() != step.Name || call.ModelCallID() != step.CallID || call.Scope().Namespace != tool.scopeNamespace ||
+		(call.Name() != domain.ToolNameGetNodeMetrics && !strings.Contains(call.ArgumentsJSON(), `"namespace":"`+tool.target.Namespace+`"`)) ||
 		strings.Contains(call.ArgumentsJSON(), `"context"`) {
 		tool.t.Fatalf("Tool call[%d] does not match the fixed fixture: %#v", index, call)
 	}
@@ -758,19 +832,40 @@ func (tool *scriptedKubeTool) Execute(_ context.Context, call agentcore.BoundToo
 			value := definition.Severity
 			severity = &value
 		}
+		var observedFrom, observedThrough *time.Time
+		if definition.ObservedFromOffsetMS != nil && definition.ObservedThroughOffsetMS != nil {
+			from := tool.base.Add(time.Duration(*definition.ObservedFromOffsetMS) * time.Millisecond)
+			through := tool.base.Add(time.Duration(*definition.ObservedThroughOffsetMS) * time.Millisecond)
+			observedFrom, observedThrough = &from, &through
+		}
+		policyVersion := ""
+		var policyGeneration domain.PolicyGeneration
+		sourceOriginHash := ""
+		switch definition.Category {
+		case domain.EvidenceCategoryMetricSnapshot:
+			policyVersion, policyGeneration = domain.ObservabilityPolicyVersion, call.PolicyGeneration()
+		case domain.EvidenceCategoryPrometheus, domain.EvidenceCategoryLoki:
+			policyVersion, policyGeneration = domain.ObservabilityPolicyVersion, call.PolicyGeneration()
+			sourceOriginHash = call.SourcePolicy().OriginHash
+		}
 		evidence[evidenceIndex] = domain.Evidence{
-			ID:           definition.ID,
-			RunID:        call.RunID(),
-			InvocationID: call.InvocationID(),
-			Category:     definition.Category,
-			Scope:        call.Scope().Snapshot(),
-			Resource:     tool.target,
-			Fact:         definition.Fact,
-			SourcePath:   sourcePath,
-			Severity:     severity,
-			Truncated:    definition.Truncated,
-			Fingerprint:  domain.SHA256Hex(string(definition.ID) + "\n" + definition.Fact),
-			ObservedAt:   observedAt,
+			ID:            definition.ID,
+			RunID:         call.RunID(),
+			InvocationID:  call.InvocationID(),
+			Category:      definition.Category,
+			Scope:         call.Scope().Snapshot(),
+			Resource:      tool.target,
+			PolicyVersion: policyVersion, PolicyGeneration: policyGeneration,
+			Fact:             definition.Fact,
+			SourcePath:       sourcePath,
+			SourceOriginHash: sourceOriginHash,
+			Series:           definition.Series,
+			ObservedFrom:     observedFrom,
+			ObservedThrough:  observedThrough,
+			Severity:         severity,
+			Truncated:        definition.Truncated,
+			Fingerprint:      domain.SHA256Hex(string(definition.ID) + "\n" + definition.Fact),
+			ObservedAt:       observedAt,
 		}
 	}
 	result := domain.ToolResult{
@@ -909,6 +1004,16 @@ func evaluateDiagnosisRubric(policy scenarioPolicy, fixture conversationFixture,
 		}
 		if evidence.Category != definition.Category || evidence.Fact != definition.Fact || evidence.Truncated != definition.Truncated {
 			addProblem("accepted Evidence %q differs from its safe fixture projection", id)
+		}
+		if evidence.SourcePath == nil || *evidence.SourcePath != definition.SourcePath || evidence.Series != definition.Series {
+			addProblem("accepted Evidence %q differs from its source provenance", id)
+		}
+		if definition.Category == domain.EvidenceCategoryMetricSnapshot || definition.Category == domain.EvidenceCategoryPrometheus ||
+			definition.Category == domain.EvidenceCategoryLoki {
+			if evidence.PolicyVersion != domain.ObservabilityPolicyVersion || evidence.PolicyGeneration != 1 ||
+				evidence.ObservedFrom == nil || evidence.ObservedThrough == nil {
+				addProblem("accepted observability Evidence %q lacks exact policy or time provenance", id)
+			}
 		}
 		if !evidence.ObservedAt.Equal(expectedObservedAt[id]) {
 			addProblem("accepted Evidence %q has observation time %s, want %s", id, evidence.ObservedAt, expectedObservedAt[id])

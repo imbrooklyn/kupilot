@@ -1,0 +1,32 @@
+{
+  "scenario": "Node pressure",
+  "minimum_evidence": [
+    "A projected Node pressure condition and one current normalized Node Metrics API snapshot."
+  ],
+  "tool_order": [
+    "get_resource",
+    "get_node_metrics"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "node_memory_pressure_true", "meaning": "The projected Node MemoryPressure condition is True."},
+    {"id": "node_memory_pressure_false", "meaning": "The projected Node MemoryPressure condition is False."},
+    {"id": "node_usage_snapshot_observed", "meaning": "A current normalized Node CPU and memory snapshot was observed."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "node_usage_may_contribute", "meaning": "Current Node usage may contribute but does not by itself explain the pressure condition."},
+    {"id": "pressure_cleared_possible", "meaning": "A false current condition may indicate earlier pressure cleared, subject to fresh metrics."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "usage_proves_pressure_cause", "meaning": "One usage snapshot proves the cause of a Node pressure condition."},
+    {"id": "unobserved_workload_cause", "meaning": "An unobserved workload is named as the cause."},
+    {"id": "action_executed", "meaning": "Kupilot cordoned, drained, or otherwise changed the Node."}
+  ],
+  "recommended_actions": [
+    {"id": "correlate_node_conditions", "meaning": "Correlate fresh pressure conditions with bounded usage and workload Evidence."},
+    {"id": "collect_node_metrics", "meaning": "Retry the bounded Node metrics read after availability is restored."}
+  ],
+  "permission_or_missing_paths": [
+    "If Node metrics are unavailable, preserve the condition observation but do not infer a usage total.",
+    "A current condition and current usage snapshot do not identify a causal workload."
+  ]
+}

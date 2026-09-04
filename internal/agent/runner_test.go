@@ -27,7 +27,7 @@ func TestAgentPolicyContractsComposeToolEvidenceAndDiagnosis(t *testing.T) {
 	selection := ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
 	}
 	call, err := BindToolCall(input, testInvocationID, selection)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection(t *testing.T) {
 		"working Namespace",
 		"namespace-access policy",
 		"Prefer get_cluster_overview when the user asks which Nodes and/or Namespaces exist",
-		"For Node, Namespace, and PersistentVolume Tool inputs, namespace must be null",
+		"For cluster-scoped resource types, namespace must be null",
 		"Do not substitute an unrelated resource",
 		"The visible answer is free-form Markdown",
 		"Use compact Markdown tables by default for structured inventories or comparisons",
@@ -207,9 +207,10 @@ func TestSystemPromptRequiresAvailableCapabilitiesBeforeAnswering(t *testing.T) 
 	for _, required := range []string{
 		"When an admitted capability can directly answer the user's current cluster question, use it before answering",
 		"Prefer get_cluster_overview when the user asks which Nodes and/or Namespaces exist",
-		"never copy the working Namespace onto a cluster-scoped Kind",
+		"For cluster-scoped resource types, namespace must be null",
 		"Do not substitute an unrelated resource",
 		"Only runtime-generated Evidence from this AgentRun can support a current cluster claim",
+		`"scalar": "integer"`,
 		"free-form Markdown",
 		"short direct answer for a simple lookup",
 		"appropriate paragraphs, lists, tables, or code spans",
@@ -225,10 +226,10 @@ func TestSystemPromptRequiresAvailableCapabilitiesBeforeAnswering(t *testing.T) 
 		}
 	}
 	specifications := ToolSpecifications()
-	if len(specifications) != 7 || specifications[1].Name != domain.ToolNameListResources ||
-		specifications[6].Name != domain.ToolNameGetClusterOverview ||
-		!strings.Contains(specifications[1].Description, "code-allowlisted Kubernetes Kind") ||
-		!strings.Contains(specifications[1].Description, "namespace=*") {
+	if len(specifications) != 11 || specifications[1].Name != domain.ToolNameListResources ||
+		specifications[10].Name != domain.ToolNameGetClusterOverview ||
+		!strings.Contains(specifications[1].Description, "local resource_type ID") ||
+		!strings.Contains(specifications[1].Description, "'*' requires namespace_access=all") {
 		t.Fatalf("list_resources specification = %#v", specifications)
 	}
 	if input.Question() != question || strings.Contains(prompt, question) {

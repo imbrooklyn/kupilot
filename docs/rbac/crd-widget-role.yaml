@@ -1,0 +1,10 @@
+# Example v0.5 exact CRD fixture matching config.example.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-widget-read
+  namespace: example-namespace
+rules:
+  - apiGroups: ["operations.example.com"]
+    resources: ["widgets"]
+    verbs: ["get", "list"]

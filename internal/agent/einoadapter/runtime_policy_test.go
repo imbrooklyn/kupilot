@@ -108,7 +108,7 @@ func TestRepeatedCorrectableToolPolicyDenialStopsAtNoProgressBudgetWithoutHandle
 		return agent.ToolSelection{
 			ID:            id,
 			Name:          domain.ToolNameListResources,
-			ArgumentsJSON: `{"health_filter":"any","kind":"Node","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Nodes."}`,
+			ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Nodes.","resource_type":"nodes"}`,
 		}
 	}
 	model := &recordingModel{scripts: []modelScript{
@@ -186,7 +186,7 @@ func TestLocalToolPolicyFeedbackHonorsCancellationTimeoutAndStaleScope(t *testin
 			selection := agent.ToolSelection{
 				ID:            "call-policy-feedback",
 				Name:          domain.ToolNameListResources,
-				ArgumentsJSON: `{"health_filter":"any","kind":"Node","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Nodes."}`,
+				ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Nodes.","resource_type":"nodes"}`,
 			}
 			if err := state.bindToolCalls(context.Background(), []agent.ToolSelection{selection}); err != nil {
 				t.Fatalf("bindToolCalls() error = %v", err)

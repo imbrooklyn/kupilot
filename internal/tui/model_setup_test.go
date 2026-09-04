@@ -371,6 +371,8 @@ func assertModelSetupStorageDisclosure(t *testing.T, model Model) {
 		"Plaintext credential storage",
 		"models.agent.api_key",
 		"models.approval_reviewer.api_key",
+		"observability.prometheus.api_key",
+		"observability.loki.api_key",
 		"plaintext",
 		"(not",
 		"encrypted)",

@@ -35,30 +35,31 @@ var (
 // contracts. No adapter, framework, client, transport, or database type crosses
 // this boundary.
 type CoordinatorConfig struct {
-	Sessions           SessionPersistence
-	Runs               RunPersistence
-	Tools              ToolEvidencePersistence
-	Audits             AuditPersistence
-	Scope              ActiveScope
-	Runner             agent.AgentRunner
-	ModelRuntime       ModelRuntime
-	ModelFactory       ModelRuntimeFactory
-	ModelProfiles      ModelProfileWriter
-	ReviewerModel      *ReviewerModelBinding
-	Identifiers        ApplicationIdentifierSource
-	AuditIdentifiers   AuditIdentifierSource
-	Questions          QuestionProcessor
-	Exports            SessionExportReader
-	ExportFiles        ExportFileWriter
-	ExportText         ExportTextProcessor
-	Privacy            *PrivacyManager
-	ModelContext       ModelContextPersistence
-	UIEvents           UIEventSink
-	Observer           RunObserver
-	Now                func() time.Time
-	BudgetLimits       agent.RunBudgetLimits
-	PersistenceTimeout time.Duration
-	UI                 *CoordinatorUIConfig
+	Sessions            SessionPersistence
+	Runs                RunPersistence
+	Tools               ToolEvidencePersistence
+	Audits              AuditPersistence
+	Scope               ActiveScope
+	Runner              agent.AgentRunner
+	ModelRuntime        ModelRuntime
+	ModelFactory        ModelRuntimeFactory
+	ModelProfiles       ModelProfileWriter
+	ReviewerModel       *ReviewerModelBinding
+	Identifiers         ApplicationIdentifierSource
+	AuditIdentifiers    AuditIdentifierSource
+	Questions           QuestionProcessor
+	Exports             SessionExportReader
+	ExportFiles         ExportFileWriter
+	ExportText          ExportTextProcessor
+	Privacy             *PrivacyManager
+	RunResourcePolicies RunResourcePolicySource
+	ModelContext        ModelContextPersistence
+	UIEvents            UIEventSink
+	Observer            RunObserver
+	Now                 func() time.Time
+	BudgetLimits        agent.RunBudgetLimits
+	PersistenceTimeout  time.Duration
+	UI                  *CoordinatorUIConfig
 }
 
 // CoordinatorUIConfig supplies the existing Session and startup consumers
@@ -91,46 +92,47 @@ type Coordinator struct {
 	mu        sync.Mutex
 	startupMu sync.Mutex
 
-	sessions          SessionPersistence
-	runs              RunPersistence
-	tools             ToolEvidencePersistence
-	audits            AuditPersistence
-	scope             ActiveScope
-	runner            agent.AgentRunner
-	modelRuntime      ModelRuntime
-	modelFactory      ModelRuntimeFactory
-	modelProfiles     ModelProfileWriter
-	reviewerModel     *ReviewerModelBinding
-	identifiers       ApplicationIdentifierSource
-	auditIdentifiers  AuditIdentifierSource
-	questions         QuestionProcessor
-	privacy           *PrivacyManager
-	modelContextStore ModelContextPersistence
-	uiEvents          UIEventSink
-	observer          RunObserver
-	now               func() time.Time
-	budgetLimits      agent.RunBudgetLimits
-	persistenceLimit  time.Duration
-	resumeSessions    SessionResumeStore
-	sessionSearch     SessionSearchReader
-	titles            SessionTitleStore
-	startup           StartupMaintenance
-	uiScopes          *ScopeManager
-	scopePreferences  ScopePreferenceStore
-	approvals         *ApprovalCoordinator
-	restartProposals  RestartDeploymentProposalPreparer
-	evidenceDetails   EvidenceDetailReader
-	localState        LocalStateDeleter
-	exports           SessionExportReader
-	exportFiles       ExportFileWriter
-	exportText        ExportTextProcessor
-	startupPrepared   bool
-	currentSession    *domain.Session
-	currentResumed    bool
-	pendingResume     *pendingResume
-	startupResume     *startupResumeState
-	privacyChallenge  *privacyChallenge
-	modelContext      sessionModelContext
+	sessions            SessionPersistence
+	runs                RunPersistence
+	tools               ToolEvidencePersistence
+	audits              AuditPersistence
+	scope               ActiveScope
+	runner              agent.AgentRunner
+	modelRuntime        ModelRuntime
+	modelFactory        ModelRuntimeFactory
+	modelProfiles       ModelProfileWriter
+	reviewerModel       *ReviewerModelBinding
+	identifiers         ApplicationIdentifierSource
+	auditIdentifiers    AuditIdentifierSource
+	questions           QuestionProcessor
+	privacy             *PrivacyManager
+	runResourcePolicies RunResourcePolicySource
+	modelContextStore   ModelContextPersistence
+	uiEvents            UIEventSink
+	observer            RunObserver
+	now                 func() time.Time
+	budgetLimits        agent.RunBudgetLimits
+	persistenceLimit    time.Duration
+	resumeSessions      SessionResumeStore
+	sessionSearch       SessionSearchReader
+	titles              SessionTitleStore
+	startup             StartupMaintenance
+	uiScopes            *ScopeManager
+	scopePreferences    ScopePreferenceStore
+	approvals           *ApprovalCoordinator
+	restartProposals    RestartDeploymentProposalPreparer
+	evidenceDetails     EvidenceDetailReader
+	localState          LocalStateDeleter
+	exports             SessionExportReader
+	exportFiles         ExportFileWriter
+	exportText          ExportTextProcessor
+	startupPrepared     bool
+	currentSession      *domain.Session
+	currentResumed      bool
+	pendingResume       *pendingResume
+	startupResume       *startupResumeState
+	privacyChallenge    *privacyChallenge
+	modelContext        sessionModelContext
 
 	closed                  bool
 	persistenceDegraded     bool
@@ -160,6 +162,8 @@ type activeRun struct {
 	minimalPersistence       bool
 	toolResultBytes          int
 	logCalls                 int
+	metricCalls              int
+	dataSourceCalls          int
 	summaryCalls             int
 
 	lastAgentSequence int64
@@ -245,7 +249,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.Sessions == nil || config.Runs == nil || config.Tools == nil ||
 		config.Audits == nil || config.Scope == nil || runner == nil && config.ModelFactory == nil || config.Identifiers == nil ||
 		config.AuditIdentifiers == nil || config.Questions == nil || config.UIEvents == nil || config.Observer == nil ||
-		config.Privacy == nil || config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
+		config.Privacy == nil || config.RunResourcePolicies == nil || config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
 		return nil, ErrCoordinatorDependency
 	}
@@ -310,7 +314,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles, reviewerModel: config.ReviewerModel,
 		identifiers:      config.Identifiers,
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
-		privacy: config.Privacy, modelContextStore: config.ModelContext,
+		privacy: config.Privacy, runResourcePolicies: config.RunResourcePolicies, modelContextStore: config.ModelContext,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
@@ -1437,8 +1441,19 @@ func (coordinator *Coordinator) executeRenameCommand(ctx context.Context, comman
 func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	limits := coordinator.budgetLimits
 	reviewerLimits, _ := agent.ReviewerBudgetLimitsForProfile(limits.Profile)
+	resourcePolicies, _, _ := coordinator.runResourcePolicies.ResourcePolicySnapshot(context.Background())
+	observabilityPolicies := domain.DisabledObservabilityPolicyCatalog()
+	if source, ok := coordinator.runResourcePolicies.(RunObservabilityPolicySource); ok {
+		if snapshot, _, current := source.ObservabilityPolicySnapshot(context.Background()); current {
+			observabilityPolicies = snapshot
+		}
+	}
+	_, prometheusEnabled := observabilityPolicies.Resolve(domain.DataSourcePrometheus)
+	_, lokiEnabled := observabilityPolicies.Resolve(domain.DataSourceLoki)
 	result := UIStatusResult{
 		Session: coordinator.CurrentUISession(), CapabilityCatalogVersion: agent.ToolCatalogVersion,
+		ResourcePolicyVersion: resourcePolicies.Version(), ResourceTypeCount: len(resourcePolicies.Entries()),
+		ObservabilityPolicyVersion: observabilityPolicies.Version(), PrometheusEnabled: prometheusEnabled, LokiEnabled: lokiEnabled,
 		Budget: UIBudgetStatus{
 			ModelEvidenceBasis: ModelBudgetEvidenceBasis,
 			Profile:            limits.Profile, RunMilliseconds: limits.RunDuration.Milliseconds(),
@@ -1448,6 +1463,18 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 			SummaryCallsMaximum:   limits.SummaryCalls, SummaryCostUnitsMaximum: limits.SummaryCostUnits,
 			ReviewerCallsMaximum: reviewerLimits.Calls, ReviewerCostUnitsMaximum: reviewerLimits.CostUnits,
 			ToolResultBytesMaximum: limits.RunToolResultBytes, LogCallsMaximum: limits.LogCalls,
+			LogContainersMaximum: limits.LogContainers, LogBytesMaximum: limits.LogBytes,
+			EventPagesMaximum: limits.EventPages, EventPageItemsMaximum: limits.EventPageItems,
+			EventPageBytesMaximum: limits.EventPageBytes, EventBytesMaximum: limits.EventBytes,
+			MetricCallsMaximum: limits.MetricCalls, MetricContainersMaximum: limits.MetricContainers, MetricBytesMaximum: limits.MetricBytes,
+			DataSourceCallsMaximum: limits.DataSourceCalls, DataSourcePagesMaximum: limits.DataSourcePages,
+			DataSourceSeriesMaximum: limits.DataSourceSeries, DataSourceSamplesMaximum: limits.DataSourceSamples,
+			DataSourceLinesMaximum: limits.DataSourceLines, DataSourceBytesMaximum: limits.DataSourceBytes,
+			DataSourceWindowMillis: limits.DataSourceWindow.Milliseconds(), DataSourceStepMillis: limits.DataSourceStep.Milliseconds(),
+			ResourcePagesMaximum: limits.ResourcePages, ResourcePageItemsMaximum: limits.ResourcePageItems,
+			ResourcePageBytesMaximum: limits.ResourcePageBytes,
+			ResourceScannedMaximum:   limits.ResourceScannedItems, ResourceReturnedMaximum: limits.ResourceReturnedItems,
+			ResourceBytesMaximum: limits.ResourceBytes,
 		},
 	}
 	if coordinator.approvals != nil {
@@ -1484,6 +1511,8 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 		result.Budget.SummaryCostUnitsUsed = state.summaryCalls
 		result.Budget.ToolResultBytesUsed = state.toolResultBytes
 		result.Budget.LogCallsUsed = state.logCalls
+		result.Budget.MetricCallsUsed = state.metricCalls
+		result.Budget.DataSourceCallsUsed = state.dataSourceCalls
 		if state.run.StartedAt != nil {
 			elapsed := coordinator.now().Sub(*state.run.StartedAt)
 			if elapsed < 0 {
@@ -1874,16 +1903,32 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		}
 		return "", ErrConsentRequired
 	}
+	resourcePolicies, policyGeneration, policyCurrent := coordinator.runResourcePolicies.ResourcePolicySnapshot(runContext)
+	if !policyCurrent || resourcePolicies.Validate() != nil || !policyGeneration.Valid() {
+		return "", ErrCoordinatorDependency
+	}
+	observabilityPolicies := domain.DisabledObservabilityPolicyCatalog()
+	if source, ok := coordinator.runResourcePolicies.(RunObservabilityPolicySource); ok {
+		var observabilityGeneration domain.PolicyGeneration
+		observabilityPolicies, observabilityGeneration, policyCurrent = source.ObservabilityPolicySnapshot(runContext)
+		if !policyCurrent || observabilityPolicies.Validate() != nil || observabilityGeneration != policyGeneration {
+			return "", ErrCoordinatorDependency
+		}
+	}
 	runID, runErr := coordinator.identifiers.NewAgentRunID()
 	messageID, messageErr := coordinator.identifiers.NewMessageID()
 	startedAt := coordinator.now()
 	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
 		return "", ErrCoordinatorDependency
 	}
-	input, err := agent.NewRunInputWithContext(
+	input, err := agent.NewRunInputWithOperationalPolicyContext(
 		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits, conversation,
+		resourcePolicies, observabilityPolicies, policyGeneration,
 	)
 	if err != nil {
+		return "", ErrCoordinatorDependency
+	}
+	if !coordinator.runResourcePolicies.CurrentPolicyGeneration(runContext, policyGeneration) {
 		return "", ErrCoordinatorDependency
 	}
 	bridge, err := newEventBridge(runID, scope.Generation, coordinator.uiEvents)
@@ -1967,7 +2012,8 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
 		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
 		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
-		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) {
+		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) ||
+		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration()) {
 		coordinator.mu.Unlock()
 		return agent.EventSinkRejected
 	}
@@ -1983,7 +2029,8 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
 		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
 		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
-		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) {
+		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) ||
+		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration()) {
 		coordinator.mu.Unlock()
 		return agent.EventSinkRejected
 	}
@@ -2334,8 +2381,20 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		if event.ToolInvocation.Name == domain.ToolNameGetPodLogs || event.ToolInvocation.Name == domain.ToolNameGetPreviousPodLogs {
-			state.logCalls++
+			state.logCalls += event.ExternalCallCost
 			if state.logCalls > state.input.BudgetLimits().LogCalls {
+				return persistenceAction{}, ErrInvalidAgentEvent
+			}
+		}
+		if event.ToolInvocation.Name == domain.ToolNameGetPodMetrics || event.ToolInvocation.Name == domain.ToolNameGetNodeMetrics {
+			state.metricCalls += event.ExternalCallCost
+			if state.metricCalls > state.input.BudgetLimits().MetricCalls {
+				return persistenceAction{}, ErrInvalidAgentEvent
+			}
+		}
+		if event.ToolInvocation.Name == domain.ToolNameQueryPrometheus || event.ToolInvocation.Name == domain.ToolNameQueryLoki {
+			state.dataSourceCalls += event.ExternalCallCost
+			if state.dataSourceCalls > state.input.BudgetLimits().DataSourceCalls {
 				return persistenceAction{}, ErrInvalidAgentEvent
 			}
 		}
@@ -2379,7 +2438,8 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 		pending := state.tools[event.Evidence.InvocationID]
 		if event.Evidence.Scope != state.run.Scope || pending == nil || pending.terminal == nil || pending.persisted ||
 			len(pending.evidence) >= pending.terminal.EvidenceCount ||
-			!state.input.Scope().AllowsReference(event.Evidence.Resource) {
+			event.Evidence.PolicyGeneration != state.input.PolicyGeneration() ||
+			!runInputAllowsEvidence(state.input, *event.Evidence) {
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		for _, existing := range pending.evidence {
@@ -2415,6 +2475,19 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 	default:
 		return persistenceAction{}, ErrInvalidAgentEvent
 	}
+}
+
+func runInputAllowsEvidence(input agent.RunInput, evidence domain.Evidence) bool {
+	resourceType := evidence.ResourceType
+	if resourceType == (domain.ResourceType{}) {
+		kind, found := domain.ResourceKindForReference(evidence.Resource)
+		if !found {
+			return false
+		}
+		resourceType = domain.BuiltInResourceType(kind)
+	}
+	policy, found := input.ResourcePolicies().Resolve(resourceType.ID)
+	return found && policy.Type == resourceType && input.Scope().AllowsResourceReference(resourceType, evidence.Resource)
 }
 
 func (coordinator *Coordinator) performPersistence(ctx context.Context, state *activeRun, action persistenceAction) error {
@@ -2908,6 +2981,14 @@ func cloneEvidence(value domain.Evidence) domain.Evidence {
 	if value.Severity != nil {
 		current := *value.Severity
 		copy.Severity = &current
+	}
+	if value.ObservedFrom != nil {
+		current := *value.ObservedFrom
+		copy.ObservedFrom = &current
+	}
+	if value.ObservedThrough != nil {
+		current := *value.ObservedThrough
+		copy.ObservedThrough = &current
 	}
 	return copy
 }

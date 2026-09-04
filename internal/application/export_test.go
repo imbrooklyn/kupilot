@@ -182,6 +182,94 @@ func TestExportSummaryRejectsUnsafeEvidenceResourceProjection(t *testing.T) {
 	}
 }
 
+func TestExportSummaryAcceptsPartialClusterScopedCRDEvidence(t *testing.T) {
+	t.Parallel()
+	createdAt := time.UnixMilli(1_775_000_000_000).UTC()
+	snapshot := SessionExportSnapshot{
+		Session: ExportSessionRecord{
+			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Messages: []ExportMessageRecord{{
+			Role: domain.MessageRoleUser, Content: "Inspect the cluster-scoped Widget.", CreatedAt: createdAt,
+		}},
+		Diagnoses: []ExportDiagnosisRecord{{
+			AnswerMarkdown: "The bounded Widget observation is partial.", CreatedAt: createdAt,
+			ConfirmedFacts: []domain.ConfirmedFact{{
+				Statement: "The Widget was observed.", EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID},
+			}},
+		}},
+		Evidence: []ExportEvidenceRecord{{
+			ID: exportTestEvidenceID, Category: domain.EvidenceCategoryResourceStatus,
+			Resource: domain.ResourceRef{APIVersion: "example.test/v1", Kind: "Widget", Name: "sample-widget"},
+			ResourceType: domain.ResourceType{
+				ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets",
+				Kind: "Widget", Scope: domain.ResourceScopeCluster,
+			},
+			PolicyVersion: domain.ResourcePolicyVersion, PolicyGeneration: 7,
+			Fact: "The projected Widget was observed.", SourcePath: "status.state", ObservedAt: createdAt,
+			Partial: true,
+		}},
+	}
+	summary, err := ProjectExportSummary(snapshot, createdAt.Add(time.Second), security.NewRedactor())
+	if err != nil {
+		t.Fatalf("ProjectExportSummary() error = %v", err)
+	}
+	content, err := RenderExportSummary(summary, security.NewRedactor())
+	if err != nil {
+		t.Fatalf("RenderExportSummary() error = %v", err)
+	}
+	if len(summary.Evidence) != 1 || summary.Evidence[0].State != domain.EvidenceDetailPartial ||
+		summary.Evidence[0].Namespace != "" || summary.Evidence[0].ResourceType != snapshot.Evidence[0].ResourceType ||
+		!strings.Contains(string(content), "`Widget sample-widget` (`example.test/v1`)") ||
+		!strings.Contains(string(content), "`example.test/v1 widgets` (`cluster`)") ||
+		!strings.Contains(string(content), "Evidence policy: `kupilot-resource-policy-v1` (generation `7`)") {
+		t.Fatalf("custom Evidence export = %#v\n%s", summary.Evidence, content)
+	}
+}
+
+func TestExportSummaryAcceptsExactObservabilityEvidence(t *testing.T) {
+	t.Parallel()
+	createdAt := time.UnixMilli(1_775_000_000_000).UTC()
+	snapshot := SessionExportSnapshot{
+		Session: ExportSessionRecord{
+			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Diagnoses: []ExportDiagnosisRecord{{
+			AnswerMarkdown: "The CPU sample was observed.", CreatedAt: createdAt,
+			ConfirmedFacts: []domain.ConfirmedFact{{
+				Statement: "The CPU sample was observed.", EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID},
+			}},
+		}},
+		Evidence: []ExportEvidenceRecord{{
+			ID: exportTestEvidenceID, Category: domain.EvidenceCategoryPrometheus,
+			Resource:      domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "payments", Name: "api-0"},
+			PolicyVersion: domain.ObservabilityPolicyVersion, PolicyGeneration: 11,
+			Fact:       "The admitted CPU series contains one bounded sample.",
+			SourcePath: "api/v1/query_range#pod_cpu_usage", ObservedAt: createdAt,
+		}},
+	}
+	summary, err := ProjectExportSummary(snapshot, createdAt.Add(time.Second), security.NewRedactor())
+	if err != nil {
+		t.Fatalf("ProjectExportSummary() error = %v", err)
+	}
+	content, err := RenderExportSummary(summary, security.NewRedactor())
+	if err != nil {
+		t.Fatalf("RenderExportSummary() error = %v", err)
+	}
+	if len(summary.Evidence) != 1 || summary.Evidence[0].PolicyVersion != domain.ObservabilityPolicyVersion ||
+		!strings.Contains(string(content), "Evidence policy: `"+domain.ObservabilityPolicyVersion+"` (generation `11`)") ||
+		!strings.Contains(string(content), "api/v1/query\\_range\\#pod\\_cpu\\_usage") {
+		t.Fatalf("observability Evidence export = %#v\n%s", summary.Evidence, content)
+	}
+
+	snapshot.Evidence[0].SourcePath = "api/v1/query_range#model_supplied_query"
+	if _, err := ProjectExportSummary(snapshot, createdAt.Add(time.Second), security.NewRedactor()); !errors.Is(err, ErrInvalidExportSummary) {
+		t.Fatalf("ProjectExportSummary(unsafe query provenance) error = %v, want ErrInvalidExportSummary", err)
+	}
+}
+
 func TestExportSummaryEnforcesSourceAndAggregateLimits(t *testing.T) {
 	t.Parallel()
 	createdAt := time.UnixMilli(1_775_000_000_000).UTC()

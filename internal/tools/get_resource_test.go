@@ -87,7 +87,7 @@ func TestGetResourceReturnsSafeDiagnosticDTOAndDeterministicEvidence(t *testing.
 			evidence.Resource.Kind != "Pod" || evidence.Resource.Namespace != "team-a" || evidence.Resource.Name != "sample-pod" ||
 			evidence.Resource.UID != observation.Summary.Reference.UID || evidence.Resource.ResourceVersion != observation.Summary.Reference.ResourceVersion ||
 			strings.Contains(evidence.Fact, canary) ||
-			evidence.ObservedAt != testObservedAt || evidence.Fingerprint != domain.SHA256Hex(string(evidence.Category)+"\n"+evidence.Fact+"\n"+valueOrEmpty(evidence.SourcePath)) {
+			evidence.ObservedAt != testObservedAt || evidence.Fingerprint != expectedEvidenceFingerprint(evidence) {
 			t.Fatalf("Evidence[%d] = %#v", index, evidence)
 		}
 	}
@@ -444,4 +444,18 @@ func valueOrEmpty(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func expectedEvidenceFingerprint(evidence domain.Evidence) string {
+	parts := []string{
+		string(evidence.Category), evidence.Fact, valueOrEmpty(evidence.SourcePath), evidence.SourceOriginHash, evidence.Series,
+		evidence.Resource.APIVersion, evidence.Resource.Kind, evidence.Resource.Namespace, evidence.Resource.Name,
+		evidence.Resource.UID, evidence.Resource.ResourceVersion,
+		evidence.ResourceType.Group, evidence.ResourceType.Version, evidence.ResourceType.Resource,
+		evidence.ResourceType.Kind, string(evidence.ResourceType.Scope), evidence.PolicyVersion, fmt.Sprint(evidence.PolicyGeneration),
+	}
+	if evidence.ObservedFrom != nil && evidence.ObservedThrough != nil {
+		parts = append(parts, evidence.ObservedFrom.Format(time.RFC3339Nano), evidence.ObservedThrough.Format(time.RFC3339Nano))
+	}
+	return domain.SHA256Hex(strings.Join(parts, "\n"))
 }

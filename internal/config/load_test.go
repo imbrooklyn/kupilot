@@ -571,6 +571,60 @@ func TestLoadVersionMigrationAndVersion2StrictFailures(t *testing.T) {
 	}
 }
 
+func TestLoadVersion2ResourcePolicies(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := testPaths(root)
+	writePrivateFile(t, paths.ConfigFile, []byte(version2Config("", "")+validResourcePolicyYAMLFixture()))
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if len(loaded.Kubernetes.ResourcePolicies) != 1 {
+		t.Fatalf("resource policies = %#v", loaded.Kubernetes.ResourcePolicies)
+	}
+	catalog, err := loaded.Config.ResourcePolicyCatalog()
+	if err != nil {
+		t.Fatalf("ResourcePolicyCatalog() error = %v", err)
+	}
+	policy, found := catalog.Resolve("widgets")
+	if !found || policy.Type.Group != "example.test" || policy.Type.Version != "v1" ||
+		policy.Type.Resource != "widgets" || policy.Type.Kind != "Widget" || !policy.Type.Namespaced() ||
+		!policy.AllowsVerb("get") || !policy.AllowsVerb("list") || len(policy.Fields) != 2 {
+		t.Fatalf("loaded policy = %#v, found = %t", policy, found)
+	}
+}
+
+func TestLoadRejectsMalformedResourcePolicyYAMLBeforeUse(t *testing.T) {
+	t.Parallel()
+
+	valid := version2Config("", "") + validResourcePolicyYAMLFixture()
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "version 1 policy", content: "version: 1\nkubernetes:\n  resource_policies: []\n"},
+		{name: "unknown policy field", content: strings.Replace(valid, "      group: example.test", "      group: example.test\n      endpoint: https://cluster.example.test", 1)},
+		{name: "duplicate field member", content: strings.Replace(valid, "          scalar: string", "          scalar: string\n          scalar: integer", 1)},
+		{name: "wrong verbs type", content: strings.Replace(valid, "      verbs: [get, list]", "      verbs: get", 1)},
+		{name: "wrong limit type", content: strings.Replace(valid, "        max_pages: 4", "        max_pages: 4.0", 1)},
+		{name: "missing policy member", content: strings.Replace(valid, "      verbs: [get, list]\n", "", 1)},
+		{name: "missing field operators", content: strings.Replace(valid, "          operators: [contains, equals]\n", "", 1)},
+		{name: "missing field Evidence mapping", content: strings.Replace(valid, "          evidence: true\n", "", 1)},
+		{name: "missing limit member", content: strings.Replace(valid, "        max_returned: 20\n", "", 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := testPaths(root)
+			writePrivateFile(t, paths.ConfigFile, []byte(test.content))
+			_, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+			assertSafeError(t, err, ClassConfigurationInvalid, "config_schema_invalid")
+		})
+	}
+}
+
 func TestLoadRejectsAmbiguousAgentCredentialAliasesAfterUnsettingBoth(t *testing.T) {
 	t.Parallel()
 	environment := map[string]string{
@@ -651,6 +705,42 @@ models:
     request_timeout_seconds: 60
     streaming: true
     tool_calling_required: true` + agentExtra + reviewer + `
+`
+}
+
+func validResourcePolicyYAMLFixture() string {
+	return `kubernetes:
+  resource_policies:
+    - id: widgets
+      group: example.test
+      version: v1
+      resource: widgets
+      kind: Widget
+      scope: namespaced
+      verbs: [get, list]
+      fields:
+        - id: state
+          path: status.state
+          scalar: string
+          data_class: status
+          selector_source: none
+          operators: [contains, equals]
+          evidence: true
+        - id: tenant
+          path: metadata.labels.tenant
+          scalar: string
+          data_class: metadata
+          selector_source: label
+          selector_key: example.test/tenant
+          operators: [equals, exists]
+          evidence: true
+      limits:
+        max_pages: 4
+        page_items: 20
+        page_bytes: 262144
+        max_items: 80
+        max_bytes: 1048576
+        max_returned: 20
 `
 }
 

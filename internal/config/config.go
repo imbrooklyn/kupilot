@@ -1,5 +1,12 @@
 package config
 
+import (
+	"sort"
+	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
+)
+
 const (
 	LegacyVersion                     = 1
 	CurrentVersion                    = 2
@@ -25,6 +32,8 @@ const (
 	MaxModelIdentifierBytes           = 128
 	MaxModelProfileNameBytes          = 128
 	MaxPathBytes                      = 4096
+	DefaultDataSourceTimeoutSeconds   = 15
+	MaxDataSourceTimeoutSeconds       = 60
 )
 
 // ModelRole is one fixed consumer binding admitted by the configuration
@@ -56,14 +65,42 @@ func (reference ModelCredentialReference) valid() bool {
 // Config is the complete serializable, non-sensitive startup configuration.
 // Paths and transport credentials are intentionally absent.
 type Config struct {
-	Version    int                 `yaml:"version" json:"version"`
-	Context    string              `yaml:"context,omitempty" json:"context,omitempty"`
-	Namespace  string              `yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	NoColor    bool                `yaml:"no_color" json:"no_color"`
-	Runtime    RuntimeConfig       `yaml:"runtime" json:"runtime"`
-	Models     ModelProfilesConfig `yaml:"models" json:"models"`
-	Kubernetes KubernetesConfig    `yaml:"kubernetes" json:"kubernetes"`
-	Logging    LoggingConfig       `yaml:"logging" json:"logging"`
+	Version       int                 `yaml:"version" json:"version"`
+	Context       string              `yaml:"context,omitempty" json:"context,omitempty"`
+	Namespace     string              `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	NoColor       bool                `yaml:"no_color" json:"no_color"`
+	Runtime       RuntimeConfig       `yaml:"runtime" json:"runtime"`
+	Models        ModelProfilesConfig `yaml:"models" json:"models"`
+	Kubernetes    KubernetesConfig    `yaml:"kubernetes" json:"kubernetes"`
+	Observability ObservabilityConfig `yaml:"observability" json:"observability"`
+	Logging       LoggingConfig       `yaml:"logging" json:"logging"`
+}
+
+// DataSourceCredentialReference selects one fixed optional-source credential
+// slot. The empty-source value "none" explicitly disables Authorization.
+type DataSourceCredentialReference string
+
+const (
+	DataSourceCredentialNone       DataSourceCredentialReference = "none"
+	DataSourceCredentialPrometheus DataSourceCredentialReference = "prometheus"
+	DataSourceCredentialLoki       DataSourceCredentialReference = "loki"
+)
+
+// ObservabilityConfig has two fixed optional slots rather than an extensible
+// source registry. A nil slot is disabled.
+type ObservabilityConfig struct {
+	Prometheus *DataSourceConfig `yaml:"prometheus,omitempty" json:"prometheus,omitempty"`
+	Loki       *DataSourceConfig `yaml:"loki,omitempty" json:"loki,omitempty"`
+}
+
+// DataSourceConfig is the non-sensitive policy for one exact optional source.
+// Endpoint is canonicalized to a bare origin during validation.
+type DataSourceConfig struct {
+	Endpoint              string                        `yaml:"endpoint" json:"endpoint"`
+	Origin                string                        `yaml:"-" json:"origin,omitempty"`
+	CredentialReference   DataSourceCredentialReference `yaml:"credential_ref" json:"credential_ref"`
+	Queries               []string                      `yaml:"queries" json:"queries"`
+	RequestTimeoutSeconds int                           `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
 }
 
 // RuntimeConfig selects one code-defined run envelope. Individual limits are
@@ -123,6 +160,17 @@ type ProfileCredential struct {
 type ModelCredentials struct {
 	Agent            ProfileCredential
 	ApprovalReviewer *ProfileCredential
+	Prometheus       *DataSourceCredential
+	Loki             *DataSourceCredential
+}
+
+// DataSourceCredential keeps one optional source credential opaque and
+// independently owned from model-role credentials.
+type DataSourceCredential struct {
+	Kind      domain.DataSourceKind
+	Reference DataSourceCredentialReference
+	Source    CredentialSource
+	Value     SecretValue
 }
 
 // Destroy overwrites every independently owned role credential.
@@ -133,6 +181,12 @@ func (credentials *ModelCredentials) Destroy() {
 	credentials.Agent.Value.Destroy()
 	if credentials.ApprovalReviewer != nil {
 		credentials.ApprovalReviewer.Value.Destroy()
+	}
+	if credentials.Prometheus != nil {
+		credentials.Prometheus.Value.Destroy()
+	}
+	if credentials.Loki != nil {
+		credentials.Loki.Value.Destroy()
 	}
 }
 
@@ -148,8 +202,154 @@ type Loaded struct {
 
 // KubernetesConfig contains the non-sensitive kubeconfig execution policy.
 type KubernetesConfig struct {
-	ExecCredentials string `yaml:"exec_credentials" json:"exec_credentials"`
-	NamespaceAccess string `yaml:"namespace_access" json:"namespace_access"`
+	ExecCredentials  string                           `yaml:"exec_credentials" json:"exec_credentials"`
+	NamespaceAccess  string                           `yaml:"namespace_access" json:"namespace_access"`
+	ResourcePolicies []KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty" json:"resource_policies,omitempty"`
+}
+
+// KubernetesResourcePolicyConfig is one explicit CRD read policy. Built-in
+// resources remain code-owned and cannot be replaced through configuration.
+type KubernetesResourcePolicyConfig struct {
+	ID       string                                `yaml:"id" json:"id"`
+	Group    string                                `yaml:"group" json:"group"`
+	Version  string                                `yaml:"version" json:"version"`
+	Resource string                                `yaml:"resource" json:"resource"`
+	Kind     string                                `yaml:"kind" json:"kind"`
+	Scope    string                                `yaml:"scope" json:"scope"`
+	Verbs    []string                              `yaml:"verbs" json:"verbs"`
+	Fields   []KubernetesResourceFieldPolicyConfig `yaml:"fields" json:"fields"`
+	Limits   KubernetesResourceQueryLimitsConfig   `yaml:"limits" json:"limits"`
+}
+
+// KubernetesResourceFieldPolicyConfig binds one local field name to one exact
+// scalar CRD path and optional typed server selector.
+type KubernetesResourceFieldPolicyConfig struct {
+	ID             string   `yaml:"id" json:"id"`
+	Path           string   `yaml:"path" json:"path"`
+	Scalar         string   `yaml:"scalar" json:"scalar"`
+	DataClass      string   `yaml:"data_class" json:"data_class"`
+	SelectorSource string   `yaml:"selector_source" json:"selector_source"`
+	SelectorKey    string   `yaml:"selector_key,omitempty" json:"selector_key,omitempty"`
+	Operators      []string `yaml:"operators" json:"operators"`
+	Evidence       bool     `yaml:"evidence" json:"evidence"`
+}
+
+// KubernetesResourceQueryLimitsConfig sets only per-entry ceilings. Runtime
+// profiles and hard limits can always tighten these values.
+type KubernetesResourceQueryLimitsConfig struct {
+	MaxPages    int `yaml:"max_pages" json:"max_pages"`
+	PageItems   int `yaml:"page_items" json:"page_items"`
+	PageBytes   int `yaml:"page_bytes" json:"page_bytes"`
+	MaxItems    int `yaml:"max_items" json:"max_items"`
+	MaxBytes    int `yaml:"max_bytes" json:"max_bytes"`
+	MaxReturned int `yaml:"max_returned" json:"max_returned"`
+}
+
+// ResourcePolicyCatalog constructs the complete immutable built-in plus CRD
+// policy snapshot. It performs no discovery or Kubernetes I/O.
+func (config Config) ResourcePolicyCatalog() (domain.ResourcePolicyCatalog, error) {
+	copy := config
+	if err := Validate(&copy); err != nil {
+		return domain.ResourcePolicyCatalog{}, err
+	}
+	entries := domain.BuiltInResourcePolicies()
+	for _, configured := range copy.Kubernetes.ResourcePolicies {
+		entry, err := configured.domainPolicy()
+		if err != nil {
+			return domain.ResourcePolicyCatalog{}, newSafeError(
+				ClassConfigurationInvalid,
+				"config_resource_policy_invalid",
+				"build_resource_policy_catalog",
+				"Each Kubernetes resource policy must name one exact CRD, read verbs, scalar projection, query semantics, and finite limits.",
+			)
+		}
+		entries = append(entries, entry)
+	}
+	catalog, err := domain.NewResourcePolicyCatalog(domain.ResourcePolicyVersion, entries)
+	if err != nil {
+		return domain.ResourcePolicyCatalog{}, newSafeError(
+			ClassConfigurationInvalid,
+			"config_resource_policy_invalid",
+			"build_resource_policy_catalog",
+			"Kubernetes resource policies must have unique local IDs and exact API identities.",
+		)
+	}
+	return catalog, nil
+}
+
+// ObservabilityPolicyCatalog constructs the immutable, credential-free source
+// policy snapshot supplied to one AgentRun.
+func (config Config) ObservabilityPolicyCatalog() (domain.ObservabilityPolicyCatalog, error) {
+	copy := config
+	if err := Validate(&copy); err != nil {
+		return domain.ObservabilityPolicyCatalog{}, err
+	}
+	policy := func(kind domain.DataSourceKind, source *DataSourceConfig) (domain.DataSourcePolicy, error) {
+		if source == nil {
+			return domain.DataSourcePolicy{}, nil
+		}
+		queries := make([]domain.ObservabilityQueryID, len(source.Queries))
+		for index, query := range source.Queries {
+			queries[index] = domain.ObservabilityQueryID(query)
+		}
+		result := domain.DataSourcePolicy{
+			Kind: kind, OriginHash: domain.SHA256Hex(source.Origin), Queries: queries,
+			RequestTimeout: time.Duration(source.RequestTimeoutSeconds) * time.Second,
+		}
+		if result.Validate() != nil {
+			return domain.DataSourcePolicy{}, domain.ErrInvalidObservabilityPolicy
+		}
+		return result, nil
+	}
+	prometheus, err := policy(domain.DataSourcePrometheus, copy.Observability.Prometheus)
+	if err != nil {
+		return domain.ObservabilityPolicyCatalog{}, err
+	}
+	loki, err := policy(domain.DataSourceLoki, copy.Observability.Loki)
+	if err != nil {
+		return domain.ObservabilityPolicyCatalog{}, err
+	}
+	return domain.NewObservabilityPolicyCatalog(prometheus, loki)
+}
+
+func (configured KubernetesResourcePolicyConfig) domainPolicy() (domain.ResourcePolicy, error) {
+	verbs := make([]domain.ResourceVerb, len(configured.Verbs))
+	for index, verb := range configured.Verbs {
+		verbs[index] = domain.ResourceVerb(verb)
+	}
+	sort.Slice(verbs, func(left, right int) bool { return verbs[left] < verbs[right] })
+	fields := make([]domain.ResourceFieldPolicy, len(configured.Fields))
+	for index, configuredField := range configured.Fields {
+		operators := make([]domain.ResourceFilterOperator, len(configuredField.Operators))
+		for operatorIndex, operator := range configuredField.Operators {
+			operators[operatorIndex] = domain.ResourceFilterOperator(operator)
+		}
+		sort.Slice(operators, func(left, right int) bool { return operators[left] < operators[right] })
+		fields[index] = domain.ResourceFieldPolicy{
+			ID: configuredField.ID, Path: configuredField.Path,
+			Scalar: domain.ResourceScalarType(configuredField.Scalar), DataClass: domain.ResourceDataClass(configuredField.DataClass),
+			SelectorSource: domain.ResourceSelectorSource(configuredField.SelectorSource), SelectorKey: configuredField.SelectorKey,
+			Operators: operators, Evidence: configuredField.Evidence,
+		}
+	}
+	policy := domain.ResourcePolicy{
+		Type: domain.ResourceType{
+			ID: configured.ID, Group: configured.Group, Version: configured.Version,
+			Resource: configured.Resource, Kind: configured.Kind,
+			Scope: domain.ResourceScope(configured.Scope), BuiltIn: false,
+		},
+		Verbs:  verbs,
+		Fields: fields,
+		Limits: domain.ResourceQueryLimits{
+			MaxPages: configured.Limits.MaxPages, PageItems: configured.Limits.PageItems, PageBytes: configured.Limits.PageBytes,
+			MaxItems: configured.Limits.MaxItems, MaxBytes: configured.Limits.MaxBytes,
+			MaxReturned: configured.Limits.MaxReturned,
+		},
+	}
+	if policy.Validate() != nil || policy.Type.Group == "" {
+		return domain.ResourcePolicy{}, domain.ErrInvalidResourcePolicy
+	}
+	return policy, nil
 }
 
 // LoggingConfig controls the fixed local file logger. Rotation ceilings remain
@@ -203,10 +403,11 @@ func defaultReviewerProfile() ModelProfileConfig {
 func Defaults() Config {
 	return Config{
 		Version: CurrentVersion, Namespace: DefaultNamespace,
-		Runtime:    RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
-		Models:     ModelProfilesConfig{Agent: defaultAgentProfile()},
-		Kubernetes: KubernetesConfig{ExecCredentials: ExecCredentialsAllow, NamespaceAccess: DefaultNamespaceAccess},
-		Logging:    LoggingConfig{Enabled: true, Level: "info", SensitiveDiagnostics: false},
+		Runtime:       RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
+		Models:        ModelProfilesConfig{Agent: defaultAgentProfile()},
+		Kubernetes:    KubernetesConfig{ExecCredentials: ExecCredentialsAllow, NamespaceAccess: DefaultNamespaceAccess},
+		Observability: ObservabilityConfig{},
+		Logging:       LoggingConfig{Enabled: true, Level: "info", SensitiveDiagnostics: false},
 	}
 }
 

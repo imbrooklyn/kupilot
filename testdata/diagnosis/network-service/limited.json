@@ -1,0 +1,44 @@
+{
+  "name": "pod_network_source_permission_denied",
+  "question": "Is network traffic relevant to the Service investigation for example-pod?",
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "query_prometheus",
+      "arguments_json": "{\"namespace\":null,\"pod_name\":\"example-pod\",\"purpose\":\"Inspect the bounded Pod network receive-rate series.\",\"query_id\":\"pod_network_receive_rate\",\"series_limit\":null,\"step_seconds\":null,\"window_seconds\":null}",
+      "result": {
+        "status": "denied",
+        "observed_offset_ms": 100,
+        "data_json": "{\"source_trust\":\"untrusted_external_data\"}",
+        "error_class": "permission_denied",
+        "safe_message": "The configured Prometheus observation was not authorized."
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "No network series was collected because the configured Prometheus observation was not authorized.\n\nNetwork behavior remains unknown; a denied source call does not imply zero traffic. Confidence: low. To verify: Exact source consent and permission allow a later bounded query for the same Pod.\n\nThe optional data-source observation was denied. Impact: No network sample can support the Service investigation.\n\nSuggested next step: Obtain exact consent and permission for the configured source before retrying. Risk: External-source access transfers approved operational metadata to that origin. Before acting: Verify the canonical origin and admitted data category.",
+    "evidence_citations": [],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [],
+    "hypotheses": [
+      {"index": 0, "assertion": "network_state_unknown"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "obtain_source_permission"}
+    ]
+  },
+  "required_confirmed_assertions": [],
+  "required_missing_kinds": [
+    "forbidden"
+  ],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

@@ -223,6 +223,10 @@ func fixedHandlers(tool agent.Tool) agent.ToolHandlers {
 		GetEvents:           tool,
 		GetPodLogs:          tool,
 		GetPreviousPodLogs:  tool,
+		GetPodMetrics:       tool,
+		GetNodeMetrics:      tool,
+		QueryPrometheus:     tool,
+		QueryLoki:           tool,
 		GetRelatedResources: tool,
 		GetClusterOverview:  tool,
 	}
@@ -373,7 +377,7 @@ func resourceCall(id, podName string) agent.ToolSelection {
 	return agent.ToolSelection{
 		ID:            id,
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"` + podName + `"}}`,
+		ArgumentsJSON: `{"detail":"describe","name":"` + podName + `","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
 	}
 }
 
@@ -381,7 +385,7 @@ func eventsCall(id, podName string) agent.ToolSelection {
 	return agent.ToolSelection{
 		ID:            id,
 		Name:          domain.ToolNameGetEvents,
-		ArgumentsJSON: `{"purpose":"Inspect recent Events.","resource":{"kind":"Pod","name":"` + podName + `"}}`,
+		ArgumentsJSON: `{"limit":null,"purpose":"Inspect recent Events.","reason":null,"resource":{"api_version":null,"kind":"Pod","name":"` + podName + `","namespace":null,"uid":null},"since_seconds":null,"type":null}`,
 	}
 }
 

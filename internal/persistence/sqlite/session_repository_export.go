@@ -54,6 +54,9 @@ const (
 			e.fact AS fact, e.source_path AS source_path, e.severity AS severity,
 			e.resource_version AS resource_version,
 			e.redaction_count AS redaction_count, e.truncated AS truncated,
+			e.resource_type_json AS resource_type_json,
+			e.resource_policy_version AS resource_policy_version,
+			e.policy_generation AS policy_generation, e.partial AS partial,
 			e.fingerprint AS fingerprint, e.observed_at_ms AS observed_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -327,9 +330,10 @@ func readExportEvidence(
 		resource.UID = ""
 		resource.ResourceVersion = ""
 		values = append(values, application.ExportEvidenceRecord{
-			ID: value.ID, Category: value.Category, Resource: resource, Fact: value.Fact,
+			ID: value.ID, Category: value.Category, Resource: resource, ResourceType: value.ResourceType,
+			PolicyVersion: value.PolicyVersion, PolicyGeneration: value.PolicyGeneration, Fact: value.Fact,
 			SourcePath: optionalExportString(value.SourcePath), ObservedAt: value.ObservedAt,
-			RedactionCount: value.RedactionCount, Truncated: value.Truncated,
+			RedactionCount: value.RedactionCount, Truncated: value.Truncated, Partial: value.Partial,
 		})
 	}
 	return values, nil

@@ -1,12 +1,15 @@
 # Kubernetes Compatibility
 
 - Status: Accepted `v0.5` target with current dependency evidence
-- Date: 2026-09-03
+- Date: 2026-09-05
 
-The checked-in runtime remains the `v0.4` implementation. The dependency pins
-and request mappings below describe current evidence; the broader `v0.5`
-capabilities are not reachable until exact client-go APIs, RBAC, projections,
-and deterministic fixtures are implemented and verified.
+The checked-in runtime implements the `v0.5` read and observability slices:
+reviewed built-ins, safe Secret metadata, exact policy-admitted CRD reads,
+typed queries, runtime-owned pagination, normalized Events, bounded Pod logs,
+and typed Pod/Node Metrics API snapshots. Optional Prometheus and Loki clients
+are separate non-Kubernetes adapters. Remote diagnostics and additional
+remediation operations remain later slices. Accepted target text is not
+evidence that those later capabilities are reachable.
 
 Kupilot pins `k8s.io/client-go v0.35.7` together with matching `k8s.io/api` and
 `k8s.io/apimachinery` modules. The upstream module requires Go 1.25.0. Kupilot
@@ -31,7 +34,7 @@ supported.
 
 ## Accepted `v0.5` Kubernetes surface
 
-The target catalog adds reviewed stable built-ins and exact policy-admitted
+The accepted catalog adds reviewed stable built-ins and exact policy-admitted
 CRDs, conversational `describe`, bounded query/count/table, Events, current/
 previous/all-container logs and local search, Pod/Node metrics, container-file
 read, Pod diagnostics, diagnostic Pods, and typed restart/scale/rollback/Pod
@@ -42,7 +45,10 @@ a separately consented `review` policy, one exact ConfigMap key or
 non-credential container environment value. Secret values, generic or bulk
 values, full objects, and credential-shaped data remain denied.
 
-Every built-in maps to a typed task-specific client-go operation. An exact CRD
+The implemented broad-read slice maps every model-selected resource type to an
+exact code-owned API identity and projection. Built-ins use their exact typed
+client-go mapping; only exact configured CRDs use the confined dynamic client.
+An exact CRD
 policy names group, version, resource, Kind, scope, verbs, projected fields,
 limits, and Evidence mapping; discovery may validate availability but never
 grants model authority. Any dynamic client required inside `internal/kube` is
@@ -77,8 +83,7 @@ inside `internal/kube`.
 
 Each selected Context owns a fresh bundle with:
 
-- the currently implemented User-Agent `kupilot/0.4`, to be versioned with the
-  future `v0.5` runtime rather than changed by this documentation work;
+- the fixed User-Agent `kupilot/0.5`;
 - QPS 5 and Burst 10;
 - a Kubernetes request deadline selected from the immutable run profile, at
   most 60 seconds and no later than the owning run deadline;
@@ -114,7 +119,7 @@ For run reads:
 - Kubernetes RBAC remains mandatory for every request.
 - Cluster-scoped references contain no Namespace.
 
-## Implemented `v0.4` typed direct reads
+## Implemented `v0.5` broad resource reads
 
 <!-- markdownlint-disable MD013 -->
 
@@ -126,7 +131,8 @@ For run reads:
 | core `v1` | Service | GET, bounded LIST | Type, safe ports/counts, selector-key count; no cluster/external addresses. |
 | core `v1` | PersistentVolumeClaim | GET, bounded LIST | Identity, creation time, and phase only; no access modes, storage class, volume source, or credential material. |
 | core `v1` | PersistentVolume | GET, bounded LIST | Identity, creation time, phase, and bounded reason only; no capacity, access modes, claim details, or volume source. |
-| core `v1` | ConfigMap | GET, bounded LIST | Identity and creation time only; `data` and `binaryData` are never projected. |
+| core `v1` | ConfigMap | metadata GET, bounded metadata LIST | PartialObjectMetadata identity and creation time only; `data` and `binaryData` are never requested through this broad-read path. |
+| core `v1` | Secret | metadata GET, bounded metadata LIST | PartialObjectMetadata identity and creation time only; `data`, `stringData`, and type-specific values never enter the project projection. |
 | `apps/v1` | Deployment | GET, bounded LIST | Replica/condition summary and fixed relationships. |
 | `apps/v1` | ReplicaSet | GET, bounded LIST | Replica/condition and owner summary. |
 | `apps/v1` | StatefulSet | GET, bounded LIST | Desired, current, ready, and available replica counts; no conditions or embedded Pod-template fields. |
@@ -139,34 +145,61 @@ For run reads:
 
 <!-- markdownlint-enable MD013 -->
 
-Every direct list limit is 1 through 50, is sent to the API server, and is
-enforced again after return. `get_cluster_overview` accepts a combined total of
-2 through 50 and splits it between its fixed Namespace and Node lists. Lists
-accept no model-controlled label selector, field
-selector, continuation token, or Watch flag. All-Namespace behavior is a
-separate explicit boolean in the internal port, never inferred from an empty
-Namespace.
+Every list sends a server-side item limit and owns continuation tokens inside
+`internal/kube`. The model may select only a local field ID, code-defined
+operator, and bounded scalar value. Kupilot translates eligible exact metadata
+name/Namespace and label predicates to server selectors and applies all
+predicates again to the allowlisted projection. It accepts no raw selector,
+continuation token, JSONPath, template, `jq`, URL, Watch flag, or hard ceiling.
+All-Namespace behavior is explicit under the frozen `all` policy and is never
+inferred from an empty Namespace.
+
+Resource policies and the run profile are intersected before I/O. The compact,
+balanced, and extended profiles respectively allow at most 2/4/8 pages,
+25/50/100 items per server page, 128 KiB/256 KiB/1 MiB per response,
+50/200/500 scanned items, 25/50/50 returned items, and 256 KiB/1 MiB/4 MiB
+cumulative response bytes. A policy may only tighten those values. A complete
+page may be retained when a later page exceeds a page or aggregate ceiling;
+the result then reports explicit partial/truncated state and never exposes the
+continuation token.
+
+`get_cluster_overview` retains its separate fixed Namespace/Node behavior and
+combined limit of 2 through 50.
+
+For a configured CRD, one discovery GET validates the policy's exact group,
+version, resource, Kind, scope, and requested verb. Discovery cannot add a
+catalog entry or change fields, predicates, Evidence mapping, or limits.
+Unknown resource types, verbs, subresources, Namespace expansion, sensitive
+fields, and model-supplied continuation state are rejected before resource
+I/O; an unavailable configured API stops after its exact discovery request.
 
 Secret values, arbitrary custom resources without an exact policy entry,
-admission objects, generic discovery authority, and unknown API versions are
-denied before a Kubernetes call when locally decidable. The `v0.5` target's
-Secret-metadata, exact ConfigMap-key, non-credential environment, and
-RBAC-status projections each require explicit catalog fields and must never
-include credentials or authorization tokens. This does not change the current
-`v0.4` table above.
+admission objects, generic discovery authority, and unknown API versions
+remain denied. Safe Secret metadata is implemented. Exact ConfigMap values,
+non-credential environment values, and RBAC-status projections still require
+their separate sensitive-read policy, permission, category consent, and sink
+work and are not reachable in this slice.
 
 ## Events, logs, metrics, and relationships
 
-- Events use an exact code-built `involvedObject` selector and return at most 50
-  normalized entries. A cluster-scoped target may require a cluster-wide Event
-  list, still bound to the exact target.
-- Current and previous Pod logs use exact namespaced `pods/log` GETs. There is
-  no follow mode. Each call is capped at 200 lines, 15 minutes, and 64 KiB and
-  additionally requires the enabled container-output consent category.
-- `v0.5` adds an explicit bounded all-container mode and local search over the
-  already bounded projection; neither follows output or expands its window.
-- Pod and Node metrics use the typed metrics API with fixed fields, sample and
-  byte limits, observation time, and explicit unavailable or stale state.
+- Events use an exact code-built `involvedObject` selector plus admitted
+  reason/type/time filters. Runtime-owned continuation, deduplication, series
+  counts, per-page and aggregate ceilings, and explicit partial state apply. A
+  cluster-scoped target requires the frozen `all` namespace-access policy and a
+  cluster-wide Event list, still bound to that exact target.
+- Current and previous Pod logs use exact namespaced `pods/log` GETs. One or a
+  bounded explicit set of regular, init, and ephemeral containers may be read;
+  local search is literal and cannot become a selector, regex, command, or
+  shell. There is no follow mode. Tail, time, container, line, and byte limits
+  are intersected with the frozen run profile, and container-output consent is
+  mandatory.
+- Pod and Node metrics use exact core-resource identity GETs followed by exact
+  `metrics.k8s.io/v1beta1` GETs. Kubernetes quantities are parsed inside the
+  adapter and cross the boundary only as CPU millicores and memory bytes.
+  Unavailable, unsupported, stale, and partial observations remain distinct.
+- Optional Prometheus and Loki sources are not Kubernetes API fallbacks and do
+  not broaden this surface. Their fixed queries and origins are documented in
+  [Configuration](configuration.md).
 - Relationship traversal is code-defined and remains within the root
   Namespace, at most two hops, 25 nodes, and 40 edges.
 - EndpointSlice contributes only address-free ready/not-ready counts through
@@ -226,13 +259,14 @@ not validate or control an external program's own network behavior.
 
 ## Verification boundary
 
-Deterministic tests assert exact verbs, groups, versions, resource paths,
-Namespaces, subresources, selectors, bodies, preconditions, limits,
-projections, cancellation, scope/policy generation, remote-command settings,
-diagnostic-Pod security context and cleanup, and zero-action denials. Every
-typed action distinguishes attempt and verification and proves no automatic
-retry after ambiguity. Request-recording HTTP fixtures supplement client-go
-object fakes because the fake alone is not a security oracle.
+The read-only deterministic tests assert exact methods, groups, versions,
+resource paths, Namespaces, query strings, selectors, content types, page
+limits, internal continuation, projections, cancellation, timeout,
+scope/policy generation, RBAC denial, partial state, and zero-call local
+denials. Request-recording Kubernetes and loopback Prometheus/Loki HTTP
+fixtures supplement client-go object fakes because the fake alone is not a
+security oracle. Later slices must add their own remote-command and action
+evidence before those capabilities can be described as implemented.
 
 ## References
 

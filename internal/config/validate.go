@@ -5,10 +5,13 @@ import (
 	"net"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 // Validate checks and canonicalizes a non-sensitive configuration.
@@ -47,10 +50,72 @@ func Validate(config *Config) error {
 	if config.Kubernetes.NamespaceAccess != NamespaceAccessCurrent && config.Kubernetes.NamespaceAccess != NamespaceAccessAll {
 		return newSafeError(ClassConfigurationInvalid, "config_namespace_access_invalid", "validate_configuration", "kubernetes.namespace_access must be current or all.")
 	}
+	if err := validateResourcePolicies(config.Kubernetes.ResourcePolicies); err != nil {
+		return err
+	}
+	if err := validateDataSource(&config.Observability.Prometheus, domain.DataSourcePrometheus); err != nil {
+		return err
+	}
+	if err := validateDataSource(&config.Observability.Loki, domain.DataSourceLoki); err != nil {
+		return err
+	}
 	switch config.Logging.Level {
 	case "info", "warn", "error":
 	default:
 		return newSafeError(ClassConfigurationInvalid, "config_log_level_invalid", "validate_configuration", "logging.level must be info, warn, or error.")
+	}
+	return nil
+}
+
+func validateDataSource(slot **DataSourceConfig, kind domain.DataSourceKind) error {
+	if slot == nil || *slot == nil {
+		return nil
+	}
+	source := *slot
+	endpoint, origin, ok := canonicalEndpoint(source.Endpoint)
+	if !ok || endpoint != origin {
+		return newSafeError(ClassConfigurationInvalid, "config_data_source_endpoint_invalid", "validate_configuration", "An observability endpoint must be one canonical HTTPS origin, or HTTP only with an explicit loopback host; paths, user information, query, fragments, and redirects are not allowed.")
+	}
+	if source.RequestTimeoutSeconds < 1 || source.RequestTimeoutSeconds > MaxDataSourceTimeoutSeconds {
+		return newSafeError(ClassConfigurationInvalid, "config_data_source_timeout_invalid", "validate_configuration", "An observability request_timeout_seconds value must be between 1 and 60.")
+	}
+	wantReference := DataSourceCredentialPrometheus
+	if kind == domain.DataSourceLoki {
+		wantReference = DataSourceCredentialLoki
+	}
+	if source.CredentialReference != DataSourceCredentialNone && source.CredentialReference != wantReference {
+		return newSafeError(ClassConfigurationInvalid, "config_data_source_credential_invalid", "validate_configuration", "An observability credential_ref must be none or the fixed slot matching that source.")
+	}
+	if len(source.Queries) < 1 || len(source.Queries) > domain.MaxObservabilityQueryTemplates {
+		return newSafeError(ClassConfigurationInvalid, "config_data_source_query_invalid", "validate_configuration", "An observability source must allow one or more code-owned query template IDs.")
+	}
+	queries := append([]string(nil), source.Queries...)
+	sort.Strings(queries)
+	for index, query := range queries {
+		if !domain.ObservabilityQueryID(query).ValidFor(kind) || index > 0 && queries[index-1] == query {
+			return newSafeError(ClassConfigurationInvalid, "config_data_source_query_invalid", "validate_configuration", "An observability source contains an unknown or duplicate query template ID.")
+		}
+	}
+	source.Endpoint = endpoint
+	source.Origin = origin
+	source.Queries = queries
+	return nil
+}
+
+func validateResourcePolicies(configured []KubernetesResourcePolicyConfig) error {
+	if len(configured)+len(domain.BuiltInResourcePolicies()) > domain.MaxResourcePolicyEntries {
+		return newSafeError(ClassConfigurationInvalid, "config_resource_policy_invalid", "validate_configuration", "Kubernetes resource policies exceed the fixed catalog-entry limit.")
+	}
+	entries := domain.BuiltInResourcePolicies()
+	for _, value := range configured {
+		policy, err := value.domainPolicy()
+		if err != nil {
+			return newSafeError(ClassConfigurationInvalid, "config_resource_policy_invalid", "validate_configuration", "Each Kubernetes resource policy must name one exact CRD, read verbs, scalar projection, query semantics, and finite limits.")
+		}
+		entries = append(entries, policy)
+	}
+	if _, err := domain.NewResourcePolicyCatalog(domain.ResourcePolicyVersion, entries); err != nil {
+		return newSafeError(ClassConfigurationInvalid, "config_resource_policy_invalid", "validate_configuration", "Kubernetes resource policies must have unique local IDs and exact API identities.")
 	}
 	return nil
 }

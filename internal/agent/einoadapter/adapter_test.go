@@ -99,7 +99,7 @@ func TestAdapterAcceptsNoncanonicalProviderToolJSONBeforeStrictBinding(t *testin
 	call := agent.ToolSelection{
 		ID:            "call-1",
 		Name:          domain.ToolNameGetResource,
-		ArgumentsJSON: ` { "resource": { "name": "sample-pod", "kind": "Pod" }, "purpose": "Inspect the selected Pod." } `,
+		ArgumentsJSON: ` { "resource_type": "pods", "purpose": "Inspect the selected Pod.", "namespace": null, "name": "sample-pod", "detail": null } `,
 	}
 	model := &recordingModel{scripts: []modelScript{
 		scriptedChunks(toolCallChunks(call)...),
@@ -295,17 +295,13 @@ func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 		clock := newTestClock()
 		guard := newTestScopeGuard()
 		arguments, err := json.Marshal(struct {
-			Purpose  string `json:"purpose"`
-			Resource struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			} `json:"resource"`
+			Detail       string  `json:"detail"`
+			Name         string  `json:"name"`
+			Namespace    *string `json:"namespace"`
+			Purpose      string  `json:"purpose"`
+			ResourceType string  `json:"resource_type"`
 		}{
-			Purpose: blockedText,
-			Resource: struct {
-				Kind string `json:"kind"`
-				Name string `json:"name"`
-			}{Kind: "Pod", Name: "sample-pod"},
+			Detail: "describe", Name: "sample-pod", Purpose: blockedText, ResourceType: "pods",
 		})
 		if err != nil {
 			t.Fatalf("json.Marshal(Tool arguments) error = %v", err)
@@ -423,6 +419,10 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 		domain.ToolNameGetEvents,
 		domain.ToolNameGetPodLogs,
 		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetPodMetrics,
+		domain.ToolNameGetNodeMetrics,
+		domain.ToolNameQueryPrometheus,
+		domain.ToolNameQueryLoki,
 		domain.ToolNameGetRelatedResources,
 		domain.ToolNameGetClusterOverview,
 	}
@@ -457,7 +457,7 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
 	}
-	const expectedSnapshotSHA256 = "3bfb27e472638147264550e44c5b9c4dd28da2ad672c8ba76462ba5fef74b8e1"
+	const expectedSnapshotSHA256 = "77b267db3fa6733829145afa02c708350a1fff351d8bd29ddf5d9d3e3321b056"
 	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
 		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
 	}
@@ -572,17 +572,17 @@ func TestAdapterFeedsBackAtomicKnownToolPolicyDenialAndAcceptsCorrectedClusterBa
 		{
 			ID:            "call-node-invalid-namespace",
 			Name:          domain.ToolNameListResources,
-			ArgumentsJSON: `{"health_filter":"any","kind":"Node","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Nodes."}`,
+			ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Nodes.","resource_type":"nodes"}`,
 		},
 		{
 			ID:            "call-namespace-invalid-namespace",
 			Name:          domain.ToolNameListResources,
-			ArgumentsJSON: `{"health_filter":"any","kind":"Namespace","limit":20,"name_query":null,"namespace":"test-namespace","purpose":"List Namespaces."}`,
+			ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"test-namespace","purpose":"List Namespaces.","resource_type":"namespaces"}`,
 		},
 		{
 			ID:            "call-pods-valid",
 			Name:          domain.ToolNameListResources,
-			ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":20,"name_query":null,"namespace":"other-namespace","purpose":"List Pods."}`,
+			ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"other-namespace","purpose":"List Pods.","resource_type":"pods"}`,
 		},
 	}
 	correctedCalls := []agent.ToolSelection{
@@ -594,7 +594,7 @@ func TestAdapterFeedsBackAtomicKnownToolPolicyDenialAndAcceptsCorrectedClusterBa
 		{
 			ID:            "call-pods-corrected-batch",
 			Name:          domain.ToolNameListResources,
-			ArgumentsJSON: `{"health_filter":"any","kind":"Pod","limit":20,"name_query":null,"namespace":"other-namespace","purpose":"List Pods."}`,
+			ArgumentsJSON: `{"filters":[],"format":"list","limit":20,"namespace":"other-namespace","purpose":"List Pods.","resource_type":"pods"}`,
 		},
 	}
 	model := &recordingModel{scripts: []modelScript{

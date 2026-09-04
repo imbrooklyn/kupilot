@@ -11,7 +11,7 @@
     {
       "call_id": "call-1",
       "name": "get_resource",
-      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect the Pod and container state.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-pod\",\"namespace\":null,\"purpose\":\"Inspect the Pod and container state.\",\"resource_type\":\"pods\"}",
       "result": {
         "status": "success",
         "observed_offset_ms": 100,
@@ -33,7 +33,7 @@
     {
       "call_id": "call-2",
       "name": "get_events",
-      "arguments_json": "{\"purpose\":\"Inspect recent restart Events.\",\"resource\":{\"kind\":\"Pod\",\"name\":\"example-pod\"}}",
+      "arguments_json": "{\"limit\":null,\"purpose\":\"Inspect recent restart Events.\",\"reason\":null,\"resource\":{\"api_version\":null,\"kind\":\"Pod\",\"name\":\"example-pod\",\"namespace\":null,\"uid\":null},\"since_seconds\":null,\"type\":null}",
       "result": {
         "status": "success",
         "observed_offset_ms": 200,
@@ -55,7 +55,7 @@
     {
       "call_id": "call-3",
       "name": "get_previous_pod_logs",
-      "arguments_json": "{\"container\":\"example-container\",\"pod_name\":\"example-pod\",\"purpose\":\"Inspect the bounded previous container log.\"}",
+      "arguments_json": "{\"container\":\"example-container\",\"container_mode\":null,\"include_ephemeral\":null,\"include_init\":null,\"namespace\":null,\"pod_name\":\"example-pod\",\"purpose\":\"Inspect the bounded previous container log.\",\"search\":null,\"since_seconds\":null,\"tail_lines\":null}",
       "result": {
         "status": "success",
         "observed_offset_ms": 300,

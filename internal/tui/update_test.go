@@ -24,6 +24,8 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 		},
 		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessAll, ScopeGeneration: 7, ReadOnly: true,
 		RunID: testRunID, RunActive: true, CapabilityCatalogVersion: agent.ToolCatalogVersion,
+		ResourcePolicyVersion: domain.ResourcePolicyVersion, ResourceTypeCount: len(domain.BuiltInResourcePolicies()),
+		ObservabilityPolicyVersion: domain.ObservabilityPolicyVersion, PrometheusEnabled: true,
 		ModelContext: application.UIModelContextStatus{
 			Mode: domain.PrivacyModeStandard, EligibleMessages: 4, EligibleBytes: 4096,
 			RecentTailMessages: 4, SummaryCallsUsed: 1, SummaryCallsMaximum: 2, StorageHealthy: true,
@@ -45,6 +47,14 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 			ReviewerCostUnitsUsed: 0, ReviewerCostUnitsMaximum: 8,
 			ToolResultBytesUsed: 96 * 1024, ToolResultBytesMaximum: 4 * 1024 * 1024,
 			LogCallsUsed: 2, LogCallsMaximum: 12,
+			LogContainersMaximum: 8, LogBytesMaximum: 256 * 1024,
+			EventPagesMaximum: 4, EventPageItemsMaximum: 50, EventPageBytesMaximum: 128 * 1024, EventBytesMaximum: 512 * 1024,
+			MetricCallsUsed: 1, MetricCallsMaximum: 12, MetricContainersMaximum: 35, MetricBytesMaximum: 256 * 1024,
+			DataSourceCallsUsed: 4, DataSourceCallsMaximum: 16, DataSourcePagesMaximum: 4,
+			DataSourceSeriesMaximum: 25, DataSourceSamplesMaximum: 400, DataSourceLinesMaximum: 400,
+			DataSourceBytesMaximum: 512 * 1024, DataSourceWindowMillis: 21_600_000, DataSourceStepMillis: 300_000,
+			ResourcePagesMaximum: 4, ResourcePageItemsMaximum: 50, ResourcePageBytesMaximum: 256 * 1024,
+			ResourceScannedMaximum: 200, ResourceReturnedMaximum: 50, ResourceBytesMaximum: 1024 * 1024,
 		},
 	}
 	got := statusText(status, "diagnostic-model")
@@ -53,10 +63,15 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 		"Scope", "Context     test-context", "Namespace   test-namespace", "Generation  7",
 		"Access      namespace policy all",
 		"Actions     restart_deployment · local approval and Kubernetes RBAC required",
-		"Run", "Catalog     " + agent.ToolCatalogVersion, "Budget", "Profile     balanced",
+		"Run", "Catalog     " + agent.ToolCatalogVersion,
+		"Resources   " + domain.ResourcePolicyVersion + " · 17 types", "Budget", "Profile     balanced",
+		"Observability " + domain.ObservabilityPolicyVersion + " · Prometheus enabled · Loki disabled",
 		"Basis       " + application.ModelBudgetEvidenceBasis,
 		"1m 30s elapsed", "8m 30s remaining", "3/32 steps", "5/48 tools", "3/16 model",
 		"96.0 KiB/4.0 MiB", "2/12 log calls",
+		"4 pages · 50 items/page · 128.0 KiB/page · 512.0 KiB total", "8 containers · 256.0 KiB/read",
+		"1/12 reads · 35 containers · 256.0 KiB/read", "4/16 reads · 4 pages · 25 series · 400 samples · 400 lines",
+		"4 pages · 50 items/page · 256.0 KiB/page · 200 scanned · 50 returned · 1.0 MiB total",
 	} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("status text missing %q:\n%s", required, got)

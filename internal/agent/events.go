@@ -73,6 +73,7 @@ type RunEvent struct {
 	Sequence          int64
 	OccurredAt        time.Time
 	Kind              RunEventKind
+	ExternalCallCost  int
 	ModelRequestID    *domain.ModelRequestID
 	Summary           *domain.SessionContextSummary
 	TextDelta         string
@@ -143,7 +144,9 @@ func (event RunEvent) Validate() error {
 			return ErrInvalidRunEvent
 		}
 	case RunEventToolCallRequested, RunEventToolCallStarted, RunEventToolCallCompleted, RunEventToolCallFailed, RunEventToolCallDenied:
-		if payloads != 1 || !event.validToolInvocation() {
+		if payloads != 1 || !event.validToolInvocation() ||
+			event.Kind == RunEventToolCallRequested && (event.ExternalCallCost < 1 || event.ExternalCallCost > MaxRunEvents) ||
+			event.Kind != RunEventToolCallRequested && event.ExternalCallCost != 0 {
 			return ErrInvalidRunEvent
 		}
 	case RunEventEvidenceCollected:

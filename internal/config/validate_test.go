@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestDefaultsUseDefaultWorkingNamespaceWithoutChoosingContext(t *testing.T) {
@@ -133,6 +135,77 @@ func TestValidateConfigurationFields(t *testing.T) {
 			err := Validate(&config)
 			assertSafeError(t, err, ClassConfigurationInvalid, tt.code)
 		})
+	}
+}
+
+func TestResourcePolicyCatalogValidatesExactCRDContract(t *testing.T) {
+	t.Parallel()
+
+	valid := Defaults()
+	valid.Kubernetes.ResourcePolicies = []KubernetesResourcePolicyConfig{validCRDPolicyConfig()}
+	catalog, err := valid.ResourcePolicyCatalog()
+	if err != nil {
+		t.Fatalf("ResourcePolicyCatalog() error = %v", err)
+	}
+	policy, found := catalog.Resolve("widgets")
+	if !found || policy.Validate() != nil || policy.Type.APIVersion() != "example.test/v1" ||
+		policy.Type.Resource != "widgets" || !policy.Type.Namespaced() || len(policy.Fields) != 2 ||
+		policy.Limits.MaxPages != 4 || policy.Limits.PageItems != 20 || policy.Limits.PageBytes != 256*1024 {
+		t.Fatalf("custom policy = %#v, found = %t", policy, found)
+	}
+	sensitive, found := policy.Field("credential_ref")
+	if !found || sensitive.DataClass != domain.ResourceDataSensitive {
+		t.Fatalf("sensitive field classification = %#v, found = %t", sensitive, found)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*KubernetesResourcePolicyConfig)
+	}{
+		{name: "core group is not a CRD", mutate: func(value *KubernetesResourcePolicyConfig) { value.Group = "" }},
+		{name: "built-in local ID", mutate: func(value *KubernetesResourcePolicyConfig) { value.ID = "pods" }},
+		{name: "built-in API identity", mutate: func(value *KubernetesResourcePolicyConfig) {
+			value.Group, value.Version, value.Resource, value.Kind = "apps", "v1", "deployments", "Deployment"
+		}},
+		{name: "write verb", mutate: func(value *KubernetesResourcePolicyConfig) { value.Verbs = []string{"get", "patch"} }},
+		{name: "unknown scope", mutate: func(value *KubernetesResourcePolicyConfig) { value.Scope = "automatic" }},
+		{name: "raw array path", mutate: func(value *KubernetesResourcePolicyConfig) { value.Fields[0].Path = "status.items[0]" }},
+		{name: "duplicate field", mutate: func(value *KubernetesResourcePolicyConfig) { value.Fields[1].ID = value.Fields[0].ID }},
+		{name: "credential path misclassified as ordinary", mutate: func(value *KubernetesResourcePolicyConfig) { value.Fields[1].DataClass = "spec" }},
+		{name: "sensitive field mapped to Evidence", mutate: func(value *KubernetesResourcePolicyConfig) { value.Fields[1].Evidence = true }},
+		{name: "unsafe selector key", mutate: func(value *KubernetesResourcePolicyConfig) {
+			value.Fields[0].SelectorSource, value.Fields[0].SelectorKey = "label", "*.example.test/value"
+		}},
+		{name: "selector projection mismatch", mutate: func(value *KubernetesResourcePolicyConfig) {
+			value.Fields[0].SelectorSource, value.Fields[0].SelectorKey = "label", "example.test/state"
+		}},
+		{name: "page ceiling one over", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.MaxPages = domain.MaxResourceQueryPages + 1 }},
+		{name: "page item ceiling one over", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.PageItems = domain.MaxResourcePageItems + 1 }},
+		{name: "page byte ceiling one over", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.PageBytes = domain.MaxResourcePageBytes + 1 }},
+		{name: "aggregate item ceiling one over", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.MaxItems = domain.MaxResourceQueryItems + 1 }},
+		{name: "byte ceiling one over", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.MaxBytes = domain.MaxResourceQueryBytes + 1 }},
+		{name: "zero limit", mutate: func(value *KubernetesResourcePolicyConfig) { value.Limits.MaxItems = 0 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := Defaults()
+			policy := validCRDPolicyConfig()
+			test.mutate(&policy)
+			config.Kubernetes.ResourcePolicies = []KubernetesResourcePolicyConfig{policy}
+			_, err := config.ResourcePolicyCatalog()
+			assertSafeError(t, err, ClassConfigurationInvalid, "config_resource_policy_invalid")
+		})
+	}
+}
+
+func validCRDPolicyConfig() KubernetesResourcePolicyConfig {
+	return KubernetesResourcePolicyConfig{
+		ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets", Kind: "Widget",
+		Scope: "namespaced", Verbs: []string{"get", "list"},
+		Fields: []KubernetesResourceFieldPolicyConfig{
+			{ID: "state", Path: "status.state", Scalar: "string", DataClass: "status", SelectorSource: "none", Operators: []string{"contains", "equals"}, Evidence: true},
+			{ID: "credential_ref", Path: "spec.credentialRef", Scalar: "string", DataClass: "sensitive", SelectorSource: "none", Operators: []string{"equals"}},
+		},
+		Limits: KubernetesResourceQueryLimitsConfig{MaxPages: 4, PageItems: 20, PageBytes: 256 * 1024, MaxItems: 80, MaxBytes: 1 << 20, MaxReturned: 20},
 	}
 }
 

@@ -961,7 +961,8 @@ func newUIScopeCoordinatorHarnessWithPreferences(
 		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence, ModelContext: persistence,
 		Scope: manager, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
-		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
+		RunResourcePolicies: coordinatorResourcePolicies{},
+		Observer:            RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{
 			Sessions: history, Search: history, Titles: history, Startup: new(recordingStartupMaintenance), Scopes: manager,
 			ScopePreferences: preferences,
@@ -1003,7 +1004,8 @@ func newUICoordinatorHarness(
 		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence, ModelContext: persistence,
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
-		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
+		RunResourcePolicies: coordinatorResourcePolicies{},
+		Observer:            RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 		UI: &CoordinatorUIConfig{Sessions: history, Search: history, Titles: history, Startup: maintenance},
 	})
 	if err != nil {

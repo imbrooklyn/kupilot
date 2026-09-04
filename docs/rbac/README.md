@@ -1,13 +1,15 @@
 # Least-Privilege Kubernetes RBAC
 
-This page defines the Accepted `v0.5` RBAC target and identifies the narrower
-fixtures currently present. The checked-in YAML still grants only the `v0.4`
-typed reads and one separately gated exact Deployment restart. It deliberately
-does not pre-grant `v0.5` metrics, CRD, Pod Exec, diagnostic Pod, scale,
-rollback, Pod delete, Node scheduling, or drain permissions.
+This page defines the Accepted `v0.5` RBAC target and identifies the currently
+implemented slices. The primary checked-in YAML grants the built-in broad-read
+resources, existing Events/logs/relationships, and one separately gated exact
+Deployment restart. Secret metadata, Pod/Node metrics, and one example exact
+CRD use separate opt-in fixtures. No fixture pre-grants optional non-Kubernetes
+data sources, Pod Exec, diagnostic Pod, local execution, scale, rollback, Pod
+delete, Node scheduling, or drain permissions.
 
-Do not grant `cluster-admin`, wildcard verbs or resources, Secret-value access,
-generic write permissions, or broad discovery for convenience.
+Do not grant `cluster-admin`, wildcard verbs or resources, generic Secret
+access, generic write permissions, or broad discovery for convenience.
 
 RBAC belongs to the kubeconfig identity. Kupilot does not create a
 ServiceAccount, RoleBinding, or ClusterRoleBinding because subjects and
@@ -63,15 +65,15 @@ application policy to `current` when cluster-wide namespaced visibility is not
 intended. Do not rely on RBAC alone to explain which policy is active; `/status`
 shows the immutable run policy.
 
-## Current `v0.4` namespaced read surface
+## Current `v0.5` read and observability surface
 
 <!-- markdownlint-disable MD013 -->
 
 | API group | Resources | Verbs | Purpose |
 | --- | --- | --- | --- |
-| Core | `pods`, `services`, `persistentvolumeclaims`, `configmaps` | `get`, `list` | Direct typed operational projections. ConfigMap values are removed locally. |
+| Core | `pods`, `services`, `persistentvolumeclaims`, `configmaps` | `get`, `list` | Direct typed operational projections; ConfigMaps use metadata-only content negotiation. |
 | Core | `events` | `list` | Exact code-built involved-object queries. |
-| Core | `pods/log` | `get` | Bounded current or previous Pod output after privacy consent. |
+| Core | `pods/log` | `get` | Bounded current or previous Pod output after review permission and privacy consent. |
 | `apps` | `deployments`, `replicasets`, `statefulsets`, `daemonsets` | `get`, `list` | Workload status and fixed relationships. |
 | `batch` | `jobs`, `cronjobs` | `get`, `list` | Batch status and fixed relationships. |
 | `networking.k8s.io` | `ingresses` | `get`, `list` | Identity and creation-time projection only. |
@@ -87,9 +89,21 @@ projection are independent mandatory controls.
 
 Neither current namespaced fixture grants create, update, patch, delete,
 deletecollection, watch, exec, attach, port-forward, ephemeral containers,
-TokenRequest, SubjectAccessReview, or Secret access.
+TokenRequest, SubjectAccessReview, or Secret access. The separate
+[secret-metadata-role.yaml](secret-metadata-role.yaml) is an explicit opt-in:
+Kubernetes RBAC grants that identity access to complete Secret responses even
+though Kupilot requests and accepts only `PartialObjectMetadata`. Use a
+dedicated least-privilege identity and do not treat local projection as an API
+server authorization boundary.
 
-## Current `v0.4` cluster-scoped read surface
+Pod metrics require both the exact core Pod identity GET and the exact
+`metrics.k8s.io/v1beta1` Pod GET. [pod-metrics-role.yaml](pod-metrics-role.yaml)
+shows a one-Pod opt-in Role using the same placeholder resource name for both
+requests. Create another reviewed rule for each additional Pod or use a
+separately reviewed bounded Namespace-wide binding when exact names cannot be
+known ahead of time.
+
+## Current `v0.5` cluster-scoped read surface
 
 [cluster-observer-cluster-role.yaml](cluster-observer-cluster-role.yaml) grants
 `get` and `list` for Namespace, Node, and PersistentVolume. Bind it only when
@@ -99,6 +113,21 @@ cluster overview and cluster-scoped direct reads.
 The code projection excludes Node addresses, provider IDs, images, system info,
 taint values, capacity maps, and PersistentVolume source details. RBAC cannot
 express those field exclusions.
+
+Node metrics likewise require an exact core Node GET and an exact
+`metrics.k8s.io/v1beta1` Node GET. The separately reviewed
+[node-metrics-cluster-role.yaml](node-metrics-cluster-role.yaml) fixture binds
+one placeholder Node name and grants no list or watch permission.
+
+## Exact configured CRD example
+
+[crd-widget-role.yaml](crd-widget-role.yaml) shows the namespaced RBAC shape
+for the matching `operations.example.com/v1` Widget policy in
+`config.example.yaml`. Both files must be reviewed and changed together for the
+actual CRD and Namespace. Kupilot performs one exact discovery check, then only
+the configured `get` or `list`; discovery cannot broaden the Role or the local
+field projection. A cluster-scoped CRD requires an equally exact ClusterRole
+and identity-specific ClusterRoleBinding instead of this Role.
 
 If cluster observation is not needed, choose one Namespace helper instead:
 
@@ -111,12 +140,13 @@ Namespace `list` exposes names available to that identity. The picker remains
 an input aid and does not create Evidence.
 
 Cluster-scoped resource Events are implemented as an all-Namespace Event list
-with an exact involved-object selector. That observation therefore also needs
-cluster-wide `events` list permission, normally supplied when the namespaced
-ClusterRole is bound with a ClusterRoleBinding. Without it, Kupilot reports an
-explicit permission gap.
+with an exact involved-object selector. That observation requires the frozen
+`kubernetes.namespace_access: all` policy as well as cluster-wide `events` list
+permission, normally supplied when the namespaced ClusterRole is bound with a
+ClusterRoleBinding. With `current`, Kupilot rejects the request before any
+Kubernetes call; without matching RBAC, it reports an explicit permission gap.
 
-## Current `v0.4` exact Deployment restart
+## Current exact Deployment restart
 
 [restart-role.yaml](restart-role.yaml) is the only write-bearing fixture. It
 grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
@@ -144,11 +174,14 @@ Kupilot never broadens a request after denial:
   and cluster overview observations unavailable.
 - Missing Event, log, EndpointSlice, or a direct Kind permission leaves that
   Evidence branch explicit and incomplete.
+- Missing core-resource or `metrics.k8s.io` permission makes the exact metric
+  snapshot unavailable; Kupilot does not install Metrics Server or retry a
+  different metrics source.
 - Missing restart get or patch permission prevents preparation, execution, or
   verification at its exact stage; no broader credential or request is tried.
-- A future `v0.5` capability with no matching exact optional permission remains
-  unavailable. Kupilot does not retry with another identity, permission
-  profile, local command, or broader API.
+- A configured CRD or Secret metadata read with no matching exact optional
+  permission remains unavailable. Kupilot does not retry with another identity,
+  permission profile, local command, or broader API.
 
 Raw API denial text is translated to a stable safe gap and is not copied into
 model content, ordinary logs, SQLite, audit, or the TUI.

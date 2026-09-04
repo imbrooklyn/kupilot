@@ -18,6 +18,8 @@ const (
 	ModelAPIKeyEnvironmentVariable            = "KUPILOT_MODEL_API_KEY"
 	AgentAPIKeyEnvironmentVariable            = "KUPILOT_AGENT_API_KEY"
 	ApprovalReviewerAPIKeyEnvironmentVariable = "KUPILOT_APPROVAL_REVIEWER_API_KEY"
+	PrometheusAPIKeyEnvironmentVariable       = "KUPILOT_PROMETHEUS_API_KEY"
+	LokiAPIKeyEnvironmentVariable             = "KUPILOT_LOKI_API_KEY"
 	MaxModelAPIKeyBytes                       = 4096
 	redactedSecret                            = "[REDACTED]"
 )
@@ -217,6 +219,8 @@ func FilterChildEnvironment(environment []string) []string {
 		ModelAPIKeyEnvironmentVariable + "=",
 		AgentAPIKeyEnvironmentVariable + "=",
 		ApprovalReviewerAPIKeyEnvironmentVariable + "=",
+		PrometheusAPIKeyEnvironmentVariable + "=",
+		LokiAPIKeyEnvironmentVariable + "=",
 	}
 	for _, entry := range environment {
 		blocked := false

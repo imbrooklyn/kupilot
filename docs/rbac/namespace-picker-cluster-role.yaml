@@ -1,4 +1,4 @@
-# Current v0.4 fixture. This does not pre-grant accepted v0.5 capabilities.
+# Current v0.5 Namespace-picker helper; picker output is not Evidence.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

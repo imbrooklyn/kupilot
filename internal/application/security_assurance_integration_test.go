@@ -193,6 +193,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 		Tools: agent.ToolHandlers{
 			GetResource: tool, ListResources: tool, GetEvents: tool,
 			GetPodLogs: tool, GetPreviousPodLogs: tool,
+			GetPodMetrics: tool, GetNodeMetrics: tool, QueryPrometheus: tool, QueryLoki: tool,
 			GetRelatedResources: tool, GetClusterOverview: tool,
 		},
 		ScopeGuard:  assuranceScopeGuard{},
@@ -244,7 +245,7 @@ func prepareToolAssuranceBoundary(t *testing.T) assuranceBoundary {
 		errors.New("secondary failure"),
 	)}
 	tool, err := tools.NewGetResourceTool(tools.ResourceToolDependencies{
-		Reader: reader, ScopeGuard: assuranceScopeGuard{}, EvidenceIDs: assuranceEvidenceIDs{},
+		Reader: reader, QueryReader: reader, ScopeGuard: assuranceScopeGuard{}, PolicyGuard: assuranceScopeGuard{}, EvidenceIDs: assuranceEvidenceIDs{},
 		Text: security.NewRedactor(), Now: func() time.Time { return time.UnixMilli(2).UTC() },
 	})
 	if err != nil {
@@ -266,7 +267,7 @@ func prepareToolAssuranceBoundary(t *testing.T) assuranceBoundary {
 		domain.ToolInvocationID("00000000-0000-7000-8000-000000000914"),
 		agent.ToolSelection{
 			ID: "assurance-call", Name: domain.ToolNameGetResource,
-			ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
+			ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
 		},
 	)
 	if err != nil {
@@ -333,7 +334,7 @@ func prepareCancelledToolBoundary(t *testing.T, ctx context.Context) assuranceBo
 	t.Helper()
 	reader := &assuranceResourceReader{err: errors.New("unreachable reader failure")}
 	tool, err := tools.NewGetResourceTool(tools.ResourceToolDependencies{
-		Reader: reader, ScopeGuard: assuranceScopeGuard{}, EvidenceIDs: assuranceEvidenceIDs{},
+		Reader: reader, QueryReader: reader, ScopeGuard: assuranceScopeGuard{}, PolicyGuard: assuranceScopeGuard{}, EvidenceIDs: assuranceEvidenceIDs{},
 		Text: security.NewRedactor(), Now: func() time.Time { return time.UnixMilli(2).UTC() },
 	})
 	if err != nil {
@@ -352,7 +353,7 @@ func prepareCancelledToolBoundary(t *testing.T, ctx context.Context) assuranceBo
 		domain.ToolInvocationID("00000000-0000-7000-8000-000000000924"),
 		agent.ToolSelection{
 			ID: "assurance-cancelled-call", Name: domain.ToolNameGetResource,
-			ArgumentsJSON: `{"purpose":"Inspect the selected Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`,
+			ArgumentsJSON: `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect the selected Pod.","resource_type":"pods"}`,
 		},
 	)
 	if err != nil {
@@ -406,7 +407,7 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	}
 	modelRequest := assuranceModelRequest()
 	modelRequest.Messages = append(modelRequest.Messages, toolMessage)
-	if len(modelRequest.Tools) != 7 || len(modelRequest.Messages) != 2 {
+	if len(modelRequest.Tools) != 11 || len(modelRequest.Messages) != 2 {
 		t.Fatal("safe model sink projection is invalid")
 	}
 	for _, message := range modelRequest.Messages {
@@ -654,9 +655,18 @@ func (reader *assuranceResourceReader) ListResources(context.Context, tools.Reso
 	return tools.ResourceObservationList{}, reader.err
 }
 
+func (reader *assuranceResourceReader) QueryResources(context.Context, tools.ResourceQueryRequest) (tools.ResourceQueryObservation, error) {
+	reader.calls.Add(1)
+	return tools.ResourceQueryObservation{}, reader.err
+}
+
 type assuranceScopeGuard struct{}
 
 func (assuranceScopeGuard) Current(context.Context, domain.ClusterScope) bool { return true }
+
+func (assuranceScopeGuard) CurrentPolicyGeneration(context.Context, domain.PolicyGeneration) bool {
+	return true
+}
 
 type assuranceEvidenceIDs struct{}
 

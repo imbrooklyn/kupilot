@@ -102,18 +102,31 @@ func (tool *GetClusterOverviewTool) Execute(ctx context.Context, call BoundToolC
 	}
 
 	projector := ListResourcesTool{dependencies: tool.dependencies}
+	resourcePolicies := domain.DefaultResourcePolicyCatalog()
+	namespaceType := domain.BuiltInResourceType(domain.ResourceKindNamespace)
+	namespacePolicy, namespacePolicyFound := resourcePolicies.Resolve(namespaceType.ID)
+	if !namespacePolicyFound {
+		return failedResult(call, observed, domain.SafeErrorClassInternal)
+	}
 	namespaceData, namespaceSummaries, namespaceTemplates, namespaceWarnings, namespaceLimited, err := projector.project(
 		namespaces.Items,
-		listResourcesArguments{HealthFilter: "any", Kind: string(domain.ResourceKindNamespace), Limit: namespaceLimit, Purpose: arguments.Purpose},
-		len(namespaces.Items),
+		namespacePolicy,
+		listResourcesArguments{Filters: []resourceFilterArgument{}, Format: domain.ResourceViewList, ResourceType: namespaceType.ID, Limit: namespaceLimit, Purpose: arguments.Purpose},
+		overviewResourcePage(namespaceType, namespaces.Items, namespaces.Truncated),
 	)
 	if err != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
+	nodeType := domain.BuiltInResourceType(domain.ResourceKindNode)
+	nodePolicy, nodePolicyFound := resourcePolicies.Resolve(nodeType.ID)
+	if !nodePolicyFound {
+		return failedResult(call, observed, domain.SafeErrorClassInternal)
+	}
 	nodeData, nodeSummaries, nodeTemplates, nodeWarnings, nodeLimited, err := projector.project(
 		nodes.Items,
-		listResourcesArguments{HealthFilter: "any", Kind: string(domain.ResourceKindNode), Limit: nodeLimit, Purpose: arguments.Purpose},
-		len(nodes.Items),
+		nodePolicy,
+		listResourcesArguments{Filters: []resourceFilterArgument{}, Format: domain.ResourceViewList, ResourceType: nodeType.ID, Limit: nodeLimit, Purpose: arguments.Purpose},
+		overviewResourcePage(nodeType, nodes.Items, nodes.Truncated),
 	)
 	if err != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
@@ -149,10 +162,27 @@ func (tool *GetClusterOverviewTool) Execute(ctx context.Context, call BoundToolC
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
 	return finalizePlannedResult(call, observed, planned)
+}
+
+func overviewResourcePage(resourceType domain.ResourceType, observations []ResourceObservation, truncated bool) domain.ResourcePage {
+	summaries := make([]domain.ResourceSummary, len(observations))
+	for index := range observations {
+		summaries[index] = observations[index].Summary
+		summaries[index].Type = resourceType
+	}
+	reason := ""
+	if truncated {
+		reason = itemLimitReason
+	}
+	return domain.ResourcePage{
+		Type: resourceType, Items: summaries, PagesRead: 1, ScannedItems: len(summaries), MatchedItems: len(summaries),
+		Partial: truncated, Truncated: truncated, MoreAvailable: truncated, Reason: reason,
+	}
 }
 
 type staleOverviewError struct{}

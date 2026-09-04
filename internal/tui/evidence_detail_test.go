@@ -275,6 +275,7 @@ func evidenceDetailResult(
 		Category:   domain.EvidenceCategoryCondition,
 		SourcePath: "projected.status.conditions",
 		Resource: application.UIEvidenceResource{
+			Type:       domain.BuiltInResourceType(domain.ResourceKindPod),
 			APIVersion: "v1", Kind: "Pod", Namespace: "test-namespace", Name: "sample-pod",
 		},
 		ObservedAt:      time.Date(2026, time.August, 13, 7, 8, 9, 0, time.UTC),

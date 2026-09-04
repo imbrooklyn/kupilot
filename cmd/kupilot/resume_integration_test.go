@@ -227,11 +227,12 @@ func TestResumeIntegrationSeparatesExplicitScopeActivationFromZeroIOAcceptance(t
 			if _, err := privacyManager.Decide(ctx, application.PrivacyActionAccept, privacyReview.Revision, nil); err != nil {
 				t.Fatalf("Privacy Decide() error = %v", err)
 			}
+			resourcePolicies := integrationResourcePolicies{}
 			coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 				Sessions: sessions, Runs: runs, Tools: tools, Audits: audits, Scope: scopeManager,
 				ModelContext: messages,
 				Runner:       runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
-				Questions: security.NewRedactor(), Privacy: privacyManager, UIEvents: integrationUIEvents{},
+				Questions: security.NewRedactor(), Privacy: privacyManager, RunResourcePolicies: resourcePolicies, UIEvents: integrationUIEvents{},
 				Observer: application.RunObserverFunc(func(context.Context, application.RunObservation) {}),
 				Now:      func() time.Time { return now },
 				UI: &application.CoordinatorUIConfig{
@@ -560,3 +561,16 @@ func (runner *integrationRunner) Inputs() []agent.RunInput {
 type integrationUIEvents struct{}
 
 func (integrationUIEvents) PublishUIEvent(context.Context, application.UIEvent) error { return nil }
+
+type integrationResourcePolicies struct{}
+
+func (integrationResourcePolicies) ResourcePolicySnapshot(ctx context.Context) (domain.ResourcePolicyCatalog, domain.PolicyGeneration, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return domain.ResourcePolicyCatalog{}, 0, false
+	}
+	return domain.DefaultResourcePolicyCatalog(), 1, true
+}
+
+func (integrationResourcePolicies) CurrentPolicyGeneration(ctx context.Context, generation domain.PolicyGeneration) bool {
+	return ctx != nil && ctx.Err() == nil && generation == 1
+}

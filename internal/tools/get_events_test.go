@@ -19,7 +19,7 @@ func TestGetEventsReturnsSanitizedDeduplicatedDeterministicEvidence(t *testing.T
 	canary := strings.Repeat("runtime-event-canary", 3)
 	target := eventTarget()
 	observations := EventObservationList{
-		Target: target,
+		Target: target, Pages: 1,
 		Items: []EventObservation{
 			{
 				Type:            ExternalText{Value: "Normal"},
@@ -120,7 +120,7 @@ func TestGetEventsReturnsSanitizedDeduplicatedDeterministicEvidence(t *testing.T
 
 func TestGetEventsEmptyResultIsSuccessful(t *testing.T) {
 	reader := &fakeEventReader{readFn: func(context.Context, EventReadRequest) (EventObservationList, error) {
-		return EventObservationList{Target: eventTarget(), Items: []EventObservation{}}, nil
+		return EventObservationList{Target: eventTarget(), Items: []EventObservation{}, Pages: 1}, nil
 	}}
 	tool, _ := NewGetEventsTool(eventDependencies(reader, &sequenceScopeGuard{}))
 	result := tool.Execute(context.Background(), boundEventCall(t, testRunInput(t, 0), `{"purpose":"Inspect recent events.","resource":{"kind":"Pod","name":"sample-pod"}}`))
@@ -135,7 +135,7 @@ func TestGetEventsClampsCutoffToValidUnixEpoch(t *testing.T) {
 		if request.NotBefore != time.UnixMilli(0).UTC() {
 			t.Fatalf("ReadEvents() not_before = %s, want Unix epoch", request.NotBefore)
 		}
-		return EventObservationList{Target: eventTarget(), Items: []EventObservation{}}, nil
+		return EventObservationList{Target: eventTarget(), Items: []EventObservation{}, Pages: 1}, nil
 	}}
 	dependencies := eventDependencies(reader, &sequenceScopeGuard{})
 	dependencies.Now = func() time.Time { return testObservedAt }
@@ -199,6 +199,20 @@ func TestGetEventsBindingDeniesScopeSelectorsAndExpandedLimitsBeforeReader(t *te
 	}
 }
 
+func TestGetEventsDeniesClusterTargetWithoutAllNamespaceAuthorityBeforeReader(t *testing.T) {
+	reader := &fakeEventReader{}
+	tool, err := NewGetEventsTool(eventDependencies(reader, &sequenceScopeGuard{}))
+	if err != nil {
+		t.Fatalf("NewGetEventsTool() error = %v", err)
+	}
+	call := boundEventCall(t, testRunInput(t, 0), `{"purpose":"Inspect recent Node events.","resource":{"kind":"Node","name":"worker-a"}}`)
+	result := tool.Execute(context.Background(), call)
+	if result.Validate() != nil || result.Status != domain.ToolResultStatusDenied || result.Error == nil ||
+		result.Error.Class != domain.SafeErrorClassPolicyDenied || reader.count() != 0 {
+		t.Fatalf("Execute() result/reads = %#v/%d", result, reader.count())
+	}
+}
+
 func TestGetEventsFitsOversizedSafeProjectionToResultCeiling(t *testing.T) {
 	target := eventTarget()
 	items := make([]EventObservation, 0, 30)
@@ -211,7 +225,7 @@ func TestGetEventsFitsOversizedSafeProjectionToResultCeiling(t *testing.T) {
 		})
 	}
 	reader := &fakeEventReader{readFn: func(context.Context, EventReadRequest) (EventObservationList, error) {
-		return EventObservationList{Target: target, Items: items}, nil
+		return EventObservationList{Target: target, Items: items, Pages: 1}, nil
 	}}
 	tool, _ := NewGetEventsTool(eventDependencies(reader, &sequenceScopeGuard{}))
 	call := boundEventCall(t, testRunInput(t, 6*1024), `{"limit":30,"purpose":"Inspect bounded events.","resource":{"kind":"Pod","name":"sample-pod"}}`)
@@ -226,7 +240,7 @@ func TestGetEventsFitsOversizedSafeProjectionToResultCeiling(t *testing.T) {
 func TestGetEventsDiscardsLateResultAfterScopeBecomesStale(t *testing.T) {
 	ids := &sequenceEvidenceIDs{}
 	reader := &fakeEventReader{readFn: func(context.Context, EventReadRequest) (EventObservationList, error) {
-		return EventObservationList{Target: eventTarget(), Items: []EventObservation{{
+		return EventObservationList{Target: eventTarget(), Pages: 1, Items: []EventObservation{{
 			Type: ExternalText{Value: "Warning"}, Reason: ExternalText{Value: "BackOff"}, Message: ExternalText{Value: "late result"},
 			Involved: eventTarget(), FirstObservedAt: eventObservedAt.Add(-time.Second), LastObservedAt: eventObservedAt, Count: 1,
 		}}}, nil
@@ -244,7 +258,7 @@ func TestGetEventsDiscardsLateResultAfterScopeBecomesStale(t *testing.T) {
 
 func eventDependencies(reader EventReader, guard ScopeGuard) EventToolDependencies {
 	return EventToolDependencies{
-		Reader: reader, ScopeGuard: guard, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
+		Reader: reader, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
 		Now: func() time.Time { return eventObservedAt },
 	}
 }

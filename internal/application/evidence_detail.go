@@ -92,6 +92,7 @@ func (query UIEvidenceDetailQuery) Validate() error {
 // UIEvidenceResource excludes UID, resource version, annotations, addresses,
 // and object content from the Evidence detail surface.
 type UIEvidenceResource struct {
+	Type       domain.ResourceType
 	APIVersion string
 	Kind       string
 	Namespace  string
@@ -105,27 +106,37 @@ func (resource UIEvidenceResource) valid(scope domain.ScopeSnapshot) bool {
 		Namespace:  resource.Namespace,
 		Name:       resource.Name,
 	}
-	return domain.ValidateLiveResourceRef(reference) == nil && resource.Namespace == scope.Namespace
+	return scope.Validate() == nil && resource.Type.Validate() == nil &&
+		domain.ValidateResourceRefForType(reference, resource.Type) == nil
 }
 
 // UIEvidenceDetail is an allowlisted, bounded derivative. It can never carry a
 // raw Tool result, Kubernetes object, log payload, or model response.
 type UIEvidenceDetail struct {
-	Category        domain.EvidenceCategory
-	SourcePath      string
-	Resource        UIEvidenceResource
-	ObservedAt      time.Time
-	Truncated       bool
-	SensitiveFilter UIEvidenceSensitiveFilter
-	Projection      string
+	Category         domain.EvidenceCategory
+	SourcePath       string
+	Resource         UIEvidenceResource
+	PolicyVersion    string
+	PolicyGeneration domain.PolicyGeneration
+	ObservedAt       time.Time
+	Truncated        bool
+	SensitiveFilter  UIEvidenceSensitiveFilter
+	Projection       string
 }
 
 func (detail UIEvidenceDetail) valid(reference UIEvidenceReference) bool {
-	return detail.Category.Valid() && allowedUIEvidenceSourcePath(detail.SourcePath) &&
+	resource := domain.ResourceRef{
+		APIVersion: detail.Resource.APIVersion,
+		Kind:       detail.Resource.Kind,
+		Namespace:  detail.Resource.Namespace,
+		Name:       detail.Resource.Name,
+	}
+	return detail.Category.Valid() && allowedUIEvidenceSourcePath(detail.Category, resource, detail.PolicyVersion, detail.SourcePath) &&
 		detail.Resource.valid(reference.Scope) && validCoordinatorTime(detail.ObservedAt) &&
 		detail.ObservedAt.Location() == time.UTC &&
 		detail.ObservedAt.Equal(detail.ObservedAt.UTC().Truncate(time.Millisecond)) &&
-		detail.SensitiveFilter.valid() && validUIBoundedText(detail.Projection, 1, MaxUIEvidenceProjectionBytes)
+		detail.SensitiveFilter.valid() && validUIBoundedText(detail.Projection, 1, MaxUIEvidenceProjectionBytes) &&
+		validEvidencePolicyBinding(detail.PolicyVersion, detail.PolicyGeneration)
 }
 
 // UIEvidenceDetailResult echoes every asynchronous identity. Expired and
@@ -283,7 +294,8 @@ func (coordinator *Coordinator) projectEvidenceDetail(
 ) (UIEvidenceDetail, UIEvidenceDetailState, bool) {
 	if diagnosis.Validate() != nil || evidence.Validate() != nil || evidence.RunID != diagnosis.RunID ||
 		evidence.Scope != diagnosis.Scope || !diagnosisReferencesEvidence(diagnosis, evidence.ID) ||
-		evidence.SourcePath == nil || !allowedUIEvidenceSourcePath(*evidence.SourcePath) {
+		evidence.SourcePath == nil ||
+		!allowedUIEvidenceSourcePath(evidence.Category, evidence.Resource, evidence.PolicyVersion, *evidence.SourcePath) {
 		return UIEvidenceDetail{}, "", false
 	}
 	addressFiltered, addressRedactions := filterUIEvidenceAddresses(evidence.Fact)
@@ -295,20 +307,30 @@ func (coordinator *Coordinator) projectEvidenceDetail(
 	if evidence.RedactionCount > 0 || processed.RedactionCount > 0 || addressRedactions > 0 {
 		filter = UIEvidenceSensitiveFilterApplied
 	}
-	truncated := evidence.Truncated || processed.Truncated
+	truncated := evidence.Truncated || evidence.Partial || processed.Truncated
 	state := UIEvidenceDetailAvailable
 	if truncated {
 		state = UIEvidenceDetailPartial
+	}
+	resourceType := evidence.ResourceType
+	if resourceType == (domain.ResourceType{}) {
+		kind, found := domain.ResourceKindForReference(evidence.Resource)
+		if !found {
+			return UIEvidenceDetail{}, "", false
+		}
+		resourceType = domain.BuiltInResourceType(kind)
 	}
 	detail := UIEvidenceDetail{
 		Category:   evidence.Category,
 		SourcePath: *evidence.SourcePath,
 		Resource: UIEvidenceResource{
+			Type:       resourceType,
 			APIVersion: evidence.Resource.APIVersion,
 			Kind:       evidence.Resource.Kind,
 			Namespace:  evidence.Resource.Namespace,
 			Name:       evidence.Resource.Name,
 		},
+		PolicyVersion: evidence.PolicyVersion, PolicyGeneration: evidence.PolicyGeneration,
 		ObservedAt: evidence.ObservedAt.UTC().Truncate(time.Millisecond),
 		Truncated:  truncated, SensitiveFilter: filter, Projection: processed.Value,
 	}
@@ -364,7 +386,62 @@ func evidenceFromTools(
 	return domain.Evidence{}, false
 }
 
-func allowedUIEvidenceSourcePath(source string) bool {
+func allowedUIEvidenceSourcePath(
+	category domain.EvidenceCategory,
+	resource domain.ResourceRef,
+	policyVersion string,
+	source string,
+) bool {
+	if policyVersion == domain.ObservabilityPolicyVersion {
+		switch category {
+		case domain.EvidenceCategoryEvent:
+			expected := "api/v1/events"
+			if resource.Namespace != "" {
+				expected = "api/v1/namespaces/" + resource.Namespace + "/events"
+			}
+			return source == expected
+		case domain.EvidenceCategoryLogExcerpt:
+			prefix := "api/v1/namespaces/" + resource.Namespace + "/pods/" + resource.Name + "/log#"
+			if resource.APIVersion != "v1" || resource.Kind != "Pod" || resource.Namespace == "" || !strings.HasPrefix(source, prefix) {
+				return false
+			}
+			instanceAndContainer := strings.TrimPrefix(source, prefix)
+			instance, container, found := strings.Cut(instanceAndContainer, ":")
+			return found && (instance == "current" || instance == "previous") && domain.ValidResourceName(container)
+		case domain.EvidenceCategoryMetricSnapshot:
+			expected := ""
+			switch {
+			case resource.APIVersion == "v1" && resource.Kind == "Node" && resource.Namespace == "":
+				expected = "apis/metrics.k8s.io/v1beta1/nodes/" + resource.Name
+			case resource.APIVersion == "v1" && resource.Kind == "Pod" && resource.Namespace != "":
+				expected = "apis/metrics.k8s.io/v1beta1/namespaces/" + resource.Namespace + "/pods/" + resource.Name
+			}
+			return expected != "" && source == expected
+		case domain.EvidenceCategoryPrometheus:
+			if resource.APIVersion != "v1" || resource.Kind != "Pod" || resource.Namespace == "" {
+				return false
+			}
+			for _, queryID := range []domain.ObservabilityQueryID{
+				domain.QueryPrometheusPodCPUUsage,
+				domain.QueryPrometheusPodMemoryWorkingSet,
+				domain.QueryPrometheusPodNetworkReceiveRate,
+				domain.QueryPrometheusPodNetworkTransmitRate,
+			} {
+				if source == "api/v1/query_range#"+string(queryID) {
+					return true
+				}
+			}
+			return false
+		case domain.EvidenceCategoryLoki:
+			return resource.APIVersion == "v1" && resource.Kind == "Pod" && resource.Namespace != "" &&
+				source == "loki/api/v1/query_range#"+string(domain.QueryLokiPodLogs)
+		default:
+			return false
+		}
+	}
+	if policyVersion != "" && policyVersion != domain.ResourcePolicyVersion {
+		return false
+	}
 	switch source {
 	case "projected.status",
 		"projected.status.conditions",
@@ -378,10 +455,20 @@ func allowedUIEvidenceSourcePath(source string) bool {
 		"projected.related.edges.owner_reference",
 		"projected.related.edges.selector_match",
 		"projected.related.edges.service_endpoints":
-		return true
+		return category != domain.EvidenceCategoryMetricSnapshot && category != domain.EvidenceCategoryPrometheus &&
+			category != domain.EvidenceCategoryLoki
 	default:
-		return false
+		return category != domain.EvidenceCategoryMetricSnapshot && category != domain.EvidenceCategoryPrometheus &&
+			category != domain.EvidenceCategoryLoki && domain.ValidResourceProjectionPath(source) &&
+			!domain.ResourceProjectionPathRequiresSensitiveClass(source)
 	}
+}
+
+func validEvidencePolicyBinding(version string, generation domain.PolicyGeneration) bool {
+	if version == "" {
+		return generation == 0
+	}
+	return generation.Valid() && (version == domain.ResourcePolicyVersion || version == domain.ObservabilityPolicyVersion)
 }
 
 func uiEvidenceState(state domain.EvidenceDetailState) UIEvidenceDetailState {

@@ -41,7 +41,7 @@ func TestQueryEvidenceDetailProjectsAllowlistedBoundedFields(t *testing.T) {
 		t.Fatalf("QueryEvidenceDetail() = %#v/%v", result, err)
 	}
 	if result.Reference.State != UIEvidenceDetailAvailable || result.Detail.SensitiveFilter != UIEvidenceSensitiveFilterApplied ||
-		result.Detail.Resource != (UIEvidenceResource{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"}) ||
+		result.Detail.Resource != (UIEvidenceResource{Type: domain.BuiltInResourceType(domain.ResourceKindPod), APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"}) ||
 		result.Detail.SourcePath != "projected.status.conditions" || result.Detail.ObservedAt.Location() != time.UTC {
 		t.Fatalf("safe detail projection = %#v", result.Detail)
 	}
@@ -56,6 +56,69 @@ func TestQueryEvidenceDetailProjectsAllowlistedBoundedFields(t *testing.T) {
 	}
 	if reader.diagnosisCalls != 1 || reader.evidenceCalls != 1 {
 		t.Fatalf("reader calls = diagnosis %d Evidence %d", reader.diagnosisCalls, reader.evidenceCalls)
+	}
+}
+
+func TestQueryEvidenceDetailSupportsPartialClusterScopedCRDProvenance(t *testing.T) {
+	t.Parallel()
+	diagnosis, evidence, reference := evidenceDetailFixture()
+	source := "status.state"
+	evidence.ResourceType = domain.ResourceType{
+		ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets", Kind: "Widget",
+		Scope: domain.ResourceScopeCluster,
+	}
+	evidence.Resource = domain.ResourceRef{APIVersion: "example.test/v1", Kind: "Widget", Name: "sample-widget"}
+	evidence.SourcePath = &source
+	evidence.PolicyVersion = domain.ResourcePolicyVersion
+	evidence.PolicyGeneration = 9
+	evidence.Partial = true
+	evidence.Fact = "The projected Widget state is Ready."
+	evidence.Fingerprint = domain.SHA256Hex(evidence.Fact)
+	reader := &recordingEvidenceDetailReader{
+		diagnosis: diagnosis, diagnosisFound: true, evidence: evidence, evidenceFound: true,
+	}
+	coordinator := &Coordinator{questions: security.NewRedactor(), evidenceDetails: reader}
+	result, err := coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 17, Reference: reference})
+	if err != nil || result.Validate() != nil || result.Reference.State != UIEvidenceDetailPartial || result.Detail == nil ||
+		result.Detail.Resource.Type != evidence.ResourceType || result.Detail.Resource.Namespace != "" ||
+		result.Detail.PolicyVersion != domain.ResourcePolicyVersion || result.Detail.PolicyGeneration != 9 || !result.Detail.Truncated {
+		t.Fatalf("cluster CRD detail = %#v/%v", result, err)
+	}
+}
+
+func TestQueryEvidenceDetailSupportsExactObservabilityProvenance(t *testing.T) {
+	t.Parallel()
+	diagnosis, evidence, reference := evidenceDetailFixture()
+	source := "api/v1/query_range#pod_cpu_usage"
+	from := evidence.ObservedAt.Add(-5 * time.Minute)
+	through := evidence.ObservedAt
+	evidence.Category = domain.EvidenceCategoryPrometheus
+	evidence.PolicyVersion = domain.ObservabilityPolicyVersion
+	evidence.PolicyGeneration = 11
+	evidence.SourcePath = &source
+	evidence.SourceOriginHash = domain.SHA256Hex("https://prometheus.example")
+	evidence.Series = "container=app"
+	evidence.ObservedFrom = &from
+	evidence.ObservedThrough = &through
+	evidence.Fact = "The admitted CPU series contains one bounded sample."
+	evidence.Fingerprint = domain.SHA256Hex(evidence.Fact)
+	reader := &recordingEvidenceDetailReader{
+		diagnosis: diagnosis, diagnosisFound: true, evidence: evidence, evidenceFound: true,
+	}
+	coordinator := &Coordinator{questions: security.NewRedactor(), evidenceDetails: reader}
+	result, err := coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 19, Reference: reference})
+	if err != nil || result.Validate() != nil || result.Reference.State != UIEvidenceDetailAvailable || result.Detail == nil ||
+		result.Detail.Category != domain.EvidenceCategoryPrometheus || result.Detail.SourcePath != source ||
+		result.Detail.PolicyVersion != domain.ObservabilityPolicyVersion || result.Detail.PolicyGeneration != 11 {
+		t.Fatalf("observability detail = %#v/%v", result, err)
+	}
+
+	unsafeSource := "api/v1/query_range#model_supplied_query"
+	evidence.SourcePath = &unsafeSource
+	reader.evidence = evidence
+	result, err = coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 20, Reference: reference})
+	if err != nil || result.Reference.State != UIEvidenceDetailUnavailable || result.Detail != nil {
+		t.Fatalf("unsafe observability source = %#v/%v", result, err)
 	}
 }
 
@@ -159,6 +222,20 @@ func TestQueryEvidenceDetailMissingAndUnsafeEvidenceAreNotProjected(t *testing.T
 			t.Fatalf("unsafe source result = %#v/%v", result, err)
 		}
 	})
+
+	t.Run("credential-shaped projected source", func(t *testing.T) {
+		diagnosis, evidence, reference := evidenceDetailFixture()
+		source := "status.credentialRef"
+		evidence.SourcePath = &source
+		reader := &recordingEvidenceDetailReader{
+			diagnosis: diagnosis, diagnosisFound: true, evidence: evidence, evidenceFound: true,
+		}
+		coordinator := &Coordinator{questions: security.NewRedactor(), evidenceDetails: reader}
+		result, err := coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 18, Reference: reference})
+		if err != nil || result.Reference.State != UIEvidenceDetailUnavailable || result.Detail != nil {
+			t.Fatalf("sensitive source result = %#v/%v", result, err)
+		}
+	})
 }
 
 func TestQueryEvidenceDetailCancellationPerformsZeroReads(t *testing.T) {
@@ -235,6 +312,24 @@ func TestQueryEvidenceDetailUsesCurrentAcceptedEvidenceWithoutRepositoryRead(t *
 		reader.diagnosisCalls != 0 || reader.evidenceCalls != 0 {
 		t.Fatalf("current accepted Evidence result/calls = %#v/%v/%d/%d",
 			result, err, reader.diagnosisCalls, reader.evidenceCalls)
+	}
+}
+
+func TestCloneEvidenceOwnsObservabilityWindow(t *testing.T) {
+	_, evidence, _ := evidenceDetailFixture()
+	observedFrom := evidence.ObservedAt.Add(-time.Minute)
+	observedThrough := evidence.ObservedAt
+	evidence.ObservedFrom = &observedFrom
+	evidence.ObservedThrough = &observedThrough
+
+	cloned := cloneEvidence(evidence)
+	wantFrom := observedFrom
+	wantThrough := observedThrough
+	*evidence.ObservedFrom = evidence.ObservedAt.Add(-time.Hour)
+	*evidence.ObservedThrough = evidence.ObservedAt.Add(-time.Second)
+	if cloned.ObservedFrom == nil || cloned.ObservedThrough == nil ||
+		!cloned.ObservedFrom.Equal(wantFrom) || !cloned.ObservedThrough.Equal(wantThrough) {
+		t.Fatalf("cloned observation window = %v through %v", cloned.ObservedFrom, cloned.ObservedThrough)
 	}
 }
 

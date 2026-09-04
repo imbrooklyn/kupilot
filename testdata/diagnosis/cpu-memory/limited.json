@@ -1,0 +1,44 @@
+{
+  "name": "pod_metrics_unsupported",
+  "question": "What are the current CPU and memory observations for example-pod?",
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_pod_metrics",
+      "arguments_json": "{\"namespace\":null,\"pod_name\":\"example-pod\",\"purpose\":\"Inspect current CPU and memory usage.\"}",
+      "result": {
+        "status": "error",
+        "observed_offset_ms": 100,
+        "data_json": "{\"availability\":\"unsupported\",\"source_trust\":\"untrusted_external_data\"}",
+        "error_class": "unsupported",
+        "safe_message": "The Metrics API is not supported for this exact target."
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "No current CPU or memory observation was collected because the Metrics API is unsupported for this target.\n\nCurrent resource pressure remains unknown; unsupported metrics do not mean zero usage. Confidence: low. To verify: A later bounded Metrics API read succeeds for the same target.\n\nThe Metrics API observation is unsupported. Impact: Current CPU and memory usage cannot be confirmed from another source.\n\nSuggested next step: Have an administrator provide the Metrics API outside Kupilot before retrying. Risk: Installing or changing a cluster component is outside this read-only workflow. Before acting: Do not infer resource usage from the missing response.",
+    "evidence_citations": [],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [],
+    "hypotheses": [
+      {"index": 0, "assertion": "usage_unknown"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "enable_metrics_api"}
+    ]
+  },
+  "required_confirmed_assertions": [],
+  "required_missing_kinds": [
+    "unsupported"
+  ],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/kube"
+	"github.com/imbrooklyn/kupilot/internal/observability"
 	"github.com/imbrooklyn/kupilot/internal/persistence/filesystem"
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
@@ -132,7 +133,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	scopePreferenceRepository := sqlite.NewScopePreferenceRepository(database)
 	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
 		Store: sqlite.NewRolePrivacyRepository(database, domain.ModelRoleAgent),
-		Role:  domain.ModelRoleAgent, Origin: loaded.Models.Agent.Origin, Now: utcNow,
+		Role:  domain.ModelRoleAgent, Origin: loaded.Models.Agent.Origin,
+		PrometheusOrigin: configuredDataSourceOrigin(loaded.Observability.Prometheus),
+		LokiOrigin:       configuredDataSourceOrigin(loaded.Observability.Loki), Now: utcNow,
 	})
 	if err != nil {
 		return err
@@ -200,19 +203,62 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
+	resourcePolicies, err := loaded.Config.ResourcePolicyCatalog()
+	if err != nil {
+		return err
+	}
+	observabilityPolicies, err := loaded.Config.ObservabilityPolicyCatalog()
+	if err != nil {
+		return err
+	}
+	resourceAuthority, err := application.NewOperationalReadAuthority(resourcePolicies, observabilityPolicies, permissionManager)
+	if err != nil {
+		return err
+	}
+	if err := runtimeGateway.ConfigureResourcePolicyGuard(resourceAuthority); err != nil {
+		return err
+	}
+	var prometheusReader tools.PrometheusReader = observability.DisabledSources{}
+	var lokiReader tools.LokiReader = observability.DisabledSources{}
+	sourceGuards := observability.RuntimeGuards{Scope: scopeManager, Policy: resourceAuthority}
+	if loaded.Observability.Prometheus != nil {
+		client, clientErr := observability.NewPrometheusClient(loaded.Observability.Prometheus, loaded.Credentials.Prometheus, nil, sourceGuards)
+		if clientErr != nil {
+			return clientErr
+		}
+		composition.prometheus = client
+		prometheusReader = client
+	}
+	if loaded.Observability.Loki != nil {
+		client, clientErr := observability.NewLokiClient(loaded.Observability.Loki, loaded.Credentials.Loki, nil, sourceGuards)
+		if clientErr != nil {
+			return clientErr
+		}
+		composition.loki = client
+		lokiReader = client
+	}
 	redactor := security.NewRedactor()
+	readPolicy := compositionObservationPolicy{privacy: privacyManager, permissions: permissionManager}
 	toolHandlers, err := tools.NewReadOnlyToolCatalog(tools.ReadOnlyToolCatalogDependencies{
 		Resources: tools.ResourceToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager,
+			Reader: runtimeGateway, QueryReader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
 			EvidenceIDs: identifiers, Text: redactor, Now: now,
 		},
 		Events: tools.EventToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager,
+			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
 			EvidenceIDs: identifiers, Text: redactor, Now: now,
 		},
 		Logs: tools.LogToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager,
-			EvidenceIDs: identifiers, Text: redactor, Policy: privacyLogDataPolicy{privacy: privacyManager}, Now: now,
+			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Text: redactor, Policy: readPolicy, Now: now,
+		},
+		Metrics: tools.MetricToolDependencies{
+			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Now: now,
+		},
+		Sources: tools.DataSourceToolDependencies{
+			Prometheus: prometheusReader, Loki: lokiReader, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			Policy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
 		},
 		Related: tools.RelatedToolDependencies{
 			Reader: runtimeGateway, ScopeGuard: scopeManager,
@@ -243,6 +289,22 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		}
 		profileWriter.reviewerFileCredential = &clone
 		composition.profileCredential = &clone
+	}
+	if sourceCredential := loaded.Credentials.Prometheus; sourceCredential != nil && sourceCredential.Source == config.CredentialSourceFile {
+		clone, cloneErr := sourceCredential.Value.Clone()
+		if cloneErr != nil {
+			return cloneErr
+		}
+		profileWriter.prometheusFileCredential = &clone
+		composition.sourceCredentials = append(composition.sourceCredentials, &clone)
+	}
+	if sourceCredential := loaded.Credentials.Loki; sourceCredential != nil && sourceCredential.Source == config.CredentialSourceFile {
+		clone, cloneErr := sourceCredential.Value.Clone()
+		if cloneErr != nil {
+			return cloneErr
+		}
+		profileWriter.lokiFileCredential = &clone
+		composition.sourceCredentials = append(composition.sourceCredentials, &clone)
 	}
 	var reviewerBinding *application.ReviewerModelBinding
 	if reviewerProfile := loaded.Models.ApprovalReviewer; reviewerProfile != nil {
@@ -341,7 +403,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		ReviewerModel: reviewerBinding,
 		Identifiers:   identifiers, AuditIdentifiers: identifiers,
 		Questions: redactor, Exports: sessionRepository, ExportFiles: filesystem.NewExportWriter(), ExportText: redactor,
-		Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
+		Privacy: privacyManager, RunResourcePolicies: resourceAuthority, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now, BudgetLimits: budgetLimits,
 		UI: &application.CoordinatorUIConfig{
 			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
@@ -905,9 +967,11 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 }
 
 type compositionModelProfileWriter struct {
-	paths                  config.Paths
-	base                   config.Config
-	reviewerFileCredential *config.SecretValue
+	paths                    config.Paths
+	base                     config.Config
+	reviewerFileCredential   *config.SecretValue
+	prometheusFileCredential *config.SecretValue
+	lokiFileCredential       *config.SecretValue
 }
 
 func (writer *compositionModelProfileWriter) SaveModelProfile(
@@ -922,9 +986,9 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 		return err
 	}
 	defer credential.Destroy()
-	return config.SaveModelProfiles(ctx, writer.paths, writer.base, config.ModelProfile{
+	return config.SaveModelProfilesWithDataSources(ctx, writer.paths, writer.base, config.ModelProfile{
 		Endpoint: request.Endpoint, Model: request.Model,
-	}, &credential, writer.reviewerFileCredential)
+	}, &credential, writer.reviewerFileCredential, writer.prometheusFileCredential, writer.lokiFileCredential)
 }
 
 type compositionModelRuntime struct {
@@ -1016,6 +1080,9 @@ type runtimeComposition struct {
 	database          io.Closer
 	logSink           io.Closer
 	profileCredential *config.SecretValue
+	sourceCredentials []*config.SecretValue
+	prometheus        *observability.PrometheusClient
+	loki              *observability.LokiClient
 	reviewer          *einoadapter.Reviewer
 	closed            bool
 }
@@ -1041,6 +1108,12 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 	if composition.reviewer != nil {
 		composition.reviewer.Close()
 	}
+	if composition.prometheus != nil {
+		composition.prometheus.Close()
+	}
+	if composition.loki != nil {
+		composition.loki.Close()
+	}
 	if composition.database != nil {
 		closeErrors = append(closeErrors, composition.database.Close())
 	}
@@ -1050,26 +1123,93 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 	if composition.profileCredential != nil {
 		composition.profileCredential.Destroy()
 	}
+	for _, credential := range composition.sourceCredentials {
+		credential.Destroy()
+	}
 	composition.closed = true
 	return errors.Join(closeErrors...)
 }
 
-type privacyLogDataPolicy struct {
-	privacy *application.PrivacyManager
+type compositionObservationPolicy struct {
+	privacy     *application.PrivacyManager
+	permissions *application.PermissionManager
 }
 
-func (policy privacyLogDataPolicy) AuthorizeLogRead(ctx context.Context, _ tools.LogPolicyRequest) tools.LogPolicyDecision {
-	if policy.privacy == nil {
+func (policy compositionObservationPolicy) AuthorizeLogRead(ctx context.Context, request tools.LogPolicyRequest) tools.LogPolicyDecision {
+	if policy.privacy == nil || policy.permissions == nil {
 		return tools.LogPolicyDenied
 	}
 	switch policy.privacy.AuthorizeLogs(ctx) {
-	case application.PrivacyLogAllowed:
-		return tools.LogPolicyAllowed
 	case application.PrivacyLogConsentRequired:
 		return tools.LogPolicyConsentRequired
+	case application.PrivacyLogDenied:
+		return tools.LogPolicyDenied
+	}
+	operation := domain.ActionOperationLogsCurrent
+	if request.Previous {
+		operation = domain.ActionOperationLogsPrevious
+	}
+	if request.AllContainers {
+		operation = domain.ActionOperationLogsAllContainers
+	}
+	if request.Search {
+		operation = domain.ActionOperationLogSearch
+	}
+	_, evaluation := policy.permissions.EvaluateCatalog(request.SessionID, application.PermissionEvaluationInput{
+		Operation: operation, Effect: domain.CapabilityEffectSensitiveRead, Risk: domain.RiskReview,
+		CapabilityAdmitted: true, CapabilityEnabled: true,
+	})
+	if evaluation.Generation != request.PolicyGeneration {
+		return tools.LogPolicyDenied
+	}
+	// S03 provides the bounded reader and safety pipeline, but an automatic
+	// permission route is not execution authority. Keep every review-class log
+	// read closed until the Application permission flow supplies and consumes
+	// its exact ActionEnvelope.
+	switch evaluation.Disposition {
+	case domain.ReviewDispositionAutomatic, domain.ReviewDispositionHuman, domain.ReviewDispositionReviewer:
+		return tools.LogPolicyPermissionRequired
 	default:
 		return tools.LogPolicyDenied
 	}
+}
+
+func (policy compositionObservationPolicy) AuthorizeObservation(ctx context.Context, request tools.ObservationPolicyRequest) tools.ObservationPolicyDecision {
+	if policy.privacy == nil || policy.permissions == nil {
+		return tools.ObservationPolicyDenied
+	}
+	switch policy.privacy.AuthorizeDataSource(ctx, request.Kind, request.OriginHash) {
+	case application.PrivacyLogConsentRequired:
+		return tools.ObservationPolicyConsentRequired
+	case application.PrivacyLogDenied:
+		return tools.ObservationPolicyDenied
+	}
+	operation := domain.ActionOperationPrometheusQuery
+	if request.Kind == domain.DataSourceLoki {
+		operation = domain.ActionOperationLokiQuery
+	}
+	_, evaluation := policy.permissions.EvaluateCatalog(request.SessionID, application.PermissionEvaluationInput{
+		Operation: operation, Effect: domain.CapabilityEffectNetworkEgress, Risk: domain.RiskReview,
+		CapabilityAdmitted: true, CapabilityEnabled: true,
+	})
+	if evaluation.Generation != request.PolicyGeneration {
+		return tools.ObservationPolicyDenied
+	}
+	// Optional-source network access follows the same fail-closed boundary as
+	// container output; a profile route cannot replace an ActionEnvelope.
+	switch evaluation.Disposition {
+	case domain.ReviewDispositionAutomatic, domain.ReviewDispositionHuman, domain.ReviewDispositionReviewer:
+		return tools.ObservationPolicyPermissionRequired
+	default:
+		return tools.ObservationPolicyDenied
+	}
+}
+
+func configuredDataSourceOrigin(source *config.DataSourceConfig) string {
+	if source == nil {
+		return ""
+	}
+	return source.Origin
 }
 
 type slogRunObserver struct {

@@ -277,7 +277,9 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 	state.mu.Unlock()
 	for _, execution := range entries {
 		invocation := execution.requested
-		if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation}); err != nil {
+		if err := state.publish(ctx, agent.RunEvent{
+			Kind: agent.RunEventToolCallRequested, ExternalCallCost: execution.call.ExternalCallCost(), ToolInvocation: &invocation,
+		}); err != nil {
 			return err
 		}
 	}

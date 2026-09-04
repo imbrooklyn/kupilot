@@ -1,0 +1,30 @@
+{
+  "scenario": "Pod CPU and memory snapshot",
+  "minimum_evidence": [
+    "One current typed Metrics API snapshot with normalized CPU millicores and memory bytes."
+  ],
+  "tool_order": [
+    "get_pod_metrics"
+  ],
+  "allowed_confirmed_assertions": [
+    {"id": "pod_cpu_snapshot_observed", "meaning": "The current Pod CPU total was observed through the Metrics API."},
+    {"id": "pod_memory_snapshot_observed", "meaning": "The current Pod memory total was observed through the Metrics API."}
+  ],
+  "allowed_hypotheses": [
+    {"id": "resource_pressure_possible", "meaning": "Resource pressure remains possible only after comparison with workload limits and a longer trend."},
+    {"id": "usage_unknown", "meaning": "Current usage remains unknown when the Metrics API is unsupported or unavailable."}
+  ],
+  "forbidden_confirmed_assertions": [
+    {"id": "current_usage_proves_oom", "meaning": "One current snapshot proves an earlier OOM termination or sustained pressure."},
+    {"id": "raw_quantity_known", "meaning": "A raw Kubernetes quantity string crossed the adapter boundary."},
+    {"id": "action_executed", "meaning": "Kupilot changed Pod resources or installed a metrics component."}
+  ],
+  "recommended_actions": [
+    {"id": "compare_resource_configuration", "meaning": "Compare the current snapshot with bounded workload requests, limits, and a permitted trend."},
+    {"id": "enable_metrics_api", "meaning": "Have an administrator provide the Metrics API outside Kupilot before retrying."}
+  ],
+  "permission_or_missing_paths": [
+    "If the Metrics API is unsupported or unavailable, report the gap and do not infer zero usage.",
+    "A current snapshot does not establish historical pressure or a causal threshold."
+  ]
+}

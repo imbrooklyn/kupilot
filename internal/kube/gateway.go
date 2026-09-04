@@ -184,7 +184,7 @@ func (gateway *Gateway) clientBundle(client application.ScopeClient, operation s
 	}
 	owned.mu.Lock()
 	defer owned.mu.Unlock()
-	if owned.closed || owned.bundle == nil || owned.bundle.typed == nil {
+	if owned.closed || owned.bundle == nil || owned.bundle.typed == nil || owned.bundle.dynamic == nil || owned.bundle.metadata == nil {
 		return nil, newKubeSafeError(
 			ClassCancelled,
 			"kubernetes_scope_client_closed",

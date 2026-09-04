@@ -1,0 +1,67 @@
+{
+  "name": "pod_network_series_sufficient",
+  "question": "Is network traffic relevant to the Service investigation for example-pod?",
+  "target": {
+    "api_version": "v1",
+    "kind": "Pod",
+    "namespace": "example-namespace",
+    "name": "example-pod"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "query_prometheus",
+      "arguments_json": "{\"namespace\":null,\"pod_name\":\"example-pod\",\"purpose\":\"Inspect the bounded Pod network receive-rate series.\",\"query_id\":\"pod_network_receive_rate\",\"series_limit\":null,\"step_seconds\":null,\"window_seconds\":null}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"query_id\":\"pod_network_receive_rate\",\"sample_count\":2,\"series_count\":1,\"source_trust\":\"untrusted_external_data\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000002101",
+            "category": "prometheus_sample",
+            "fact": "The admitted Pod network receive-rate series reports a latest value of 1280 bytes per second within the bounded window.",
+            "source_path": "api/v1/query_range#pod_network_receive_rate",
+            "series": "container=example-container",
+            "observed_from_offset_ms": 0,
+            "observed_through_offset_ms": 100,
+            "severity": "info",
+            "supports": [
+              "pod_network_receive_series_observed",
+              "traffic_change_possible"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "A bounded Prometheus series for example-pod reported a latest network receive rate of 1280 bytes per second in the observed window.\n\nA traffic change may be relevant to the Service investigation, but this series does not identify Service readiness or application behavior. Confidence: low. To verify: Fresh Service relationship and application Evidence correlate with the same bounded window.\n\nNo Service endpoint state or application response observation was collected in this run. Impact: The network sample cannot establish an outage or its cause.\n\nSuggested next step: Correlate the bounded series with address-free Service readiness and application Evidence. Risk: Additional external observations may expose operational metadata. Before acting: Retain the exact source consent, Pod identity, and query window.",
+    "evidence_citations": [
+      {
+        "claim": "A bounded Prometheus series for example-pod reported a latest network receive rate of 1280 bytes per second in the observed window.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002101"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "pod_network_receive_series_observed"}
+    ],
+    "hypotheses": [
+      {"index": 0, "assertion": "traffic_change_possible"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "correlate_service_evidence"}
+    ]
+  },
+  "required_confirmed_assertions": [
+    "pod_network_receive_series_observed"
+  ],
+  "required_missing_kinds": [],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

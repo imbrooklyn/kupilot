@@ -48,14 +48,15 @@ func (availability PodLogAvailability) valid() bool {
 // PodLogReadRequest is one exact Pod/container log read. Scope, current versus
 // previous semantics, and every hard limit are runtime-derived.
 type PodLogReadRequest struct {
-	Scope        domain.ClusterScope
-	Namespace    string
-	PodName      string
-	Container    string
-	Previous     bool
-	TailLines    int
-	SinceSeconds int
-	LimitBytes   int
+	Scope            domain.ClusterScope
+	PolicyGeneration domain.PolicyGeneration
+	Namespace        string
+	PodName          string
+	Container        string
+	Previous         bool
+	TailLines        int
+	SinceSeconds     int
+	LimitBytes       int
 }
 
 // PodLogContent is a bounded opaque source payload. It exposes only its byte
@@ -100,10 +101,11 @@ func (content PodLogContent) bytes() []byte {
 // Validate rejects cross-scope or expanding log reads before an adapter action.
 func (request PodLogReadRequest) Validate() error {
 	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName}
-	if request.Scope.Validate() != nil || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
+	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
 		request.Container != "" && !domain.ValidResourceName(request.Container) ||
-		request.TailLines < 1 || request.TailLines > 200 || request.SinceSeconds < 1 || request.SinceSeconds > 900 ||
-		request.LimitBytes < 1 || request.LimitBytes > domain.MaxToolResultBytes {
+		request.TailLines < 1 || request.TailLines > domain.MaxObservabilityLines ||
+		request.SinceSeconds < 60 || request.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
+		request.LimitBytes < 1 || request.LimitBytes > domain.MaxObservabilityBytes {
 		return ErrInvalidPodLogRead
 	}
 	return nil
@@ -115,12 +117,64 @@ type PodLogObservation struct {
 	Pod                   domain.ResourceRef
 	Container             string
 	InitContainer         bool
+	EphemeralContainer    bool
 	Previous              bool
 	Availability          PodLogAvailability
 	RestartCount          int32
 	LastTerminationReason ExternalText
 	Content               PodLogContent
 	Truncated             bool
+}
+
+// PodLogsReadRequest selects a deterministic bounded set of Pod containers.
+// Container enumeration and continuation remain inside the Kubernetes adapter.
+type PodLogsReadRequest struct {
+	Scope            domain.ClusterScope
+	PolicyGeneration domain.PolicyGeneration
+	Namespace        string
+	PodName          string
+	Previous         bool
+	IncludeInit      bool
+	IncludeEphemeral bool
+	TailLines        int
+	SinceSeconds     int
+	MaxContainers    int
+	LimitBytes       int
+}
+
+func (request PodLogsReadRequest) Validate() error {
+	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName}
+	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
+		request.TailLines < 1 || request.TailLines > domain.MaxObservabilityLines || request.SinceSeconds < 60 || request.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
+		request.MaxContainers < 1 || request.MaxContainers > domain.MaxObservabilityLogContainers || request.LimitBytes < 1 || request.LimitBytes > domain.MaxObservabilityBytes {
+		return ErrInvalidPodLogRead
+	}
+	return nil
+}
+
+type PodLogsObservation struct {
+	Pod           domain.ResourceRef
+	Items         []PodLogObservation
+	SourceBytes   int
+	Partial       bool
+	Truncated     bool
+	PartialReason string
+}
+
+func (observation PodLogsObservation) Validate(request PodLogsReadRequest) error {
+	if request.Validate() != nil || domain.ValidateLiveResourceRef(observation.Pod) != nil || observation.Pod.APIVersion != "v1" || observation.Pod.Kind != "Pod" ||
+		observation.Pod.Namespace != request.Namespace || observation.Pod.Name != request.PodName || len(observation.Items) > request.MaxContainers ||
+		observation.SourceBytes < 0 || observation.SourceBytes > request.LimitBytes || !domain.ValidModelText(observation.PartialReason, 64, true) {
+		return ErrInvalidPodLogRead
+	}
+	for _, item := range observation.Items {
+		single := PodLogReadRequest{Scope: request.Scope, PolicyGeneration: request.PolicyGeneration, Namespace: request.Namespace, PodName: request.PodName, Container: item.Container,
+			Previous: request.Previous, TailLines: request.TailLines, SinceSeconds: request.SinceSeconds, LimitBytes: request.LimitBytes}
+		if item.Validate(single) != nil {
+			return ErrInvalidPodLogRead
+		}
+	}
+	return nil
 }
 
 // Validate checks source identity, semantics, and the adapter-side byte bound.
@@ -150,6 +204,10 @@ type PodLogReader interface {
 	ReadPodLog(context.Context, PodLogReadRequest) (PodLogObservation, error)
 }
 
+type PodLogsReader interface {
+	ReadPodLogs(context.Context, PodLogsReadRequest) (PodLogsObservation, error)
+}
+
 // LogTextProcessor preserves normalized line boundaries while applying the
 // fixed sensitive-value and terminal-control policy.
 type LogTextProcessor interface {
@@ -161,21 +219,26 @@ type LogTextProcessor interface {
 type LogPolicyDecision string
 
 const (
-	LogPolicyAllowed         LogPolicyDecision = "allowed"
-	LogPolicyConsentRequired LogPolicyDecision = "consent_required"
-	LogPolicyDenied          LogPolicyDecision = "denied"
+	LogPolicyAllowed            LogPolicyDecision = "allowed"
+	LogPolicyConsentRequired    LogPolicyDecision = "consent_required"
+	LogPolicyPermissionRequired LogPolicyDecision = "permission_required"
+	LogPolicyDenied             LogPolicyDecision = "denied"
 )
 
 // LogPolicyRequest contains only safe run/scope metadata and fixed instance
 // semantics; it never contains log content.
 type LogPolicyRequest struct {
-	RunID    domain.AgentRunID
-	Scope    domain.ClusterScope
-	Previous bool
+	RunID            domain.AgentRunID
+	SessionID        domain.SessionID
+	Scope            domain.ClusterScope
+	PolicyGeneration domain.PolicyGeneration
+	Previous         bool
+	AllContainers    bool
+	Search           bool
 }
 
 func (request LogPolicyRequest) valid() bool {
-	return request.RunID.Valid() && request.Scope.Validate() == nil
+	return request.RunID.Valid() && request.SessionID.Valid() && request.Scope.Validate() == nil && request.PolicyGeneration.Valid()
 }
 
 // LogDataPolicy consumes the already-bound runtime privacy policy before any
@@ -184,11 +247,33 @@ type LogDataPolicy interface {
 	AuthorizeLogRead(context.Context, LogPolicyRequest) LogPolicyDecision
 }
 
+func classifyLogPolicyDecision(decision LogPolicyDecision) domain.SafeErrorClass {
+	switch decision {
+	case LogPolicyAllowed:
+		return ""
+	case LogPolicyConsentRequired:
+		return domain.SafeErrorClassConsentRequired
+	case LogPolicyPermissionRequired, LogPolicyDenied:
+		return domain.SafeErrorClassPolicyDenied
+	default:
+		return domain.SafeErrorClassInternal
+	}
+}
+
+func authorizeLogRead(ctx context.Context, request LogPolicyRequest, dependencies LogToolDependencies) domain.SafeErrorClass {
+	class := classifyLogPolicyDecision(dependencies.Policy.AuthorizeLogRead(ctx, request))
+	if ctx.Err() != nil {
+		return classifyFailure(ctx, ctx.Err())
+	}
+	return class
+}
+
 // LogToolDependencies are immutable stateless dependencies shared by the two
 // separately named Pod log handlers.
 type LogToolDependencies struct {
 	Reader      PodLogReader
 	ScopeGuard  ScopeGuard
+	PolicyGuard PolicyGenerationGuard
 	EvidenceIDs EvidenceIDSource
 	Text        LogTextProcessor
 	Policy      LogDataPolicy
@@ -196,7 +281,7 @@ type LogToolDependencies struct {
 }
 
 func (dependencies LogToolDependencies) validate() error {
-	if dependencies.Reader == nil || dependencies.ScopeGuard == nil || dependencies.EvidenceIDs == nil ||
+	if dependencies.Reader == nil || dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil || dependencies.EvidenceIDs == nil ||
 		dependencies.Text == nil || dependencies.Policy == nil || dependencies.Now == nil ||
 		!validRequiredUTCTime(dependencies.Now()) {
 		return ErrInvalidLogToolDependencies
@@ -228,18 +313,23 @@ func (tool *GetPodLogsTool) Execute(ctx context.Context, call BoundToolCall) Too
 }
 
 type getPodLogsArguments struct {
-	Container    string `json:"container,omitempty"`
-	Namespace    string `json:"namespace"`
-	PodName      string `json:"pod_name"`
-	Purpose      string `json:"purpose"`
-	SinceSeconds int    `json:"since_seconds"`
-	TailLines    int    `json:"tail_lines"`
+	Container        string `json:"container"`
+	ContainerMode    string `json:"container_mode"`
+	IncludeEphemeral bool   `json:"include_ephemeral"`
+	IncludeInit      bool   `json:"include_init"`
+	Namespace        string `json:"namespace"`
+	PodName          string `json:"pod_name"`
+	Purpose          string `json:"purpose"`
+	Search           string `json:"search"`
+	SinceSeconds     int    `json:"since_seconds"`
+	TailLines        int    `json:"tail_lines"`
 }
 
 type decodedPodLogCall struct {
 	request       PodLogReadRequest
 	lineLimited   bool
 	windowLimited bool
+	arguments     getPodLogsArguments
 }
 
 func decodePodLogCall(call BoundToolCall, previous bool) (decodedPodLogCall, error) {
@@ -254,14 +344,16 @@ func decodePodLogCall(call BoundToolCall, previous bool) (decodedPodLogCall, err
 	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() ||
 		!domain.ValidResourceName(arguments.PodName) ||
 		arguments.Container != "" && !domain.ValidResourceName(arguments.Container) ||
-		arguments.TailLines < 1 || arguments.TailLines > 200 || arguments.SinceSeconds < 60 || arguments.SinceSeconds > 3600 {
+		arguments.TailLines < 1 || arguments.TailLines > domain.MaxObservabilityLines || arguments.SinceSeconds < 60 || arguments.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
+		(arguments.ContainerMode != "single" && arguments.ContainerMode != "all") || arguments.ContainerMode == "all" && arguments.Container != "" ||
+		!domain.ValidModelText(arguments.Search, 256, true) {
 		return decodedPodLogCall{}, ErrInvalidCanonicalArguments
 	}
-	effectiveLines := min(arguments.TailLines, call.Ceilings().MaxLogLines, 200)
-	effectiveWindow := min(arguments.SinceSeconds, max(1, int(call.Ceilings().MaxLogWindow/time.Second)), 900)
-	effectiveBytes := min(domain.MaxToolResultBytes, call.Ceilings().MaxResultBytes)
+	effectiveLines := min(arguments.TailLines, call.Ceilings().MaxLogLines, domain.MaxObservabilityLines)
+	effectiveWindow := min(arguments.SinceSeconds, max(1, int(call.Ceilings().MaxLogWindow/time.Second)), int(domain.MaxObservabilityWindow/time.Second))
+	effectiveBytes := min(domain.MaxObservabilityBytes, call.Ceilings().MaxLogBytes)
 	request := PodLogReadRequest{
-		Scope: call.Scope(), Namespace: arguments.Namespace, PodName: arguments.PodName, Container: arguments.Container, Previous: previous,
+		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Namespace: arguments.Namespace, PodName: arguments.PodName, Container: arguments.Container, Previous: previous,
 		TailLines: effectiveLines, SinceSeconds: effectiveWindow, LimitBytes: effectiveBytes,
 	}
 	if request.Validate() != nil {
@@ -269,6 +361,7 @@ func decodePodLogCall(call BoundToolCall, previous bool) (decodedPodLogCall, err
 	}
 	return decodedPodLogCall{
 		request:     request,
+		arguments:   arguments,
 		lineLimited: arguments.TailLines > effectiveLines, windowLimited: arguments.SinceSeconds > effectiveWindow,
 	}, nil
 }
@@ -288,31 +381,27 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 	if ctx.Err() != nil {
 		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
 	}
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
-	policyRequest := LogPolicyRequest{RunID: call.RunID(), Scope: call.Scope(), Previous: previous}
+	policyRequest := LogPolicyRequest{
+		RunID: call.RunID(), SessionID: call.SessionID(), Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(),
+		Previous: previous, AllContainers: decoded.arguments.ContainerMode == "all", Search: decoded.arguments.Search != "",
+	}
 	if !policyRequest.valid() {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
-	decision := dependencies.Policy.AuthorizeLogRead(ctx, policyRequest)
-	if ctx.Err() != nil {
-		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
-	}
-	switch decision {
-	case LogPolicyAllowed:
-	case LogPolicyConsentRequired:
-		return failedResult(call, observed, domain.SafeErrorClassConsentRequired)
-	case LogPolicyDenied:
-		return failedResult(call, observed, domain.SafeErrorClassPolicyDenied)
-	default:
-		return failedResult(call, observed, domain.SafeErrorClassInternal)
+	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
+		return failedResult(call, observed, class)
 	}
 	if ctx.Err() != nil {
 		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
+	}
+	if decoded.arguments.ContainerMode == "all" {
+		return executeAllPodLogs(ctx, call, observed, decoded, dependencies, policyRequest)
 	}
 	observation, readErr := dependencies.Reader.ReadPodLog(ctx, decoded.request)
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	if ctx.Err() != nil {
@@ -320,6 +409,12 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 	}
 	if readErr != nil {
 		return failedResult(call, observed, classifyFailure(ctx, readErr))
+	}
+	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
+		return failedResult(call, observed, class)
+	}
+	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	if observation.Validate(decoded.request) != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
@@ -341,10 +436,44 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
 	return finalizePlannedResult(call, observed, planned)
+}
+
+func executeAllPodLogs(ctx context.Context, call BoundToolCall, observed time.Time, decoded decodedPodLogCall, dependencies LogToolDependencies, policyRequest LogPolicyRequest) ToolResult {
+	reader, ok := dependencies.Reader.(PodLogsReader)
+	if !ok {
+		return failedResult(call, observed, domain.SafeErrorClassUnsupported)
+	}
+	request := PodLogsReadRequest{Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Namespace: decoded.request.Namespace, PodName: decoded.request.PodName,
+		Previous: decoded.request.Previous, IncludeInit: decoded.arguments.IncludeInit, IncludeEphemeral: decoded.arguments.IncludeEphemeral,
+		TailLines: decoded.request.TailLines, SinceSeconds: decoded.request.SinceSeconds, MaxContainers: call.Ceilings().MaxLogContainers, LimitBytes: decoded.request.LimitBytes}
+	if request.Validate() != nil {
+		return failedResult(call, observed, domain.SafeErrorClassPolicyDenied)
+	}
+	observations, readErr := reader.ReadPodLogs(ctx, request)
+	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	if ctx.Err() != nil {
+		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
+	}
+	if readErr != nil {
+		return failedResult(call, observed, classifyFailure(ctx, readErr))
+	}
+	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
+		return failedResult(call, observed, class)
+	}
+	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	if observations.Validate(request) != nil {
+		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+	}
+	return buildAllPodLogsResult(call, observed, decoded, observations, dependencies)
 }
 
 type safePodLogData struct {
@@ -354,6 +483,7 @@ type safePodLogData struct {
 	Content               string                `json:"content"`
 	ContentFingerprint    string                `json:"content_fingerprint,omitempty"`
 	InitContainer         bool                  `json:"init_container"`
+	EphemeralContainer    bool                  `json:"ephemeral_container"`
 	Instance              string                `json:"instance"`
 	InstructionLike       bool                  `json:"instruction_like"`
 	LastTerminationReason string                `json:"last_termination_reason,omitempty"`
@@ -362,6 +492,7 @@ type safePodLogData struct {
 	Pod                   safeResourceReference `json:"pod"`
 	RedactionCount        int                   `json:"redaction_count"`
 	RestartCount          int32                 `json:"restart_count"`
+	Search                string                `json:"search,omitempty"`
 	SinceSeconds          int                   `json:"since_seconds"`
 	SourceTrust           string                `json:"source_trust"`
 	TailLines             int                   `json:"tail_lines"`
@@ -392,9 +523,10 @@ func projectPodLog(
 	}
 	data := safePodLogData{
 		Availability: observation.Availability, Container: containerResult.Value, InitContainer: observation.InitContainer,
-		Instance: instance, LastTerminationReason: lastReason, LimitBytes: decoded.request.LimitBytes,
+		EphemeralContainer: observation.EphemeralContainer,
+		Instance:           instance, LastTerminationReason: lastReason, LimitBytes: decoded.request.LimitBytes,
 		Pod: pod, RestartCount: observation.RestartCount, SinceSeconds: decoded.request.SinceSeconds,
-		SourceTrust: security.UntrustedDataClass, TailLines: decoded.request.TailLines,
+		SourceTrust: security.UntrustedDataClass, TailLines: decoded.request.TailLines, Search: decoded.arguments.Search,
 	}
 	warnings := []domain.ToolResultWarning{}
 	if metadata.blocked {
@@ -429,6 +561,15 @@ func projectPodLog(
 			lines = lines[len(lines)-decoded.request.TailLines:]
 			decoded.lineLimited = true
 		}
+		if decoded.arguments.Search != "" {
+			filtered := lines[:0]
+			for _, line := range lines {
+				if strings.Contains(line, decoded.arguments.Search) {
+					filtered = append(filtered, line)
+				}
+			}
+			lines = filtered
+		}
 		data.Content = strings.Join(lines, "\n")
 		data.LineCount = len(lines)
 		data.ByteCount = len(data.Content)
@@ -451,6 +592,47 @@ func projectPodLog(
 	}
 	data.Truncated = reason != ""
 	return data, warnings, reason, nil
+}
+
+type safeAllPodLogsData struct {
+	Containers      []safePodLogData      `json:"containers"`
+	ContainerCount  int                   `json:"container_count"`
+	InstructionLike bool                  `json:"instruction_like"`
+	Pod             safeResourceReference `json:"pod"`
+	RedactionCount  int                   `json:"redaction_count"`
+	Search          string                `json:"search,omitempty"`
+	SourceTrust     string                `json:"source_trust"`
+	Truncated       bool                  `json:"truncated"`
+}
+
+func buildAllPodLogsResult(call BoundToolCall, observed time.Time, decoded decodedPodLogCall, observations PodLogsObservation, dependencies LogToolDependencies) ToolResult {
+	data := safeAllPodLogsData{Containers: make([]safePodLogData, 0, len(observations.Items)), ContainerCount: len(observations.Items), Search: decoded.arguments.Search,
+		SourceTrust: security.UntrustedDataClass, Truncated: observations.Truncated || observations.Partial}
+	templates := []evidenceTemplate{}
+	warnings := []domain.ToolResultWarning{}
+	for _, observation := range observations.Items {
+		itemDecoded := decoded
+		itemDecoded.request.Container = observation.Container
+		projected, currentWarnings, reason, err := projectPodLog(dependencies, observation, itemDecoded)
+		if err != nil {
+			return failedResult(call, observed, domain.SafeErrorClassInternal)
+		}
+		data.Containers = append(data.Containers, projected)
+		data.InstructionLike = data.InstructionLike || projected.InstructionLike
+		data.RedactionCount += projected.RedactionCount
+		data.Truncated = data.Truncated || projected.Truncated || reason != ""
+		warnings = append(warnings, currentWarnings...)
+		templates = append(templates, podLogEvidence(projected, observed)...)
+	}
+	if len(data.Containers) > 0 {
+		data.Pod = data.Containers[0].Pod
+	}
+	partial := data.Truncated || observations.Partial
+	reason := observations.PartialReason
+	if reason == "" && partial {
+		reason = "source_partial"
+	}
+	return fitDataSourceResult(call, observed, &data, templates, dependencies.EvidenceIDs, partial, reason, len(data.Containers), warnings)
 }
 
 type logTextAdapter struct {
@@ -482,7 +664,7 @@ func logLines(value string) []string {
 	return strings.Split(value, "\n")
 }
 
-func podLogEvidence(data safePodLogData) []evidenceTemplate {
+func podLogEvidence(data safePodLogData, observed time.Time) []evidenceTemplate {
 	if data.Content == "" || data.Availability != PodLogAvailable {
 		return nil
 	}
@@ -494,9 +676,12 @@ func podLogEvidence(data safePodLogData) []evidenceTemplate {
 	fact := fmt.Sprintf("%s log excerpt for Pod %s container %s contains %d sanitized line(s) and %d byte(s); fingerprint %s.",
 		instanceLabel, reference.Name, data.Container, data.LineCount, data.ByteCount, data.ContentFingerprint)
 	fact, factTruncated := boundedEvidenceFact(fact)
+	from, through := observed.Add(-time.Duration(data.SinceSeconds)*time.Second).UTC(), observed
 	return []evidenceTemplate{{
 		category: domain.EvidenceCategoryLogExcerpt, resource: reference, fact: fact,
-		sourcePath: "projected.logs." + data.Instance, severity: stableSeverity(domain.EvidenceSeverityInfo),
+		sourcePath:    "api/v1/namespaces/" + reference.Namespace + "/pods/" + reference.Name + "/log#" + data.Instance + ":" + data.Container,
+		policyVersion: domain.ObservabilityPolicyVersion, observedFrom: &from, observedThrough: &through,
+		severity:       stableSeverity(domain.EvidenceSeverityInfo),
 		redactionCount: data.RedactionCount, truncated: data.Truncated || factTruncated,
 	}}
 }
@@ -517,7 +702,7 @@ func fitPodLogResult(
 	for attempts := 0; attempts <= 200; attempts++ {
 		partial := reason != "" || outputTrimmed
 		data.Truncated = data.Truncated || partial
-		templates := podLogEvidence(data)
+		templates := podLogEvidence(data, observed)
 		if len(templates) > call.Ceilings().MaxEvidenceItems {
 			templates = templates[:call.Ceilings().MaxEvidenceItems]
 		}
@@ -546,6 +731,7 @@ func fitPodLogResult(
 				}
 				for index := range result.Evidence {
 					result.Evidence[index].Truncated = true
+					result.Evidence[index].Partial = true
 				}
 			}
 			measured, measureErr := measureResult(call, result)

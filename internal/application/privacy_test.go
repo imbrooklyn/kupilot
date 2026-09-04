@@ -35,7 +35,7 @@ func TestPrivacyConsentLifecycleBindsOriginCategoriesAndPolicy(t *testing.T) {
 	}
 	record := store.snapshot()
 	if record.OriginHash == "" || strings.Contains(record.OriginHash, "model.example") ||
-		len(record.Categories) != len(privacyCategoryCatalog)-1 {
+		len(record.Categories) != len(enabledPrivacyCategories(false, false, false)) {
 		t.Fatalf("stored consent = %#v", record)
 	}
 
@@ -153,6 +153,68 @@ func TestPrivacyConsentIsIndependentForEachModelRoleAtTheSameOrigin(t *testing.T
 	if agentStore.snapshot().Role != domain.ModelRoleAgent || reviewerStore.saveCalls != 0 {
 		t.Fatalf("role stores = agent %#v, reviewer saves %d", agentStore.snapshot(), reviewerStore.saveCalls)
 	}
+}
+
+func TestPrivacyConsentBindsOptionalSourceOriginsAndCategories(t *testing.T) {
+	store := new(privacyTestStore)
+	manager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: store, Role: domain.ModelRoleAgent, Origin: "https://model.example",
+		PrometheusOrigin: "https://prometheus.example", LokiOrigin: "https://loki.example", LogsEnabled: true,
+		Now: privacyTestClock(),
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	review, err := manager.Review(context.Background())
+	if err != nil || review.Validate() != nil || len(review.DataSources) != 2 || !review.DataSources[0].Enabled || !review.DataSources[1].Enabled {
+		t.Fatalf("Review() = %#v/%v", review, err)
+	}
+	prometheusHash := privacyOriginHash("https://prometheus.example")
+	lokiHash := privacyOriginHash("https://loki.example")
+	if manager.AuthorizeDataSource(context.Background(), domain.DataSourcePrometheus, prometheusHash) != PrivacyLogConsentRequired ||
+		manager.AuthorizeDataSource(context.Background(), domain.DataSourceLoki, lokiHash) != PrivacyLogConsentRequired {
+		t.Fatal("optional source transfer was allowed before exact consent")
+	}
+	if _, err := manager.Decide(context.Background(), PrivacyActionAccept, review.Revision, nil); err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if manager.AuthorizeDataSource(context.Background(), domain.DataSourcePrometheus, prometheusHash) != PrivacyLogAllowed ||
+		manager.AuthorizeDataSource(context.Background(), domain.DataSourceLoki, lokiHash) != PrivacyLogAllowed ||
+		manager.AuthorizeDataSource(context.Background(), domain.DataSourcePrometheus, strings.Repeat("0", 64)) != PrivacyLogDenied {
+		t.Fatal("optional source authorization did not bind exact origins")
+	}
+	record := store.snapshot()
+	if record.PrometheusOriginHash != prometheusHash || record.LokiOriginHash != lokiHash || record.Validate() != nil ||
+		!containsPrivacyCategory(record.Categories, DataCategoryPrometheusResults) || !containsPrivacyCategory(record.Categories, DataCategoryRedactedLokiOutput) {
+		t.Fatalf("stored optional source consent = %#v", record)
+	}
+
+	changed, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: store, Role: domain.ModelRoleAgent, Origin: "https://model.example",
+		PrometheusOrigin: "https://other-prometheus.example", LokiOrigin: "https://loki.example", LogsEnabled: true,
+		Now: privacyTestClock(),
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager(changed) error = %v", err)
+	}
+	if changed.AuthorizeDataSource(context.Background(), domain.DataSourceLoki, lokiHash) != PrivacyLogConsentRequired {
+		t.Fatal("an origin change reused the previous source consent tuple")
+	}
+
+	malformed := record
+	malformed.PrometheusOriginHash = ""
+	if malformed.Validate() == nil {
+		t.Fatal("PrivacyRecord accepted a source category without its exact origin hash")
+	}
+}
+
+func containsPrivacyCategory(categories []ModelDataCategory, want ModelDataCategory) bool {
+	for _, category := range categories {
+		if category == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPrivacyManagerRejectsAConsentRecordFromAnotherRole(t *testing.T) {

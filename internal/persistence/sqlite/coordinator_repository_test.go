@@ -151,7 +151,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 	for _, statement := range []string{
 		`INSERT INTO audit_events (id, event_type, actor, outcome, details_json, occurred_at_ms) VALUES ('00000000-0000-7000-8000-000000012005', 'persistence_degraded', 'system', 'failure', '{}', 12005)`,
 		`INSERT INTO settings (key, value_json, schema_version, updated_at_ms) VALUES ('operational_detail_retention_days', '14', 1, 12006)`,
-		`INSERT INTO privacy_consents (role, policy_version, origin_hash, categories_json, decision, decided_at_ms, schema_version) VALUES ('agent', 'privacy-v1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '[]', 'accepted', 12007, 2)`,
+		`INSERT INTO privacy_consents (role, policy_version, origin_hash, categories_json, decision, decided_at_ms, schema_version) VALUES ('agent', 'privacy-v1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '[]', 'accepted', 12007, 3)`,
 	} {
 		if _, err := database.handle.ExecContext(context.Background(), statement); err != nil {
 			t.Fatalf("seed preference statement error = %v", err)
@@ -181,7 +181,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
 		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
 		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
-		"settings": 2, "privacy_consents": 1, "schema_migrations": 7,
+		"settings": 2, "privacy_consents": 1, "schema_migrations": 9,
 	} {
 		var got int
 		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {

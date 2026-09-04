@@ -11,7 +11,7 @@
     {
       "call_id": "call-1",
       "name": "get_resource",
-      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect Job counts and conditions.\",\"resource\":{\"kind\":\"Job\",\"name\":\"example-job\"}}",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-job\",\"namespace\":null,\"purpose\":\"Inspect Job counts and conditions.\",\"resource_type\":\"jobs\"}",
       "result": {
         "status": "success",
         "observed_offset_ms": 100,
@@ -80,7 +80,7 @@
     {
       "call_id": "call-3",
       "name": "get_events",
-      "arguments_json": "{\"purpose\":\"Inspect recent Job failure Events.\",\"resource\":{\"kind\":\"Job\",\"name\":\"example-job\"}}",
+      "arguments_json": "{\"limit\":null,\"purpose\":\"Inspect recent Job failure Events.\",\"reason\":null,\"resource\":{\"api_version\":null,\"kind\":\"Job\",\"name\":\"example-job\",\"namespace\":null,\"uid\":null},\"since_seconds\":null,\"type\":null}",
       "result": {
         "status": "success",
         "observed_offset_ms": 300,

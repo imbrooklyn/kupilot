@@ -9,16 +9,18 @@ capabilities, Evidence, ActionEnvelopes, outcomes, and safe errors.
 This document distinguishes the accepted `v0.5` target from current
 reachability. The checked-in runtime now uses the stable Eino ADK path, named
 model profiles, role-bound consent, safe Session context and summarization,
-and separate Agent, Agent-summary, and Reviewer budgets. It also contains the
-deterministic permission/action foundation and Reviewer routing used by the
-existing supervised Deployment restart. The expanded capability catalog,
-public permission controls, optional data sources, and new execution or
-remediation paths remain targets and are not yet reachable.
+separate Agent, Agent-summary, and Reviewer budgets, broad policy-bound
+Kubernetes resource reads, and deterministic observability adapters. It also
+contains the deterministic permission/action foundation and Reviewer routing used by the existing
+supervised Deployment restart. Public permission controls and new execution or
+remediation paths remain targets. Review-class logs and optional sources fail
+closed before I/O in the default `ask` composition until that permission
+delivery path can supply their ActionEnvelopes.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v7`
-- Capability catalog: `kupilot-operational-tools-v2`
+- System prompt: `kupilot-agent-policy-v9`
+- Capability catalog: `kupilot-operational-tools-v4`
 
 ## Frozen run input
 
@@ -29,11 +31,12 @@ Application currently creates an immutable RunInput containing:
 - verified Context, working Namespace, namespace-access policy, scope
   generation, and activation time;
 - optional selected ResourceRef;
-- exact prompt and capability-catalog versions;
+- exact prompt and capability-catalog versions, the exact resource-policy
+  catalog, and its policy generation;
 - eligible ordered same-Session context, safe summary, and content-free
   coverage metadata; and
-- finite Agent and Agent-summary call, time, byte, stream, Tool, and cost
-  limits.
+- finite Agent and Agent-summary call, time, byte, stream, Tool, resource page,
+  item, response-byte, aggregate-byte, and cost limits.
 
 The composition root separately binds the exact Agent profile and optional
 Reviewer profile. Application checks the current Agent role, canonical origin,
@@ -96,15 +99,19 @@ indefinite correction loop.
 
 ## Capability binding
 
-The current `kupilot-operational-tools-v2` catalog contains seven fixed
-diagnostic Tools: resource get/list, Events, current/previous Pod logs, related
-resources, and cluster overview. The accepted `v0.5` catalog additionally
-admits the categories documented in [Scope](scope.md):
-built-in and exact policy-admitted CRD reads/queries, Events and logs, metrics,
-explicit optional data sources, container files, Pod diagnostics, typed
-remediation, restricted local argv, and a separate shell risk class. Every
-new category still requires its implementation and tests. Every current model
-schema is strict: all object properties are
+The current `kupilot-operational-tools-v4` catalog contains eleven fixed
+diagnostic Tools. Resource get/list now select only a local `resource_type` ID
+from the frozen built-in and exact configured CRD catalog. They support exact
+get, bounded list/count/table projections, normalized describe detail, typed
+field predicates, runtime-owned server selectors, and runtime-owned
+continuation. Events add typed filters and pagination; current/previous Pod logs
+add explicit all-container and literal-search modes; Pod/Node metrics use the
+typed Metrics API; and optional Prometheus/Loki Tools select only enabled
+code-owned query IDs. Related resources and cluster overview retain their
+narrower typed behavior. Container files, Pod diagnostics, additional typed
+remediation, restricted local argv, and the separate shell risk class remain
+later slices.
+Every current model schema is strict: all object properties are
 declared, every property is required, optional values use explicit `null`, and
 additional properties are rejected.
 
@@ -139,9 +146,13 @@ sensitive model text remain terminal policy failures.
 ## Evidence and answer validation
 
 Only accepted deterministic Tool results create Evidence. Every Evidence item
-binds the run, invocation, scope generation, exact ResourceRef, category,
-source path, observation time, safe fact, and partial/truncation/redaction
-state.
+binds the run, invocation, scope generation, exact API group/version/resource,
+Kind and scope, exact ResourceRef, category, applicable resource or
+observability policy version and generation, source path, observation time,
+safe fact, and partial/truncation/redaction state. External-source Evidence
+also binds the canonical source-origin hash, normalized series identity, and
+query window. Continuation tokens, generated PromQL/LogQL, and raw Kubernetes
+or data-source objects never enter Evidence.
 
 The final wire object contains these members in order so the answer can be
 projected without treating the rest of the envelope as visible text:
@@ -223,14 +234,41 @@ endpoint evidence may require a tighter configuration.
 | Reviewer output bytes | 8 KiB | 8 KiB | 8 KiB | 8 KiB |
 | Reviewer cost units | 2 | 8 | 16 | 16 |
 | Kubernetes request | 15 sec | 30 sec | 60 sec | 60 sec |
+| Resource pages per query | 2 | 4 | 8 | 8 |
+| Resource items per page | 25 | 50 | 100 | 100 |
+| Resource bytes per response | 128 KiB | 256 KiB | 1 MiB | 1 MiB |
+| Resource items scanned per query | 50 | 200 | 500 | 500 |
+| Resource items returned per query | 25 | 50 | 50 | 50 |
+| Resource bytes per query | 256 KiB | 1 MiB | 4 MiB | 4 MiB |
 | Cumulative Tool results | 1 MiB | 4 MiB | 12 MiB | 16 MiB |
 | Pod-log calls | 4 | 12 | 32 | 32 |
+| Pod-log containers per call | 4 | 8 | 16 | 16 |
+| Pod-log lines per call | 100 | 400 | 1,000 | 1,000 |
+| Pod-log bytes per call | 64 KiB | 256 KiB | 1 MiB | 4 MiB |
+| Pod-log time window | 1 hour | 6 hours | 24 hours | 24 hours |
+| Event pages per call | 2 | 4 | 8 | 8 |
+| Event items per page | 25 | 50 | 100 | 100 |
+| Event bytes per page | 64 KiB | 128 KiB | 256 KiB | 4 MiB |
+| Event aggregate bytes | 128 KiB | 512 KiB | 2 MiB | 4 MiB |
+| Metrics calls | 4 | 12 | 32 | 32 |
+| Metric containers per Pod | 20 | 35 | 50 | 50 |
+| Metric response bytes | 128 KiB | 256 KiB | 1 MiB | 4 MiB |
+| Optional data-source calls | 4 | 16 | 64 | 64 |
+| Loki pages per call | 2 | 4 | 8 | 8 |
+| Prometheus series per call | 10 | 25 | 100 | 100 |
+| Prometheus samples per call | 100 | 400 | 1,000 | 1,000 |
+| Loki lines per call | 100 | 400 | 1,000 | 1,000 |
+| Data-source response bytes | 128 KiB | 512 KiB | 4 MiB | 4 MiB |
+| Data-source query window | 1 hour | 6 hours | 24 hours | 24 hours |
+| Data-source step ceiling | 1 min | 5 min | 15 min | 15 min |
 | Consecutive no-progress steps | 2 | 4 | 6 | 10 |
 
 The model and Tool request deadlines are additionally capped by the owning
-run's remaining time. One ToolResult remains at most 64 KiB. Resource and Event
-items, logs, Evidence, and relationship graphs retain their independent
-ceilings.
+run's remaining time. One ToolResult remains at most 64 KiB. Resource queries
+intersect the selected profile with the exact resource-policy entry and enforce
+each response before decoding plus cumulative page, scanned-item, returned-item,
+and byte ceilings. Resource and Event items, logs, Evidence, and relationship
+graphs retain their independent ceilings.
 
 Reservations happen before I/O. Completion accounts actual Tool-result bytes,
 accepted Evidence progress, and retryability. Once stopped, a budget cannot be
@@ -241,8 +279,8 @@ Each model call consumes one code-defined cost unit; that unit is a finite call
 budget, not a price estimate. Exact context-window and token values still
 require evidence from the selected endpoint. Missing token evidence never
 permits an unlimited request; byte, call, time, and cost-unit ceilings fail
-closed. Data-source, remote-exec, local-process, sample, and idle budgets remain
-part of the accepted later capability work.
+closed. Remote-exec, local-process, stream, and idle budgets remain part of the
+accepted later capability work.
 
 ## Session context and summarization
 
@@ -313,7 +351,8 @@ event ceilings; excess provisional refreshes may be omitted because the
 validated terminal answer replaces the draft. `/status` is a local Application
 query exposing the current catalog, scope, named model roles/origin hashes,
 consent, content-free memory and summary coverage, budgets and usage, run state,
-the byte/call/time/cost-unit evidence basis with no endpoint-token claim,
+the resource page/item/per-response/aggregate ceilings, the
+byte/call/time/cost-unit evidence basis with no endpoint-token claim,
 privacy, and storage health without model, Kubernetes, Reviewer, process, or
 executor activity. The complete `/permissions` interaction and detailed action
 outcome display remain later work.

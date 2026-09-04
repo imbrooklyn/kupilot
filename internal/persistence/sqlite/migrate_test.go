@@ -60,7 +60,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 7 {
+	if err != nil || len(migrations) != 9 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -146,12 +146,18 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := applyMigration(context.Background(), db, migrations[6], "0.5.0", false); err != nil {
 		t.Fatalf("apply v0.5 action-permission migration error = %v", err)
 	}
+	if err := applyMigration(context.Background(), db, migrations[7], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 resource-Evidence migration error = %v", err)
+	}
+	if err := applyMigration(context.Background(), db, migrations[8], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 observability provenance migration error = %v", err)
+	}
 	wantRows := map[string]int{
 		"sessions": 1, "messages": 1, "agent_runs": 1, "model_requests": 1,
 		"tool_invocations": 1, "evidence_items": 1, "diagnoses": 1, "audit_events": 1,
 		"settings": 1, "privacy_consents": 1, "approvals": 0, "approval_decisions": 0,
 		"legacy_restart_approvals": 1, "legacy_restart_approval_decisions": 0,
-		"action_reviews": 0, "schema_migrations": 7, "session_context_summaries": 0,
+		"action_reviews": 0, "schema_migrations": 9, "session_context_summaries": 0,
 	}
 	for table, want := range wantRows {
 		var got int
@@ -161,6 +167,19 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		if got != want {
 			t.Errorf("%s rows = %d, want %d", table, got, want)
 		}
+	}
+	var migratedEvidence struct {
+		ResourceTypeJSON sql.NullString `db:"resource_type_json"`
+		PolicyVersion    sql.NullString `db:"resource_policy_version"`
+		PolicyGeneration sql.NullInt64  `db:"policy_generation"`
+		Partial          int64          `db:"partial"`
+	}
+	if err := db.GetContext(context.Background(), &migratedEvidence, `
+		SELECT resource_type_json, resource_policy_version, policy_generation, partial
+		FROM evidence_items WHERE id = ?
+	`, evidenceID); err != nil || migratedEvidence.ResourceTypeJSON.Valid || migratedEvidence.PolicyVersion.Valid ||
+		migratedEvidence.PolicyGeneration.Valid || migratedEvidence.Partial != 0 {
+		t.Fatalf("legacy Evidence provenance defaults = %#v/%v", migratedEvidence, err)
 	}
 	var retainedMessageID string
 	if err := db.GetContext(context.Background(), &retainedMessageID, `
@@ -173,18 +192,21 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		t.Fatalf("migrated approval state = %q/%v", approvalState, err)
 	}
 	var migratedConsent struct {
-		Role           string `db:"role"`
-		PolicyVersion  string `db:"policy_version"`
-		CategoriesJSON string `db:"categories_json"`
-		Decision       string `db:"decision"`
-		SchemaVersion  int    `db:"schema_version"`
+		Role                 string `db:"role"`
+		PolicyVersion        string `db:"policy_version"`
+		PrometheusOriginHash string `db:"prometheus_origin_hash"`
+		LokiOriginHash       string `db:"loki_origin_hash"`
+		CategoriesJSON       string `db:"categories_json"`
+		Decision             string `db:"decision"`
+		SchemaVersion        int    `db:"schema_version"`
 	}
 	if err := db.GetContext(context.Background(), &migratedConsent, `
-		SELECT role, policy_version, categories_json, decision, schema_version
+		SELECT role, policy_version, prometheus_origin_hash, loki_origin_hash, categories_json, decision, schema_version
 		FROM privacy_consents
 	`); err != nil || migratedConsent.Role != "agent" || migratedConsent.PolicyVersion != "privacy-policy-v1" ||
-		migratedConsent.CategoriesJSON != `["user_question"]` || migratedConsent.Decision != "accepted" ||
-		migratedConsent.SchemaVersion != 2 {
+		migratedConsent.PrometheusOriginHash != "" || migratedConsent.LokiOriginHash != "" ||
+		migratedConsent.CategoriesJSON != `["user_question","safe_conversation_context","resource_names_and_references","projected_kubernetes_status","projected_kubernetes_events","projected_kubernetes_metrics"]` ||
+		migratedConsent.Decision != "pending" || migratedConsent.SchemaVersion != 3 {
 		t.Fatalf("migrated consent = %#v/%v", migratedConsent, err)
 	}
 	var migratedModelRequest struct {
@@ -201,7 +223,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		migratedModelRequest.ReservedCostUnit != 1 {
 		t.Fatalf("migrated model request = %#v/%v", migratedModelRequest, err)
 	}
-	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0"}
+	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0"}
 	assertMigrationApplicationVersions(t, db, wantVersions)
 	assertNoMigrationForeignKeyViolation(t, db)
 
@@ -274,7 +296,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 7 {
+	if err != nil || len(migrations) != 9 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -329,7 +351,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 7 {
+	if err != nil || len(migrations) != 9 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -415,7 +437,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 7 {
+	if err != nil || len(migrations) != 9 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -480,7 +502,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 7 {
+		if err != nil || len(migrations) != 9 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -561,7 +583,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 7 {
+		if err != nil || len(migrations) != 9 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -664,7 +686,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 8, "000008_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 10, "000010_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -913,6 +935,8 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000005_v04_runtime_limits.sql",
 		"000006_session_model_context.sql",
 		"000007_action_permission_foundation.sql",
+		"000008_resource_evidence_provenance.sql",
+		"000009_observability_provenance_and_consent.sql",
 	}
 	count := 0
 	for rows.Next() {

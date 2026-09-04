@@ -173,6 +173,73 @@ func TestCoordinatorStatusProjectsFrozenBudgetWithoutExternalWork(t *testing.T) 
 	coordinator.mu.Unlock()
 }
 
+func TestRunInputAllowsOnlyExactFrozenResourcePolicyEvidence(t *testing.T) {
+	scope := domain.ClusterScope{
+		Context: "selected", Namespace: "team-a", NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation: 7, ActivatedAt: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+	}
+	widgetType := domain.ResourceType{
+		ID: "widgets", Group: "example.test", Version: "v1", Resource: "widgets", Kind: "Widget",
+		Scope: domain.ResourceScopeNamespaced,
+	}
+	entries := domain.BuiltInResourcePolicies()
+	entries = append(entries, domain.ResourcePolicy{
+		Type:  widgetType,
+		Verbs: []domain.ResourceVerb{domain.ResourceVerbGet, domain.ResourceVerbList},
+		Fields: []domain.ResourceFieldPolicy{{
+			ID: "state", Path: "status.state", Scalar: domain.ResourceScalarString,
+			DataClass: domain.ResourceDataStatus, SelectorSource: domain.ResourceSelectorNone,
+			Operators: []domain.ResourceFilterOperator{domain.ResourceFilterEquals}, Evidence: true,
+		}},
+		Limits: domain.ResourceQueryLimits{
+			MaxPages: 2, PageItems: 20, PageBytes: 256 * 1024,
+			MaxItems: 40, MaxBytes: 1 << 20, MaxReturned: 20,
+		},
+	})
+	catalog, err := domain.NewResourcePolicyCatalog(domain.ResourcePolicyVersion, entries)
+	if err != nil {
+		t.Fatalf("NewResourcePolicyCatalog() error = %v", err)
+	}
+	sessionID := domain.SessionID(coordinatorUUID(941))
+	conversation, err := agent.NewConversationContext(sessionID, nil, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
+	input, err := agent.NewRunInputWithPolicyContext(
+		domain.AgentRunID(coordinatorUUID(942)), sessionID, domain.MessageID(coordinatorUUID(943)),
+		"Inspect the configured Widget.", scope, nil, agent.DefaultRunBudgetLimits(), conversation, catalog, 3,
+	)
+	if err != nil {
+		t.Fatalf("NewRunInputWithPolicyContext() error = %v", err)
+	}
+	evidence := domain.Evidence{
+		ResourceType: widgetType,
+		Resource: domain.ResourceRef{
+			APIVersion: "example.test/v1", Kind: "Widget", Namespace: "team-a", Name: "sample-widget",
+		},
+	}
+	if !runInputAllowsEvidence(input, evidence) {
+		t.Fatal("exact configured CRD Evidence was rejected")
+	}
+
+	unknown := evidence
+	unknown.ResourceType.ID = "unknown-widgets"
+	if runInputAllowsEvidence(input, unknown) {
+		t.Fatal("unconfigured CRD Evidence was accepted")
+	}
+	spoofed := evidence
+	spoofed.ResourceType.Group = "other.test"
+	spoofed.Resource.APIVersion = "other.test/v1"
+	if runInputAllowsEvidence(input, spoofed) {
+		t.Fatal("mismatched CRD API Evidence was accepted")
+	}
+	crossNamespace := evidence
+	crossNamespace.Resource.Namespace = "team-b"
+	if runInputAllowsEvidence(input, crossNamespace) {
+		t.Fatal("cross-Namespace CRD Evidence was accepted under current policy")
+	}
+}
+
 func TestCoordinatorRejectsCancelledAndStaleStartsBeforePersistence(t *testing.T) {
 	t.Parallel()
 	t.Run("cancelled Context", func(t *testing.T) {
@@ -234,7 +301,7 @@ func TestCoordinatorRejectsCompleteScopeMismatchBeforeToolPersistence(t *testing
 			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
 		}
 		result, _ := publisher.Publish(ctx, agent.RunEvent{
-			Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation,
+			Kind: agent.RunEventToolCallRequested, ExternalCallCost: 1, ToolInvocation: &invocation,
 		})
 		rejected <- result
 		class := domain.SafeErrorClassInternal
@@ -267,79 +334,102 @@ func TestCoordinatorRejectsCompleteScopeMismatchBeforeToolPersistence(t *testing
 	assertOneUITerminal(t, ui.events(), UIEventRunFailed)
 }
 
-func TestCoordinatorRejectsCrossNamespaceEvidenceUnderCurrentPolicyBeforePersistence(t *testing.T) {
+func TestCoordinatorRejectsUnauthorizedEvidenceBeforePersistence(t *testing.T) {
 	t.Parallel()
-	clock := newCoordinatorClock()
-	rejected := make(chan agent.EventSinkResult, 1)
-	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
-		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
-		if err != nil {
-			t.Fatalf("NewEventPublisher() error = %v", err)
-		}
-		if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
-			t.Fatalf("Publish(started) error = %v", err)
-		}
-		purpose := "Inspect one bounded projection."
-		arguments := `{"kind":"Pod","name":"sample-pod"}`
-		startedAt := clock.Now()
-		invocation := domain.ToolInvocation{
-			ID: domain.ToolInvocationID(coordinatorUUID(881)), RunID: input.RunID(), Sequence: 1,
-			Name: domain.ToolNameGetResource, Version: "tool-v1", Purpose: &purpose,
-			Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
-			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
-		}
-		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
-			t.Fatalf("Publish(requested) = %q/%v", result, err)
-		}
-		finishedAt := clock.Now()
-		summary := "One projected observation was collected."
-		invocation.Status = domain.ToolInvocationStatusSucceeded
-		invocation.ResultSummary = &summary
-		invocation.EvidenceCount = 1
-		invocation.FinishedAt = &finishedAt
-		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallCompleted, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
-			t.Fatalf("Publish(completed) = %q/%v", result, err)
-		}
-		evidence := domain.Evidence{
-			ID: domain.EvidenceID(coordinatorUUID(882)), RunID: input.RunID(), InvocationID: invocation.ID,
-			Category: domain.EvidenceCategoryResourceStatus, Scope: input.Scope().Snapshot(),
-			Resource: domain.ResourceRef{
-				APIVersion: "v1", Kind: "Pod", Namespace: "other-namespace", Name: "sample-pod",
+	tests := []struct {
+		name   string
+		mutate func(*domain.Evidence, agent.RunInput)
+	}{
+		{
+			name: "cross-Namespace resource",
+			mutate: func(evidence *domain.Evidence, _ agent.RunInput) {
+				evidence.Resource.Namespace = "other-namespace"
 			},
-			Fact: "The projected Pod phase is Pending.", Fingerprint: domain.SHA256Hex("cross-namespace-evidence"),
-			ObservedAt: finishedAt,
-		}
-		result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventEvidenceCollected, Evidence: &evidence})
-		if err != nil {
-			t.Fatalf("Publish(Evidence) error = %v", err)
-		}
-		rejected <- result
-		class := domain.SafeErrorClassPolicyDenied
-		_, _ = publisher.Publish(ctx, agent.RunEvent{
-			Kind: agent.RunEventRunFailed,
-			Failure: &agent.RunEventFailure{
-				Class: class, SafeMessage: "The AgentRun stopped at the namespace policy boundary.",
+		},
+		{
+			name: "stale policy generation",
+			mutate: func(evidence *domain.Evidence, input agent.RunInput) {
+				evidence.PolicyGeneration = input.PolicyGeneration() + 1
 			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newCoordinatorClock()
+			rejected := make(chan agent.EventSinkResult, 1)
+			runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+				publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+				if err != nil {
+					t.Fatalf("NewEventPublisher() error = %v", err)
+				}
+				if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
+					t.Fatalf("Publish(started) error = %v", err)
+				}
+				purpose := "Inspect one bounded projection."
+				arguments := `{"kind":"Pod","name":"sample-pod"}`
+				startedAt := clock.Now()
+				invocation := domain.ToolInvocation{
+					ID: domain.ToolInvocationID(coordinatorUUID(881)), RunID: input.RunID(), Sequence: 1,
+					Name: domain.ToolNameGetResource, Version: "tool-v1", Purpose: &purpose,
+					Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
+					Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
+				}
+				if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ExternalCallCost: 1, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
+					t.Fatalf("Publish(requested) = %q/%v", result, err)
+				}
+				finishedAt := clock.Now()
+				summary := "One projected observation was collected."
+				invocation.Status = domain.ToolInvocationStatusSucceeded
+				invocation.ResultSummary = &summary
+				invocation.EvidenceCount = 1
+				invocation.FinishedAt = &finishedAt
+				if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallCompleted, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
+					t.Fatalf("Publish(completed) = %q/%v", result, err)
+				}
+				evidence := domain.Evidence{
+					ID: domain.EvidenceID(coordinatorUUID(882)), RunID: input.RunID(), InvocationID: invocation.ID,
+					Category: domain.EvidenceCategoryResourceStatus, Scope: input.Scope().Snapshot(),
+					Resource: domain.ResourceRef{
+						APIVersion: "v1", Kind: "Pod", Namespace: input.Scope().Namespace, Name: "sample-pod",
+					},
+					PolicyVersion: domain.ResourcePolicyVersion, PolicyGeneration: input.PolicyGeneration(),
+					Fact: "The projected Pod phase is Pending.", Fingerprint: domain.SHA256Hex("unauthorized-evidence"),
+					ObservedAt: finishedAt,
+				}
+				test.mutate(&evidence, input)
+				result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventEvidenceCollected, Evidence: &evidence})
+				if err != nil {
+					t.Fatalf("Publish(Evidence) error = %v", err)
+				}
+				rejected <- result
+				class := domain.SafeErrorClassPolicyDenied
+				_, _ = publisher.Publish(ctx, agent.RunEvent{
+					Kind: agent.RunEventRunFailed,
+					Failure: &agent.RunEventFailure{
+						Class: class, SafeMessage: "The AgentRun stopped at the Evidence policy boundary.",
+					},
+				})
+				return agent.RunOutcome{
+					Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+					SafeMessage: "The AgentRun stopped at the Evidence policy boundary.",
+				}
+			})
+			coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
+				SessionID: session.ID, Question: "Inspect the selected Pod.",
+			})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			result, err := coordinator.WaitRun(context.Background(), runID)
+			if err != nil {
+				t.Fatalf("WaitRun() error = %v", err)
+			}
+			if <-rejected != agent.EventSinkRejected || persistence.toolCalls() != 0 || result.Status != domain.AgentRunStatusFailed {
+				t.Fatalf("unauthorized Evidence result/tool writes = %#v/%d", result, persistence.toolCalls())
+			}
 		})
-		return agent.RunOutcome{
-			Status: domain.AgentRunStatusFailed, ErrorClass: &class,
-			SafeMessage: "The AgentRun stopped at the namespace policy boundary.",
-		}
-	})
-	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
-	session := createCoordinatorSession(t, coordinator)
-	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
-		SessionID: session.ID, Question: "Inspect the selected Pod.",
-	})
-	if err != nil {
-		t.Fatalf("StartRun() error = %v", err)
-	}
-	result, err := coordinator.WaitRun(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("WaitRun() error = %v", err)
-	}
-	if <-rejected != agent.EventSinkRejected || persistence.toolCalls() != 0 || result.Status != domain.AgentRunStatusFailed {
-		t.Fatalf("cross-Namespace result/tool writes = %#v/%d", result, persistence.toolCalls())
 	}
 }
 
@@ -1046,6 +1136,19 @@ type recordingUIEvents struct {
 	values []UIEvent
 }
 
+type coordinatorResourcePolicies struct{}
+
+func (coordinatorResourcePolicies) ResourcePolicySnapshot(ctx context.Context) (domain.ResourcePolicyCatalog, domain.PolicyGeneration, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return domain.ResourcePolicyCatalog{}, 0, false
+	}
+	return domain.DefaultResourcePolicyCatalog(), 1, true
+}
+
+func (coordinatorResourcePolicies) CurrentPolicyGeneration(ctx context.Context, generation domain.PolicyGeneration) bool {
+	return ctx != nil && ctx.Err() == nil && generation == 1
+}
+
 func (sink *recordingUIEvents) PublishUIEvent(_ context.Context, event UIEvent) error {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
@@ -1080,7 +1183,8 @@ func newCoordinatorHarness(
 		Audits: persistence, ModelContext: persistence,
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: ui,
-		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
+		RunResourcePolicies: coordinatorResourcePolicies{},
+		Observer:            RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)

@@ -18,18 +18,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	clientauthentication "k8s.io/client-go/pkg/apis/clientauthentication"
 	clientauthenticationinstall "k8s.io/client-go/pkg/apis/clientauthentication/install"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clienttransport "k8s.io/client-go/transport"
+	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 )
 
 const (
 	// DefaultUserAgent is the fixed Kubernetes transport identity.
-	DefaultUserAgent = "kupilot/0.4"
+	DefaultUserAgent = "kupilot/0.5"
 
 	// DefaultClientQPS and DefaultClientBurst are the non-expandable client
 	// rate defaults.
@@ -63,17 +66,23 @@ const (
 
 type commandContextFunc func(context.Context, string, ...string) *exec.Cmd
 type typedClientFunc func(*rest.Config, *http.Client) (kubernetes.Interface, error)
+type dynamicClientFunc func(*rest.Config, *http.Client) (dynamic.Interface, error)
+type metadataClientFunc func(*rest.Config, *http.Client) (metadata.Interface, error)
+type metricsClientFunc func(*rest.Config, *http.Client) (metricsv1beta1.MetricsV1beta1Interface, error)
 
 // ClientFactory creates one independently owned, cancellable typed client
 // bundle. It exposes no rest.Config or client-go client through its public API.
 type ClientFactory struct {
-	loader         *ConfigLoader
-	execPolicy     ExecCredentialPolicy
-	requestTimeout time.Duration
-	environment    func() []string
-	commandContext commandContextFunc
-	newTypedClient typedClientFunc
-	now            func() time.Time
+	loader            *ConfigLoader
+	execPolicy        ExecCredentialPolicy
+	requestTimeout    time.Duration
+	environment       func() []string
+	commandContext    commandContextFunc
+	newTypedClient    typedClientFunc
+	newDynamicClient  dynamicClientFunc
+	newMetadataClient metadataClientFunc
+	newMetricsClient  metricsClientFunc
+	now               func() time.Time
 }
 
 // NewClientFactory validates immutable Kubernetes client construction policy.
@@ -116,6 +125,15 @@ func NewClientFactory(loader *ConfigLoader, policy ExecCredentialPolicy, request
 		newTypedClient: func(config *rest.Config, client *http.Client) (kubernetes.Interface, error) {
 			return kubernetes.NewForConfigAndClient(config, client)
 		},
+		newDynamicClient: func(config *rest.Config, client *http.Client) (dynamic.Interface, error) {
+			return dynamic.NewForConfigAndClient(config, client)
+		},
+		newMetadataClient: func(config *rest.Config, client *http.Client) (metadata.Interface, error) {
+			return metadata.NewForConfigAndClient(config, client)
+		},
+		newMetricsClient: func(config *rest.Config, client *http.Client) (metricsv1beta1.MetricsV1beta1Interface, error) {
+			return metricsv1beta1.NewForConfigAndClient(config, client)
+		},
 		now: time.Now,
 	}, nil
 }
@@ -124,14 +142,18 @@ func NewClientFactory(loader *ConfigLoader, policy ExecCredentialPolicy, request
 // bundle. Application lifecycle code may retain and close it, while Kubernetes
 // operations remain private to this adapter.
 type ClientBundle struct {
-	info      ContextInfo
-	typed     kubernetes.Interface
-	transport http.RoundTripper
-	lifecycle *lifecycleRoundTripper
-	exec      *execCredentialManager
-	closeOnce sync.Once
-	stopMu    sync.Mutex
-	stopOwner func() bool
+	info           ContextInfo
+	typed          kubernetes.Interface
+	dynamic        dynamic.Interface
+	metadata       metadata.Interface
+	metrics        metricsv1beta1.MetricsV1beta1Interface
+	requestTimeout time.Duration
+	transport      http.RoundTripper
+	lifecycle      *lifecycleRoundTripper
+	exec           *execCredentialManager
+	closeOnce      sync.Once
+	stopMu         sync.Mutex
+	stopOwner      func() bool
 }
 
 // Context returns the safe Context projection bound to this bundle.
@@ -176,7 +198,7 @@ func (factory *ClientFactory) Create(ctx context.Context, contextName string) (*
 	if ctx == nil || ctx.Err() != nil {
 		return nil, cancelledClientError()
 	}
-	if factory == nil || factory.loader == nil || factory.newTypedClient == nil || factory.environment == nil || factory.commandContext == nil || factory.now == nil {
+	if factory == nil || factory.loader == nil || factory.newTypedClient == nil || factory.newDynamicClient == nil || factory.newMetadataClient == nil || factory.newMetricsClient == nil || factory.environment == nil || factory.commandContext == nil || factory.now == nil {
 		return nil, newKubeSafeError(
 			ClassInternal,
 			"kubernetes_client_factory_unavailable",
@@ -275,12 +297,82 @@ func (factory *ClientFactory) Create(ctx context.Context, contextName string) (*
 			"The selected Kubernetes client configuration is invalid.",
 		)
 	}
+	dynamicClient, rawErr := factory.newDynamicClient(clientConfig, httpClient)
+	if ctx.Err() != nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, cancelledClientError()
+	}
+	if rawErr != nil || dynamicClient == nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, newKubeSafeError(
+			ClassConfigurationInvalid,
+			"kubernetes_dynamic_client_invalid",
+			"create_kubernetes_client",
+			"The selected Kubernetes client configuration could not create the bounded resource reader.",
+		)
+	}
+	metadataClient, rawErr := factory.newMetadataClient(clientConfig, httpClient)
+	if ctx.Err() != nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, cancelledClientError()
+	}
+	if rawErr != nil || metadataClient == nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, newKubeSafeError(
+			ClassConfigurationInvalid,
+			"kubernetes_metadata_client_invalid",
+			"create_kubernetes_client",
+			"The selected Kubernetes client configuration could not create the metadata-only resource reader.",
+		)
+	}
+	metricsClient, rawErr := factory.newMetricsClient(clientConfig, httpClient)
+	if ctx.Err() != nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, cancelledClientError()
+	}
+	if rawErr != nil || metricsClient == nil {
+		lifecycle.closeAndWait()
+		if manager != nil {
+			manager.close()
+		}
+		closeIdleConnections(lifecycle)
+		return nil, newKubeSafeError(
+			ClassConfigurationInvalid,
+			"kubernetes_metrics_client_invalid",
+			"create_kubernetes_client",
+			"The selected Kubernetes client configuration could not create the bounded metrics reader.",
+		)
+	}
 	bundle := &ClientBundle{
-		info:      info,
-		typed:     typed,
-		transport: lifecycle,
-		lifecycle: lifecycle,
-		exec:      manager,
+		info:           info,
+		typed:          typed,
+		dynamic:        dynamicClient,
+		metadata:       metadataClient,
+		metrics:        metricsClient,
+		requestTimeout: factory.requestTimeout,
+		transport:      lifecycle,
+		lifecycle:      lifecycle,
+		exec:           manager,
 	}
 	stopOwner := context.AfterFunc(ctx, bundle.closeResources)
 	bundle.stopMu.Lock()
@@ -559,7 +651,11 @@ func (roundTripper *lifecycleRoundTripper) RoundTrip(request *http.Request) (*ht
 	if response.Body == nil {
 		response.Body = http.NoBody
 	}
-	body := &lifecycleResponseBody{base: response.Body, finish: finish}
+	responseBody := response.Body
+	if budgets := responseBudgetsFromContext(request.Context()); len(budgets) != 0 {
+		responseBody = &budgetedResponseBody{base: responseBody, budgets: budgets}
+	}
+	body := &lifecycleResponseBody{base: responseBody, finish: finish}
 	response.Body = body
 	bodyReady <- body
 

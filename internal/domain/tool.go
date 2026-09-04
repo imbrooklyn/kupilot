@@ -57,6 +57,10 @@ const (
 	ToolNameGetEvents           ToolName = "get_events"
 	ToolNameGetPodLogs          ToolName = "get_pod_logs"
 	ToolNameGetPreviousPodLogs  ToolName = "get_previous_pod_logs"
+	ToolNameGetPodMetrics       ToolName = "get_pod_metrics"
+	ToolNameGetNodeMetrics      ToolName = "get_node_metrics"
+	ToolNameQueryPrometheus     ToolName = "query_prometheus"
+	ToolNameQueryLoki           ToolName = "query_loki"
 	ToolNameGetRelatedResources ToolName = "get_related_resources"
 	ToolNameGetClusterOverview  ToolName = "get_cluster_overview"
 )
@@ -69,6 +73,10 @@ func (name ToolName) Valid() bool {
 		ToolNameGetEvents,
 		ToolNameGetPodLogs,
 		ToolNameGetPreviousPodLogs,
+		ToolNameGetPodMetrics,
+		ToolNameGetNodeMetrics,
+		ToolNameQueryPrometheus,
+		ToolNameQueryLoki,
 		ToolNameGetRelatedResources,
 		ToolNameGetClusterOverview:
 		return true

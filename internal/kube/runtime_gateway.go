@@ -15,18 +15,22 @@ import (
 type ToolScopeBinding struct {
 	gateway *Gateway
 
-	mu         sync.Mutex
-	client     application.ScopeClient
-	reader     *ToolResourceReader
-	generation int64
+	mu          sync.Mutex
+	client      application.ScopeClient
+	reader      *ToolResourceReader
+	generation  int64
+	policyGuard toolcontract.PolicyGenerationGuard
 }
 
 var (
 	_ application.ScopeClientFactory     = (*ToolScopeBinding)(nil)
 	_ application.ScopeInvalidationHook  = (*ToolScopeBinding)(nil)
 	_ toolcontract.ResourceReader        = (*ToolScopeBinding)(nil)
+	_ toolcontract.ResourceQueryReader   = (*ToolScopeBinding)(nil)
 	_ toolcontract.EventReader           = (*ToolScopeBinding)(nil)
 	_ toolcontract.PodLogReader          = (*ToolScopeBinding)(nil)
+	_ toolcontract.PodLogsReader         = (*ToolScopeBinding)(nil)
+	_ toolcontract.MetricReader          = (*ToolScopeBinding)(nil)
 	_ toolcontract.RelatedResourceReader = (*ToolScopeBinding)(nil)
 )
 
@@ -37,6 +41,26 @@ func NewToolScopeBinding(gateway *Gateway) (*ToolScopeBinding, error) {
 		return nil, gatewayUnavailableError("create_tool_scope_binding")
 	}
 	return &ToolScopeBinding{gateway: gateway}, nil
+}
+
+// ConfigureResourcePolicyGuard binds the Application-owned policy-generation
+// authority before any broad resource query can run. It performs no I/O.
+func (gateway *ToolScopeBinding) ConfigureResourcePolicyGuard(guard toolcontract.PolicyGenerationGuard) error {
+	if gateway == nil || gateway.gateway == nil || guard == nil {
+		return newKubeSafeError(
+			ClassInvalidInput,
+			"kubernetes_resource_policy_guard_invalid",
+			"configure_resource_policy_guard",
+			"The Kubernetes resource reader requires a current policy-generation guard.",
+		)
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if gateway.reader != nil {
+		return newKubeSafeError(ClassPolicyDenied, "kubernetes_resource_policy_guard_late", "configure_resource_policy_guard", "The resource policy guard must be configured before resource reads start.")
+	}
+	gateway.policyGuard = guard
+	return nil
 }
 
 // Contexts delegates safe local kubeconfig projection without performing a
@@ -116,6 +140,19 @@ func (gateway *ToolScopeBinding) ListResources(
 	return reader.ListResources(ctx, request)
 }
 
+// QueryResources delegates one exact broad read while keeping dynamic and
+// continuation state inside internal/kube.
+func (gateway *ToolScopeBinding) QueryResources(
+	ctx context.Context,
+	request toolcontract.ResourceQueryRequest,
+) (toolcontract.ResourceQueryObservation, error) {
+	reader, err := gateway.readerFor(request.Query.Scope)
+	if err != nil {
+		return toolcontract.ResourceQueryObservation{}, err
+	}
+	return reader.QueryResources(ctx, request)
+}
+
 // ReadEvents delegates the one fixed Events relationship read.
 func (gateway *ToolScopeBinding) ReadEvents(
 	ctx context.Context,
@@ -138,6 +175,27 @@ func (gateway *ToolScopeBinding) ReadPodLog(
 		return toolcontract.PodLogObservation{}, err
 	}
 	return reader.ReadPodLog(ctx, request)
+}
+
+// ReadPodLogs delegates one bounded all-container non-following log read.
+func (gateway *ToolScopeBinding) ReadPodLogs(ctx context.Context, request toolcontract.PodLogsReadRequest) (toolcontract.PodLogsObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.PodLogsObservation{}, err
+	}
+	return reader.ReadPodLogs(ctx, request)
+}
+
+// ReadMetrics delegates one exact typed Metrics API snapshot.
+func (gateway *ToolScopeBinding) ReadMetrics(
+	ctx context.Context,
+	request toolcontract.MetricReadRequest,
+) (toolcontract.MetricObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.MetricObservation{}, err
+	}
+	return reader.ReadMetrics(ctx, request)
 }
 
 // ReadRelatedResources delegates one code-defined bounded relationship graph.
@@ -174,7 +232,13 @@ func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolReso
 	if gateway.reader != nil {
 		return gateway.reader, nil
 	}
-	reader, err := NewToolResourceReader(gateway.gateway, gateway.client, scope)
+	var reader *ToolResourceReader
+	var err error
+	if gateway.policyGuard == nil {
+		reader, err = NewToolResourceReader(gateway.gateway, gateway.client, scope)
+	} else {
+		reader, err = NewToolResourceReader(gateway.gateway, gateway.client, scope, gateway.policyGuard)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -635,9 +635,10 @@ func resourceKindDeniedError(operation string) *SafeError {
 // client. It exposes no client-go value, selector, GVR, pagination, or write
 // capability.
 type ToolResourceReader struct {
-	gateway *Gateway
-	client  application.ScopeClient
-	scope   domain.ClusterScope
+	gateway     *Gateway
+	client      application.ScopeClient
+	scope       domain.ClusterScope
+	policyGuard toolcontract.PolicyGenerationGuard
 }
 
 // NewToolResourceReader validates one immutable scope/client binding without
@@ -646,8 +647,9 @@ func NewToolResourceReader(
 	gateway *Gateway,
 	client application.ScopeClient,
 	scope domain.ClusterScope,
+	policyGuards ...toolcontract.PolicyGenerationGuard,
 ) (*ToolResourceReader, error) {
-	if gateway == nil || scope.Validate() != nil {
+	if gateway == nil || scope.Validate() != nil || len(policyGuards) > 1 {
 		return nil, newKubeSafeError(
 			ClassInvalidInput,
 			"kubernetes_tool_reader_binding_invalid",
@@ -658,7 +660,11 @@ func NewToolResourceReader(
 	if _, err := gateway.resourceBundle(client, scope, "bind_tool_resource_reader"); err != nil {
 		return nil, err
 	}
-	return &ToolResourceReader{gateway: gateway, client: client, scope: scope}, nil
+	var policyGuard toolcontract.PolicyGenerationGuard
+	if len(policyGuards) == 1 {
+		policyGuard = policyGuards[0]
+	}
+	return &ToolResourceReader{gateway: gateway, client: client, scope: scope, policyGuard: policyGuard}, nil
 }
 
 // ReadResource performs one exact typed GET and returns the Tool-owned reader
@@ -801,7 +807,8 @@ func (reader *ToolResourceReader) ReadEvents(
 	if err := reader.validateContext(ctx, request.Scope, operation); err != nil {
 		return toolcontract.EventObservationList{}, err
 	}
-	if _, allowed := domain.ResourceKindForReference(request.Reference); !allowed {
+	kind, allowed := domain.ResourceKindForReference(request.Reference)
+	if !allowed {
 		return toolcontract.EventObservationList{}, resourceKindDeniedError(operation)
 	}
 	if !request.Scope.AllowsReference(request.Reference) {
@@ -812,6 +819,14 @@ func (reader *ToolResourceReader) ReadEvents(
 			"The Kubernetes Event target is outside the configured namespace-access policy.",
 		)
 	}
+	if kind.ClusterScoped() && request.Scope.NamespaceAccess != domain.NamespaceAccessAll {
+		return toolcontract.EventObservationList{}, newKubeSafeError(
+			ClassPolicyDenied,
+			"kubernetes_event_all_namespaces_denied",
+			operation,
+			"Cluster-scoped Kubernetes Event reads require all-Namespace access.",
+		)
+	}
 	if request.Validate() != nil {
 		return toolcontract.EventObservationList{}, newKubeSafeError(
 			ClassInvalidInput,
@@ -820,7 +835,11 @@ func (reader *ToolResourceReader) ReadEvents(
 			"The Kubernetes Event request is invalid.",
 		)
 	}
-	target, err := reader.ReadResource(ctx, toolcontract.ResourceReadRequest{
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.EventObservationList{}, newKubeSafeError(ClassStaleScope, "kubernetes_event_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+	}
+	boundedContext, byteBudget := withResponseByteBudget(ctx, request.MaxBytes)
+	target, err := reader.ReadResource(boundedContext, toolcontract.ResourceReadRequest{
 		Scope: request.Scope, Reference: request.Reference, Detail: toolcontract.ResourceDetailSummary,
 	})
 	if err != nil {
@@ -835,6 +854,9 @@ func (reader *ToolResourceReader) ReadEvents(
 			"The requested Kubernetes object was not found.",
 		)
 	}
+	if byteBudget.remainingBytes() == 0 {
+		return toolcontract.EventObservationList{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_event_byte_limit", operation, "The Kubernetes Event byte limit was exhausted by target validation before an Event page could be read.")
+	}
 	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
 	if err != nil {
 		return toolcontract.EventObservationList{}, err
@@ -848,41 +870,99 @@ func (reader *ToolResourceReader) ReadEvents(
 	if !uidFilterDegraded {
 		selectorTerms = append(selectorTerms, fields.OneTermEqualSelector("involvedObject.uid", verified.UID))
 	}
+	if request.Reason != "" {
+		selectorTerms = append(selectorTerms, fields.OneTermEqualSelector("reason", request.Reason))
+	}
+	if request.Type != "" {
+		selectorTerms = append(selectorTerms, fields.OneTermEqualSelector("type", request.Type))
+	}
 	selector := fields.AndSelectors(selectorTerms...).String()
 	eventNamespace := verified.Namespace
 	if eventNamespace == "" {
 		eventNamespace = metav1.NamespaceAll
 	}
-	list, rawErr := bundle.typed.CoreV1().Events(eventNamespace).List(ctx, metav1.ListOptions{
-		FieldSelector: selector,
-		Limit:         int64(request.Limit),
-	})
-	if err := resourceCallError(ctx, rawErr, operation); err != nil {
-		return toolcontract.EventObservationList{}, err
-	}
-	if list == nil {
-		return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
-	}
 	result := toolcontract.EventObservationList{
 		Target:            verified,
-		Items:             make([]toolcontract.EventObservation, 0, min(len(list.Items), request.Limit)),
+		Items:             make([]toolcontract.EventObservation, 0, request.Limit),
 		UIDFilterDegraded: uidFilterDegraded,
-		Truncated:         list.Continue != "" || len(list.Items) > request.Limit,
 	}
-	for index := 0; index < min(len(list.Items), request.Limit); index++ {
-		item := &list.Items[index]
-		if !eventMatchesTarget(item, verified) {
-			result.Truncated = true
-			continue
+	continuation := ""
+	seenContinuations := make(map[string]struct{}, request.MaxPages)
+	for result.Pages < request.MaxPages && len(result.Items) < request.Limit {
+		if byteBudget.remainingBytes() == 0 {
+			if len(result.Items) == 0 {
+				return toolcontract.EventObservationList{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_event_byte_limit", operation, "The Kubernetes Event byte limit was exhausted before a page could be read.")
+			}
+			result.Truncated, result.PartialReason = true, "byte_limit"
+			break
 		}
-		projected, projectErr := projectToolEvent(item, verified)
-		if projectErr != nil {
+		if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(boundedContext, request.PolicyGeneration) {
+			return toolcontract.EventObservationList{}, newKubeSafeError(ClassStaleScope, "kubernetes_event_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+		}
+		pageLimit := min(request.PageItems, request.Limit-len(result.Items))
+		timeoutSeconds := int64((bundle.requestTimeout + time.Second - 1) / time.Second)
+		pageContext, pageBudget := withResponsePageBudget(boundedContext, request.PageBytes)
+		list, rawErr := bundle.typed.CoreV1().Events(eventNamespace).List(pageContext, metav1.ListOptions{
+			FieldSelector: selector, Limit: int64(pageLimit), Continue: continuation, TimeoutSeconds: &timeoutSeconds,
+		})
+		_, pageExhausted := pageBudget.snapshot()
+		_, aggregateExhausted := byteBudget.snapshot()
+		if pageExhausted || aggregateExhausted {
+			if len(result.Items) == 0 {
+				return toolcontract.EventObservationList{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_event_byte_limit", operation, "The Kubernetes Event response exceeded its byte limit.")
+			}
+			result.Truncated, result.PartialReason = true, "byte_limit"
+			break
+		}
+		if err := resourceCallError(pageContext, rawErr, operation); err != nil {
+			return toolcontract.EventObservationList{}, err
+		}
+		if list == nil {
 			return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
 		}
-		if projected.LastObservedAt.Before(request.NotBefore) {
-			continue
+		result.Pages++
+		for index := range list.Items {
+			item := &list.Items[index]
+			if !eventMatchesTarget(item, verified) {
+				result.Truncated = true
+				result.PartialReason = "projection_filter"
+				continue
+			}
+			projected, projectErr := projectToolEvent(item, verified)
+			if projectErr != nil {
+				return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
+			}
+			if projected.LastObservedAt.Before(request.NotBefore) {
+				continue
+			}
+			result.Items = append(result.Items, projected)
+			if len(result.Items) >= request.Limit {
+				break
+			}
 		}
-		result.Items = append(result.Items, projected)
+		if list.Continue == "" {
+			continuation = ""
+			break
+		}
+		if len(result.Items) >= request.Limit {
+			result.Truncated, result.PartialReason = true, "item_limit"
+			break
+		}
+		if _, duplicate := seenContinuations[list.Continue]; duplicate || len(list.Continue) > maxResourceContinuationTokenBytes {
+			return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
+		}
+		seenContinuations[list.Continue] = struct{}{}
+		continuation = list.Continue
+	}
+	if continuation != "" && result.Pages >= request.MaxPages {
+		result.Truncated, result.PartialReason = true, "page_limit"
+	}
+	result.SourceBytes, _ = byteBudget.snapshot()
+	if result.Pages == 0 {
+		result.Pages = 1
+	}
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(boundedContext, request.PolicyGeneration) {
+		return toolcontract.EventObservationList{}, newKubeSafeError(ClassStaleScope, "kubernetes_event_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
 	}
 	if result.Validate(request) != nil {
 		return toolcontract.EventObservationList{}, invalidKubernetesProjectionError(operation)
@@ -904,6 +984,143 @@ func (reader *ToolResourceReader) ReadPodLog(
 	return reader.readPodLog(ctx, request, operation)
 }
 
+// ReadPodLogs performs one Pod identity read followed by a deterministic,
+// bounded sequence of non-following log subresource reads. It never expands
+// beyond the application containers and the explicitly admitted init or
+// ephemeral categories.
+func (reader *ToolResourceReader) ReadPodLogs(ctx context.Context, request toolcontract.PodLogsReadRequest) (toolcontract.PodLogsObservation, error) {
+	const operation = "tool_get_all_pod_logs"
+	if err := reader.validateContext(ctx, request.Scope, operation); err != nil {
+		return toolcontract.PodLogsObservation{}, err
+	}
+	if request.Validate() != nil {
+		return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassInvalidInput, "kubernetes_tool_logs_request_invalid", operation, "The Kubernetes Pod log request is invalid.")
+	}
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+	}
+	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
+	if err != nil {
+		return toolcontract.PodLogsObservation{}, err
+	}
+	boundedContext, byteBudget := withResponseByteBudget(ctx, request.LimitBytes)
+	pod, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).Get(boundedContext, request.PodName, metav1.GetOptions{})
+	if _, exhausted := byteBudget.snapshot(); exhausted {
+		return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_log_byte_limit", operation, "The Kubernetes Pod log response exceeded its aggregate byte limit.")
+	}
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return toolcontract.PodLogsObservation{}, err
+	}
+	projected, projectErr := projectPod(pod, request.Namespace, request.PodName)
+	if projectErr != nil {
+		return toolcontract.PodLogsObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	names := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers)+len(pod.Spec.EphemeralContainers))
+	for _, container := range pod.Spec.Containers {
+		names = append(names, container.Name)
+	}
+	if request.IncludeInit {
+		for _, container := range pod.Spec.InitContainers {
+			names = append(names, container.Name)
+		}
+	}
+	if request.IncludeEphemeral {
+		for _, container := range pod.Spec.EphemeralContainers {
+			names = append(names, container.Name)
+		}
+	}
+	result := toolcontract.PodLogsObservation{Pod: projected.Reference, Items: make([]toolcontract.PodLogObservation, 0, min(len(names), request.MaxContainers))}
+	if len(names) > request.MaxContainers {
+		names = names[:request.MaxContainers]
+		result.Partial, result.Truncated, result.PartialReason = true, true, "container_limit"
+	}
+	for _, name := range names {
+		if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+			return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+		}
+		selection, selectionErr := selectPodLogContainer(pod, name, operation)
+		if selectionErr != nil {
+			return toolcontract.PodLogsObservation{}, selectionErr
+		}
+		remaining := byteBudget.remainingBytes()
+		if remaining < 1 {
+			result.Partial, result.Truncated, result.PartialReason = true, true, "byte_limit"
+			break
+		}
+		observation, readErr := readSelectedPodLog(boundedContext, bundle, projected.Reference, selection, request.Previous, request.TailLines, request.SinceSeconds, remaining, operation)
+		if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+			return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+		}
+		if ctx.Err() != nil {
+			return toolcontract.PodLogsObservation{}, resourceCallError(ctx, ctx.Err(), operation)
+		}
+		if readErr != nil {
+			if len(result.Items) == 0 {
+				return toolcontract.PodLogsObservation{}, readErr
+			}
+			result.Partial, result.Truncated, result.PartialReason = true, true, "container_read_failed"
+			break
+		}
+		result.SourceBytes, _ = byteBudget.snapshot()
+		result.Items = append(result.Items, observation)
+		if observation.Truncated {
+			result.Partial, result.Truncated, result.PartialReason = true, true, "byte_limit"
+			break
+		}
+	}
+	result.SourceBytes, _ = byteBudget.snapshot()
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+	}
+	if result.Validate(request) != nil {
+		return toolcontract.PodLogsObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	return result, nil
+}
+
+func readSelectedPodLog(ctx context.Context, bundle *ClientBundle, pod domain.ResourceRef, selection selectedPodLogContainer, previous bool, tail, since, maximum int, operation string) (toolcontract.PodLogObservation, error) {
+	observation := toolcontract.PodLogObservation{Pod: pod, Container: selection.name, InitContainer: selection.init, EphemeralContainer: selection.ephemeral,
+		Previous: previous, Availability: toolcontract.PodLogAvailable, RestartCount: selection.restartCount,
+		LastTerminationReason: projectToolText(selection.lastTerminationReason, maxProjectedIdentityBytes)}
+	if previous && !selection.previousAvailable {
+		observation.Availability = toolcontract.PodLogNoPreviousInstance
+		return observation, nil
+	}
+	if !previous && !selection.currentAvailable {
+		observation.Availability = toolcontract.PodLogContainerNotRunning
+		return observation, nil
+	}
+	tailLines, sinceSeconds, limitBytes := int64(tail), int64(since), int64(maximum)
+	stream, rawErr := bundle.typed.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: selection.name, Previous: previous,
+		TailLines: &tailLines, SinceSeconds: &sinceSeconds, LimitBytes: &limitBytes}).Stream(ctx)
+	if err := resourceCallError(ctx, rawErr, operation); err != nil {
+		return toolcontract.PodLogObservation{}, err
+	}
+	payload, readErr := io.ReadAll(io.LimitReader(stream, int64(maximum)+1))
+	closeErr := stream.Close()
+	if ctx.Err() != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, ctx.Err(), operation)
+	}
+	if closeErr != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, closeErr, operation)
+	}
+	if errors.Is(readErr, errResourceResponseLimit) {
+		observation.Truncated = true
+	} else if readErr != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, readErr, operation)
+	}
+	if len(payload) > maximum {
+		payload = payload[:maximum]
+		observation.Truncated = true
+	}
+	content, contentErr := toolcontract.NewPodLogContent(payload, maximum)
+	if contentErr != nil {
+		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	observation.Content = content
+	return observation, nil
+}
+
 func (reader *ToolResourceReader) readPodLog(
 	ctx context.Context,
 	request toolcontract.PodLogReadRequest,
@@ -920,17 +1137,27 @@ func (reader *ToolResourceReader) readPodLog(
 			"The Kubernetes Pod log request is invalid.",
 		)
 	}
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+	}
 	bundle, err := reader.gateway.resourceBundle(reader.client, request.Scope, operation)
 	if err != nil {
 		return toolcontract.PodLogObservation{}, err
 	}
-	pod, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).Get(ctx, request.PodName, metav1.GetOptions{})
+	boundedContext, byteBudget := withResponseByteBudget(ctx, request.LimitBytes)
+	pod, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).Get(boundedContext, request.PodName, metav1.GetOptions{})
+	if _, exhausted := byteBudget.snapshot(); exhausted {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_log_byte_limit", operation, "The Kubernetes Pod log response exceeded its aggregate byte limit.")
+	}
 	if err := resourceCallError(ctx, rawErr, operation); err != nil {
 		return toolcontract.PodLogObservation{}, err
 	}
 	projectedPod, projectErr := projectPod(pod, request.Namespace, request.PodName)
 	if projectErr != nil {
 		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
 	}
 	selection, err := selectPodLogContainer(pod, request.Container, operation)
 	if err != nil {
@@ -940,6 +1167,7 @@ func (reader *ToolResourceReader) readPodLog(
 		Pod:                   projectedPod.Reference,
 		Container:             selection.name,
 		InitContainer:         selection.init,
+		EphemeralContainer:    selection.ephemeral,
 		Previous:              request.Previous,
 		Availability:          toolcontract.PodLogAvailable,
 		RestartCount:          selection.restartCount,
@@ -959,32 +1187,41 @@ func (reader *ToolResourceReader) readPodLog(
 		}
 		return observation, nil
 	}
+	remaining := byteBudget.remainingBytes()
+	if remaining < 1 {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassBudgetExhausted, "kubernetes_log_byte_limit", operation, "The Kubernetes Pod log response exhausted its aggregate byte limit.")
+	}
 	tailLines := int64(request.TailLines)
 	sinceSeconds := int64(request.SinceSeconds)
-	limitBytes := int64(request.LimitBytes)
+	limitBytes := int64(remaining)
 	stream, rawErr := bundle.typed.CoreV1().Pods(request.Namespace).GetLogs(request.PodName, &corev1.PodLogOptions{
 		Container:    selection.name,
 		Previous:     request.Previous,
 		TailLines:    &tailLines,
 		SinceSeconds: &sinceSeconds,
 		LimitBytes:   &limitBytes,
-	}).Stream(ctx)
+	}).Stream(boundedContext)
 	if err := resourceCallError(ctx, rawErr, operation); err != nil {
 		return toolcontract.PodLogObservation{}, err
 	}
-	payload, readErr := io.ReadAll(io.LimitReader(stream, int64(request.LimitBytes)+1))
+	payload, readErr := io.ReadAll(io.LimitReader(stream, int64(remaining)+1))
 	closeErr := stream.Close()
+	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")
+	}
 	if ctx.Err() != nil {
 		return toolcontract.PodLogObservation{}, resourceCallError(ctx, ctx.Err(), operation)
-	}
-	if readErr != nil {
-		return toolcontract.PodLogObservation{}, resourceCallError(ctx, readErr, operation)
 	}
 	if closeErr != nil {
 		return toolcontract.PodLogObservation{}, resourceCallError(ctx, closeErr, operation)
 	}
-	if len(payload) > request.LimitBytes {
-		payload = payload[:request.LimitBytes]
+	if errors.Is(readErr, errResourceResponseLimit) {
+		observation.Truncated = true
+	} else if readErr != nil {
+		return toolcontract.PodLogObservation{}, resourceCallError(ctx, readErr, operation)
+	}
+	if len(payload) > remaining {
+		payload = payload[:remaining]
 		observation.Truncated = true
 	}
 	content, contentErr := toolcontract.NewPodLogContent(payload, request.LimitBytes)
@@ -1001,6 +1238,7 @@ func (reader *ToolResourceReader) readPodLog(
 type selectedPodLogContainer struct {
 	name                  string
 	init                  bool
+	ephemeral             bool
 	restartCount          int32
 	lastTerminationReason string
 	previousAvailable     bool
@@ -1013,6 +1251,7 @@ func selectPodLogContainer(pod *corev1.Pod, requested, operation string) (select
 	}
 	name := requested
 	initContainer := false
+	ephemeralContainer := false
 	if name == "" {
 		if len(pod.Spec.Containers) != 1 {
 			return selectedPodLogContainer{}, newKubeSafeError(
@@ -1036,6 +1275,12 @@ func selectPodLogContainer(pod *corev1.Pod, requested, operation string) (select
 				initContainer = true
 			}
 		}
+		for _, container := range pod.Spec.EphemeralContainers {
+			if container.Name == name {
+				matches++
+				ephemeralContainer = true
+			}
+		}
 		if matches == 0 {
 			return selectedPodLogContainer{}, newKubeSafeError(
 				ClassNotFound,
@@ -1054,6 +1299,8 @@ func selectPodLogContainer(pod *corev1.Pod, requested, operation string) (select
 	statuses := pod.Status.ContainerStatuses
 	if initContainer {
 		statuses = pod.Status.InitContainerStatuses
+	} else if ephemeralContainer {
+		statuses = pod.Status.EphemeralContainerStatuses
 	}
 	var status *corev1.ContainerStatus
 	for index := range statuses {
@@ -1065,7 +1312,7 @@ func selectPodLogContainer(pod *corev1.Pod, requested, operation string) (select
 		}
 		status = &statuses[index]
 	}
-	selection := selectedPodLogContainer{name: name, init: initContainer}
+	selection := selectedPodLogContainer{name: name, init: initContainer, ephemeral: ephemeralContainer}
 	if status == nil {
 		return selection, nil
 	}
@@ -2189,6 +2436,7 @@ var (
 	_ application.ResourceService        = (*Gateway)(nil)
 	_ application.ScopeClient            = (*scopeClient)(nil)
 	_ toolcontract.ResourceReader        = (*ToolResourceReader)(nil)
+	_ toolcontract.ResourceQueryReader   = (*ToolResourceReader)(nil)
 	_ toolcontract.EventReader           = (*ToolResourceReader)(nil)
 	_ toolcontract.PodLogReader          = (*ToolResourceReader)(nil)
 	_ toolcontract.RelatedResourceReader = (*ToolResourceReader)(nil)

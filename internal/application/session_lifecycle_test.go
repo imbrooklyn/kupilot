@@ -30,7 +30,7 @@ func TestCoordinatorZeroDayRetentionKeepsOperationalDetailInMemory(t *testing.T)
 			Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
 			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
 		}
-		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
+		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ExternalCallCost: 1, ToolInvocation: &invocation}); err != nil || result != agent.EventSinkAccepted {
 			t.Fatalf("Publish(requested) = %q, %v", result, err)
 		}
 		invocation.Status = domain.ToolInvocationStatusRunning
@@ -288,7 +288,7 @@ func TestCoordinatorMinimalSessionCompletesWithLifecycleOnly(t *testing.T) {
 			Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
 			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
 		}
-		if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ToolInvocation: &invocation}); err != nil {
+		if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventToolCallRequested, ExternalCallCost: 1, ToolInvocation: &invocation}); err != nil {
 			t.Fatalf("Publish(Tool requested) error = %v", err)
 		}
 		invocation.Status = domain.ToolInvocationStatusRunning

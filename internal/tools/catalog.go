@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -22,6 +21,8 @@ type ReadOnlyToolCatalogDependencies struct {
 	Resources ResourceToolDependencies
 	Events    EventToolDependencies
 	Logs      LogToolDependencies
+	Metrics   MetricToolDependencies
+	Sources   DataSourceToolDependencies
 	Related   RelatedToolDependencies
 }
 
@@ -48,6 +49,22 @@ func NewReadOnlyToolCatalog(dependencies ReadOnlyToolCatalogDependencies) (agent
 	if err != nil {
 		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
 	}
+	getPodMetrics, err := NewGetPodMetricsTool(dependencies.Metrics)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	getNodeMetrics, err := NewGetNodeMetricsTool(dependencies.Metrics)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	queryPrometheus, err := NewQueryPrometheusTool(dependencies.Sources)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
+	queryLoki, err := NewQueryLokiTool(dependencies.Sources)
+	if err != nil {
+		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+	}
 	getRelatedResources, err := NewGetRelatedResourcesTool(dependencies.Related)
 	if err != nil {
 		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
@@ -59,6 +76,7 @@ func NewReadOnlyToolCatalog(dependencies ReadOnlyToolCatalogDependencies) (agent
 	handlers := agent.ToolHandlers{
 		GetResource: getResource, ListResources: listResources, GetEvents: getEvents,
 		GetPodLogs: getPodLogs, GetPreviousPodLogs: getPreviousPodLogs, GetRelatedResources: getRelatedResources,
+		GetPodMetrics: getPodMetrics, GetNodeMetrics: getNodeMetrics, QueryPrometheus: queryPrometheus, QueryLoki: queryLoki,
 		GetClusterOverview: getClusterOverview,
 	}
 	if handlers.Validate() != nil {
@@ -75,18 +93,26 @@ type resourceArgument struct {
 }
 
 type getResourceArguments struct {
-	Detail   ResourceDetail   `json:"detail"`
-	Purpose  string           `json:"purpose"`
-	Resource resourceArgument `json:"resource"`
+	Detail       string `json:"detail"`
+	Name         string `json:"name"`
+	Namespace    string `json:"namespace,omitempty"`
+	Purpose      string `json:"purpose"`
+	ResourceType string `json:"resource_type"`
+}
+
+type resourceFilterArgument struct {
+	Field    string                        `json:"field"`
+	Operator domain.ResourceFilterOperator `json:"operator"`
+	Value    string                        `json:"value,omitempty"`
 }
 
 type listResourcesArguments struct {
-	HealthFilter string `json:"health_filter"`
-	Kind         string `json:"kind"`
-	Limit        int    `json:"limit"`
-	NameQuery    string `json:"name_query,omitempty"`
-	Namespace    string `json:"namespace,omitempty"`
-	Purpose      string `json:"purpose"`
+	Filters      []resourceFilterArgument `json:"filters"`
+	Format       domain.ResourceView      `json:"format"`
+	Limit        int                      `json:"limit"`
+	Namespace    string                   `json:"namespace,omitempty"`
+	Purpose      string                   `json:"purpose"`
+	ResourceType string                   `json:"resource_type"`
 }
 
 type relatedResourceArgument struct {
@@ -104,52 +130,82 @@ type getRelatedResourcesArguments struct {
 	Resource      relatedResourceArgument `json:"resource"`
 }
 
-func decodeGetResourceCall(call BoundToolCall) (getResourceArguments, ResourceReadRequest, error) {
+func decodeGetResourceCall(call BoundToolCall) (getResourceArguments, ResourceQueryRequest, error) {
 	if call.Validate() != nil || call.Name() != domain.ToolNameGetResource || call.Version() != agent.ToolCatalogVersion {
-		return getResourceArguments{}, ResourceReadRequest{}, ErrInvalidCanonicalArguments
+		return getResourceArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
 	var arguments getResourceArguments
-	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() || !arguments.Detail.valid() {
-		return getResourceArguments{}, ResourceReadRequest{}, ErrInvalidCanonicalArguments
+	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() {
+		return getResourceArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
-	request := ResourceReadRequest{
-		Scope: call.Scope(),
-		Reference: domain.ResourceRef{
-			APIVersion: arguments.Resource.APIVersion,
-			Kind:       arguments.Resource.Kind,
-			Namespace:  arguments.Resource.Namespace,
-			Name:       arguments.Resource.Name,
-		},
-		Detail: arguments.Detail,
+	detail := ResourceDetailSummary
+	view := domain.ResourceViewSummary
+	if arguments.Detail == string(domain.ResourceViewDescribe) {
+		detail = ResourceDetailDiagnostic
+		view = domain.ResourceViewDescribe
+	} else if arguments.Detail != string(domain.ResourceViewSummary) {
+		return getResourceArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
+	policy := call.ResourcePolicy()
+	limits := boundedResourceQueryLimits(call, policy, 1)
+	request := ResourceQueryRequest{Policy: policy, Detail: detail, Query: domain.ResourceQuery{
+		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), PolicyVersion: domain.ResourcePolicyVersion,
+		Type: policy.Type, Verb: domain.ResourceVerbGet, View: view, Namespace: arguments.Namespace,
+		Name: arguments.Name, Limits: limits,
+	}}
 	if request.Validate() != nil {
-		return getResourceArguments{}, ResourceReadRequest{}, ErrInvalidCanonicalArguments
+		return getResourceArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
 	return arguments, request, nil
 }
 
-func decodeListResourcesCall(call BoundToolCall) (listResourcesArguments, ResourceListRequest, error) {
+func decodeListResourcesCall(call BoundToolCall) (listResourcesArguments, ResourceQueryRequest, error) {
 	if call.Validate() != nil || call.Name() != domain.ToolNameListResources || call.Version() != agent.ToolCatalogVersion {
-		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
+		return listResourcesArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
 	var arguments listResourcesArguments
 	if json.Unmarshal([]byte(call.ArgumentsJSON()), &arguments) != nil || arguments.Purpose != call.Purpose() ||
-		arguments.HealthFilter != "any" && arguments.HealthFilter != "abnormal" ||
-		len(arguments.NameQuery) > 128 || strings.TrimSpace(arguments.NameQuery) != arguments.NameQuery {
-		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
+		arguments.Format != domain.ResourceViewList && arguments.Format != domain.ResourceViewCount && arguments.Format != domain.ResourceViewTable {
+		return listResourcesArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
-	effectiveLimit := min(arguments.Limit, call.Ceilings().MaxResourceItems, domain.MaxResourceSummaries)
-	request := ResourceListRequest{
-		Scope: call.Scope(), Kind: domain.ResourceKind(arguments.Kind), Namespace: arguments.Namespace,
-		AllNamespaces: arguments.Namespace == "*", Limit: effectiveLimit,
+	policy := call.ResourcePolicy()
+	filters := make([]domain.ResourceFilter, len(arguments.Filters))
+	for index, filter := range arguments.Filters {
+		filters[index] = domain.ResourceFilter{Field: filter.Field, Operator: filter.Operator, Value: filter.Value}
 	}
-	if request.AllNamespaces {
-		request.Namespace = ""
+	allNamespaces := arguments.Namespace == "*"
+	namespace := arguments.Namespace
+	if allNamespaces {
+		namespace = ""
 	}
+	request := ResourceQueryRequest{Policy: policy, Query: domain.ResourceQuery{
+		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), PolicyVersion: domain.ResourcePolicyVersion,
+		Type: policy.Type, Verb: domain.ResourceVerbList, View: arguments.Format, Namespace: namespace,
+		AllNamespaces: allNamespaces, Filters: filters, Limits: boundedResourceQueryLimits(call, policy, arguments.Limit),
+	}}
 	if request.Validate() != nil || arguments.Limit < 1 || arguments.Limit > domain.MaxResourceSummaries {
-		return listResourcesArguments{}, ResourceListRequest{}, ErrInvalidCanonicalArguments
+		return listResourcesArguments{}, ResourceQueryRequest{}, ErrInvalidCanonicalArguments
 	}
 	return arguments, request, nil
+}
+
+func boundedResourceQueryLimits(call BoundToolCall, policy domain.ResourcePolicy, returned int) domain.ResourceQueryLimits {
+	ceilings := call.Ceilings()
+	if returned < 1 {
+		returned = 1
+	}
+	limits := domain.ResourceQueryLimits{
+		MaxPages:    min(policy.Limits.MaxPages, ceilings.MaxResourcePages),
+		PageItems:   min(policy.Limits.PageItems, ceilings.MaxResourcePageItems),
+		PageBytes:   min(policy.Limits.PageBytes, ceilings.MaxResourcePageBytes),
+		MaxItems:    min(policy.Limits.MaxItems, ceilings.MaxResourceScannedItems),
+		MaxBytes:    min(policy.Limits.MaxBytes, ceilings.MaxResourceBytes),
+		MaxReturned: min(policy.Limits.MaxReturned, ceilings.MaxResourceItems, returned),
+	}
+	if returned == 1 && call.Name() == domain.ToolNameGetResource {
+		limits.MaxPages, limits.PageItems, limits.MaxItems, limits.MaxReturned = 1, 1, 1, 1
+	}
+	return limits
 }
 
 func decodeRelatedResourcesCall(call BoundToolCall) (getRelatedResourcesArguments, RelatedReadRequest, bool, error) {

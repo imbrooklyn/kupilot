@@ -11,7 +11,7 @@
     {
       "call_id": "call-1",
       "name": "get_resource",
-      "arguments_json": "{\"detail\":\"diagnostic\",\"purpose\":\"Inspect Deployment replica and condition state.\",\"resource\":{\"kind\":\"Deployment\",\"name\":\"example-deployment\"}}",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-deployment\",\"namespace\":null,\"purpose\":\"Inspect Deployment replica and condition state.\",\"resource_type\":\"deployments\"}",
       "result": {
         "status": "success",
         "observed_offset_ms": 100,
@@ -71,7 +71,7 @@
     {
       "call_id": "call-3",
       "name": "get_events",
-      "arguments_json": "{\"purpose\":\"Inspect recent Deployment progress Events.\",\"resource\":{\"kind\":\"Deployment\",\"name\":\"example-deployment\"}}",
+      "arguments_json": "{\"limit\":null,\"purpose\":\"Inspect recent Deployment progress Events.\",\"reason\":null,\"resource\":{\"api_version\":null,\"kind\":\"Deployment\",\"name\":\"example-deployment\",\"namespace\":null,\"uid\":null},\"since_seconds\":null,\"type\":null}",
       "result": {
         "status": "success",
         "observed_offset_ms": 300,

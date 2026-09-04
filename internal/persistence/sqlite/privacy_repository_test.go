@@ -79,7 +79,7 @@ func TestPrivacyRepositoryRejectsCancellationAndCorruptRows(t *testing.T) {
 		INSERT INTO privacy_consents (
 			role, policy_version, origin_hash, categories_json,
 			decision, decided_at_ms, schema_version
-		) VALUES ('agent', '2026-09-04.v2', ?, '["unknown"]', 'accepted', 1, 2)
+		) VALUES ('agent', '2026-09-04.v2', ?, '["unknown"]', 'accepted', 1, 3)
 	`, strings.Repeat("0", 64)); err != nil {
 		t.Fatalf("corrupt row setup error = %v", err)
 	}

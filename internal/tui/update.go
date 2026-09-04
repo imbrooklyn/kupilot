@@ -936,15 +936,20 @@ func (model *Model) acceptEvidenceDetailResult(result application.UIEvidenceDeta
 		if partial || detail.Truncated {
 			status = "partial"
 		}
+		resourceName := sanitizeExternalText(detail.Resource.Name, 253)
+		if detail.Resource.Namespace != "" {
+			resourceName = sanitizeExternalText(detail.Resource.Namespace, 63) + "/" + resourceName
+		}
+		resourceIdentity := fmt.Sprintf("%s %s (%s %s, %s)",
+			sanitizeExternalText(detail.Resource.Kind, 63), resourceName,
+			sanitizeExternalText(detail.Resource.Type.APIVersion(), 317),
+			sanitizeExternalText(detail.Resource.Type.Resource, 253), detail.Resource.Type.Scope)
 		model.evidenceDialog.ShowDetail(components.EvidenceDetailContent{
 			Category: string(detail.Category),
 			Scope: fmt.Sprintf("%s / %s",
 				sanitizeExternalText(result.Reference.Scope.Context, 253),
 				sanitizeExternalText(result.Reference.Scope.Namespace, 63)),
-			Resource: fmt.Sprintf("%s %s/%s",
-				sanitizeExternalText(detail.Resource.Kind, 63),
-				sanitizeExternalText(detail.Resource.Namespace, 63),
-				sanitizeExternalText(detail.Resource.Name, 253)),
+			Resource:          resourceIdentity,
 			ObservedAt:        detail.ObservedAt.UTC().Format(time.RFC3339Nano),
 			Status:            status,
 			SensitiveFiltered: detail.SensitiveFilter == application.UIEvidenceSensitiveFilterApplied,
@@ -1906,6 +1911,9 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"Run",
 		statusRow("State", run),
 		statusRow("Catalog", status.CapabilityCatalogVersion),
+		statusRow("Resources", fmt.Sprintf("%s · %d types", status.ResourcePolicyVersion, status.ResourceTypeCount)),
+		statusRow("Observability", fmt.Sprintf("%s · Prometheus %s · Loki %s", status.ObservabilityPolicyVersion,
+			statusEnabled(status.PrometheusEnabled), statusEnabled(status.LokiEnabled))),
 		"",
 		"Budget",
 		statusRow("Profile", string(budget.Profile)),
@@ -1919,7 +1927,26 @@ func statusText(status application.UIStatusResult, modelName string) string {
 			budget.ReviewerCostUnitsUsed, budget.ReviewerCostUnitsMaximum)),
 		statusRow("Data", fmt.Sprintf("%s/%s · %d/%d log calls", statusBytes(budget.ToolResultBytesUsed),
 			statusBytes(budget.ToolResultBytesMaximum), budget.LogCallsUsed, budget.LogCallsMaximum)),
+		statusRow("Events", fmt.Sprintf("%d pages · %d items/page · %s/page · %s total",
+			budget.EventPagesMaximum, budget.EventPageItemsMaximum, statusBytes(budget.EventPageBytesMaximum), statusBytes(budget.EventBytesMaximum))),
+		statusRow("Logs", fmt.Sprintf("%d containers · %s/read", budget.LogContainersMaximum, statusBytes(budget.LogBytesMaximum))),
+		statusRow("Metrics", fmt.Sprintf("%d/%d reads · %d containers · %s/read", budget.MetricCallsUsed,
+			budget.MetricCallsMaximum, budget.MetricContainersMaximum, statusBytes(budget.MetricBytesMaximum))),
+		statusRow("Sources", fmt.Sprintf("%d/%d reads · %d pages · %d series · %d samples · %d lines · %s · %s window · %s step",
+			budget.DataSourceCallsUsed, budget.DataSourceCallsMaximum, budget.DataSourcePagesMaximum, budget.DataSourceSeriesMaximum,
+			budget.DataSourceSamplesMaximum, budget.DataSourceLinesMaximum, statusBytes(budget.DataSourceBytesMaximum),
+			statusDuration(budget.DataSourceWindowMillis), statusDuration(budget.DataSourceStepMillis))),
+		statusRow("Resources", fmt.Sprintf("%d pages · %d items/page · %s/page · %d scanned · %d returned · %s total",
+			budget.ResourcePagesMaximum, budget.ResourcePageItemsMaximum, statusBytes(budget.ResourcePageBytesMaximum),
+			budget.ResourceScannedMaximum, budget.ResourceReturnedMaximum, statusBytes(budget.ResourceBytesMaximum))),
 	}, "\n")
+}
+
+func statusEnabled(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 func statusRow(label, value string) string {

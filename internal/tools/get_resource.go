@@ -24,7 +24,7 @@ var _ agent.Tool = (*GetResourceTool)(nil)
 
 // NewGetResourceTool validates the immutable dependencies for get_resource.
 func NewGetResourceTool(dependencies ResourceToolDependencies) (*GetResourceTool, error) {
-	if dependencies.validate() != nil {
+	if dependencies.validateQuery() != nil {
 		return nil, ErrInvalidResourceToolDependencies
 	}
 	return &GetResourceTool{dependencies: dependencies}, nil
@@ -33,7 +33,7 @@ func NewGetResourceTool(dependencies ResourceToolDependencies) (*GetResourceTool
 // Execute applies scope gates around one narrow reader action, then projects,
 // sanitizes, limits, and derives Evidence in that order.
 func (tool *GetResourceTool) Execute(ctx context.Context, call BoundToolCall) ToolResult {
-	if tool == nil || tool.dependencies.validate() != nil || call.Validate() != nil {
+	if tool == nil || tool.dependencies.validateQuery() != nil || call.Validate() != nil {
 		return ToolResult{}
 	}
 	observed := observedAt(tool.dependencies, call)
@@ -50,8 +50,14 @@ func (tool *GetResourceTool) Execute(ctx context.Context, call BoundToolCall) To
 	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
-	observation, readErr := tool.dependencies.Reader.ReadResource(ctx, request)
+	if !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	queryResult, readErr := tool.dependencies.QueryReader.QueryResources(ctx, request)
 	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) {
+		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	}
+	if !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
 		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
 	}
 	if ctx.Err() != nil {
@@ -60,15 +66,22 @@ func (tool *GetResourceTool) Execute(ctx context.Context, call BoundToolCall) To
 	if readErr != nil {
 		return failedResult(call, observed, classifyFailure(ctx, readErr))
 	}
-	if observation.validate() != nil || !sameRequestedResource(request.Reference, observation.Summary.Reference) {
+	if queryResult.Validate(request) != nil || len(queryResult.Items) != 1 {
 		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
 	}
-	data, templates, warnings, limited, err := tool.project(observation, request.Detail)
+	observation := queryResult.Items[0]
+	if observation.Summary.Reference.Name != request.Query.Name || observation.Summary.Reference.Namespace != request.Query.Namespace ||
+		observation.Summary.EffectiveType() != request.Policy.Type {
+		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+	}
+	data, templates, warnings, limited, err := tool.project(observation, request.Policy, request.Detail)
 	if err != nil {
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
 	reason := ""
-	if limited {
+	if queryResult.Page.Partial {
+		reason = queryResult.Page.Reason
+	} else if limited {
 		reason = fieldLimitReason
 	}
 	templates, evidenceLimited := limitEvidenceTemplates(call, templates)
@@ -89,6 +102,7 @@ func (tool *GetResourceTool) Execute(ctx context.Context, call BoundToolCall) To
 	if planned.Truncation.Truncated {
 		for index := range evidence {
 			evidence[index].Truncated = true
+			evidence[index].Partial = true
 		}
 	}
 	planned.Evidence = evidence
@@ -190,17 +204,29 @@ type safeResourceStatus struct {
 	truncated      bool
 }
 
+type safeResourceField struct {
+	Class  domain.ResourceDataClass  `json:"class"`
+	Field  string                    `json:"field"`
+	Path   string                    `json:"source_path"`
+	Scalar domain.ResourceScalarType `json:"scalar"`
+	Value  *string                   `json:"value,omitempty"`
+}
+
 type getResourceData struct {
 	Conditions      []safeCondition       `json:"conditions"`
 	Containers      []safeContainer       `json:"containers"`
 	CreatedAt       string                `json:"created_at,omitempty"`
 	Detail          ResourceDetail        `json:"detail"`
+	Fields          []safeResourceField   `json:"fields"`
 	InstructionLike bool                  `json:"instruction_like"`
 	LabelCount      int                   `json:"label_count"`
 	Labels          []safeLabel           `json:"labels"`
 	Owners          []safeOwner           `json:"owners"`
 	RedactionCount  int                   `json:"redaction_count"`
 	Resource        safeResourceReference `json:"resource"`
+	ResourceType    string                `json:"resource_type"`
+	APIResource     string                `json:"api_resource"`
+	ResourceScope   domain.ResourceScope  `json:"resource_scope"`
 	ServicePorts    []safeServicePort     `json:"service_ports"`
 	SourceTrust     string                `json:"source_trust"`
 	Status          safeResourceStatus    `json:"status"`
@@ -216,18 +242,23 @@ type textMetadata struct {
 
 func (tool *GetResourceTool) project(
 	observation ResourceObservation,
+	policy domain.ResourcePolicy,
 	detail ResourceDetail,
 ) (getResourceData, []evidenceTemplate, []domain.ToolResultWarning, bool, error) {
 	data := getResourceData{
-		Conditions:   []safeCondition{},
-		Containers:   []safeContainer{},
-		Detail:       detail,
-		LabelCount:   observation.LabelCount,
-		Labels:       []safeLabel{},
-		Owners:       []safeOwner{},
-		ServicePorts: []safeServicePort{},
-		SourceTrust:  security.UntrustedDataClass,
-		Truncated:    observation.Truncated,
+		Conditions:    []safeCondition{},
+		Containers:    []safeContainer{},
+		Detail:        detail,
+		Fields:        []safeResourceField{},
+		LabelCount:    observation.LabelCount,
+		Labels:        []safeLabel{},
+		Owners:        []safeOwner{},
+		ServicePorts:  []safeServicePort{},
+		SourceTrust:   security.UntrustedDataClass,
+		Truncated:     observation.Truncated,
+		ResourceType:  observation.Summary.EffectiveType().ID,
+		APIResource:   observation.Summary.EffectiveType().Resource,
+		ResourceScope: observation.Summary.EffectiveType().Scope,
 	}
 	if !observation.Summary.CreatedAt.IsZero() {
 		data.CreatedAt = observation.Summary.CreatedAt.Format(time.RFC3339Nano)
@@ -249,6 +280,15 @@ func (tool *GetResourceTool) project(
 	}
 	data.Status = status
 	metadata.merge(currentMetadata)
+	fields, currentMetadata, err := tool.safeFields(observation.Fields)
+	if err != nil {
+		return getResourceData{}, nil, nil, false, err
+	}
+	data.Fields = fields
+	metadata.merge(currentMetadata)
+	if currentMetadata.blocked {
+		warnings = appendWarning(warnings, sensitiveFieldWarningCode, "One Kubernetes field was hidden because it may contain sensitive data.")
+	}
 	for _, label := range observation.Labels {
 		value, current, processErr := tool.safeText(label.Value, maxIdentityTextBytes)
 		if processErr != nil {
@@ -312,6 +352,21 @@ func (tool *GetResourceTool) project(
 	data.RedactionCount = metadata.redactions
 	data.Truncated = data.Truncated || metadata.truncated || metadata.blocked
 	templates := getResourceEvidence(data, domainReference(data.Resource))
+	for index := range templates {
+		templates[index].resourceType = observation.Summary.EffectiveType()
+	}
+	for _, field := range data.Fields {
+		policyField, admitted := policy.Field(field.Field)
+		if field.Value == nil || !admitted || !policyField.Evidence {
+			continue
+		}
+		fact, truncated := boundedEvidenceFact(fmt.Sprintf("The projected %s %s field %s is %s.", data.Resource.Kind, data.Resource.Name, field.Field, *field.Value))
+		templates = append(templates, evidenceTemplate{
+			category: domain.EvidenceCategoryResourceStatus, resourceType: observation.Summary.EffectiveType(),
+			resource: domainReference(data.Resource), fact: fact, sourcePath: field.Path,
+			severity: stableSeverity(domain.EvidenceSeverityInfo), truncated: truncated,
+		})
+	}
 	return data, templates, warnings, data.Truncated || evidenceTemplatesTruncated(templates), nil
 }
 
@@ -366,6 +421,28 @@ func (tool *GetResourceTool) safeText(value ExternalText, maximumBytes int) (str
 		truncated:       value.Truncated || processed.Truncated,
 		instructionLike: processed.InstructionLike,
 	}, nil
+}
+
+func (tool *GetResourceTool) safeFields(fields []ResourceFieldObservation) ([]safeResourceField, textMetadata, error) {
+	result := make([]safeResourceField, 0, len(fields))
+	metadata := textMetadata{}
+	for _, field := range fields {
+		projected := safeResourceField{Class: field.DataClass, Field: field.Field, Path: field.Path, Scalar: field.Scalar}
+		if field.Present {
+			value, current, err := tool.safeText(field.Value, maxProjectedTextBytes)
+			if err != nil {
+				return nil, textMetadata{}, err
+			}
+			metadata.merge(current)
+			if current.blocked {
+				continue
+			}
+			projected.Value = &value
+		}
+		result = append(result, projected)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Field < result[right].Field })
+	return result, metadata, nil
 }
 
 func (tool *GetResourceTool) safeResourceReference(observation ResourceObservation) (safeResourceReference, textMetadata, error) {
@@ -723,6 +800,7 @@ func fitGetResourceResult(
 				}
 				for index := range result.Evidence {
 					result.Evidence[index].Truncated = true
+					result.Evidence[index].Partial = true
 				}
 			}
 			measured, measureErr := measureResult(call, result)

@@ -1,0 +1,79 @@
+{
+  "name": "node_pressure_metrics_unavailable",
+  "question": "Is example-node under resource pressure?",
+  "scope_namespace": "example-namespace",
+  "target": {
+    "api_version": "v1",
+    "kind": "Node",
+    "namespace": "",
+    "name": "example-node"
+  },
+  "steps": [
+    {
+      "call_id": "call-1",
+      "name": "get_resource",
+      "arguments_json": "{\"detail\":\"describe\",\"name\":\"example-node\",\"namespace\":null,\"purpose\":\"Inspect the current Node pressure conditions.\",\"resource_type\":\"nodes\"}",
+      "result": {
+        "status": "success",
+        "observed_offset_ms": 100,
+        "data_json": "{\"instruction_like\":false,\"source_trust\":\"untrusted_external_data\",\"summary\":\"The projected MemoryPressure condition is False.\"}",
+        "evidence": [
+          {
+            "id": "00000000-0000-7000-8000-000000002211",
+            "category": "condition",
+            "fact": "Node example-node has MemoryPressure=False with reason KubeletHasSufficientMemory.",
+            "source_path": "projected.status.conditions",
+            "severity": "info",
+            "supports": [
+              "node_memory_pressure_false",
+              "pressure_cleared_possible"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "call_id": "call-2",
+      "name": "get_node_metrics",
+      "arguments_json": "{\"node_name\":\"example-node\",\"purpose\":\"Inspect current Node CPU and memory usage.\"}",
+      "result": {
+        "status": "error",
+        "observed_offset_ms": 200,
+        "data_json": "{\"availability\":\"unavailable\",\"source_trust\":\"untrusted_external_data\"}",
+        "error_class": "unavailable",
+        "safe_message": "The Metrics API is unavailable for this exact target."
+      }
+    }
+  ],
+  "diagnosis": {
+    "answer_markdown": "The projected MemoryPressure condition is False for example-node.\n\nEarlier pressure may have cleared, but current usage remains unknown because the Metrics API was unavailable. Confidence: low. To verify: A later bounded Node metrics read and fresh condition agree in the same window.\n\nThe current Node metrics observation was unavailable. Impact: CPU and memory totals cannot be confirmed and the condition alone does not establish capacity.\n\nSuggested next step: Retry the bounded Node metrics read after availability is restored. Risk: Cordon or drain would mutate scheduling and is not part of this read-only workflow. Before acting: Do not infer a causal workload or change the Node.",
+    "evidence_citations": [
+      {
+        "claim": "The projected MemoryPressure condition is False for example-node.",
+        "evidence_ids": [
+          "00000000-0000-7000-8000-000000002211"
+        ]
+      }
+    ],
+    "proposed_actions": []
+  },
+  "annotations": {
+    "confirmed_facts": [
+      {"index": 0, "assertion": "node_memory_pressure_false"}
+    ],
+    "hypotheses": [
+      {"index": 0, "assertion": "pressure_cleared_possible"}
+    ],
+    "recommended_actions": [
+      {"index": 0, "assertion": "collect_node_metrics"}
+    ]
+  },
+  "required_confirmed_assertions": [
+    "node_memory_pressure_false"
+  ],
+  "required_missing_kinds": [
+    "absent"
+  ],
+  "maximum_hypothesis_confidence": "low",
+  "expected_evidence_detail_state": "available"
+}

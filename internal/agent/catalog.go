@@ -15,12 +15,11 @@ import (
 
 const (
 	// ToolCatalogVersion versions the complete built-in model-visible catalog.
-	ToolCatalogVersion = "kupilot-operational-tools-v2"
+	ToolCatalogVersion = "kupilot-operational-tools-v4"
 
 	maxToolPurposeBytes = 1024
-	maxNameQueryBytes   = 128
 	maxRequestedEvents  = 50
-	maxRequestedLogs    = 200
+	maxRequestedLogs    = domain.MaxObservabilityLines
 )
 
 var (
@@ -47,10 +46,14 @@ var (
 )
 
 const (
-	getResourceSchema         = `{"additionalProperties":false,"properties":{"detail":{"enum":["summary","diagnostic",null],"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1","networking.k8s.io/v1","autoscaling/v2","policy/v1",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]}},"required":["api_version","kind","name","namespace"],"type":"object"}},"required":["detail","purpose","resource"],"type":"object"}`
-	listResourcesSchema       = `{"additionalProperties":false,"properties":{"health_filter":{"enum":["any","abnormal",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"name_query":{"maxLength":128,"type":["string","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["health_filter","kind","limit","name_query","namespace","purpose"],"type":"object"}`
-	getEventsSchema           = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1","networking.k8s.io/v1","autoscaling/v2","policy/v1",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"},"since_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["limit","purpose","resource","since_seconds"],"type":"object"}`
-	getPodLogsSchema          = `{"additionalProperties":false,"properties":{"container":{"maxLength":253,"minLength":1,"type":["string","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"since_seconds":{"maximum":3600,"minimum":60,"type":["integer","null"]},"tail_lines":{"maximum":200,"minimum":1,"type":["integer","null"]}},"required":["container","namespace","pod_name","purpose","since_seconds","tail_lines"],"type":"object"}`
+	getResourceSchema         = `{"additionalProperties":false,"properties":{"detail":{"enum":["summary","describe",null],"type":["string","null"]},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource_type":{"maxLength":63,"minLength":1,"pattern":"^[a-z][a-z0-9-]{0,62}$","type":"string"}},"required":["detail","name","namespace","purpose","resource_type"],"type":"object"}`
+	listResourcesSchema       = `{"additionalProperties":false,"properties":{"filters":{"items":{"additionalProperties":false,"properties":{"field":{"maxLength":63,"minLength":1,"pattern":"^[a-z][a-z0-9_]{0,62}$","type":"string"},"operator":{"enum":["contains","equals","exists","greater_than","less_than","not_equals","starts_with"],"type":"string"},"value":{"maxLength":512,"type":["string","null"]}},"required":["field","operator","value"],"type":"object"},"maxItems":8,"type":["array","null"]},"format":{"enum":["count","list","table",null],"type":["string","null"]},"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"resource_type":{"maxLength":63,"minLength":1,"pattern":"^[a-z][a-z0-9-]{0,62}$","type":"string"}},"required":["filters","format","limit","namespace","purpose","resource_type"],"type":"object"}`
+	getEventsSchema           = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":1,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"reason":{"maxLength":128,"type":["string","null"]},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1","networking.k8s.io/v1","autoscaling/v2","policy/v1",null],"type":["string","null"]},"kind":{"enum":["Namespace","Node","Pod","Service","PersistentVolumeClaim","PersistentVolume","ConfigMap","Deployment","ReplicaSet","StatefulSet","DaemonSet","Job","CronJob","Ingress","HorizontalPodAutoscaler","PodDisruptionBudget"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"},"since_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]},"type":{"enum":["Normal","Warning",null],"type":["string","null"]}},"required":["limit","purpose","reason","resource","since_seconds","type"],"type":"object"}`
+	getPodLogsSchema          = `{"additionalProperties":false,"properties":{"container":{"maxLength":253,"type":["string","null"]},"container_mode":{"enum":["all","single",null],"type":["string","null"]},"include_ephemeral":{"type":["boolean","null"]},"include_init":{"type":["boolean","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"search":{"maxLength":256,"type":["string","null"]},"since_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]},"tail_lines":{"maximum":1000,"minimum":1,"type":["integer","null"]}},"required":["container","container_mode","include_ephemeral","include_init","namespace","pod_name","purpose","search","since_seconds","tail_lines"],"type":"object"}`
+	getPodMetricsSchema       = `{"additionalProperties":false,"properties":{"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["namespace","pod_name","purpose"],"type":"object"}`
+	getNodeMetricsSchema      = `{"additionalProperties":false,"properties":{"node_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["node_name","purpose"],"type":"object"}`
+	queryPrometheusSchema     = `{"additionalProperties":false,"properties":{"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"query_id":{"enum":["pod_cpu_usage","pod_memory_working_set","pod_network_receive_rate","pod_network_transmit_rate"],"type":"string"},"series_limit":{"maximum":100,"minimum":1,"type":["integer","null"]},"step_seconds":{"maximum":900,"minimum":15,"type":["integer","null"]},"window_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["namespace","pod_name","purpose","query_id","series_limit","step_seconds","window_seconds"],"type":"object"}`
+	queryLokiSchema           = `{"additionalProperties":false,"properties":{"contains":{"maxLength":256,"type":["string","null"]},"line_limit":{"maximum":1000,"minimum":1,"type":["integer","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"query_id":{"enum":["pod_logs"],"type":"string"},"window_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["contains","line_limit","namespace","pod_name","purpose","query_id","window_seconds"],"type":"object"}`
 	getRelatedResourcesSchema = `{"additionalProperties":false,"properties":{"include":{"items":{"enum":["owners","pods","replica_sets","service_endpoints","services"],"type":"string"},"maxItems":3,"minItems":1,"type":["array","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"relation_depth":{"maximum":2,"minimum":1,"type":["integer","null"]},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"}},"required":["include","purpose","relation_depth","resource"],"type":"object"}`
 	getClusterOverviewSchema  = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":2,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["limit","purpose"],"type":"object"}`
 )
@@ -58,11 +61,15 @@ const (
 // ToolSpecifications returns a defensive copy of the exact ordered catalog.
 func ToolSpecifications() []ToolSpecification {
 	return []ToolSpecification{
-		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Read one code-allowlisted Kubernetes resource through a bounded safe projection. Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume. Namespaced targets use null for the working Namespace and may use an exact Namespace only when the frozen access policy is all.", InputSchemaJSON: getResourceSchema},
-		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "List one code-allowlisted Kubernetes Kind with bounded local filtering. Set namespace to null for cluster-scoped Node, Namespace, or PersistentVolume. For namespaced Kinds, null means the working Namespace; use an exact Namespace or namespace=* only when the frozen namespace-access policy is all.", InputSchemaJSON: listResourcesSchema},
+		{Name: domain.ToolNameGetResource, Version: ToolCatalogVersion, Description: "Get one resource by a local resource_type ID from the frozen built-in or exact CRD policy catalog. API group, version, resource, Kind, scope, projection, and ceilings are injected by the runtime. Set namespace to null for cluster-scoped types; for namespaced types null or the exact working Namespace selects that Namespace, while another exact Namespace requires namespace_access=all.", InputSchemaJSON: getResourceSchema},
+		{Name: domain.ToolNameListResources, Version: ToolCatalogVersion, Description: "Run one bounded list, count, or table query using a local resource_type ID and code-defined field/operator predicates. Raw selectors and continuation tokens are not accepted. API identity, scope, projection, pagination, and aggregate ceilings are runtime-owned. Set namespace to null for cluster-scoped types; for namespaced types null means the working Namespace and '*' requires namespace_access=all.", InputSchemaJSON: listResourcesSchema},
 		{Name: domain.ToolNameGetEvents, Version: ToolCatalogVersion, Description: "Read bounded, normalized recent Kubernetes Events related to one exact allowlisted resource.", InputSchemaJSON: getEventsSchema},
 		{Name: domain.ToolNameGetPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized current Pod container log tail without follow mode.", InputSchemaJSON: getPodLogsSchema},
 		{Name: domain.ToolNameGetPreviousPodLogs, Version: ToolCatalogVersion, Description: "Read one bounded, sanitized previous Pod container log tail when a previous instance exists.", InputSchemaJSON: getPodLogsSchema},
+		{Name: domain.ToolNameGetPodMetrics, Version: ToolCatalogVersion, Description: "Read one current bounded Pod CPU and memory snapshot from the Kubernetes Metrics API. Quantities are normalized locally; unavailable, stale, partial, and unsupported states remain explicit.", InputSchemaJSON: getPodMetricsSchema},
+		{Name: domain.ToolNameGetNodeMetrics, Version: ToolCatalogVersion, Description: "Read one current bounded Node CPU and memory snapshot from the Kubernetes Metrics API. Quantities are normalized locally; unavailable, stale, partial, and unsupported states remain explicit.", InputSchemaJSON: getNodeMetricsSchema},
+		{Name: domain.ToolNameQueryPrometheus, Version: ToolCatalogVersion, Description: "Run one enabled code-owned Prometheus query template for an exact Pod and bounded time range. Raw PromQL, URLs, headers, credentials, and result ceilings are not accepted.", InputSchemaJSON: queryPrometheusSchema},
+		{Name: domain.ToolNameQueryLoki, Version: ToolCatalogVersion, Description: "Run one enabled code-owned Loki log query for an exact Pod and bounded time range. Only an optional literal contains filter is accepted; raw LogQL, regex, URLs, headers, credentials, and result ceilings are not accepted.", InputSchemaJSON: queryLokiSchema},
 		{Name: domain.ToolNameGetRelatedResources, Version: ToolCatalogVersion, Description: "Follow only code-defined, bounded same-Namespace relationships from one allowlisted resource.", InputSchemaJSON: getRelatedResourcesSchema},
 		{Name: domain.ToolNameGetClusterOverview, Version: ToolCatalogVersion, Description: "Use this for requests asking which Nodes and/or Namespaces exist or for their health. It reads both bounded projections in one concise cluster overview and never performs discovery or returns addresses, provider identifiers, images, system information, or capacity maps.", InputSchemaJSON: getClusterOverviewSchema},
 	}
@@ -82,6 +89,10 @@ type ToolHandlers struct {
 	GetEvents           Tool
 	GetPodLogs          Tool
 	GetPreviousPodLogs  Tool
+	GetPodMetrics       Tool
+	GetNodeMetrics      Tool
+	QueryPrometheus     Tool
+	QueryLoki           Tool
 	GetRelatedResources Tool
 	GetClusterOverview  Tool
 }
@@ -89,7 +100,8 @@ type ToolHandlers struct {
 // Validate checks that every admitted Tool has exactly one injected handler.
 func (handlers ToolHandlers) Validate() error {
 	if handlers.GetResource == nil || handlers.ListResources == nil || handlers.GetEvents == nil ||
-		handlers.GetPodLogs == nil || handlers.GetPreviousPodLogs == nil || handlers.GetRelatedResources == nil {
+		handlers.GetPodLogs == nil || handlers.GetPreviousPodLogs == nil || handlers.GetPodMetrics == nil ||
+		handlers.GetNodeMetrics == nil || handlers.QueryPrometheus == nil || handlers.QueryLoki == nil || handlers.GetRelatedResources == nil {
 		return ErrInvalidToolHandlers
 	}
 	if handlers.GetClusterOverview == nil {
@@ -114,6 +126,14 @@ func (handlers ToolHandlers) Resolve(name domain.ToolName) (Tool, error) {
 		return handlers.GetPodLogs, nil
 	case domain.ToolNameGetPreviousPodLogs:
 		return handlers.GetPreviousPodLogs, nil
+	case domain.ToolNameGetPodMetrics:
+		return handlers.GetPodMetrics, nil
+	case domain.ToolNameGetNodeMetrics:
+		return handlers.GetNodeMetrics, nil
+	case domain.ToolNameQueryPrometheus:
+		return handlers.QueryPrometheus, nil
+	case domain.ToolNameQueryLoki:
+		return handlers.QueryLoki, nil
 	case domain.ToolNameGetRelatedResources:
 		return handlers.GetRelatedResources, nil
 	case domain.ToolNameGetClusterOverview:
@@ -125,16 +145,36 @@ func (handlers ToolHandlers) Resolve(name domain.ToolName) (Tool, error) {
 
 // ToolCallCeilings is runtime-injected policy and never part of model arguments.
 type ToolCallCeilings struct {
-	RequestTimeout       time.Duration
-	MaxResultBytes       int
-	MaxEvidenceItems     int
-	MaxResourceItems     int
-	MaxEventItems        int
-	MaxLogLines          int
-	MaxLogWindow         time.Duration
-	MaxRelationshipHops  int
-	MaxRelationshipNodes int
-	MaxRelationshipEdges int
+	RequestTimeout          time.Duration
+	MaxResultBytes          int
+	MaxEvidenceItems        int
+	MaxResourceItems        int
+	MaxResourceScannedItems int
+	MaxResourcePages        int
+	MaxResourcePageItems    int
+	MaxResourcePageBytes    int
+	MaxResourceBytes        int
+	MaxEventItems           int
+	MaxEventPages           int
+	MaxEventPageItems       int
+	MaxEventPageBytes       int
+	MaxEventBytes           int
+	MaxLogLines             int
+	MaxLogContainers        int
+	MaxLogBytes             int
+	MaxLogWindow            time.Duration
+	MaxMetricContainers     int
+	MaxMetricBytes          int
+	MaxDataSourcePages      int
+	MaxDataSourceSeries     int
+	MaxDataSourceSamples    int
+	MaxDataSourceLines      int
+	MaxDataSourceBytes      int
+	MaxDataSourceWindow     time.Duration
+	MaxDataSourceStep       time.Duration
+	MaxRelationshipHops     int
+	MaxRelationshipNodes    int
+	MaxRelationshipEdges    int
 }
 
 func (ceilings ToolCallCeilings) valid() bool {
@@ -142,9 +182,32 @@ func (ceilings ToolCallCeilings) valid() bool {
 		ceilings.MaxResultBytes > 0 && ceilings.MaxResultBytes <= domain.MaxToolResultBytes &&
 		ceilings.MaxEvidenceItems > 0 && ceilings.MaxEvidenceItems <= domain.MaxEvidenceItemsPerResult &&
 		ceilings.MaxResourceItems > 0 && ceilings.MaxResourceItems <= 50 &&
+		ceilings.MaxResourceScannedItems > 0 && ceilings.MaxResourceScannedItems <= domain.MaxResourceQueryItems &&
+		ceilings.MaxResourcePages > 0 && ceilings.MaxResourcePages <= domain.MaxResourceQueryPages &&
+		ceilings.MaxResourcePageItems > 0 && ceilings.MaxResourcePageItems <= domain.MaxResourcePageItems &&
+		ceilings.MaxResourcePageBytes > 0 && ceilings.MaxResourcePageBytes <= domain.MaxResourcePageBytes &&
+		ceilings.MaxResourceBytes > 0 && ceilings.MaxResourceBytes <= domain.MaxResourceQueryBytes &&
+		ceilings.MaxResourcePageItems <= ceilings.MaxResourceScannedItems &&
+		ceilings.MaxResourceItems <= ceilings.MaxResourceScannedItems &&
+		ceilings.MaxResourcePageBytes <= ceilings.MaxResourceBytes &&
 		ceilings.MaxEventItems > 0 && ceilings.MaxEventItems <= 50 &&
-		ceilings.MaxLogLines > 0 && ceilings.MaxLogLines <= 200 &&
-		ceilings.MaxLogWindow > 0 && ceilings.MaxLogWindow <= 15*time.Minute &&
+		ceilings.MaxEventPages > 0 && ceilings.MaxEventPages <= domain.MaxObservabilityPages &&
+		ceilings.MaxEventPageItems > 0 && ceilings.MaxEventPageItems <= 100 &&
+		ceilings.MaxEventPageBytes > 0 && ceilings.MaxEventPageBytes <= domain.MaxObservabilityBytes && ceilings.MaxEventPageBytes <= ceilings.MaxEventBytes &&
+		ceilings.MaxEventBytes > 0 && ceilings.MaxEventBytes <= domain.MaxObservabilityBytes &&
+		ceilings.MaxLogLines > 0 && ceilings.MaxLogLines <= domain.MaxObservabilityLines &&
+		ceilings.MaxLogContainers > 0 && ceilings.MaxLogContainers <= domain.MaxObservabilityLogContainers &&
+		ceilings.MaxLogBytes > 0 && ceilings.MaxLogBytes <= domain.MaxObservabilityBytes &&
+		ceilings.MaxLogWindow > 0 && ceilings.MaxLogWindow <= domain.MaxObservabilityWindow &&
+		ceilings.MaxMetricContainers > 0 && ceilings.MaxMetricContainers <= domain.MaxMetricContainers &&
+		ceilings.MaxMetricBytes > 0 && ceilings.MaxMetricBytes <= domain.MaxObservabilityBytes &&
+		ceilings.MaxDataSourcePages > 0 && ceilings.MaxDataSourcePages <= domain.MaxObservabilityPages &&
+		ceilings.MaxDataSourceSeries > 0 && ceilings.MaxDataSourceSeries <= domain.MaxObservabilitySeries &&
+		ceilings.MaxDataSourceSamples > 0 && ceilings.MaxDataSourceSamples <= domain.MaxObservabilitySamples &&
+		ceilings.MaxDataSourceLines > 0 && ceilings.MaxDataSourceLines <= domain.MaxObservabilityLines &&
+		ceilings.MaxDataSourceBytes > 0 && ceilings.MaxDataSourceBytes <= domain.MaxObservabilityBytes &&
+		ceilings.MaxDataSourceWindow > 0 && ceilings.MaxDataSourceWindow <= domain.MaxObservabilityWindow &&
+		ceilings.MaxDataSourceStep > 0 && ceilings.MaxDataSourceStep <= domain.MaxObservabilityStep &&
 		ceilings.MaxRelationshipHops > 0 && ceilings.MaxRelationshipHops <= 2 &&
 		ceilings.MaxRelationshipNodes > 0 && ceilings.MaxRelationshipNodes <= 25 &&
 		ceilings.MaxRelationshipEdges > 0 && ceilings.MaxRelationshipEdges <= 40
@@ -161,38 +224,67 @@ type ToolCallIdentity struct {
 // BoundToolCall is created only after strict model-call validation. Accessors
 // expose immutable values and no caller-controlled scope or ceiling field.
 type BoundToolCall struct {
-	invocationID    domain.ToolInvocationID
-	runID           domain.AgentRunID
-	modelCallID     string
-	name            domain.ToolName
-	version         string
-	purpose         string
-	argumentsJSON   string
-	argumentsDigest string
-	scope           domain.ClusterScope
-	ceilings        ToolCallCeilings
+	invocationID     domain.ToolInvocationID
+	runID            domain.AgentRunID
+	sessionID        domain.SessionID
+	modelCallID      string
+	name             domain.ToolName
+	version          string
+	purpose          string
+	argumentsJSON    string
+	argumentsDigest  string
+	scope            domain.ClusterScope
+	policyGeneration domain.PolicyGeneration
+	resourcePolicy   domain.ResourcePolicy
+	sourcePolicy     domain.DataSourcePolicy
+	externalCallCost int
+	ceilings         ToolCallCeilings
 }
 
 // Validate checks the complete runtime-bound call.
 func (call BoundToolCall) Validate() error {
 	selection := ToolSelection{ID: call.modelCallID, Name: call.name, ArgumentsJSON: call.argumentsJSON}
-	if !call.invocationID.Valid() || !call.runID.Valid() || selection.Validate() != nil ||
+	if !call.invocationID.Valid() || !call.runID.Valid() || !call.sessionID.Valid() || selection.Validate() != nil ||
 		call.version != ToolCatalogVersion || call.argumentsDigest != domain.SHA256Hex(call.argumentsJSON) ||
-		call.scope.Validate() != nil || !validAgentText(call.purpose, maxToolPurposeBytes, false) || !call.ceilings.valid() {
+		call.scope.Validate() != nil || !call.policyGeneration.Valid() || !validAgentText(call.purpose, maxToolPurposeBytes, false) || !call.ceilings.valid() {
+		return ErrInvalidBoundToolCall
+	}
+	if call.name == domain.ToolNameGetResource || call.name == domain.ToolNameListResources {
+		if call.resourcePolicy.Validate() != nil {
+			return ErrInvalidBoundToolCall
+		}
+	} else if call.resourcePolicy.Type != (domain.ResourceType{}) || len(call.resourcePolicy.Verbs) != 0 ||
+		len(call.resourcePolicy.Fields) != 0 || call.resourcePolicy.Limits != (domain.ResourceQueryLimits{}) {
+		return ErrInvalidBoundToolCall
+	}
+	if call.name == domain.ToolNameQueryPrometheus || call.name == domain.ToolNameQueryLoki {
+		if call.sourcePolicy.Validate() != nil {
+			return ErrInvalidBoundToolCall
+		}
+	} else if call.sourcePolicy.Kind != "" || call.sourcePolicy.OriginHash != "" ||
+		len(call.sourcePolicy.Queries) != 0 || call.sourcePolicy.RequestTimeout != 0 {
+		return ErrInvalidBoundToolCall
+	}
+	if call.externalCallCost < 1 || call.externalCallCost > maxDataSourceCalls {
 		return ErrInvalidBoundToolCall
 	}
 	return nil
 }
 
-func (call BoundToolCall) InvocationID() domain.ToolInvocationID { return call.invocationID }
-func (call BoundToolCall) RunID() domain.AgentRunID              { return call.runID }
-func (call BoundToolCall) ModelCallID() string                   { return call.modelCallID }
-func (call BoundToolCall) Name() domain.ToolName                 { return call.name }
-func (call BoundToolCall) Version() string                       { return call.version }
-func (call BoundToolCall) Purpose() string                       { return call.purpose }
-func (call BoundToolCall) ArgumentsJSON() string                 { return call.argumentsJSON }
-func (call BoundToolCall) Scope() domain.ClusterScope            { return call.scope }
-func (call BoundToolCall) Ceilings() ToolCallCeilings            { return call.ceilings }
+func (call BoundToolCall) InvocationID() domain.ToolInvocationID     { return call.invocationID }
+func (call BoundToolCall) RunID() domain.AgentRunID                  { return call.runID }
+func (call BoundToolCall) SessionID() domain.SessionID               { return call.sessionID }
+func (call BoundToolCall) ModelCallID() string                       { return call.modelCallID }
+func (call BoundToolCall) Name() domain.ToolName                     { return call.name }
+func (call BoundToolCall) Version() string                           { return call.version }
+func (call BoundToolCall) Purpose() string                           { return call.purpose }
+func (call BoundToolCall) ArgumentsJSON() string                     { return call.argumentsJSON }
+func (call BoundToolCall) Scope() domain.ClusterScope                { return call.scope }
+func (call BoundToolCall) PolicyGeneration() domain.PolicyGeneration { return call.policyGeneration }
+func (call BoundToolCall) ResourcePolicy() domain.ResourcePolicy     { return call.resourcePolicy.Copy() }
+func (call BoundToolCall) SourcePolicy() domain.DataSourcePolicy     { return call.sourcePolicy.Copy() }
+func (call BoundToolCall) ExternalCallCost() int                     { return call.externalCallCost }
+func (call BoundToolCall) Ceilings() ToolCallCeilings                { return call.ceilings }
 
 // Identity returns the frozen canonical repeat key.
 func (call BoundToolCall) Identity() ToolCallIdentity {
@@ -260,35 +352,176 @@ func normalizeListNamespace(scope domain.ClusterScope, kind domain.ResourceKind,
 	return namespace, nil
 }
 
+func normalizePolicyNamespace(scope domain.ClusterScope, resourceType domain.ResourceType, namespace string, allowAll bool) (string, error) {
+	if resourceType.Validate() != nil {
+		return "", ErrToolPolicyDenied
+	}
+	if resourceType.ClusterScoped() {
+		if namespace != "" {
+			return "", ErrToolPolicyDenied
+		}
+		return "", nil
+	}
+	if namespace == "" {
+		return scope.Namespace, nil
+	}
+	if namespace == "*" {
+		if !allowAll || scope.NamespaceAccess != domain.NamespaceAccessAll {
+			return "", ErrToolPolicyDenied
+		}
+		return namespace, nil
+	}
+	if !domain.ValidNamespaceName(namespace) || scope.NamespaceAccess != domain.NamespaceAccessAll && namespace != scope.Namespace {
+		return "", ErrToolPolicyDenied
+	}
+	return namespace, nil
+}
+
+func normalizePodObservation(scope domain.ClusterScope, namespace, podName, purposeValue string) (string, string, error) {
+	purpose, err := safeToolPurpose(purposeValue)
+	if err != nil {
+		return "", "", err
+	}
+	namespace, err = normalizeListNamespace(scope, domain.ResourceKindPod, namespace)
+	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: namespace, Name: podName}
+	if err != nil || namespace == "*" || domain.ValidateLiveResourceRef(pod) != nil || !scope.AllowsReference(pod) {
+		return "", "", ErrToolPolicyDenied
+	}
+	return purpose, namespace, nil
+}
+
+func boundResourcePolicy(input RunInput, name domain.ToolName, canonical string) (domain.ResourcePolicy, error) {
+	if name != domain.ToolNameGetResource && name != domain.ToolNameListResources {
+		return domain.ResourcePolicy{}, nil
+	}
+	var identity struct {
+		ResourceType string `json:"resource_type"`
+	}
+	if json.Unmarshal([]byte(canonical), &identity) != nil {
+		return domain.ResourcePolicy{}, ErrToolPolicyDenied
+	}
+	policy, found := input.ResourcePolicies().Resolve(identity.ResourceType)
+	if !found || policy.Validate() != nil {
+		return domain.ResourcePolicy{}, ErrToolPolicyDenied
+	}
+	return policy, nil
+}
+
+func boundSourcePolicy(input RunInput, name domain.ToolName, canonical string) (domain.DataSourcePolicy, error) {
+	var kind domain.DataSourceKind
+	switch name {
+	case domain.ToolNameQueryPrometheus:
+		kind = domain.DataSourcePrometheus
+	case domain.ToolNameQueryLoki:
+		kind = domain.DataSourceLoki
+	default:
+		return domain.DataSourcePolicy{}, nil
+	}
+	var identity struct {
+		QueryID domain.ObservabilityQueryID `json:"query_id"`
+	}
+	if json.Unmarshal([]byte(canonical), &identity) != nil {
+		return domain.DataSourcePolicy{}, ErrToolPolicyDenied
+	}
+	policy, found := input.ObservabilityPolicies().Resolve(kind)
+	if !found || !policy.Allows(identity.QueryID) {
+		return domain.DataSourcePolicy{}, ErrToolPolicyDenied
+	}
+	return policy, nil
+}
+
+func externalCallCost(name domain.ToolName, canonical string, limits RunBudgetLimits) (int, error) {
+	switch name {
+	case domain.ToolNameGetPodLogs, domain.ToolNameGetPreviousPodLogs:
+		var arguments getPodLogsArguments
+		if json.Unmarshal([]byte(canonical), &arguments) != nil {
+			return 0, ErrToolPolicyDenied
+		}
+		if arguments.ContainerMode == "all" {
+			return limits.LogContainers, nil
+		}
+		return 1, nil
+	case domain.ToolNameQueryLoki:
+		return limits.DataSourcePages, nil
+	default:
+		return 1, nil
+	}
+}
+
 type getResourceArguments struct {
-	Detail   string           `json:"detail"`
-	Purpose  string           `json:"purpose"`
-	Resource resourceArgument `json:"resource"`
+	Detail       string `json:"detail"`
+	Name         string `json:"name"`
+	Namespace    string `json:"namespace"`
+	Purpose      string `json:"purpose"`
+	ResourceType string `json:"resource_type"`
+}
+
+type resourceFilterArgument struct {
+	Field    string                        `json:"field"`
+	Operator domain.ResourceFilterOperator `json:"operator"`
+	Value    string                        `json:"value"`
 }
 
 type listResourcesArguments struct {
-	HealthFilter string `json:"health_filter"`
-	Kind         string `json:"kind"`
-	Limit        int    `json:"limit"`
-	NameQuery    string `json:"name_query,omitempty"`
-	Namespace    string `json:"namespace,omitempty"`
-	Purpose      string `json:"purpose"`
+	Filters      []resourceFilterArgument `json:"filters"`
+	Format       domain.ResourceView      `json:"format"`
+	Limit        int                      `json:"limit"`
+	Namespace    string                   `json:"namespace"`
+	Purpose      string                   `json:"purpose"`
+	ResourceType string                   `json:"resource_type"`
 }
 
 type getEventsArguments struct {
 	Limit        int              `json:"limit"`
 	Purpose      string           `json:"purpose"`
+	Reason       string           `json:"reason"`
 	Resource     resourceArgument `json:"resource"`
 	SinceSeconds int              `json:"since_seconds"`
+	Type         string           `json:"type"`
 }
 
 type getPodLogsArguments struct {
-	Container    string `json:"container,omitempty"`
-	Namespace    string `json:"namespace"`
-	PodName      string `json:"pod_name"`
-	Purpose      string `json:"purpose"`
-	SinceSeconds int    `json:"since_seconds"`
-	TailLines    int    `json:"tail_lines"`
+	Container        string `json:"container"`
+	ContainerMode    string `json:"container_mode"`
+	IncludeEphemeral bool   `json:"include_ephemeral"`
+	IncludeInit      bool   `json:"include_init"`
+	Namespace        string `json:"namespace"`
+	PodName          string `json:"pod_name"`
+	Purpose          string `json:"purpose"`
+	Search           string `json:"search"`
+	SinceSeconds     int    `json:"since_seconds"`
+	TailLines        int    `json:"tail_lines"`
+}
+
+type getPodMetricsArguments struct {
+	Namespace string `json:"namespace"`
+	PodName   string `json:"pod_name"`
+	Purpose   string `json:"purpose"`
+}
+
+type getNodeMetricsArguments struct {
+	NodeName string `json:"node_name"`
+	Purpose  string `json:"purpose"`
+}
+
+type queryPrometheusArguments struct {
+	Namespace     string                      `json:"namespace"`
+	PodName       string                      `json:"pod_name"`
+	Purpose       string                      `json:"purpose"`
+	QueryID       domain.ObservabilityQueryID `json:"query_id"`
+	SeriesLimit   int                         `json:"series_limit"`
+	StepSeconds   int                         `json:"step_seconds"`
+	WindowSeconds int                         `json:"window_seconds"`
+}
+
+type queryLokiArguments struct {
+	Contains      string                      `json:"contains"`
+	LineLimit     int                         `json:"line_limit"`
+	Namespace     string                      `json:"namespace"`
+	PodName       string                      `json:"pod_name"`
+	Purpose       string                      `json:"purpose"`
+	QueryID       domain.ObservabilityQueryID `json:"query_id"`
+	WindowSeconds int                         `json:"window_seconds"`
 }
 
 type getClusterOverviewArguments struct {
@@ -309,32 +542,73 @@ func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selectio
 	if input.Validate() != nil || !invocationID.Valid() || selection.Validate() != nil {
 		return BoundToolCall{}, ErrToolPolicyDenied
 	}
-	canonical, purpose, err := canonicalToolArguments(input.Scope(), selection)
+	canonical, purpose, err := canonicalToolArguments(input, selection)
+	if err != nil {
+		return BoundToolCall{}, err
+	}
+	policy, err := boundResourcePolicy(input, selection.Name, canonical)
+	if err != nil {
+		return BoundToolCall{}, err
+	}
+	sourcePolicy, err := boundSourcePolicy(input, selection.Name, canonical)
 	if err != nil {
 		return BoundToolCall{}, err
 	}
 	limits := input.BudgetLimits()
+	callCost, err := externalCallCost(selection.Name, canonical, limits)
+	if err != nil {
+		return BoundToolCall{}, err
+	}
+	requestTimeout := limits.ToolRequestTimeout
+	if sourcePolicy.RequestTimeout > 0 && sourcePolicy.RequestTimeout < requestTimeout {
+		requestTimeout = sourcePolicy.RequestTimeout
+	}
 	call := BoundToolCall{
-		invocationID:    invocationID,
-		runID:           input.RunID(),
-		modelCallID:     selection.ID,
-		name:            selection.Name,
-		version:         ToolCatalogVersion,
-		purpose:         purpose,
-		argumentsJSON:   canonical,
-		argumentsDigest: domain.SHA256Hex(canonical),
-		scope:           input.Scope(),
+		invocationID:     invocationID,
+		runID:            input.RunID(),
+		sessionID:        input.SessionID(),
+		modelCallID:      selection.ID,
+		name:             selection.Name,
+		version:          ToolCatalogVersion,
+		purpose:          purpose,
+		argumentsJSON:    canonical,
+		argumentsDigest:  domain.SHA256Hex(canonical),
+		scope:            input.Scope(),
+		policyGeneration: input.PolicyGeneration(),
+		resourcePolicy:   policy,
+		sourcePolicy:     sourcePolicy,
+		externalCallCost: callCost,
 		ceilings: ToolCallCeilings{
-			RequestTimeout:       limits.ToolRequestTimeout,
-			MaxResultBytes:       limits.ToolResultBytes,
-			MaxEvidenceItems:     domain.MaxEvidenceItemsPerResult,
-			MaxResourceItems:     50,
-			MaxEventItems:        50,
-			MaxLogLines:          200,
-			MaxLogWindow:         15 * time.Minute,
-			MaxRelationshipHops:  2,
-			MaxRelationshipNodes: 25,
-			MaxRelationshipEdges: 40,
+			RequestTimeout:          requestTimeout,
+			MaxResultBytes:          limits.ToolResultBytes,
+			MaxEvidenceItems:        domain.MaxEvidenceItemsPerResult,
+			MaxResourceItems:        limits.ResourceReturnedItems,
+			MaxResourceScannedItems: limits.ResourceScannedItems,
+			MaxResourcePages:        limits.ResourcePages,
+			MaxResourcePageItems:    limits.ResourcePageItems,
+			MaxResourcePageBytes:    limits.ResourcePageBytes,
+			MaxResourceBytes:        limits.ResourceBytes,
+			MaxEventItems:           min(50, limits.EventPageItems),
+			MaxEventPages:           limits.EventPages,
+			MaxEventPageItems:       limits.EventPageItems,
+			MaxEventPageBytes:       limits.EventPageBytes,
+			MaxEventBytes:           limits.EventBytes,
+			MaxLogLines:             limits.DataSourceLines,
+			MaxLogContainers:        limits.LogContainers,
+			MaxLogBytes:             limits.LogBytes,
+			MaxLogWindow:            limits.DataSourceWindow,
+			MaxMetricContainers:     limits.MetricContainers,
+			MaxMetricBytes:          limits.MetricBytes,
+			MaxDataSourcePages:      limits.DataSourcePages,
+			MaxDataSourceSeries:     limits.DataSourceSeries,
+			MaxDataSourceSamples:    limits.DataSourceSamples,
+			MaxDataSourceLines:      limits.DataSourceLines,
+			MaxDataSourceBytes:      limits.DataSourceBytes,
+			MaxDataSourceWindow:     limits.DataSourceWindow,
+			MaxDataSourceStep:       limits.DataSourceStep,
+			MaxRelationshipHops:     2,
+			MaxRelationshipNodes:    25,
+			MaxRelationshipEdges:    40,
 		},
 	}
 	if call.Validate() != nil {
@@ -343,13 +617,22 @@ func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selectio
 	return call, nil
 }
 
-func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) (string, string, error) {
+func canonicalToolArguments(input RunInput, selection ToolSelection) (string, string, error) {
+	scope := input.Scope()
 	switch selection.Name {
 	case domain.ToolNameGetResource:
+		if err := requireExactJSONObjectFields(
+			selection.ArgumentsJSON,
+			"detail", "name", "namespace", "purpose", "resource_type",
+		); err != nil {
+			return "", "", err
+		}
 		var wire struct {
-			Detail   string           `json:"detail"`
-			Purpose  string           `json:"purpose"`
-			Resource resourceArgument `json:"resource"`
+			Detail       string `json:"detail"`
+			Name         string `json:"name"`
+			Namespace    string `json:"namespace"`
+			Purpose      string `json:"purpose"`
+			ResourceType string `json:"resource_type"`
 		}
 		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
 			return "", "", err
@@ -358,46 +641,56 @@ func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) 
 		if err != nil {
 			return "", "", err
 		}
-		resource, err := normalizeResource(scope, wire.Resource)
+		policy, found := input.ResourcePolicies().Resolve(wire.ResourceType)
+		if !found || !policy.AllowsVerb(domain.ResourceVerbGet) || !domain.ValidResourceName(wire.Name) {
+			return "", "", ErrToolPolicyDenied
+		}
+		namespace, err := normalizePolicyNamespace(scope, policy.Type, wire.Namespace, false)
 		if err != nil {
 			return "", "", err
 		}
 		detail := wire.Detail
 		if detail == "" {
-			detail = "diagnostic"
+			detail = string(domain.ResourceViewDescribe)
 		}
-		if detail != "summary" && detail != "diagnostic" {
+		if detail != string(domain.ResourceViewSummary) && detail != string(domain.ResourceViewDescribe) {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getResourceArguments{Detail: detail, Purpose: purpose, Resource: resource}, purpose)
+		return marshalCanonical(getResourceArguments{
+			Detail: detail, Name: wire.Name, Namespace: namespace, Purpose: purpose, ResourceType: policy.Type.ID,
+		}, purpose)
 	case domain.ToolNameListResources:
+		if err := requireListResourceArgumentShape(selection.ArgumentsJSON); err != nil {
+			return "", "", err
+		}
 		var wire struct {
-			HealthFilter string `json:"health_filter"`
-			Kind         string `json:"kind"`
-			Limit        *int   `json:"limit"`
-			NameQuery    string `json:"name_query"`
-			Namespace    string `json:"namespace"`
-			Purpose      string `json:"purpose"`
+			Filters []struct {
+				Field    string                        `json:"field"`
+				Operator domain.ResourceFilterOperator `json:"operator"`
+				Value    *string                       `json:"value"`
+			} `json:"filters"`
+			Format       domain.ResourceView `json:"format"`
+			Limit        *int                `json:"limit"`
+			Namespace    string              `json:"namespace"`
+			Purpose      string              `json:"purpose"`
+			ResourceType string              `json:"resource_type"`
 		}
 		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
 			return "", "", err
 		}
-		if !domain.ResourceKind(wire.Kind).Valid() {
+		policy, found := input.ResourcePolicies().Resolve(wire.ResourceType)
+		if !found || !policy.AllowsVerb(domain.ResourceVerbList) || len(wire.Filters) > domain.MaxResourceFilters {
 			return "", "", ErrToolPolicyDenied
 		}
 		purpose, err := safeToolPurpose(wire.Purpose)
 		if err != nil {
 			return "", "", err
 		}
-		nameQuery, err := safeOptionalToolText(wire.NameQuery, maxNameQueryBytes)
-		if err != nil {
-			return "", "", err
+		format := wire.Format
+		if format == "" {
+			format = domain.ResourceViewList
 		}
-		health := wire.HealthFilter
-		if health == "" {
-			health = "abnormal"
-		}
-		if health != "any" && health != "abnormal" {
+		if format != domain.ResourceViewList && format != domain.ResourceViewCount && format != domain.ResourceViewTable {
 			return "", "", ErrToolPolicyDenied
 		}
 		limit := 20
@@ -407,17 +700,55 @@ func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) 
 		if limit < 1 || limit > 50 {
 			return "", "", ErrToolPolicyDenied
 		}
-		namespace, err := normalizeListNamespace(scope, domain.ResourceKind(wire.Kind), wire.Namespace)
+		namespace, err := normalizePolicyNamespace(scope, policy.Type, wire.Namespace, true)
 		if err != nil {
 			return "", "", err
 		}
-		return marshalCanonical(listResourcesArguments{HealthFilter: health, Kind: wire.Kind, Limit: limit, NameQuery: nameQuery, Namespace: namespace, Purpose: purpose}, purpose)
+		filters := make([]resourceFilterArgument, 0, len(wire.Filters))
+		seen := make(map[string]struct{}, len(wire.Filters))
+		for _, requested := range wire.Filters {
+			field, allowed := policy.Field(requested.Field)
+			if !allowed {
+				return "", "", ErrToolPolicyDenied
+			}
+			value := ""
+			if requested.Value != nil {
+				value, err = safeOptionalToolText(*requested.Value, 512)
+				if err != nil {
+					return "", "", err
+				}
+			}
+			filter := domain.ResourceFilter{Field: requested.Field, Operator: requested.Operator, Value: value}
+			key := requested.Field + "\x00" + string(requested.Operator)
+			if !field.AllowsFilter(filter) {
+				return "", "", ErrToolPolicyDenied
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return "", "", ErrToolPolicyDenied
+			}
+			seen[key] = struct{}{}
+			filters = append(filters, resourceFilterArgument{Field: filter.Field, Operator: filter.Operator, Value: filter.Value})
+		}
+		sort.Slice(filters, func(left, right int) bool {
+			if filters[left].Field == filters[right].Field {
+				return filters[left].Operator < filters[right].Operator
+			}
+			return filters[left].Field < filters[right].Field
+		})
+		return marshalCanonical(listResourcesArguments{
+			Filters: filters, Format: format, Limit: limit, Namespace: namespace, Purpose: purpose, ResourceType: policy.Type.ID,
+		}, purpose)
 	case domain.ToolNameGetEvents:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "limit", "purpose", "reason", "resource", "since_seconds", "type"); err != nil {
+			return "", "", err
+		}
 		var wire struct {
 			Limit        *int             `json:"limit"`
 			Purpose      string           `json:"purpose"`
+			Reason       string           `json:"reason"`
 			Resource     resourceArgument `json:"resource"`
 			SinceSeconds *int             `json:"since_seconds"`
+			Type         string           `json:"type"`
 		}
 		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
 			return "", "", err
@@ -440,15 +771,26 @@ func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) 
 		if limit < 1 || limit > maxRequestedEvents || since < 60 || since > 86400 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getEventsArguments{Limit: limit, Purpose: purpose, Resource: resource, SinceSeconds: since}, purpose)
+		reason, err := safeOptionalToolText(wire.Reason, 128)
+		if err != nil || wire.Type != "" && wire.Type != "Normal" && wire.Type != "Warning" {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(getEventsArguments{Limit: limit, Purpose: purpose, Reason: reason, Resource: resource, SinceSeconds: since, Type: wire.Type}, purpose)
 	case domain.ToolNameGetPodLogs, domain.ToolNameGetPreviousPodLogs:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "container", "container_mode", "include_ephemeral", "include_init", "namespace", "pod_name", "purpose", "search", "since_seconds", "tail_lines"); err != nil {
+			return "", "", err
+		}
 		var wire struct {
-			Container    string `json:"container"`
-			Namespace    string `json:"namespace"`
-			PodName      string `json:"pod_name"`
-			Purpose      string `json:"purpose"`
-			SinceSeconds *int   `json:"since_seconds"`
-			TailLines    *int   `json:"tail_lines"`
+			Container        string `json:"container"`
+			ContainerMode    string `json:"container_mode"`
+			IncludeEphemeral *bool  `json:"include_ephemeral"`
+			IncludeInit      *bool  `json:"include_init"`
+			Namespace        string `json:"namespace"`
+			PodName          string `json:"pod_name"`
+			Purpose          string `json:"purpose"`
+			Search           string `json:"search"`
+			SinceSeconds     *int   `json:"since_seconds"`
+			TailLines        *int   `json:"tail_lines"`
 		}
 		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
 			return "", "", err
@@ -468,6 +810,27 @@ func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) 
 		if domain.ValidateLiveResourceRef(pod) != nil || !scope.AllowsReference(pod) {
 			return "", "", ErrToolPolicyDenied
 		}
+		mode := wire.ContainerMode
+		if mode == "" {
+			mode = "single"
+		}
+		if mode != "single" && mode != "all" || mode == "all" && wire.Container != "" {
+			return "", "", ErrToolPolicyDenied
+		}
+		includeInit, includeEphemeral := false, false
+		if wire.IncludeInit != nil {
+			includeInit = *wire.IncludeInit
+		}
+		if wire.IncludeEphemeral != nil {
+			includeEphemeral = *wire.IncludeEphemeral
+		}
+		if mode == "single" && (includeInit || includeEphemeral) {
+			return "", "", ErrToolPolicyDenied
+		}
+		search, err := safeOptionalToolText(wire.Search, 256)
+		if err != nil {
+			return "", "", err
+		}
 		tail, since := 200, 900
 		if wire.TailLines != nil {
 			tail = *wire.TailLines
@@ -475,10 +838,137 @@ func canonicalToolArguments(scope domain.ClusterScope, selection ToolSelection) 
 		if wire.SinceSeconds != nil {
 			since = *wire.SinceSeconds
 		}
-		if tail < 1 || tail > maxRequestedLogs || since < 60 || since > 3600 {
+		if tail < 1 || tail > maxRequestedLogs || since < 60 || since > 86400 {
 			return "", "", ErrToolPolicyDenied
 		}
-		return marshalCanonical(getPodLogsArguments{Container: wire.Container, Namespace: namespace, PodName: wire.PodName, Purpose: purpose, SinceSeconds: since, TailLines: tail}, purpose)
+		return marshalCanonical(getPodLogsArguments{
+			Container: wire.Container, ContainerMode: mode, IncludeEphemeral: includeEphemeral, IncludeInit: includeInit,
+			Namespace: namespace, PodName: wire.PodName, Purpose: purpose, Search: search, SinceSeconds: since, TailLines: tail,
+		}, purpose)
+	case domain.ToolNameGetPodMetrics:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "namespace", "pod_name", "purpose"); err != nil {
+			return "", "", err
+		}
+		var wire getPodMetricsArguments
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		if err != nil {
+			return "", "", err
+		}
+		namespace, err := normalizeListNamespace(scope, domain.ResourceKindPod, wire.Namespace)
+		pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: namespace, Name: wire.PodName}
+		if err != nil || namespace == "*" || domain.ValidateLiveResourceRef(pod) != nil || !scope.AllowsReference(pod) {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(getPodMetricsArguments{Namespace: namespace, PodName: wire.PodName, Purpose: purpose}, purpose)
+	case domain.ToolNameGetNodeMetrics:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "node_name", "purpose"); err != nil {
+			return "", "", err
+		}
+		var wire getNodeMetricsArguments
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		node := domain.ResourceRef{APIVersion: "v1", Kind: "Node", Name: wire.NodeName}
+		if err != nil || domain.ValidateLiveResourceRef(node) != nil || !scope.AllowsReference(node) {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(getNodeMetricsArguments{NodeName: wire.NodeName, Purpose: purpose}, purpose)
+	case domain.ToolNameQueryPrometheus:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "namespace", "pod_name", "purpose", "query_id", "series_limit", "step_seconds", "window_seconds"); err != nil {
+			return "", "", err
+		}
+		var wire struct {
+			Namespace     string                      `json:"namespace"`
+			PodName       string                      `json:"pod_name"`
+			Purpose       string                      `json:"purpose"`
+			QueryID       domain.ObservabilityQueryID `json:"query_id"`
+			SeriesLimit   *int                        `json:"series_limit"`
+			StepSeconds   *int                        `json:"step_seconds"`
+			WindowSeconds *int                        `json:"window_seconds"`
+		}
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		policy, found := input.ObservabilityPolicies().Resolve(domain.DataSourcePrometheus)
+		if !found || !policy.Allows(wire.QueryID) {
+			return "", "", ErrToolPolicyDenied
+		}
+		purpose, namespace, err := normalizePodObservation(scope, wire.Namespace, wire.PodName, wire.Purpose)
+		if err != nil {
+			return "", "", err
+		}
+		limits := input.BudgetLimits()
+		window := min(3600, int(limits.DataSourceWindow/time.Second))
+		step := min(60, int(limits.DataSourceStep/time.Second))
+		if wire.WindowSeconds != nil {
+			window = *wire.WindowSeconds
+		}
+		if wire.StepSeconds != nil {
+			step = *wire.StepSeconds
+		}
+		if window < 60 || window > int(domain.MaxObservabilityWindow/time.Second) || step < 15 || step > int(domain.MaxObservabilityStep/time.Second) ||
+			window > int(limits.DataSourceWindow/time.Second) || step > int(limits.DataSourceStep/time.Second) {
+			return "", "", ErrToolPolicyDenied
+		}
+		pointsPerSeries := window/step + 1
+		if pointsPerSeries < 1 || pointsPerSeries > domain.MaxObservabilitySamples {
+			return "", "", ErrToolPolicyDenied
+		}
+		maximumSeries := min(limits.DataSourceSeries, limits.DataSourceSamples/pointsPerSeries)
+		series := min(20, maximumSeries)
+		if wire.SeriesLimit != nil {
+			series = *wire.SeriesLimit
+		}
+		if series < 1 || series > domain.MaxObservabilitySeries || series > maximumSeries {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(queryPrometheusArguments{Namespace: namespace, PodName: wire.PodName, Purpose: purpose, QueryID: wire.QueryID, SeriesLimit: series, StepSeconds: step, WindowSeconds: window}, purpose)
+	case domain.ToolNameQueryLoki:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "contains", "line_limit", "namespace", "pod_name", "purpose", "query_id", "window_seconds"); err != nil {
+			return "", "", err
+		}
+		var wire struct {
+			Contains      string                      `json:"contains"`
+			LineLimit     *int                        `json:"line_limit"`
+			Namespace     string                      `json:"namespace"`
+			PodName       string                      `json:"pod_name"`
+			Purpose       string                      `json:"purpose"`
+			QueryID       domain.ObservabilityQueryID `json:"query_id"`
+			WindowSeconds *int                        `json:"window_seconds"`
+		}
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		policy, found := input.ObservabilityPolicies().Resolve(domain.DataSourceLoki)
+		if !found || !policy.Allows(wire.QueryID) {
+			return "", "", ErrToolPolicyDenied
+		}
+		purpose, namespace, err := normalizePodObservation(scope, wire.Namespace, wire.PodName, wire.Purpose)
+		if err != nil {
+			return "", "", err
+		}
+		contains, err := safeOptionalToolText(wire.Contains, 256)
+		if err != nil {
+			return "", "", err
+		}
+		limits := input.BudgetLimits()
+		window := min(3600, int(limits.DataSourceWindow/time.Second))
+		lines := min(200, limits.DataSourceLines)
+		if wire.WindowSeconds != nil {
+			window = *wire.WindowSeconds
+		}
+		if wire.LineLimit != nil {
+			lines = *wire.LineLimit
+		}
+		if window < 60 || window > int(domain.MaxObservabilityWindow/time.Second) || window > int(limits.DataSourceWindow/time.Second) ||
+			lines < 1 || lines > domain.MaxObservabilityLines || lines > limits.DataSourceLines {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(queryLokiArguments{Contains: contains, LineLimit: lines, Namespace: namespace, PodName: wire.PodName, Purpose: purpose, QueryID: wire.QueryID, WindowSeconds: window}, purpose)
 	case domain.ToolNameGetRelatedResources:
 		var wire struct {
 			Include       []string         `json:"include"`
@@ -571,6 +1061,9 @@ func normalizeIncludes(kind domain.ResourceKind, requested []string) ([]string, 
 }
 
 func strictDecode[T any](value string, target *T) error {
+	if rejectDuplicateJSONFields(value) != nil {
+		return rejectedToolArguments()
+	}
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -579,6 +1072,106 @@ func strictDecode[T any](value string, target *T) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return rejectedToolArguments()
+	}
+	return nil
+}
+
+func requireListResourceArgumentShape(value string) error {
+	if err := requireExactJSONObjectFields(
+		value,
+		"filters", "format", "limit", "namespace", "purpose", "resource_type",
+	); err != nil {
+		return err
+	}
+	var root map[string]json.RawMessage
+	if json.Unmarshal([]byte(value), &root) != nil {
+		return rejectedToolArguments()
+	}
+	var filters []map[string]json.RawMessage
+	if json.Unmarshal(root["filters"], &filters) != nil {
+		return rejectedToolArguments()
+	}
+	for _, filter := range filters {
+		if !exactJSONObjectFields(filter, "field", "operator", "value") {
+			return rejectedToolArguments()
+		}
+	}
+	return nil
+}
+
+func requireExactJSONObjectFields(value string, required ...string) error {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(value), &fields) != nil || !exactJSONObjectFields(fields, required...) {
+		return rejectedToolArguments()
+	}
+	return nil
+}
+
+func exactJSONObjectFields(fields map[string]json.RawMessage, required ...string) bool {
+	if fields == nil || len(fields) != len(required) {
+		return false
+	}
+	for _, field := range required {
+		if _, found := fields[field]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func rejectDuplicateJSONFields(value string) error {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	if err := consumeUniqueJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("JSON contains trailing data")
+	}
+	return nil
+}
+
+func consumeUniqueJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, composite := token.(json.Delim)
+	if !composite {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, keyErr := decoder.Token()
+			key, valid := keyToken.(string)
+			if keyErr != nil || !valid {
+				return errors.New("JSON object key is invalid")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return errors.New("JSON object key is duplicated")
+			}
+			seen[key] = struct{}{}
+			if err := consumeUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("JSON object is incomplete")
+		}
+	case '[':
+		for decoder.More() {
+			if err := consumeUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("JSON array is incomplete")
+		}
+	default:
+		return errors.New("JSON delimiter is invalid")
 	}
 	return nil
 }
@@ -660,16 +1253,32 @@ type modelToolResource struct {
 	UID             string `json:"uid,omitempty"`
 }
 
+type modelResourceType struct {
+	Group    string               `json:"group"`
+	Kind     string               `json:"kind"`
+	Resource string               `json:"resource"`
+	Scope    domain.ResourceScope `json:"scope"`
+	Version  string               `json:"version"`
+}
+
 type modelEvidence struct {
-	Category       domain.EvidenceCategory  `json:"category"`
-	Fact           string                   `json:"fact"`
-	ID             domain.EvidenceID        `json:"id"`
-	ObservedAt     string                   `json:"observed_at"`
-	RedactionCount int                      `json:"redaction_count"`
-	Resource       modelToolResource        `json:"resource"`
-	Severity       *domain.EvidenceSeverity `json:"severity,omitempty"`
-	SourcePath     *string                  `json:"source_path,omitempty"`
-	Truncated      bool                     `json:"truncated"`
+	Category         domain.EvidenceCategory  `json:"category"`
+	Fact             string                   `json:"fact"`
+	ID               domain.EvidenceID        `json:"id"`
+	ObservedAt       string                   `json:"observed_at"`
+	Partial          bool                     `json:"partial"`
+	PolicyGeneration domain.PolicyGeneration  `json:"policy_generation,omitempty"`
+	PolicyVersion    string                   `json:"policy_version,omitempty"`
+	RedactionCount   int                      `json:"redaction_count"`
+	Resource         modelToolResource        `json:"resource"`
+	ResourceType     *modelResourceType       `json:"resource_type,omitempty"`
+	Series           string                   `json:"series,omitempty"`
+	Severity         *domain.EvidenceSeverity `json:"severity,omitempty"`
+	SourcePath       *string                  `json:"source_path,omitempty"`
+	SourceOriginHash string                   `json:"source_origin_hash,omitempty"`
+	ObservedFrom     string                   `json:"observed_from,omitempty"`
+	ObservedThrough  string                   `json:"observed_through,omitempty"`
+	Truncated        bool                     `json:"truncated"`
 }
 
 type modelToolResult struct {
@@ -705,7 +1314,7 @@ func BuildToolPolicyFeedback() (string, error) {
 	encoded, err := json.Marshal(modelToolPolicyFeedback{
 		Code:        "tool_selection_denied",
 		DataClass:   "local_runtime_policy",
-		Instruction: "The local runtime rejected the whole requested batch before any Tool handler or Kubernetes call. Submit a new batch using the exact supplied schema. Use namespace:null for Node, Namespace, and PersistentVolume. For namespaced Kinds, null means the working Namespace; an exact Namespace or '*' is permitted only when namespace_access is all. If the requested scope is not allowed, explain that limitation instead of substituting another scope.",
+		Instruction: "The local runtime rejected the whole requested batch before any Tool handler or Kubernetes call. Submit a new batch using one exact resource_type from the trusted catalog and the supplied schema. Use namespace:null for a cluster-scoped resource type. For a namespaced resource type, null or the exact working Namespace selects that Namespace; another exact Namespace or '*' is permitted only when namespace_access is all. If the requested API, field, operation, or scope is not allowed, explain that limitation instead of substituting another one.",
 	})
 	if err != nil || len(encoded) > domain.MaxToolResultBytes ||
 		!domain.ValidModelText(string(encoded), domain.MaxModelInputMessageBytes, false) {
@@ -723,12 +1332,27 @@ func BuildToolResultContent(result domain.ToolResult) (string, int, error) {
 	}
 	evidence := make([]modelEvidence, len(result.Evidence))
 	for index, item := range result.Evidence {
+		var resourceType *modelResourceType
+		if item.ResourceType.Validate() == nil {
+			resourceType = &modelResourceType{
+				Group: item.ResourceType.Group, Kind: item.ResourceType.Kind, Resource: item.ResourceType.Resource,
+				Scope: item.ResourceType.Scope, Version: item.ResourceType.Version,
+			}
+		}
+		observedFrom, observedThrough := "", ""
+		if item.ObservedFrom != nil {
+			observedFrom = item.ObservedFrom.Format(time.RFC3339Nano)
+			observedThrough = item.ObservedThrough.Format(time.RFC3339Nano)
+		}
 		evidence[index] = modelEvidence{
-			Category:       item.Category,
-			Fact:           item.Fact,
-			ID:             item.ID,
-			ObservedAt:     item.ObservedAt.Format(time.RFC3339Nano),
-			RedactionCount: item.RedactionCount,
+			Category:         item.Category,
+			Fact:             item.Fact,
+			ID:               item.ID,
+			ObservedAt:       item.ObservedAt.Format(time.RFC3339Nano),
+			Partial:          item.Partial,
+			PolicyGeneration: item.PolicyGeneration,
+			PolicyVersion:    item.PolicyVersion,
+			RedactionCount:   item.RedactionCount,
 			Resource: modelToolResource{
 				APIVersion:      item.Resource.APIVersion,
 				Kind:            item.Resource.Kind,
@@ -737,9 +1361,14 @@ func BuildToolResultContent(result domain.ToolResult) (string, int, error) {
 				ResourceVersion: item.Resource.ResourceVersion,
 				UID:             item.Resource.UID,
 			},
-			Severity:   item.Severity,
-			SourcePath: item.SourcePath,
-			Truncated:  item.Truncated,
+			ResourceType:     resourceType,
+			Series:           item.Series,
+			Severity:         item.Severity,
+			SourcePath:       item.SourcePath,
+			SourceOriginHash: item.SourceOriginHash,
+			ObservedFrom:     observedFrom,
+			ObservedThrough:  observedThrough,
+			Truncated:        item.Truncated,
 		}
 	}
 	warnings := make([]domain.ToolResultWarning, len(result.Warnings))

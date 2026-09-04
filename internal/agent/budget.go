@@ -12,6 +12,8 @@ import (
 const (
 	maxToolRequestDuration = 60 * time.Second
 	maxLogCalls            = 32
+	maxMetricCalls         = 32
+	maxDataSourceCalls     = 64
 	maxSummaryCalls        = 4
 	maxSummaryRequestTime  = 60 * time.Second
 )
@@ -58,6 +60,29 @@ type RunBudgetLimits struct {
 	SummaryRequestTimeout time.Duration
 	ToolRequestTimeout    time.Duration
 	LogCalls              int
+	LogContainers         int
+	LogBytes              int
+	EventPages            int
+	EventPageItems        int
+	EventPageBytes        int
+	EventBytes            int
+	MetricCalls           int
+	MetricContainers      int
+	MetricBytes           int
+	DataSourceCalls       int
+	DataSourcePages       int
+	DataSourceSeries      int
+	DataSourceSamples     int
+	DataSourceLines       int
+	DataSourceBytes       int
+	DataSourceWindow      time.Duration
+	DataSourceStep        time.Duration
+	ResourcePages         int
+	ResourcePageItems     int
+	ResourcePageBytes     int
+	ResourceScannedItems  int
+	ResourceReturnedItems int
+	ResourceBytes         int
 }
 
 // DefaultRunBudgetLimits returns the balanced operational profile.
@@ -90,7 +115,30 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.ToolRequestTimeout = 15 * time.Second
 		limits.RunToolResultBytes = 1 * 1024 * 1024
 		limits.LogCalls = 4
+		limits.LogContainers = 4
+		limits.LogBytes = 64 * 1024
+		limits.EventPages = 2
+		limits.EventPageItems = 25
+		limits.EventPageBytes = 64 * 1024
+		limits.EventBytes = 128 * 1024
+		limits.MetricCalls = 4
+		limits.MetricContainers = 20
+		limits.MetricBytes = 128 * 1024
+		limits.DataSourceCalls = 4
+		limits.DataSourcePages = 2
+		limits.DataSourceSeries = 10
+		limits.DataSourceSamples = 100
+		limits.DataSourceLines = 100
+		limits.DataSourceBytes = 128 * 1024
+		limits.DataSourceWindow = time.Hour
+		limits.DataSourceStep = time.Minute
 		limits.NoProgressSteps = 2
+		limits.ResourcePages = 2
+		limits.ResourcePageItems = 25
+		limits.ResourcePageBytes = 128 * 1024
+		limits.ResourceScannedItems = 50
+		limits.ResourceReturnedItems = 25
+		limits.ResourceBytes = 256 * 1024
 	case BudgetProfileBalanced:
 		limits.RunDuration = 10 * time.Minute
 		limits.Steps = 32
@@ -104,7 +152,30 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.ToolRequestTimeout = 30 * time.Second
 		limits.RunToolResultBytes = 4 * 1024 * 1024
 		limits.LogCalls = 12
+		limits.LogContainers = 8
+		limits.LogBytes = 256 * 1024
+		limits.EventPages = 4
+		limits.EventPageItems = 50
+		limits.EventPageBytes = 128 * 1024
+		limits.EventBytes = 512 * 1024
+		limits.MetricCalls = 12
+		limits.MetricContainers = 35
+		limits.MetricBytes = 256 * 1024
+		limits.DataSourceCalls = 16
+		limits.DataSourcePages = 4
+		limits.DataSourceSeries = 25
+		limits.DataSourceSamples = 400
+		limits.DataSourceLines = 400
+		limits.DataSourceBytes = 512 * 1024
+		limits.DataSourceWindow = 6 * time.Hour
+		limits.DataSourceStep = 5 * time.Minute
 		limits.NoProgressSteps = 4
+		limits.ResourcePages = 4
+		limits.ResourcePageItems = 50
+		limits.ResourcePageBytes = 256 * 1024
+		limits.ResourceScannedItems = 200
+		limits.ResourceReturnedItems = domain.MaxResourceSummaries
+		limits.ResourceBytes = 1 * 1024 * 1024
 	case BudgetProfileExtended:
 		limits.RunDuration = 30 * time.Minute
 		limits.Steps = 64
@@ -118,7 +189,30 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.ToolRequestTimeout = 60 * time.Second
 		limits.RunToolResultBytes = 12 * 1024 * 1024
 		limits.LogCalls = 32
+		limits.LogContainers = 16
+		limits.LogBytes = 1 * 1024 * 1024
+		limits.EventPages = domain.MaxObservabilityPages
+		limits.EventPageItems = 100
+		limits.EventPageBytes = 256 * 1024
+		limits.EventBytes = 2 * 1024 * 1024
+		limits.MetricCalls = maxMetricCalls
+		limits.MetricContainers = domain.MaxMetricContainers
+		limits.MetricBytes = 1 * 1024 * 1024
+		limits.DataSourceCalls = maxDataSourceCalls
+		limits.DataSourcePages = domain.MaxObservabilityPages
+		limits.DataSourceSeries = domain.MaxObservabilitySeries
+		limits.DataSourceSamples = domain.MaxObservabilitySamples
+		limits.DataSourceLines = domain.MaxObservabilityLines
+		limits.DataSourceBytes = domain.MaxObservabilityBytes
+		limits.DataSourceWindow = domain.MaxObservabilityWindow
+		limits.DataSourceStep = domain.MaxObservabilityStep
 		limits.NoProgressSteps = 6
+		limits.ResourcePages = domain.MaxResourceQueryPages
+		limits.ResourcePageItems = domain.MaxResourcePageItems
+		limits.ResourcePageBytes = domain.MaxResourcePageBytes
+		limits.ResourceScannedItems = domain.MaxResourceQueryItems
+		limits.ResourceReturnedItems = domain.MaxResourceSummaries
+		limits.ResourceBytes = domain.MaxResourceQueryBytes
 	default:
 		return RunBudgetLimits{}, ErrInvalidRunBudget
 	}
@@ -146,7 +240,32 @@ func (limits RunBudgetLimits) Validate() error {
 		limits.ModelRequestTimeout <= 0 || limits.ModelRequestTimeout > profileLimits.ModelRequestTimeout || limits.ModelRequestTimeout > domain.MaxModelRequestTimeout ||
 		limits.SummaryRequestTimeout <= 0 || limits.SummaryRequestTimeout > profileLimits.SummaryRequestTimeout || limits.SummaryRequestTimeout > maxSummaryRequestTime ||
 		limits.ToolRequestTimeout <= 0 || limits.ToolRequestTimeout > profileLimits.ToolRequestTimeout || limits.ToolRequestTimeout > maxToolRequestDuration ||
-		limits.LogCalls <= 0 || limits.LogCalls > profileLimits.LogCalls || limits.LogCalls > maxLogCalls {
+		limits.LogCalls <= 0 || limits.LogCalls > profileLimits.LogCalls || limits.LogCalls > maxLogCalls ||
+		limits.LogContainers <= 0 || limits.LogContainers > profileLimits.LogContainers || limits.LogContainers > domain.MaxObservabilityLogContainers ||
+		limits.LogBytes <= 0 || limits.LogBytes > profileLimits.LogBytes || limits.LogBytes > domain.MaxObservabilityBytes ||
+		limits.EventPages <= 0 || limits.EventPages > profileLimits.EventPages || limits.EventPages > domain.MaxObservabilityPages ||
+		limits.EventPageItems <= 0 || limits.EventPageItems > profileLimits.EventPageItems || limits.EventPageItems > 100 ||
+		limits.EventPageBytes <= 0 || limits.EventPageBytes > profileLimits.EventPageBytes || limits.EventPageBytes > domain.MaxObservabilityBytes ||
+		limits.EventBytes <= 0 || limits.EventBytes > profileLimits.EventBytes || limits.EventBytes > domain.MaxObservabilityBytes ||
+		limits.EventPageBytes > limits.EventBytes ||
+		limits.MetricCalls <= 0 || limits.MetricCalls > profileLimits.MetricCalls || limits.MetricCalls > maxMetricCalls ||
+		limits.MetricContainers <= 0 || limits.MetricContainers > profileLimits.MetricContainers || limits.MetricContainers > domain.MaxMetricContainers ||
+		limits.MetricBytes <= 0 || limits.MetricBytes > profileLimits.MetricBytes || limits.MetricBytes > domain.MaxObservabilityBytes ||
+		limits.DataSourceCalls <= 0 || limits.DataSourceCalls > profileLimits.DataSourceCalls || limits.DataSourceCalls > maxDataSourceCalls ||
+		limits.DataSourcePages <= 0 || limits.DataSourcePages > profileLimits.DataSourcePages || limits.DataSourcePages > domain.MaxObservabilityPages ||
+		limits.DataSourceSeries <= 0 || limits.DataSourceSeries > profileLimits.DataSourceSeries || limits.DataSourceSeries > domain.MaxObservabilitySeries ||
+		limits.DataSourceSamples <= 0 || limits.DataSourceSamples > profileLimits.DataSourceSamples || limits.DataSourceSamples > domain.MaxObservabilitySamples ||
+		limits.DataSourceLines <= 0 || limits.DataSourceLines > profileLimits.DataSourceLines || limits.DataSourceLines > domain.MaxObservabilityLines ||
+		limits.DataSourceBytes <= 0 || limits.DataSourceBytes > profileLimits.DataSourceBytes || limits.DataSourceBytes > domain.MaxObservabilityBytes ||
+		limits.DataSourceWindow <= 0 || limits.DataSourceWindow > profileLimits.DataSourceWindow || limits.DataSourceWindow > domain.MaxObservabilityWindow ||
+		limits.DataSourceStep <= 0 || limits.DataSourceStep > profileLimits.DataSourceStep || limits.DataSourceStep > domain.MaxObservabilityStep ||
+		limits.ResourcePages <= 0 || limits.ResourcePages > profileLimits.ResourcePages || limits.ResourcePages > domain.MaxResourceQueryPages ||
+		limits.ResourcePageItems <= 0 || limits.ResourcePageItems > profileLimits.ResourcePageItems || limits.ResourcePageItems > domain.MaxResourcePageItems ||
+		limits.ResourcePageBytes <= 0 || limits.ResourcePageBytes > profileLimits.ResourcePageBytes || limits.ResourcePageBytes > domain.MaxResourcePageBytes ||
+		limits.ResourceScannedItems <= 0 || limits.ResourceScannedItems > profileLimits.ResourceScannedItems || limits.ResourceScannedItems > domain.MaxResourceQueryItems ||
+		limits.ResourceReturnedItems <= 0 || limits.ResourceReturnedItems > profileLimits.ResourceReturnedItems || limits.ResourceReturnedItems > domain.MaxResourceSummaries ||
+		limits.ResourceBytes <= 0 || limits.ResourceBytes > profileLimits.ResourceBytes || limits.ResourceBytes > domain.MaxResourceQueryBytes ||
+		limits.ResourcePageItems > limits.ResourceScannedItems || limits.ResourcePageBytes > limits.ResourceBytes || limits.ResourceReturnedItems > limits.ResourceScannedItems {
 		return ErrInvalidRunBudget
 	}
 	return nil
@@ -174,6 +293,8 @@ const (
 	RunStopRepeatedToolCall  RunStopReason = "repeated_tool_call"
 	RunStopNoProgress        RunStopReason = "no_progress"
 	RunStopLogCallLimit      RunStopReason = "log_call_limit"
+	RunStopMetricCallLimit   RunStopReason = "metric_call_limit"
+	RunStopDataSourceLimit   RunStopReason = "data_source_call_limit"
 	RunStopInvalidState      RunStopReason = "invalid_runtime_state"
 )
 
@@ -254,6 +375,8 @@ type RunBudgetSnapshot struct {
 	SummaryCostUnits      int
 	ToolResultBytes       int
 	LogCalls              int
+	MetricCalls           int
+	DataSourceCalls       int
 	ConsecutiveNoProgress int
 	Stopped               bool
 	StopReason            RunStopReason
@@ -278,6 +401,8 @@ type RunBudget struct {
 	summaryCostUnits      int
 	toolResultBytes       int
 	logCalls              int
+	metricCalls           int
+	dataSourceCalls       int
 	consecutiveNoProgress int
 	repeats               map[ToolCallIdentity]repeatState
 	stopped               bool
@@ -431,10 +556,22 @@ func (budget *RunBudget) reserveToolCall(ctx context.Context, call BoundToolCall
 		return CallReservation{}, budget.stopLocked(RunStopToolCallLimit)
 	}
 	if call.Name() == domain.ToolNameGetPodLogs || call.Name() == domain.ToolNameGetPreviousPodLogs {
-		if budget.logCalls >= budget.limits.LogCalls {
+		if call.ExternalCallCost() < 1 || call.ExternalCallCost() > budget.limits.LogCalls-budget.logCalls {
 			return CallReservation{}, budget.stopLocked(RunStopLogCallLimit)
 		}
-		budget.logCalls++
+		budget.logCalls += call.ExternalCallCost()
+	}
+	if call.Name() == domain.ToolNameGetPodMetrics || call.Name() == domain.ToolNameGetNodeMetrics {
+		if call.ExternalCallCost() < 1 || call.ExternalCallCost() > budget.limits.MetricCalls-budget.metricCalls {
+			return CallReservation{}, budget.stopLocked(RunStopMetricCallLimit)
+		}
+		budget.metricCalls += call.ExternalCallCost()
+	}
+	if call.Name() == domain.ToolNameQueryPrometheus || call.Name() == domain.ToolNameQueryLoki {
+		if call.ExternalCallCost() < 1 || call.ExternalCallCost() > budget.limits.DataSourceCalls-budget.dataSourceCalls {
+			return CallReservation{}, budget.stopLocked(RunStopDataSourceLimit)
+		}
+		budget.dataSourceCalls += call.ExternalCallCost()
 	}
 	budget.toolCalls++
 	repeat.count++
@@ -512,6 +649,8 @@ func (budget *RunBudget) Snapshot() RunBudgetSnapshot {
 		SummaryCostUnits:      budget.summaryCostUnits,
 		ToolResultBytes:       budget.toolResultBytes,
 		LogCalls:              budget.logCalls,
+		MetricCalls:           budget.metricCalls,
+		DataSourceCalls:       budget.dataSourceCalls,
 		ConsecutiveNoProgress: budget.consecutiveNoProgress,
 		Stopped:               budget.stopped,
 		StopReason:            budget.stopReason,
@@ -598,6 +737,10 @@ func newRunBudgetError(reason RunStopReason) *RunBudgetError {
 		budgetError.message = "The diagnostic run stopped after repeated steps made no progress."
 	case RunStopLogCallLimit:
 		budgetError.message = "The diagnostic run reached its log-read limit."
+	case RunStopMetricCallLimit:
+		budgetError.message = "The diagnostic run reached its Kubernetes metrics-read limit."
+	case RunStopDataSourceLimit:
+		budgetError.message = "The diagnostic run reached its observability data-source request limit."
 	case RunStopCompleted:
 		budgetError.class = domain.SafeErrorClassInternal
 		budgetError.message = "The diagnostic run is already complete."

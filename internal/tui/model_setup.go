@@ -18,7 +18,7 @@ const (
 	modelSetupApplying
 )
 
-const modelSetupStorageDisclosure = "Choosing save writes models.agent.api_key and any existing file-sourced models.approval_reviewer.api_key as plaintext (not encrypted) in KUPILOT_HOME/config.yaml. Choosing session keeps the new Agent key only in this process."
+const modelSetupStorageDisclosure = "Choosing save writes models.agent.api_key and any existing file-sourced models.approval_reviewer.api_key, observability.prometheus.api_key, and observability.loki.api_key as plaintext (not encrypted) in KUPILOT_HOME/config.yaml. Choosing session keeps the new Agent key only in this process."
 
 type modelSetupState struct {
 	Stage      modelSetupStage
@@ -175,7 +175,7 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
 	model.composer.ResetPlaceholder()
 	if result.Persisted {
-		model.transcript.AppendNotice("Agent model configured. The agent API key, plus any existing file-sourced approval_reviewer key, was saved as plaintext in KUPILOT_HOME/config.yaml.")
+		model.transcript.AppendNotice("Agent model configured. The agent API key, plus any existing file-sourced approval_reviewer, Prometheus, and Loki keys, was saved as plaintext in KUPILOT_HOME/config.yaml.")
 	} else {
 		model.transcript.AppendNotice("Model configured for this Kupilot process only.")
 	}
