@@ -15,8 +15,9 @@ var (
 )
 
 // RestartDeploymentObservation is the safe result of the mandatory fresh
-// Deployment read. ResourceVersion is observation metadata, never proposal or
-// model input, and is admitted only as the subsequent concurrency precondition.
+// Deployment read. ResourceVersion must match the code-owned envelope binding;
+// it is never model-supplied and becomes the subsequent concurrency
+// precondition.
 type RestartDeploymentObservation struct {
 	Scope                domain.ScopeSnapshot
 	DeploymentName       string
@@ -52,16 +53,17 @@ type RestartDeploymentExecution struct {
 }
 
 // NewRestartDeploymentExecution binds a fresh observation to the approved
-// canonical intent while deliberately ignoring proposal-time resource version.
+// canonical intent, including its exact resource version.
 func NewRestartDeploymentExecution(
 	intent domain.OperationIntent,
 	observation RestartDeploymentObservation,
 ) (RestartDeploymentExecution, error) {
-	if intent.Validate() != nil || observation.Validate() != nil ||
-		intent.Scope != observation.Scope || intent.DeploymentName != observation.DeploymentName ||
-		intent.DeploymentUID != observation.DeploymentUID ||
-		intent.TemplateFingerprint != observation.TemplateFingerprint ||
-		intent.DeploymentGeneration != observation.DeploymentGeneration ||
+	target := intent.Target.Resource
+	if intent.ValidateRestartDeployment() != nil || observation.Validate() != nil ||
+		intent.Scope != observation.Scope || target.Name != observation.DeploymentName ||
+		target.UID != observation.DeploymentUID || target.ResourceVersion != observation.ResourceVersion ||
+		intent.Target.Fingerprint != observation.TemplateFingerprint ||
+		intent.Target.Generation != observation.DeploymentGeneration ||
 		intent.PolicyVersion != domain.RestartDeploymentApprovalPolicyVersion {
 		return RestartDeploymentExecution{}, ErrInvalidRestartDeploymentExecution
 	}
@@ -172,29 +174,13 @@ func (attempt RestartDeploymentAttempt) Validate() error {
 	return nil
 }
 
-// ConsumeResult returns both the durable approval state and the separate
-// fixed executor outcome. A consumed approval can never authorize a retry.
-type ConsumeResult struct {
-	domain.ApprovalRequest
-	Attempt RestartDeploymentAttempt
-}
-
-// Validate checks that only a consumed request may carry an executor result.
-func (result ConsumeResult) Validate() error {
-	if result.ApprovalRequest.Validate() != nil || result.Attempt.Validate() != nil ||
-		result.ApprovalRequest.State != domain.ApprovalStateConsumed && result.Attempt.State != RestartDeploymentNotAttempted {
-		return ErrInvalidRestartDeploymentExecution
-	}
-	return nil
-}
-
 // RestartDeploymentRevalidator owns the one exact fresh Deployment read.
 type RestartDeploymentRevalidator interface {
 	RevalidateApprovedRestart(context.Context, domain.OperationIntent) (RestartDeploymentObservation, error)
 }
 
-// RestartDeploymentExecutor is the sole fixed write seam. Only Service calls
-// it, after durable pre-write intent and audit have committed.
+// RestartDeploymentExecutor is the sole fixed write seam. Only Application
+// calls it after durable pre-operation audit has committed.
 type RestartDeploymentExecutor interface {
 	ExecuteApprovedRestart(context.Context, RestartDeploymentExecution) (RestartDeploymentResult, error)
 }
@@ -204,11 +190,6 @@ type RestartDeploymentExecutor interface {
 type PreWriteStore interface {
 	VerifyApproved(context.Context, StoredRequest, StoredDecision) error
 	ConsumeWithAudit(context.Context, StoredRequest, StoredDecision, StoredRequest, domain.AuditEvent) error
-}
-
-// CurrentScope supplies the complete currently verified ClusterScope.
-type CurrentScope interface {
-	CurrentScope() (domain.ClusterScope, bool)
 }
 
 // AuditIdentifierSource supplies application-generated durable AuditEvent IDs.
@@ -225,13 +206,7 @@ func writeIntentAudit(id domain.AuditEventID, request StoredRequest) (domain.Aud
 	policy := request.Intent.PolicyVersion
 	scope := request.Intent.Scope
 	sessionID, runID := request.SessionID, request.RunID
-	subject := domain.ResourceRef{
-		APIVersion: domain.RestartDeploymentTargetAPIVersion,
-		Kind:       domain.RestartDeploymentTargetKind,
-		Namespace:  request.Intent.Scope.Namespace,
-		Name:       request.Intent.DeploymentName,
-		UID:        request.Intent.DeploymentUID,
-	}
+	subject := request.Intent.Target.Resource
 	event := domain.AuditEvent{
 		ID: id, SessionID: &sessionID, RunID: &runID,
 		Type: domain.AuditEventWriteIntent, Actor: domain.AuditActorSystem, Outcome: domain.AuditOutcomeSuccess,

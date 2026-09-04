@@ -256,9 +256,16 @@ func (fake *dispatchApplication) ExecuteUICommand(
 		Command: application.UICommandShowStatus,
 		Status: &application.UIStatusResult{
 			CapabilityCatalogVersion: agent.ToolCatalogVersion,
+			AgentModel: application.UIModelRoleStatus{
+				Role: domain.ModelRoleAgent, Profile: "agent", OriginHash: strings.Repeat("a", 64),
+				Configured: true, Available: true, Consented: true,
+			},
 			Budget: application.UIBudgetStatus{
-				Profile: agent.BudgetProfileBalanced, RunMilliseconds: 600_000, RemainingMilliseconds: 600_000,
+				ModelEvidenceBasis: application.ModelBudgetEvidenceBasis,
+				Profile:            agent.BudgetProfileBalanced, RunMilliseconds: 600_000, RemainingMilliseconds: 600_000,
 				StepsMaximum: 32, ToolCallsMaximum: 48, ModelCallsMaximum: 16,
+				ModelCostUnitsMaximum: 16, SummaryCallsMaximum: 2, SummaryCostUnitsMaximum: 2,
+				ReviewerCallsMaximum: 8, ReviewerCostUnitsMaximum: 8,
 				ToolResultBytesMaximum: 4 * 1024 * 1024, LogCallsMaximum: 12,
 			},
 		},

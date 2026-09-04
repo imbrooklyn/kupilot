@@ -17,6 +17,15 @@ import (
 
 const safeProviderErrorBody = `{"error":{"message":"The model endpoint rejected the request."}}`
 
+const maxSummaryResponseBytes = 64 * 1024
+
+type transportResponseMode uint8
+
+const (
+	transportResponseStream transportResponseMode = iota + 1
+	transportResponseJSON
+)
+
 type transportRequestStateKey struct{}
 
 type transportRequestState struct {
@@ -26,7 +35,10 @@ type transportRequestState struct {
 	providerErrorBody          string
 	providerErrorBodyTruncated bool
 	httpStatus                 int
-	responseBody               *boundedSSEBody
+	responseMode               transportResponseMode
+	requestLimit               int
+	responseLimit              int
+	responseBody               boundedResponseBody
 }
 
 func (state *transportRequestState) markTransportEntered() {
@@ -72,7 +84,7 @@ func (state *transportRequestState) providerError() (string, bool) {
 	return state.providerErrorBody, state.providerErrorBodyTruncated
 }
 
-func (state *transportRequestState) setResponseBody(body *boundedSSEBody) {
+func (state *transportRequestState) setResponseBody(body boundedResponseBody) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.responseBody = body
@@ -94,7 +106,12 @@ func (state *transportRequestState) responseLimitReached() bool {
 	state.mu.Lock()
 	body := state.responseBody
 	state.mu.Unlock()
-	return body != nil && errors.Is(body.failure, errModelResponseLimitReached)
+	return body != nil && body.limitReached()
+}
+
+type boundedResponseBody interface {
+	io.ReadCloser
+	limitReached() bool
 }
 
 type guardedRoundTripper struct {
@@ -104,15 +121,19 @@ type guardedRoundTripper struct {
 }
 
 func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request == nil {
+		return nil, errTransportRequestInvalid
+	}
 	state, ok := request.Context().Value(transportRequestStateKey{}).(*transportRequestState)
-	if !ok {
+	if !ok || state == nil || state.requestLimit < 1 || state.requestLimit > domain.MaxModelRequestBytes ||
+		state.responseLimit < 1 || state.responseMode != transportResponseStream && state.responseMode != transportResponseJSON {
 		return nil, errTransportRequestInvalid
 	}
 	state.markTransportEntered()
-	if request != nil && request.ContentLength > int64(domain.MaxModelRequestBytes) {
+	if request.ContentLength > int64(state.requestLimit) {
 		return nil, errModelRequestLimitReached
 	}
-	if !transport.validRequest(request) {
+	if !transport.validRequest(request, state.requestLimit) {
 		return nil, errTransportRequestInvalid
 	}
 	if useError := transport.credential.Use(func(value string) {
@@ -139,7 +160,11 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return response, nil
 	}
 	mediaType, _, mediaError := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if mediaError != nil || !strings.EqualFold(mediaType, "text/event-stream") {
+	wantMedia := "text/event-stream"
+	if state.responseMode == transportResponseJSON {
+		wantMedia = "application/json"
+	}
+	if mediaError != nil || !strings.EqualFold(mediaType, wantMedia) {
 		_ = response.Body.Close()
 		return nil, errUnsupportedResponseMedia
 	}
@@ -149,16 +174,25 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return nil, errMalformedProviderChunk
 	}
 	response.Header.Del("X-Request-ID")
-	boundedBody := &boundedSSEBody{ReadCloser: response.Body}
+	if response.ContentLength > int64(state.responseLimit) {
+		_ = response.Body.Close()
+		return nil, errModelResponseLimitReached
+	}
+	var boundedBody boundedResponseBody
+	if state.responseMode == transportResponseStream {
+		boundedBody = &boundedSSEBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
+	} else {
+		boundedBody = &boundedJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
+	}
 	state.setResponseBody(boundedBody)
 	response.Body = boundedBody
 	return response, nil
 }
 
-func (transport *guardedRoundTripper) validRequest(request *http.Request) bool {
+func (transport *guardedRoundTripper) validRequest(request *http.Request, maximum int) bool {
 	if transport == nil || transport.base == nil || transport.origin == nil || request == nil || request.URL == nil ||
 		request.Method != http.MethodPost || request.Body == nil || request.ContentLength < 0 ||
-		request.ContentLength > int64(domain.MaxModelRequestBytes) ||
+		maximum < 1 || maximum > domain.MaxModelRequestBytes || request.ContentLength > int64(maximum) ||
 		request.URL.Scheme != transport.origin.Scheme || request.URL.Host != transport.origin.Host ||
 		request.URL.User != nil || request.URL.RawQuery != "" || request.URL.ForceQuery || request.URL.Fragment != "" ||
 		request.Header.Get("Authorization") != "Bearer "+einoCredentialPlaceholder {
@@ -202,6 +236,7 @@ type boundedSSEBody struct {
 	dataLine         bool
 	dataLeadingSpace bool
 	failure          error
+	maximumBytes     int
 }
 
 func (body *boundedSSEBody) Close() error {
@@ -215,7 +250,11 @@ func (body *boundedSSEBody) Read(target []byte) (int, error) {
 	if body.failure != nil {
 		return 0, body.failure
 	}
-	remaining := domain.MaxModelStreamBytes - body.totalBytes + 1
+	maximum := body.maximumBytes
+	if maximum < 1 || maximum > domain.MaxModelStreamBytes {
+		maximum = domain.MaxModelStreamBytes
+	}
+	remaining := maximum - body.totalBytes + 1
 	if remaining < len(target) {
 		target = target[:remaining]
 	}
@@ -231,7 +270,11 @@ func (body *boundedSSEBody) Read(target []byte) (int, error) {
 
 func (body *boundedSSEBody) accept(current byte) bool {
 	body.totalBytes++
-	if body.totalBytes > domain.MaxModelStreamBytes {
+	maximum := body.maximumBytes
+	if maximum < 1 || maximum > domain.MaxModelStreamBytes {
+		maximum = domain.MaxModelStreamBytes
+	}
+	if body.totalBytes > maximum {
 		return false
 	}
 	if current == '\n' {
@@ -264,11 +307,60 @@ func (body *boundedSSEBody) accept(current byte) bool {
 	return payloadBytes <= domain.MaxModelStreamChunkBytes
 }
 
+func (body *boundedSSEBody) limitReached() bool {
+	return body != nil && errors.Is(body.failure, errModelResponseLimitReached)
+}
+
 func (body *boundedSSEBody) resetLine() {
 	body.lineBytes = 0
 	body.linePrefixBytes = 0
 	body.dataLine = false
 	body.dataLeadingSpace = false
+}
+
+type boundedJSONBody struct {
+	io.ReadCloser
+	closeOnce    sync.Once
+	closeError   error
+	totalBytes   int
+	maximumBytes int
+	failure      error
+}
+
+func (body *boundedJSONBody) Close() error {
+	body.closeOnce.Do(func() { body.closeError = body.ReadCloser.Close() })
+	return body.closeError
+}
+
+func (body *boundedJSONBody) Read(target []byte) (int, error) {
+	if body.failure != nil {
+		return 0, body.failure
+	}
+	if body.maximumBytes < 1 || body.maximumBytes > maxSummaryResponseBytes {
+		body.failure = errTransportRequestInvalid
+		return 0, body.failure
+	}
+	remaining := body.maximumBytes - body.totalBytes + 1
+	if remaining < 1 {
+		body.failure = errModelResponseLimitReached
+		return 0, body.failure
+	}
+	if remaining < len(target) {
+		target = target[:remaining]
+	}
+	count, readError := body.ReadCloser.Read(target)
+	if body.totalBytes+count > body.maximumBytes {
+		accepted := body.maximumBytes - body.totalBytes
+		body.totalBytes += accepted
+		body.failure = errModelResponseLimitReached
+		return accepted, body.failure
+	}
+	body.totalBytes += count
+	return count, readError
+}
+
+func (body *boundedJSONBody) limitReached() bool {
+	return body != nil && errors.Is(body.failure, errModelResponseLimitReached)
 }
 
 func contextModelErrorCode(ctx context.Context) (domain.ModelErrorCode, bool) {

@@ -17,7 +17,7 @@ var (
 	ErrInvalidRunOutcome = errors.New("Agent RunOutcome data is invalid")
 )
 
-// RunInput is the immutable, Eino-neutral input for one AgentRun. Its fields
+// RunInput is the immutable project-owned input for one AgentRun. Its fields
 // are private so collection and pointer aliases cannot mutate active authority.
 type RunInput struct {
 	runID            domain.AgentRunID
@@ -29,6 +29,139 @@ type RunInput struct {
 	budgetLimits     RunBudgetLimits
 	promptVersion    string
 	catalogVersion   string
+	conversation     ConversationContext
+}
+
+// ConversationTurn is the minimal safe prior-turn projection supplied to
+// Eino. Historic scope, resources, Evidence, Tools, and authority are absent.
+type ConversationTurn struct {
+	MessageID   domain.MessageID
+	Role        domain.MessageRole
+	Content     string
+	ContentHash string
+}
+
+func (turn ConversationTurn) validate() error {
+	if !turn.MessageID.Valid() || (turn.Role != domain.MessageRoleUser && turn.Role != domain.MessageRoleAssistant) ||
+		!domain.ValidModelText(turn.Content, domain.MaxModelInputMessageBytes, false) ||
+		turn.ContentHash != domain.MessageContentHash(turn.Content) {
+		return ErrInvalidRunInput
+	}
+	return nil
+}
+
+// ConversationContext is one bounded representation of all retained eligible
+// prior turns, optionally preceded by one verified durable summary.
+type ConversationContext struct {
+	turns    []ConversationTurn
+	summary  *domain.SessionContextSummary
+	coverage []domain.SessionContextCoverageItem
+}
+
+// NewConversationContext validates and defensively copies retained context.
+func NewConversationContext(sessionID domain.SessionID, turns []ConversationTurn, summary *domain.SessionContextSummary) (ConversationContext, error) {
+	coverage := make([]domain.SessionContextCoverageItem, len(turns))
+	for index, turn := range turns {
+		coverage[index] = domain.SessionContextCoverageItem{
+			MessageID: turn.MessageID, Role: turn.Role, ContentHash: turn.ContentHash, ContentBytes: len(turn.Content),
+		}
+	}
+	return NewConversationContextWithCoverage(sessionID, turns, summary, coverage)
+}
+
+// NewConversationContextWithCoverage retains content-free metadata for the
+// summarized prefix so later compaction can advance without replaying content.
+func NewConversationContextWithCoverage(sessionID domain.SessionID, turns []ConversationTurn, summary *domain.SessionContextSummary, coverage []domain.SessionContextCoverageItem) (ConversationContext, error) {
+	if !sessionID.Valid() || len(turns) > domain.MaxSessionContextMessages {
+		return ConversationContext{}, ErrInvalidRunInput
+	}
+	copyContext := ConversationContext{
+		turns:    append([]ConversationTurn(nil), turns...),
+		coverage: append([]domain.SessionContextCoverageItem(nil), coverage...),
+	}
+	totalBytes := 0
+	for index, turn := range copyContext.turns {
+		if turn.validate() != nil {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		wantRole := domain.MessageRoleUser
+		if index%2 == 1 {
+			wantRole = domain.MessageRoleAssistant
+		}
+		if turn.Role != wantRole {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		totalBytes += len(turn.Content)
+		if totalBytes > domain.MaxSessionHistoryBytes {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+	}
+	if summary != nil {
+		if summary.Validate() != nil || summary.SessionID != sessionID {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		value := *summary
+		copyContext.summary = &value
+	}
+	covered := 0
+	if copyContext.summary != nil {
+		covered = copyContext.summary.CoveredCount
+	}
+	if covered%2 != 0 || len(copyContext.turns)%2 != 0 || len(copyContext.coverage) != covered+len(copyContext.turns) ||
+		len(copyContext.coverage) > domain.MaxSessionContextMessages {
+		return ConversationContext{}, ErrInvalidRunInput
+	}
+	for index, item := range copyContext.coverage {
+		if item.Validate() != nil {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		wantRole := domain.MessageRoleUser
+		if index%2 == 1 {
+			wantRole = domain.MessageRoleAssistant
+		}
+		if item.Role != wantRole {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		if index >= covered {
+			turn := copyContext.turns[index-covered]
+			if item.MessageID != turn.MessageID || item.Role != turn.Role || item.ContentHash != turn.ContentHash ||
+				item.ContentBytes != len(turn.Content) {
+				return ConversationContext{}, ErrInvalidRunInput
+			}
+		}
+	}
+	if copyContext.summary != nil {
+		prefix := copyContext.coverage[:covered]
+		digest, bytes, err := domain.SessionContextCoverageDigestItems(prefix)
+		if err != nil || digest != copyContext.summary.CoverageDigest || bytes != copyContext.summary.CoveredBytes ||
+			prefix[0].MessageID != copyContext.summary.CoveredFirstID || prefix[len(prefix)-1].MessageID != copyContext.summary.CoveredThroughID {
+			return ConversationContext{}, ErrInvalidRunInput
+		}
+		totalBytes += bytes
+	}
+	if totalBytes > domain.MaxSessionHistoryBytes {
+		return ConversationContext{}, ErrInvalidRunInput
+	}
+	return copyContext, nil
+}
+
+// Turns returns a defensive ordered copy.
+func (context ConversationContext) Turns() []ConversationTurn {
+	return append([]ConversationTurn(nil), context.turns...)
+}
+
+// Summary returns a defensive copy of the optional verified derivative.
+func (context ConversationContext) Summary() *domain.SessionContextSummary {
+	if context.summary == nil {
+		return nil
+	}
+	value := *context.summary
+	return &value
+}
+
+// Coverage returns content-free metadata for the full retained eligible order.
+func (context ConversationContext) Coverage() []domain.SessionContextCoverageItem {
+	return append([]domain.SessionContextCoverageItem(nil), context.coverage...)
 }
 
 // NewRunInput validates and defensively copies one frozen run policy snapshot.
@@ -42,6 +175,24 @@ func NewRunInput(
 	resource *domain.ResourceRef,
 	budgetLimits RunBudgetLimits,
 ) (RunInput, error) {
+	conversation, err := NewConversationContext(sessionID, nil, nil)
+	if err != nil {
+		return RunInput{}, err
+	}
+	return NewRunInputWithContext(runID, sessionID, requestMessageID, question, scope, resource, budgetLimits, conversation)
+}
+
+// NewRunInputWithContext freezes one already-selected Session representation.
+func NewRunInputWithContext(
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	requestMessageID domain.MessageID,
+	question string,
+	scope domain.ClusterScope,
+	resource *domain.ResourceRef,
+	budgetLimits RunBudgetLimits,
+	conversation ConversationContext,
+) (RunInput, error) {
 	input := RunInput{
 		runID:            runID,
 		sessionID:        sessionID,
@@ -51,6 +202,7 @@ func NewRunInput(
 		budgetLimits:     budgetLimits,
 		promptVersion:    SystemPromptVersion,
 		catalogVersion:   ToolCatalogVersion,
+		conversation:     conversation,
 	}
 	if resource != nil {
 		copied := *resource
@@ -68,6 +220,9 @@ func (input RunInput) Validate() error {
 		input.scope.Validate() != nil || !domain.ValidModelText(input.question, domain.MaxModelInputMessageBytes, false) ||
 		input.budgetLimits.Validate() != nil ||
 		input.promptVersion != SystemPromptVersion || input.catalogVersion != ToolCatalogVersion {
+		return ErrInvalidRunInput
+	}
+	if _, err := NewConversationContextWithCoverage(input.sessionID, input.conversation.turns, input.conversation.summary, input.conversation.coverage); err != nil {
 		return ErrInvalidRunInput
 	}
 	if input.resource != nil &&
@@ -110,9 +265,15 @@ func (input RunInput) PromptVersion() string { return input.promptVersion }
 // CatalogVersion returns the code-defined fixed Tool catalog version.
 func (input RunInput) CatalogVersion() string { return input.catalogVersion }
 
-// AgentRunner is the Eino-neutral single-run facade. Implementations block
-// until exactly one terminal outcome, honor ctx, and publish only neutral
-// ordered events. The production implementation belongs in einoadapter.
+// Conversation returns a defensive copy of prior untrusted Session context.
+func (input RunInput) Conversation() ConversationContext {
+	context, _ := NewConversationContextWithCoverage(input.sessionID, input.conversation.turns, input.conversation.summary, input.conversation.coverage)
+	return context
+}
+
+// AgentRunner is the active consumer-owned single-run port. Implementations
+// block until exactly one terminal outcome, honor ctx, and publish only
+// project-owned ordered events. Production composition binds einoadapter.
 type AgentRunner interface {
 	Run(context.Context, RunInput, EventSink) RunOutcome
 }

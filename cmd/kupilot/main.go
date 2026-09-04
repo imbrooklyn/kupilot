@@ -71,7 +71,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
-	defer loaded.Credential.Destroy()
+	defer loaded.Credentials.Destroy()
 	for _, warning := range loaded.Warnings {
 		_, _ = fmt.Fprintln(stderr, "Warning:", warning)
 	}
@@ -106,7 +106,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		"component", "composition",
 		"operation", "configuration_load",
 		"outcome", "success",
-		"provider_kind", loaded.Model.ProviderKind,
+		"provider_kind", loaded.Models.Agent.ProviderKind,
 	)
 
 	applicationVersion := info.Version
@@ -131,7 +131,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	retentionRepository := sqlite.NewRetentionRepository(database)
 	scopePreferenceRepository := sqlite.NewScopePreferenceRepository(database)
 	privacyManager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
-		Store: sqlite.NewPrivacyRepository(database), Origin: loaded.Model.Origin, Now: utcNow,
+		Store: sqlite.NewRolePrivacyRepository(database, domain.ModelRoleAgent),
+		Role:  domain.ModelRoleAgent, Origin: loaded.Models.Agent.Origin, Now: utcNow,
 	})
 	if err != nil {
 		return err
@@ -187,13 +188,14 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 	approvalService, err := approval.NewService(approval.ServiceConfig{
-		Clock:       compositionApprovalClock{now: now},
-		Nonces:      identifiers,
-		Store:       approvalRepository,
-		Scope:       scopeManager,
-		Revalidator: restarter,
-		Executor:    restarter,
-		AuditIDs:    identifiers,
+		Clock: compositionApprovalClock{now: now}, Nonces: identifiers,
+		Store: approvalRepository, AuditIDs: identifiers,
+	})
+	if err != nil {
+		return err
+	}
+	permissionManager, err := application.NewPermissionManager(application.PermissionPolicy{
+		Profile: application.DefaultPermissionProfile, Generation: 1,
 	})
 	if err != nil {
 		return err
@@ -225,14 +227,74 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		base: loaded.Config, tools: toolHandlers, scope: scopeManager,
 		identifiers: identifiers, now: now, logger: logger,
 	}
-	profileWriter := &compositionModelProfileWriter{paths: loaded.Paths, base: loaded.Config}
+	profileWriterBase := loaded.Config
+	if loaded.SourceVersion == config.LegacyVersion &&
+		profileWriterBase.Models.Agent.MaxOutputTokens == config.LegacyDefaultMaxModelOutputTokens {
+		// Preserve the v1 value only for the compatibility runtime. A deliberate
+		// v2 save must not republish that historical default as endpoint evidence.
+		profileWriterBase.Models.Agent.MaxOutputTokens = 0
+	}
+	profileWriter := &compositionModelProfileWriter{paths: loaded.Paths, base: profileWriterBase}
+	if reviewerCredential := loaded.Credentials.ApprovalReviewer; reviewerCredential != nil &&
+		reviewerCredential.Source == config.CredentialSourceFile {
+		clone, cloneErr := reviewerCredential.Value.Clone()
+		if cloneErr != nil {
+			return cloneErr
+		}
+		profileWriter.reviewerFileCredential = &clone
+		composition.profileCredential = &clone
+	}
+	var reviewerBinding *application.ReviewerModelBinding
+	if reviewerProfile := loaded.Models.ApprovalReviewer; reviewerProfile != nil {
+		reviewerPrivacy, privacyErr := application.NewPrivacyManager(application.PrivacyManagerConfig{
+			Store: sqlite.NewRolePrivacyRepository(database, domain.ModelRoleApprovalReviewer),
+			Role:  domain.ModelRoleApprovalReviewer, Origin: reviewerProfile.Origin, Now: utcNow,
+		})
+		if privacyErr != nil {
+			return privacyErr
+		}
+		reviewerLimits, limitErr := agent.ReviewerBudgetLimitsForProfile(agent.BudgetProfile(loaded.Runtime.BudgetProfile))
+		if limitErr != nil {
+			return limitErr
+		}
+		configuredTimeout := time.Duration(reviewerProfile.RequestTimeoutSeconds) * time.Second
+		if configuredTimeout < reviewerLimits.RequestTimeout {
+			reviewerLimits.RequestTimeout = configuredTimeout
+		}
+		reviewerBudget, budgetErr := agent.NewReviewerBudget(reviewerLimits)
+		if budgetErr != nil {
+			return budgetErr
+		}
+		reviewerBinding = &application.ReviewerModelBinding{
+			Profile: reviewerProfile.Name, Model: reviewerProfile.Model,
+			Privacy: reviewerPrivacy, Budget: reviewerBudget,
+		}
+		if loaded.Credentials.ApprovalReviewer != nil && loaded.Credentials.ApprovalReviewer.Value.IsSet() {
+			reviewerSecret, cloneErr := loaded.Credentials.ApprovalReviewer.Value.Clone()
+			if cloneErr != nil {
+				return cloneErr
+			}
+			reviewer, reviewerErr := einoadapter.NewReviewer(einoadapter.ReviewerConfig{
+				ModelConfiguration: modelConfiguration(*reviewerProfile), Credential: &reviewerSecret,
+				Logger: logger, Diagnostics: einoadapter.DiagnosticOptions{Sensitive: loaded.Logging.SensitiveDiagnostics},
+			})
+			if reviewerErr != nil {
+				reviewerSecret.Destroy()
+				_, _ = fmt.Fprintln(stderr, "Warning: the configured approval reviewer is unavailable; automated review remains disabled.")
+			} else {
+				composition.reviewer = reviewer
+				reviewerBinding.Available = true
+				reviewerBinding.Transport = reviewer
+			}
+		}
+	}
 	var initialRuntime application.ModelRuntime
-	if loaded.Model.Endpoint != "" && loaded.Model.Model != "" && loaded.Credential.IsSet() {
-		setupSecret, secretErr := applicationSecret(&loaded.Credential)
-		loaded.Credential.Destroy()
+	if loaded.Models.Agent.Endpoint != "" && loaded.Models.Agent.Model != "" && loaded.Credentials.Agent.Value.IsSet() {
+		setupSecret, secretErr := applicationSecret(&loaded.Credentials.Agent.Value)
+		loaded.Credentials.Agent.Value.Destroy()
 		if secretErr == nil {
 			request := application.ModelSetupRequest{
-				RequestID: 1, Endpoint: loaded.Model.Endpoint, Model: loaded.Model.Model, Secret: setupSecret,
+				RequestID: 1, Endpoint: loaded.Models.Agent.Endpoint, Model: loaded.Models.Agent.Model, Secret: setupSecret,
 			}
 			initialRuntime, err = modelFactory.BuildModelRuntime(ctx, request)
 			setupSecret.Destroy()
@@ -242,7 +304,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			_, _ = fmt.Fprintln(stderr, "Warning: the configured model runtime could not be constructed; use /model to configure it in the TUI.")
 		}
 	} else {
-		loaded.Credential.Destroy()
+		loaded.Credentials.Agent.Value.Destroy()
 	}
 	runtimeTransferred := false
 	defer func() {
@@ -253,15 +315,20 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	deliveryStop := make(chan struct{})
 	uiEventSink := &deliveryUIEventSink{events: make(chan application.UIEvent, 64), stopped: deliveryStop}
 	approvalCoordinator, err := application.NewApprovalCoordinator(application.ApprovalCoordinatorConfig{
-		Service:      approvalService,
-		Persistence:  approvalRepository,
-		ResultAudits: auditRepository,
-		Scope:        scopeManager,
-		ApprovalIDs:  identifiers,
-		AuditIDs:     identifiers,
-		UIEvents:     uiEventSink,
-		Rollout:      rolloutObserver,
-		Now:          now,
+		Service:            approvalService,
+		Persistence:        approvalRepository,
+		ResultAudits:       auditRepository,
+		Scope:              scopeManager,
+		ApprovalIDs:        identifiers,
+		AuditIDs:           identifiers,
+		UIEvents:           uiEventSink,
+		Rollout:            rolloutObserver,
+		RestartRevalidator: restarter,
+		RestartExecutor:    restarter,
+		Permissions:        permissionManager,
+		Reviewer:           reviewerBinding,
+		Reviews:            approvalRepository,
+		Now:                now,
 	})
 	if err != nil {
 		return err
@@ -269,8 +336,10 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
+		ModelContext: messageRepository,
 		ModelRuntime: initialRuntime, ModelFactory: modelFactory, ModelProfiles: profileWriter,
-		Identifiers: identifiers, AuditIdentifiers: identifiers,
+		ReviewerModel: reviewerBinding,
+		Identifiers:   identifiers, AuditIdentifiers: identifiers,
 		Questions: redactor, Exports: sessionRepository, ExportFiles: filesystem.NewExportWriter(), ExportText: redactor,
 		Privacy: privacyManager, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now, BudgetLimits: budgetLimits,
@@ -317,8 +386,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		NoColor:                 loaded.NoColor,
 		StartIntent:             startIntent,
 		Scope:                   initialScope,
-		ModelEndpoint:           loaded.Model.Endpoint,
-		ModelName:               loaded.Model.Model,
+		ModelEndpoint:           loaded.Models.Agent.Endpoint,
+		ModelName:               loaded.Models.Agent.Model,
 		ModelConfigured:         initialRuntime != nil,
 		ModelConfiguredSet:      true,
 		PrivacyMode:             domain.PrivacyModeStandard,
@@ -804,9 +873,9 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		return nil, application.ErrModelSetupInvalid
 	}
 	settings := factory.base
-	settings.Model.Endpoint = request.Endpoint
-	settings.Model.Origin = ""
-	settings.Model.Model = request.Model
+	settings.Models.Agent.Endpoint = request.Endpoint
+	settings.Models.Agent.Origin = ""
+	settings.Models.Agent.Model = request.Model
 	if err := config.Validate(&settings); err != nil {
 		return nil, err
 	}
@@ -815,7 +884,7 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		return nil, err
 	}
 	agentAdapter, err := einoadapter.New(einoadapter.Config{
-		ModelConfiguration: modelConfiguration(settings.Model),
+		ModelConfiguration: modelConfiguration(settings.Models.Agent),
 		Credential:         &credential,
 		Logger:             factory.logger,
 		Diagnostics:        einoadapter.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
@@ -829,14 +898,16 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		return nil, err
 	}
 	return &compositionModelRuntime{
-		agent: agentAdapter,
-		name:  settings.Model.Model, origin: settings.Model.Origin,
+		agent:   agentAdapter,
+		profile: settings.Models.Agent.Name,
+		name:    settings.Models.Agent.Model, origin: settings.Models.Agent.Origin,
 	}, nil
 }
 
 type compositionModelProfileWriter struct {
-	paths config.Paths
-	base  config.Config
+	paths                  config.Paths
+	base                   config.Config
+	reviewerFileCredential *config.SecretValue
 }
 
 func (writer *compositionModelProfileWriter) SaveModelProfile(
@@ -851,16 +922,17 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 		return err
 	}
 	defer credential.Destroy()
-	return config.SaveModelProfile(ctx, writer.paths, writer.base, config.ModelProfile{
+	return config.SaveModelProfiles(ctx, writer.paths, writer.base, config.ModelProfile{
 		Endpoint: request.Endpoint, Model: request.Model,
-	}, &credential)
+	}, &credential, writer.reviewerFileCredential)
 }
 
 type compositionModelRuntime struct {
-	once   sync.Once
-	agent  *einoadapter.Adapter
-	name   string
-	origin string
+	once    sync.Once
+	agent   *einoadapter.Adapter
+	profile string
+	name    string
+	origin  string
 }
 
 func (runtime *compositionModelRuntime) Run(
@@ -899,6 +971,13 @@ func (runtime *compositionModelRuntime) Origin() string {
 	return runtime.origin
 }
 
+func (runtime *compositionModelRuntime) ProfileName() string {
+	if runtime == nil {
+		return ""
+	}
+	return runtime.profile
+}
+
 func applicationSecret(secret *config.SecretValue) (*application.ModelSetupSecret, error) {
 	var (
 		result *application.ModelSetupSecret
@@ -932,11 +1011,13 @@ func configurationSecret(secret *application.ModelSetupSecret) (config.SecretVal
 type runtimeComposition struct {
 	mu sync.Mutex
 
-	coordinator coordinatorLifecycle
-	scope       scopeLifecycle
-	database    io.Closer
-	logSink     io.Closer
-	closed      bool
+	coordinator       coordinatorLifecycle
+	scope             scopeLifecycle
+	database          io.Closer
+	logSink           io.Closer
+	profileCredential *config.SecretValue
+	reviewer          *einoadapter.Reviewer
+	closed            bool
 }
 
 func (composition *runtimeComposition) Close(ctx context.Context) error {
@@ -957,11 +1038,17 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 	if composition.scope != nil {
 		closeErrors = append(closeErrors, composition.scope.Close())
 	}
+	if composition.reviewer != nil {
+		composition.reviewer.Close()
+	}
 	if composition.database != nil {
 		closeErrors = append(closeErrors, composition.database.Close())
 	}
 	if composition.logSink != nil {
 		closeErrors = append(closeErrors, composition.logSink.Close())
+	}
+	if composition.profileCredential != nil {
+		composition.profileCredential.Destroy()
 	}
 	composition.closed = true
 	return errors.Join(closeErrors...)
@@ -1010,8 +1097,9 @@ func (observer slogRunObserver) ObserveRun(ctx context.Context, observation appl
 	)
 }
 
-func modelConfiguration(value config.ModelConfig) domain.ModelConfiguration {
+func modelConfiguration(value config.ModelProfileConfig) domain.ModelConfiguration {
 	return domain.ModelConfiguration{
+		ProfileName: value.Name, Role: domain.ModelRole(value.Role),
 		ProviderKind: domain.ModelProviderOpenAICompatible,
 		Endpoint:     value.Endpoint, Origin: value.Origin, Model: value.Model,
 		APIKeySource:    domain.ModelAPIKeySourceRuntime,
@@ -1028,7 +1116,7 @@ func configuredBudgetLimits(value config.Config) (agent.RunBudgetLimits, error) 
 	if err != nil {
 		return agent.RunBudgetLimits{}, err
 	}
-	configuredModelTimeout := time.Duration(value.Model.RequestTimeoutSeconds) * time.Second
+	configuredModelTimeout := time.Duration(value.Models.Agent.RequestTimeoutSeconds) * time.Second
 	if configuredModelTimeout > 0 && configuredModelTimeout < limits.ModelRequestTimeout {
 		limits.ModelRequestTimeout = configuredModelTimeout
 	}

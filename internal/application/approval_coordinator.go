@@ -50,12 +50,13 @@ type ApprovalLifecycle interface {
 	Expire(context.Context, domain.ApprovalID) (domain.ApprovalRequest, error)
 	Cancel(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
 	Invalidate(context.Context, domain.ApprovalID, domain.ApprovalStateReason) (domain.ApprovalRequest, error)
-	Consume(context.Context, approval.ConsumeCommand) (approval.ConsumeResult, error)
+	Claim(context.Context, approval.ConsumeCommand) (approval.ExecutionClaim, error)
+	CommitConsume(context.Context, approval.ExecutionClaim) (domain.ApprovalRequest, error)
 }
 
-// ConsumeApprovedRestart performs the deterministic post-decision execution
-// transition. Application supplies proof and projects the terminal result; it
-// never receives an executor, patch, annotation, or client.
+// ConsumeApprovedRestart owns the sole operation path: durable decision proof,
+// fresh target validation, atomic consume/pre-audit, final scope and policy
+// checks, and at most one exact executor call.
 func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	ctx context.Context,
 	command UICommand,
@@ -83,61 +84,155 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	if currentOK {
 		currentScope = current.Snapshot()
 	}
-	consumeResult, consumeErr := coordinator.service.Consume(ctx, approval.ConsumeCommand{
+	claim, claimErr := coordinator.service.Claim(ctx, approval.ConsumeCommand{
 		RequestID: command.ApprovalID, ShownDigest: command.ApprovalDigest,
 		Nonce: command.ApprovalNonce, CurrentScope: currentScope,
 	})
-	updated := consumeResult.ApprovalRequest
-
+	if claimErr != nil {
+		return coordinator.finishClaimFailure(ctx, tracked, claim.Request, claimErr)
+	}
+	if claim.Validate() != nil || !coordinator.actionCurrent(claim.Request.ActionEnvelope()) {
+		return coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonPolicyChanged)
+	}
+	observation, revalidateErr := coordinator.restartValidator.RevalidateApprovedRestart(ctx, claim.Request.Intent)
+	if revalidateErr != nil {
+		reason := domain.ApprovalReasonTargetChanged
+		if ctx.Err() != nil {
+			reason = domain.ApprovalReasonContextCancelled
+		}
+		return coordinator.invalidateClaim(ctx, tracked, reason)
+	}
+	execution, err := approval.NewRestartDeploymentExecution(claim.Request.Intent, observation)
+	if err != nil || !coordinator.actionCurrent(claim.Request.ActionEnvelope()) {
+		return coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonTargetChanged)
+	}
+	consumed, consumeErr := coordinator.service.CommitConsume(ctx, claim)
+	if consumeErr != nil {
+		return coordinator.finishClaimFailure(ctx, tracked, consumed, consumeErr)
+	}
+	if consumed.Validate() != nil || consumed.State != domain.ApprovalStateConsumed {
+		return coordinator.finishClaimFailure(ctx, tracked, consumed, domain.NewApprovalError(domain.ApprovalErrorCodeInternal))
+	}
 	coordinator.mu.Lock()
 	currentTracked, stillTracked := coordinator.active[command.ApprovalID]
-	if stillTracked && (currentTracked.request.ID != tracked.request.ID || currentTracked.sequence != tracked.sequence) {
-		delete(coordinator.active, command.ApprovalID)
+	if !stillTracked || currentTracked.request.ID != tracked.request.ID || currentTracked.sequence != tracked.sequence {
 		coordinator.mu.Unlock()
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
-	if updated.ID != tracked.request.ID {
-		if stillTracked {
-			delete(coordinator.active, command.ApprovalID)
-		}
-		coordinator.mu.Unlock()
-		return UIApprovalResult{}, ErrApprovalUnavailable
-	}
-	if stillTracked && (updated.State == domain.ApprovalStateInvalidated || updated.State == domain.ApprovalStateCancelled ||
-		updated.State == domain.ApprovalStateExpired) {
-		if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
-			delete(coordinator.active, command.ApprovalID)
-			coordinator.mu.Unlock()
-			return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
-		}
-	}
-	if stillTracked {
-		delete(coordinator.active, command.ApprovalID)
-	}
+	delete(coordinator.active, command.ApprovalID)
 	coordinator.mu.Unlock()
-	result := projectUIApprovalResult(updated, tracked.sequence)
-	if updated.State == domain.ApprovalStateConsumed {
-		if consumeResult.Validate() != nil {
-			return UIApprovalResult{}, ErrApprovalUnavailable
-		}
-		execution, executionErr := coordinator.finishRestartExecution(ctx, tracked, consumeResult.Attempt, consumeErr)
-		result.Execution = &execution
-		if result.Validate() != nil {
-			return UIApprovalResult{}, ErrApprovalUnavailable
-		}
-		return result, executionErr
-	}
+
+	attempt, executeErr := coordinator.executeRestartOnce(ctx, consumed, execution, observation)
+	result := projectUIApprovalResult(consumed, tracked.sequence)
+	executionResult, resultErr := coordinator.finishRestartExecution(ctx, tracked, attempt, executeErr)
+	result.Execution = &executionResult
 	if result.Validate() != nil {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
-	if errors.Is(consumeErr, approval.ErrPreWritePersistenceUnavailable) {
-		return result, ErrApprovalPersistenceUnavailable
+	return result, resultErr
+}
+
+func (coordinator *ApprovalCoordinator) actionCurrent(envelope domain.ActionEnvelope) bool {
+	if coordinator == nil || !coordinator.permissions.ActionCurrent(envelope) {
+		return false
+	}
+	current, ok := coordinator.scope.CurrentScope()
+	return ok && current.Validate() == nil && current.Snapshot() == envelope.Intent.Scope &&
+		current.NamespaceAccess == envelope.Intent.NamespaceAccess
+}
+
+func (coordinator *ApprovalCoordinator) executeRestartOnce(
+	ctx context.Context,
+	request domain.ApprovalRequest,
+	execution approval.RestartDeploymentExecution,
+	observation approval.RestartDeploymentObservation,
+) (approval.RestartDeploymentAttempt, error) {
+	notAttempted := approval.RestartDeploymentAttempt{State: approval.RestartDeploymentNotAttempted}
+	if ctx == nil || ctx.Err() != nil || !coordinator.now().Before(request.ExpiresAt) ||
+		!coordinator.actionCurrent(request.ActionEnvelope()) {
+		return notAttempted, ErrPermissionStale
+	}
+	result, err := coordinator.restartExecutor.ExecuteApprovedRestart(ctx, execution)
+	if err != nil {
+		return classifyRestartDeploymentAttempt(err), err
+	}
+	if result.Validate() != nil || result.Scope != observation.Scope ||
+		result.DeploymentName != observation.DeploymentName || result.DeploymentUID != observation.DeploymentUID ||
+		result.PreviousResourceVersion != observation.ResourceVersion || result.ResourceVersion == observation.ResourceVersion ||
+		result.TargetGeneration-observation.DeploymentGeneration != 1 {
+		return approval.RestartDeploymentAttempt{
+			State: approval.RestartDeploymentPatchUnknown, ErrorClass: domain.SafeErrorClassInvalidExternalResponse,
+		}, domain.NewApprovalError(domain.ApprovalErrorCodeExecutorFailed)
+	}
+	attempt := approval.RestartDeploymentAttempt{
+		State: approval.RestartDeploymentPatchAccepted,
+		Acceptance: approval.RestartDeploymentAcceptance{
+			TargetGeneration: result.TargetGeneration, TargetReplicas: result.TargetReplicas,
+		},
+	}
+	if !coordinator.actionCurrent(request.ActionEnvelope()) {
+		return attempt, ErrPermissionStale
+	}
+	return attempt, nil
+}
+
+func classifyRestartDeploymentAttempt(err error) approval.RestartDeploymentAttempt {
+	errorClass := safeApprovalExecutionClass(err)
+	state := approval.RestartDeploymentPatchFailed
+	switch errorClass {
+	case domain.SafeErrorClassCancelled, domain.SafeErrorClassTimeout, domain.SafeErrorClassUnavailable,
+		domain.SafeErrorClassStaleScope, domain.SafeErrorClassInvalidExternalResponse, domain.SafeErrorClassInternal:
+		state = approval.RestartDeploymentPatchUnknown
+	}
+	return approval.RestartDeploymentAttempt{State: state, ErrorClass: errorClass}
+}
+
+func (coordinator *ApprovalCoordinator) invalidateClaim(
+	ctx context.Context,
+	tracked trackedApproval,
+	reason domain.ApprovalStateReason,
+) (UIApprovalResult, error) {
+	var updated domain.ApprovalRequest
+	var err error
+	if reason.ValidCancellation() {
+		updated, err = coordinator.service.Cancel(ctx, tracked.request.ID, reason)
+	} else {
+		updated, err = coordinator.service.Invalidate(ctx, tracked.request.ID, reason)
+	}
+	if err != nil && updated.ID == "" {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	return coordinator.finishClaimFailure(ctx, tracked, updated, err)
+}
+
+func (coordinator *ApprovalCoordinator) finishClaimFailure(
+	ctx context.Context,
+	tracked trackedApproval,
+	updated domain.ApprovalRequest,
+	cause error,
+) (UIApprovalResult, error) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	current, ok := coordinator.active[tracked.request.ID]
+	if !ok || current.request.ID != tracked.request.ID || current.sequence != tracked.sequence || updated.ID != tracked.request.ID {
+		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	if updated.State == domain.ApprovalStateInvalidated || updated.State == domain.ApprovalStateCancelled ||
-		updated.State == domain.ApprovalStateExpired || approvalErrorCode(consumeErr) == domain.ApprovalErrorCodeStaleScope {
-		return result, ErrApprovalInvalidated
+		updated.State == domain.ApprovalStateExpired {
+		if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
+			delete(coordinator.active, tracked.request.ID)
+			return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
+		}
 	}
-	return result, ErrApprovalUnavailable
+	delete(coordinator.active, tracked.request.ID)
+	result := projectUIApprovalResult(updated, tracked.sequence)
+	if result.Validate() != nil {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if errors.Is(cause, approval.ErrPreWritePersistenceUnavailable) {
+		return result, ErrApprovalPersistenceUnavailable
+	}
+	return result, ErrApprovalInvalidated
 }
 
 // ApprovalPersistence owns each atomic approval and audit transaction intent.
@@ -158,6 +253,7 @@ type ApprovalResultAudits interface {
 // ApprovalIdentifierSource supplies application-owned UUIDv7 request IDs.
 type ApprovalIdentifierSource interface {
 	NewApprovalID() (domain.ApprovalID, error)
+	NewModelRequestID() (domain.ModelRequestID, error)
 }
 
 // ApprovalCurrentScope supplies the exact currently verified scope.
@@ -165,8 +261,8 @@ type ApprovalCurrentScope interface {
 	CurrentScope() (domain.ClusterScope, bool)
 }
 
-// ApprovalCoordinatorConfig contains no executor. The lifecycle service owns
-// its fakeable seam, while Application can only create and resolve authority.
+// ApprovalCoordinatorConfig keeps the operation-specific executor at the
+// Application boundary; the approval lifecycle never performs external I/O.
 type ApprovalCoordinatorConfig struct {
 	Service            ApprovalLifecycle
 	Persistence        ApprovalPersistence
@@ -176,6 +272,11 @@ type ApprovalCoordinatorConfig struct {
 	AuditIDs           AuditIdentifierSource
 	UIEvents           UIEventSink
 	Rollout            RestartRolloutObserver
+	RestartRevalidator approval.RestartDeploymentRevalidator
+	RestartExecutor    approval.RestartDeploymentExecutor
+	Permissions        *PermissionManager
+	Reviewer           *ReviewerModelBinding
+	Reviews            ActionReviewPersistence
 	Now                func() time.Time
 	PersistenceTimeout time.Duration
 }
@@ -193,15 +294,23 @@ type ApprovalCoordinator struct {
 	auditIDs         AuditIdentifierSource
 	uiEvents         UIEventSink
 	rollout          RestartRolloutObserver
+	restartValidator approval.RestartDeploymentRevalidator
+	restartExecutor  approval.RestartDeploymentExecutor
+	permissions      *PermissionManager
+	reviewer         *ReviewerModelBinding
+	reviews          ActionReviewPersistence
 	now              func() time.Time
 	persistenceLimit time.Duration
 	active           map[domain.ApprovalID]trackedApproval
 }
 
 type trackedApproval struct {
-	request   domain.ApprovalRequest
-	sequence  int64
-	consuming bool
+	request      domain.ApprovalRequest
+	sequence     int64
+	consuming    bool
+	route        PermissionEvaluation
+	reviewing    bool
+	reviewCancel context.CancelFunc
 }
 
 // NewApprovalCoordinator constructs a fail-closed non-executing coordinator.
@@ -211,15 +320,56 @@ func NewApprovalCoordinator(config ApprovalCoordinatorConfig) (*ApprovalCoordina
 		limit = DefaultPersistenceTimeout
 	}
 	if config.Service == nil || config.Persistence == nil || config.ResultAudits == nil || config.Scope == nil || config.ApprovalIDs == nil ||
-		config.AuditIDs == nil || config.UIEvents == nil || config.Rollout == nil || config.Now == nil || !validCoordinatorTime(config.Now()) ||
+		config.AuditIDs == nil || config.UIEvents == nil || config.Rollout == nil || config.RestartRevalidator == nil ||
+		config.RestartExecutor == nil || config.Permissions == nil || config.Reviews == nil ||
+		config.Now == nil || !validCoordinatorTime(config.Now()) ||
 		limit <= 0 || limit > MaxPersistenceTimeout {
 		return nil, ErrApprovalCoordinatorDependency
 	}
-	return &ApprovalCoordinator{
+	coordinator := &ApprovalCoordinator{
 		service: config.Service, persistence: config.Persistence, resultAudits: config.ResultAudits, scope: config.Scope,
 		approvalIDs: config.ApprovalIDs, auditIDs: config.AuditIDs, uiEvents: config.UIEvents,
-		rollout: config.Rollout, now: config.Now, persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
-	}, nil
+		rollout: config.Rollout, restartValidator: config.RestartRevalidator,
+		restartExecutor: config.RestartExecutor, permissions: config.Permissions,
+		reviewer: config.Reviewer, reviews: config.Reviews, now: config.Now,
+		persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
+	}
+	if config.Reviewer != nil && !config.Reviewer.valid() {
+		return nil, ErrApprovalCoordinatorDependency
+	}
+	if err := config.Permissions.BindInvalidationHooks(coordinator, coordinator); err != nil {
+		return nil, ErrApprovalCoordinatorDependency
+	}
+	return coordinator, nil
+}
+
+// PrepareRestartActionPolicy rejects disabled or denied work before the fresh
+// Kubernetes target read. It returns only local immutable snapshots.
+func (coordinator *ApprovalCoordinator) PrepareRestartActionPolicy(
+	sessionID domain.SessionID,
+	scope domain.ScopeSnapshot,
+) (PermissionPolicy, domain.ClusterScope, error) {
+	if coordinator == nil || !sessionID.Valid() || scope.Validate() != nil {
+		return PermissionPolicy{}, domain.ClusterScope{}, ErrApprovalUnavailable
+	}
+	status := coordinator.permissions.Status(coordinator.now())
+	if status.SessionID == "" {
+		if err := coordinator.permissions.BindSession(sessionID); err != nil {
+			return PermissionPolicy{}, domain.ClusterScope{}, ErrPermissionStale
+		}
+	}
+	current, ok := coordinator.scope.CurrentScope()
+	if !ok || current.Validate() != nil || current.Snapshot() != scope {
+		return PermissionPolicy{}, domain.ClusterScope{}, ErrApprovalInvalidated
+	}
+	policy, evaluation := coordinator.permissions.EvaluateCatalog(sessionID, PermissionEvaluationInput{
+		Operation: domain.ActionOperationRestartDeployment, Effect: domain.CapabilityEffectClusterMutation,
+		Risk: domain.RiskReview, CapabilityAdmitted: true, CapabilityEnabled: true,
+	})
+	if evaluation.Disposition == domain.ReviewDispositionDeny || evaluation.Validate() != nil {
+		return PermissionPolicy{}, domain.ClusterScope{}, ErrPermissionDenied
+	}
+	return policy, current, nil
 }
 
 // SubmitRestartDeploymentProposal implements the proposal bridge sink. It
@@ -232,49 +382,87 @@ func (coordinator *ApprovalCoordinator) SubmitRestartDeploymentProposal(
 	intent domain.OperationIntent,
 ) (domain.ApprovalRequest, error) {
 	if coordinator == nil || ctx == nil || !runID.Valid() || !sessionID.Valid() ||
-		sequence < 1 || sequence > 4096 || intent.Validate() != nil {
+		sequence < 1 || sequence > 4096 || intent.ValidateRestartDeployment() != nil {
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	if len(coordinator.active) != 0 {
+		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalBusy
 	}
 	current, ok := coordinator.scope.CurrentScope()
-	if !ok || current.Snapshot() != intent.Scope {
+	if !ok || current.Validate() != nil || current.Snapshot() != intent.Scope ||
+		current.NamespaceAccess != intent.NamespaceAccess {
+		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalInvalidated
 	}
 	id, err := coordinator.approvalIDs.NewApprovalID()
 	if err != nil || !id.Valid() {
+		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable
 	}
 	request, err := coordinator.service.Request(ctx, approval.RequestCommand{
 		ID: id, RunID: runID, SessionID: sessionID, Intent: intent,
 	})
 	if err != nil {
+		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable
+	}
+	route := coordinator.permissions.Evaluate(request.ActionEnvelope(), true, true, coordinator.now())
+	if route.Validate() != nil || route.Disposition == domain.ReviewDispositionDeny {
+		coordinator.cancelInMemory(request.ID)
+		coordinator.mu.Unlock()
+		return domain.ApprovalRequest{}, ErrPermissionDenied
 	}
 	audit, err := coordinator.newAudit(request)
 	if err != nil || coordinator.persist(ctx, func(operationContext context.Context) error {
 		return coordinator.persistence.CreateWithAudit(operationContext, request, audit)
 	}) != nil {
 		coordinator.cancelInMemory(request.ID)
+		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalPersistenceUnavailable
 	}
+	tracked := trackedApproval{request: request, sequence: sequence, route: route}
+	coordinator.active[request.ID] = tracked
+	coordinator.mu.Unlock()
+
+	switch route.Disposition {
+	case domain.ReviewDispositionHuman:
+		if err := coordinator.publishApprovalDialog(ctx, tracked); err != nil {
+			return domain.ApprovalRequest{}, err
+		}
+	case domain.ReviewDispositionAutomatic:
+		if err := coordinator.resolveAutomaticAction(ctx, tracked); err != nil {
+			return request, err
+		}
+	case domain.ReviewDispositionReviewer:
+		if err := coordinator.reviewAction(ctx, tracked); err != nil {
+			return request, err
+		}
+	default:
+		return domain.ApprovalRequest{}, ErrPermissionDenied
+	}
+	return request, nil
+}
+
+func (coordinator *ApprovalCoordinator) publishApprovalDialog(ctx context.Context, tracked trackedApproval) error {
+	request, sequence := tracked.request, tracked.sequence
 	projection := projectUIApprovalRequest(request, sequence)
 	event := UIEvent{
 		Kind: UIEventApprovalRequested, RunID: request.RunID,
 		ScopeGeneration: request.Intent.Scope.Generation, Sequence: sequence, Approval: &projection,
 	}
 	if projection.Validate() != nil || event.Validate() != nil || coordinator.uiEvents.PublishUIEvent(ctx, event) != nil {
+		coordinator.mu.Lock()
+		delete(coordinator.active, request.ID)
+		coordinator.mu.Unlock()
 		coordinator.closeAfterDeliveryFailure(ctx, request)
-		return domain.ApprovalRequest{}, ErrApprovalUnavailable
+		return ErrApprovalUnavailable
 	}
-	coordinator.active[request.ID] = trackedApproval{request: request, sequence: sequence}
-	return request, nil
+	return nil
 }
 
 // Decide maps a typed UI intent to a domain decision and persists it before
@@ -291,7 +479,8 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	defer coordinator.mu.Unlock()
 	tracked, ok := coordinator.active[command.ApprovalID]
 	if !ok || tracked.request.RunID != command.RunID || tracked.sequence != command.ApprovalSequence ||
-		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration {
+		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		tracked.route.Disposition != domain.ReviewDispositionHuman {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	current, currentOK := coordinator.scope.CurrentScope()
@@ -306,6 +495,7 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	updated, decision, decideErr := coordinator.service.Decide(ctx, approval.DecisionCommand{
 		RequestID: command.ApprovalID, Choice: choice,
 		ShownDigest: command.ApprovalDigest, Nonce: command.ApprovalNonce, CurrentScope: currentScope,
+		Actor: domain.ApprovalActorLocalUser, Disposition: domain.ReviewDispositionHuman,
 	})
 	if decideErr != nil {
 		if updated.ID != tracked.request.ID ||
@@ -413,6 +603,55 @@ func (coordinator *ApprovalCoordinator) InvalidateScope(generation int64) error 
 	}, domain.ApprovalReasonScopeChanged)
 }
 
+// InvalidatePolicy marks every older action stale after the new generation is
+// committed. It performs this durable transition before cancellation.
+func (coordinator *ApprovalCoordinator) InvalidatePolicy(generation domain.PolicyGeneration) error {
+	if coordinator == nil || !generation.Valid() {
+		return ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), coordinator.persistenceLimit)
+	defer cancel()
+	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
+		return tracked.request.Intent.PolicyGeneration < generation
+	}, domain.ApprovalReasonPolicyChanged)
+}
+
+// CancelPolicyWork runs only after InvalidatePolicy. Reviewer cancellation is
+// added to this same owner below; the lifecycle itself has no background work.
+func (coordinator *ApprovalCoordinator) CancelPolicyWork(ctx context.Context, _ domain.PolicyGeneration) error {
+	if coordinator == nil || ctx == nil {
+		return ErrApprovalUnavailable
+	}
+	return ctx.Err()
+}
+
+// InvalidateModelOrigin advances permission policy before Coordinator cancels
+// the old AgentRun during a role/origin replacement.
+func (coordinator *ApprovalCoordinator) InvalidateModelOrigin(ctx context.Context) error {
+	if coordinator == nil || coordinator.permissions == nil {
+		return ErrPermissionUnavailable
+	}
+	return coordinator.permissions.InvalidateOriginPolicy(ctx)
+}
+
+// BindSessionAuthority keeps process-local permission rules and actions bound
+// to exactly the Session selected by Application.
+func (coordinator *ApprovalCoordinator) BindSessionAuthority(ctx context.Context, sessionID domain.SessionID) error {
+	if coordinator == nil || ctx == nil || !sessionID.Valid() {
+		return ErrPermissionUnavailable
+	}
+	status := coordinator.permissions.Status(coordinator.now())
+	if status.SessionID == "" {
+		return coordinator.permissions.BindSession(sessionID)
+	}
+	if status.SessionID == sessionID {
+		return nil
+	}
+	return coordinator.permissions.ChangeSession(ctx, sessionID)
+}
+
 // Recover atomically invalidates every pending or approved-not-executed row.
 func (coordinator *ApprovalCoordinator) Recover(ctx context.Context) error {
 	if coordinator == nil || ctx == nil {
@@ -481,6 +720,28 @@ func (coordinator *ApprovalCoordinator) Get(
 	return request, decision, nil
 }
 
+// Status returns policy and active-action metadata without persistence,
+// model, Kubernetes, Tool, reviewer, or executor I/O.
+func (coordinator *ApprovalCoordinator) Status() (PermissionStatus, *UIActionStatus) {
+	if coordinator == nil || coordinator.permissions == nil {
+		return PermissionStatus{}, nil
+	}
+	permission := coordinator.permissions.Status(coordinator.now())
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	for _, tracked := range coordinator.active {
+		status := &UIActionStatus{
+			RequestID: tracked.request.ID, Operation: tracked.request.Intent.Operation,
+			Risk: tracked.request.Intent.Risk, Route: tracked.route.Disposition,
+			State: tracked.request.State, ScopeGeneration: tracked.request.Intent.Scope.Generation,
+			PolicyGeneration: tracked.request.Intent.PolicyGeneration, Reviewing: tracked.reviewing,
+			ExpiresAtMillis: tracked.request.ExpiresAt.UnixMilli(),
+		}
+		return permission, status
+	}
+	return permission, nil
+}
+
 func (coordinator *ApprovalCoordinator) closeMatching(
 	ctx context.Context,
 	matches func(trackedApproval) bool,
@@ -495,7 +756,7 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 			updated domain.ApprovalRequest
 			err     error
 		)
-		if reason == domain.ApprovalReasonScopeChanged {
+		if reason == domain.ApprovalReasonScopeChanged || reason == domain.ApprovalReasonPolicyChanged {
 			updated, err = coordinator.service.Invalidate(ctx, id, reason)
 		} else {
 			updated, err = coordinator.service.Cancel(ctx, id, reason)
@@ -503,16 +764,25 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 		if err != nil && updated.ID == "" {
 			resultErr = ErrApprovalUnavailable
 			delete(coordinator.active, id)
+			if tracked.reviewCancel != nil {
+				tracked.reviewCancel()
+			}
 			continue
 		}
 		if updated.State == domain.ApprovalStateConsumed {
 			delete(coordinator.active, id)
+			if tracked.reviewCancel != nil {
+				tracked.reviewCancel()
+			}
 			continue
 		}
 		if persistErr := coordinator.persistClosed(ctx, tracked.request.State, updated); persistErr != nil {
 			resultErr = ErrApprovalPersistenceUnavailable
 		}
 		delete(coordinator.active, id)
+		if tracked.reviewCancel != nil {
+			tracked.reviewCancel()
+		}
 		coordinator.publishClosed(ctx, projectUIApprovalResult(updated, tracked.sequence))
 	}
 	return resultErr
@@ -550,10 +820,7 @@ func (coordinator *ApprovalCoordinator) newStoredAudit(request approval.StoredRe
 	policy := request.Intent.PolicyVersion
 	scope := request.Intent.Scope
 	sessionID, runID := request.SessionID, request.RunID
-	subject := domain.ResourceRef{
-		APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
-		Namespace: request.Intent.Scope.Namespace, Name: request.Intent.DeploymentName, UID: request.Intent.DeploymentUID,
-	}
+	subject := request.Intent.Target.Resource
 	event := domain.AuditEvent{
 		ID: id, SessionID: &sessionID, RunID: &runID, Type: eventType, Actor: actor, Outcome: outcome,
 		Scope: &scope, Subject: &subject,
@@ -571,9 +838,17 @@ func approvalAuditProjection(request approval.StoredRequest) (domain.AuditEventT
 	case domain.ApprovalStatePending:
 		return domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested"
 	case domain.ApprovalStateApproved:
-		return domain.AuditEventApprovalApproved, domain.AuditActorUser, domain.AuditOutcomeSuccess, string(request.StateReason)
+		actor := domain.AuditActorSystem
+		if request.StateReason == domain.ApprovalReasonUserApproved {
+			actor = domain.AuditActorUser
+		}
+		return domain.AuditEventApprovalApproved, actor, domain.AuditOutcomeSuccess, string(request.StateReason)
 	case domain.ApprovalStateRejected:
-		return domain.AuditEventApprovalRejected, domain.AuditActorUser, domain.AuditOutcomeDenied, string(request.StateReason)
+		actor := domain.AuditActorSystem
+		if request.StateReason == domain.ApprovalReasonUserRejected {
+			actor = domain.AuditActorUser
+		}
+		return domain.AuditEventApprovalRejected, actor, domain.AuditOutcomeDenied, string(request.StateReason)
 	case domain.ApprovalStateExpired:
 		return domain.AuditEventApprovalExpired, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
 	default:

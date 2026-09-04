@@ -13,9 +13,13 @@ import (
 )
 
 const (
-	ModelAPIKeyEnvironmentVariable = "KUPILOT_MODEL_API_KEY"
-	MaxModelAPIKeyBytes            = 4096
-	redactedSecret                 = "[REDACTED]"
+	// ModelAPIKeyEnvironmentVariable is the version 1 Agent alias retained for
+	// deterministic compatibility. New files and setup copy use the role name.
+	ModelAPIKeyEnvironmentVariable            = "KUPILOT_MODEL_API_KEY"
+	AgentAPIKeyEnvironmentVariable            = "KUPILOT_AGENT_API_KEY"
+	ApprovalReviewerAPIKeyEnvironmentVariable = "KUPILOT_APPROVAL_REVIEWER_API_KEY"
+	MaxModelAPIKeyBytes                       = 4096
+	redactedSecret                            = "[REDACTED]"
 )
 
 var _ fmt.Formatter = SecretValue{}
@@ -23,10 +27,12 @@ var _ fmt.Stringer = SecretValue{}
 var _ fmt.GoStringer = SecretValue{}
 var _ encoding.TextMarshaler = SecretValue{}
 
-// EnvironmentSecretSource reads the one admitted environment override.
+// EnvironmentSecretSource reads one fixed role's admitted environment
+// aliases. Every present alias is removed before validation completes.
 type EnvironmentSecretSource struct {
 	LookupEnv func(string) (string, bool)
 	Unsetenv  func(string) error
+	Variables []string
 
 	mu       sync.Mutex
 	consumed bool
@@ -65,17 +71,46 @@ func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error)
 	if unset == nil {
 		unset = os.Unsetenv
 	}
-	value, found := lookup(ModelAPIKeyEnvironmentVariable)
-	if !found {
+	variables := append([]string(nil), source.Variables...)
+	if len(variables) == 0 {
+		variables = []string{ModelAPIKeyEnvironmentVariable}
+	}
+	seen := make(map[string]struct{}, len(variables))
+	values := make([]string, 0, 1)
+	presentCount := 0
+	unsetFailed := false
+	for _, variable := range variables {
+		if variable == "" {
+			return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_source_invalid", "read_model_api_key", "The model API key source is invalid.")
+		}
+		if _, duplicate := seen[variable]; duplicate {
+			return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_source_invalid", "read_model_api_key", "The model API key source is invalid.")
+		}
+		seen[variable] = struct{}{}
+		value, found := lookup(variable)
+		if !found {
+			continue
+		}
+		presentCount++
+		if err := unset(variable); err != nil {
+			unsetFailed = true
+		}
+		values = append(values, value)
+	}
+	if unsetFailed {
+		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "Kupilot could not remove a model API key from its process environment; startup was stopped.")
+	}
+	if presentCount == 0 {
 		return SecretValue{}, false, nil
 	}
-	if err := unset(ModelAPIKeyEnvironmentVariable); err != nil {
-		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "Kupilot could not remove the model API key from its process environment; startup was stopped.")
+	if presentCount != 1 || len(values) != 1 {
+		for index := range values {
+			values[index] = ""
+		}
+		return SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "model_api_key_ambiguous", "read_model_api_key", "Only one API key environment alias may be set for a model role.")
 	}
-	if value == "" {
-		return SecretValue{}, false, nil
-	}
-	secret, err := NewSecretValue(value)
+	secret, err := NewSecretValue(values[0])
+	values[0] = ""
 	if err != nil {
 		return SecretValue{}, false, err
 	}
@@ -141,6 +176,15 @@ func (secret *SecretValue) Destroy() {
 	secret.value = nil
 }
 
+// Clone creates a separately owned opaque buffer for an explicitly shared
+// credential reference. It never exposes the credential as a return value.
+func (secret *SecretValue) Clone() (SecretValue, error) {
+	if secret == nil || len(secret.value) == 0 {
+		return SecretValue{}, newSafeError(ClassInternal, "model_api_key_unavailable", "clone_model_api_key", "The model credential is unavailable.")
+	}
+	return SecretValue{value: append([]byte(nil), secret.value...)}, nil
+}
+
 func (SecretValue) String() string {
 	return redactedSecret
 }
@@ -169,9 +213,20 @@ func (SecretValue) MarshalYAML() (any, error) {
 // API-key entry removed. It is a second defense after source unsetting.
 func FilterChildEnvironment(environment []string) []string {
 	filtered := make([]string, 0, len(environment))
-	prefix := ModelAPIKeyEnvironmentVariable + "="
+	prefixes := [...]string{
+		ModelAPIKeyEnvironmentVariable + "=",
+		AgentAPIKeyEnvironmentVariable + "=",
+		ApprovalReviewerAPIKeyEnvironmentVariable + "=",
+	}
 	for _, entry := range environment {
-		if strings.HasPrefix(entry, prefix) {
+		blocked := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry, prefix) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
 			continue
 		}
 		filtered = append(filtered, entry)

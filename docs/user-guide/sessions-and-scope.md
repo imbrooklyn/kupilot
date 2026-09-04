@@ -1,9 +1,9 @@
 # Sessions and Scope
 
-This page defines the Accepted `v0.5` Session-memory semantics while retaining
-the explicit CLI forms already implemented in `v0.4`. The checked-in binary
-does not yet use persisted history as model context or implement ADK
-summarization and coverage.
+This page defines the implemented Session-memory and explicit-resume semantics
+within the Accepted `v0.5` contract. The checked-in binary now uses eligible
+persisted history as model context and directly uses Eino ADK summarization
+with project-owned safe coverage metadata.
 
 ## A bare start is always new
 
@@ -99,16 +99,20 @@ exported across processes.
 
 ## What resume restores
 
-Resume loads only allowlisted safe history and historic candidates:
+Resume acceptance loads only allowlisted safe history and Session metadata:
 
 - Committed, locally processed user Messages.
 - Final validated assistant Messages, free-form answers, and safe Diagnosis
   metadata.
 - A bounded safe summary, coverage metadata, and eligible recent committed tail
-  when the `v0.5` implementation requires compaction.
+  when compaction has occurred.
 - Safe Session metadata.
-- An unverified historic Context and Namespace candidate.
-- An unverified historic ResourceRef candidate when eligible.
+
+The picker may display an unverified historic Context and Namespace candidate
+before acceptance. Choosing it is a separate explicit scope activation that
+must complete first. Resume acceptance itself keeps the currently verified
+scope and clears the selected ResourceRef; it does not install or revalidate a
+historic resource candidate.
 
 Resume does not restore or replay:
 
@@ -129,15 +133,15 @@ and accepting a saved scope is a later explicit action that performs normal
 scope verification. Supplying explicit `--context` or `--namespace` startup
 overrides also requests separate scope activation.
 
-Under `v0.5`, every question after the first in a Session receives one ordered,
+Every question after the first in a Session receives one ordered,
 bounded representation of all retained eligible safe history when such history
 exists. Application first checks the current named role/profile, canonical
-origin, exact data categories and consent, verified scope, scope and policy
-generations, coverage, and finite context/summary budget. A failed gate causes
-zero model calls and no current-question-only fallback. The current question is
-included exactly once. Partial streams, Tool calls/results, raw model traffic,
-command output, and approval dialogs are never replayed as conversation
-history.
+origin, exact data categories and consent, verified current scope/generation,
+coverage, and finite context/summary budget. A failed gate causes zero model
+calls and no current-question-only fallback. The accepted permission work will
+add its independent policy-generation gate. The current question is included
+exactly once. Partial streams, Tool calls/results, raw model traffic, command
+output, and approval dialogs are never replayed as conversation history.
 
 ## Saved-scope conflict
 
@@ -164,12 +168,11 @@ A scope change invalidates the old generation first, cancels the active run,
 clears the selected ResourceRef and picker caches, closes or replaces the old
 client, and rejects late results.
 
-After resume, a saved ResourceRef is eligible for revalidation only when its
-saved Namespace matches the newly verified ClusterScope. Kupilot reads the
-exact object and checks stronger identity when available before selecting it.
-If the object is absent, forbidden, changed, cross-Namespace, or otherwise
-unavailable, the selection remains cleared. Selecting a candidate never creates
-Evidence; the next AgentRun must verify it through a typed bounded capability.
+Resume never restores or automatically revalidates a saved ResourceRef. The
+selection remains cleared even when a saved candidate used to match the scope.
+The user may select a resource again through the ordinary `/resource` flow;
+that input aid still creates no Evidence, and the next AgentRun must verify
+current cluster facts through a typed bounded capability.
 
 ## Resume privacy behavior
 

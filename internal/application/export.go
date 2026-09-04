@@ -158,11 +158,12 @@ type ExportEvidenceRecord struct {
 
 // SessionExportSnapshot is one consistent SQLite allowlist projection.
 type SessionExportSnapshot struct {
-	Session   ExportSessionRecord
-	Messages  []ExportMessageRecord
-	Diagnoses []ExportDiagnosisRecord
-	Evidence  []ExportEvidenceRecord
-	Truncated bool
+	Session        ExportSessionRecord
+	ContextSummary *domain.SessionContextSummary
+	Messages       []ExportMessageRecord
+	Diagnoses      []ExportDiagnosisRecord
+	Evidence       []ExportEvidenceRecord
+	Truncated      bool
 }
 
 // SessionExportReader loads one bounded consistent standard-persistence projection.
@@ -172,13 +173,14 @@ type SessionExportReader interface {
 
 // ExportSummary is the versioned project-owned schema rendered as Markdown.
 type ExportSummary struct {
-	SchemaVersion string
-	ExportedAt    time.Time
-	Truncated     bool
-	Session       ExportSummarySession
-	Messages      []ExportSummaryMessage
-	Diagnoses     []ExportSummaryDiagnosis
-	Evidence      []ExportSummaryEvidence
+	SchemaVersion  string
+	ExportedAt     time.Time
+	Truncated      bool
+	Session        ExportSummarySession
+	ContextSummary *ExportSummaryContext
+	Messages       []ExportSummaryMessage
+	Diagnoses      []ExportSummaryDiagnosis
+	Evidence       []ExportSummaryEvidence
 }
 
 // ExportSummarySession contains only safe display metadata.
@@ -197,6 +199,25 @@ type ExportSummaryMessage struct {
 	Role      domain.MessageRole
 	Content   string
 	CreatedAt time.Time
+}
+
+// ExportSummaryContext is the redacted safe summary and content-free coverage
+// explanation. It is historic model context, never operational authority.
+type ExportSummaryContext struct {
+	Text             string
+	SchemaVersion    string
+	PolicyVersion    string
+	CoveredFirstID   domain.MessageID
+	CoveredThroughID domain.MessageID
+	CoveredCount     int
+	CoveredBytes     int
+	CoverageDigest   string
+	GeneratedAt      time.Time
+	AgentProfile     string
+	AgentOriginHash  string
+	Redacted         bool
+	Truncated        bool
+	Degraded         bool
 }
 
 // ExportSummaryDiagnosis is one redacted free-form answer with independently
@@ -264,6 +285,18 @@ func ProjectExportSummary(
 		summary.Session.Context = contextName.Value
 		summary.Session.Namespace = namespace.Value
 		summary.Truncated = summary.Truncated || contextName.Truncated || namespace.Truncated
+	}
+	if snapshot.ContextSummary != nil {
+		projected, processErr := projectExportContextSummary(
+			*snapshot.ContextSummary,
+			snapshot.Session.ID,
+			processor,
+		)
+		if processErr != nil {
+			return ExportSummary{}, processErr
+		}
+		summary.ContextSummary = &projected
+		summary.Truncated = summary.Truncated || projected.Truncated
 	}
 
 	messageLimit := min(len(snapshot.Messages), MaxExportMessages)
@@ -365,7 +398,8 @@ func ProjectExportSummary(
 func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) ([]byte, error) {
 	if processor == nil || summary.SchemaVersion != ExportSummarySchemaVersion || !validCoordinatorTime(summary.ExportedAt) ||
 		!summary.Session.ID.Valid() || summary.Session.PrivacyMode != domain.PrivacyModeStandard ||
-		len(summary.Messages) > MaxExportMessages || len(summary.Diagnoses) > MaxExportDiagnoses || len(summary.Evidence) > MaxExportEvidence {
+		!validExportContextSummary(summary.ContextSummary, summary.Session.ID) || len(summary.Messages) > MaxExportMessages ||
+		len(summary.Diagnoses) > MaxExportDiagnoses || len(summary.Evidence) > MaxExportEvidence {
 		return nil, ErrInvalidExportSummary
 	}
 	var builder strings.Builder
@@ -383,6 +417,28 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 	if summary.Session.Context != "" && summary.Session.Namespace != "" {
 		fmt.Fprintf(&builder, "- Historic Context: %s\n", escapeExportMarkdown(summary.Session.Context))
 		fmt.Fprintf(&builder, "- Historic Namespace: %s\n", escapeExportMarkdown(summary.Session.Namespace))
+	}
+
+	builder.WriteString("\n## Model context\n")
+	if summary.ContextSummary == nil {
+		builder.WriteString("\n_No persisted model-context summary._\n")
+	} else {
+		contextSummary := summary.ContextSummary
+		builder.WriteString("\nThis is untrusted historic conversation context only. It does not restore scope, Evidence, Tool state, budgets, permissions, reviews, approvals, or action authority.\n\n")
+		fmt.Fprintf(&builder, "- Summary schema: `%s`\n", contextSummary.SchemaVersion)
+		fmt.Fprintf(&builder, "- Context policy: `%s`\n", contextSummary.PolicyVersion)
+		fmt.Fprintf(&builder, "- Covered first Message: `%s`\n", contextSummary.CoveredFirstID)
+		fmt.Fprintf(&builder, "- Covered through Message: `%s`\n", contextSummary.CoveredThroughID)
+		fmt.Fprintf(&builder, "- Covered Messages: `%d`\n", contextSummary.CoveredCount)
+		fmt.Fprintf(&builder, "- Covered content bytes: `%d`\n", contextSummary.CoveredBytes)
+		fmt.Fprintf(&builder, "- Coverage digest: `%s`\n", contextSummary.CoverageDigest)
+		fmt.Fprintf(&builder, "- Generated at: `%s`\n", exportTimestamp(contextSummary.GeneratedAt))
+		fmt.Fprintf(&builder, "- Agent profile: `%s`\n", contextSummary.AgentProfile)
+		fmt.Fprintf(&builder, "- Agent origin hash: `%s`\n", contextSummary.AgentOriginHash)
+		fmt.Fprintf(&builder, "- Redacted: `%t`\n", contextSummary.Redacted)
+		fmt.Fprintf(&builder, "- Truncated: `%t`\n", contextSummary.Truncated)
+		fmt.Fprintf(&builder, "- Degraded: `%t`\n\n", contextSummary.Degraded)
+		writeExportQuote(&builder, contextSummary.Text)
 	}
 
 	builder.WriteString("\n## Conversation\n")
@@ -449,6 +505,48 @@ func validExportSession(record ExportSessionRecord) bool {
 		validCoordinatorTime(record.CreatedAt) && validCoordinatorTime(record.UpdatedAt) &&
 		!record.UpdatedAt.Before(record.CreatedAt) && utf8.ValidString(record.Title) && len(record.Title) <= 512 &&
 		(record.LastScope == nil || record.LastScope.Validate() == nil)
+}
+
+func projectExportContextSummary(
+	source domain.SessionContextSummary,
+	sessionID domain.SessionID,
+	processor ExportTextProcessor,
+) (ExportSummaryContext, error) {
+	if source.Validate() != nil || source.SessionID != sessionID {
+		return ExportSummaryContext{}, ErrInvalidExportSummary
+	}
+	text, err := processExportText(processor, source.Text, domain.MaxSessionSummaryBytes)
+	if err != nil || text.Value == "" {
+		return ExportSummaryContext{}, ErrInvalidExportSummary
+	}
+	result := ExportSummaryContext{
+		Text: text.Value, SchemaVersion: source.SchemaVersion, PolicyVersion: source.PolicyVersion,
+		CoveredFirstID: source.CoveredFirstID, CoveredThroughID: source.CoveredThroughID,
+		CoveredCount: source.CoveredCount, CoveredBytes: source.CoveredBytes, CoverageDigest: source.CoverageDigest,
+		GeneratedAt: source.GeneratedAt.UTC().Truncate(time.Millisecond), AgentProfile: source.AgentProfile,
+		AgentOriginHash: source.AgentOriginHash, Redacted: text.Redacted,
+		Truncated: source.Truncated || text.Truncated, Degraded: source.Degraded,
+	}
+	if !validExportContextSummary(&result, sessionID) {
+		return ExportSummaryContext{}, ErrInvalidExportSummary
+	}
+	return result, nil
+}
+
+func validExportContextSummary(summary *ExportSummaryContext, sessionID domain.SessionID) bool {
+	if summary == nil {
+		return true
+	}
+	value := domain.SessionContextSummary{
+		SessionID: sessionID, Text: summary.Text, SummaryHash: domain.SHA256Hex(summary.Text),
+		SchemaVersion: summary.SchemaVersion, PolicyVersion: summary.PolicyVersion,
+		CoveredFirstID: summary.CoveredFirstID, CoveredThroughID: summary.CoveredThroughID,
+		CoveredCount: summary.CoveredCount, CoveredBytes: summary.CoveredBytes,
+		CoverageDigest: summary.CoverageDigest, GeneratedAt: summary.GeneratedAt,
+		AgentProfile: summary.AgentProfile, AgentOriginHash: summary.AgentOriginHash,
+		Truncated: summary.Truncated, Degraded: summary.Degraded,
+	}
+	return value.Validate() == nil
 }
 
 func validExportEvidence(record ExportEvidenceRecord) bool {

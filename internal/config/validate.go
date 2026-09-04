@@ -17,7 +17,7 @@ func Validate(config *Config) error {
 		return newSafeError(ClassInternal, "config_internal", "validate_configuration", "Kupilot could not validate its configuration.")
 	}
 	if config.Version != CurrentVersion {
-		return newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "validate_configuration", "Configuration version is unsupported; use version 1.")
+		return newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "validate_configuration", "Configuration version is unsupported; use version 2. Version 1 files are accepted only through the documented compatibility migration.")
 	}
 	if !validDisplayName(config.Context, MaxContextBytes) {
 		return newSafeError(ClassConfigurationInvalid, "config_context_invalid", "validate_configuration", "Kubernetes Context must be valid, bounded text without control characters.")
@@ -30,36 +30,16 @@ func Validate(config *Config) error {
 	default:
 		return newSafeError(ClassConfigurationInvalid, "config_budget_profile_invalid", "validate_configuration", "runtime.budget_profile must be compact, balanced, or extended.")
 	}
-	if config.Model.ProviderKind != ProviderOpenAICompatible {
-		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "model.provider_kind must be openai_compatible.")
+	if err := validateModelProfile(&config.Models.Agent, ModelRoleAgent, true); err != nil {
+		return err
 	}
-	if config.Model.ReasoningEffort != "" && config.Model.ReasoningEffort != ModelReasoningEffortNone {
-		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "model.reasoning_effort must be omitted or set to none.")
-	}
-	if math.IsNaN(config.Model.Temperature) || math.IsInf(config.Model.Temperature, 0) || config.Model.Temperature < 0 || config.Model.Temperature > 0.2 {
-		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "model.temperature must be between 0 and 0.2.")
-	}
-	if config.Model.MaxOutputTokens < 1 || config.Model.MaxOutputTokens > MaxModelOutputTokens {
-		return newSafeError(ClassConfigurationInvalid, "config_output_limit_invalid", "validate_configuration", "model.max_output_tokens must be between 1 and 8192.")
-	}
-	if config.Model.RequestTimeoutSeconds < 1 || config.Model.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
-		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "model.request_timeout_seconds must be between 1 and 300.")
-	}
-	if !config.Model.Streaming || !config.Model.ToolCallingRequired {
-		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "Model streaming and structured Tool calling must remain enabled.")
-	}
-	if config.Model.Endpoint != "" {
-		endpoint, origin, ok := canonicalEndpoint(config.Model.Endpoint)
-		if !ok {
-			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "Model endpoint must use HTTPS, or HTTP only with an explicit loopback host; user information, query, fragments, and ambiguous paths are not allowed.")
+	if reviewer := config.Models.ApprovalReviewer; reviewer != nil {
+		if err := validateModelProfile(reviewer, ModelRoleApprovalReviewer, false); err != nil {
+			return err
 		}
-		config.Model.Endpoint = endpoint
-		config.Model.Origin = origin
-	} else {
-		config.Model.Origin = ""
-	}
-	if config.Model.Model != "" && !validModelIdentifier(config.Model.Model) {
-		return newSafeError(ClassConfigurationInvalid, "config_model_identifier_invalid", "validate_configuration", "Model identifier must be bounded ASCII text without spaces or control characters.")
+		if reviewer.Name == config.Models.Agent.Name {
+			return newSafeError(ClassConfigurationInvalid, "config_model_profile_name_duplicate", "validate_configuration", "Model profile names must be unique.")
+		}
 	}
 	if config.Kubernetes.ExecCredentials != ExecCredentialsAllow && config.Kubernetes.ExecCredentials != ExecCredentialsDeny {
 		return newSafeError(ClassConfigurationInvalid, "config_exec_credentials_invalid", "validate_configuration", "kubernetes.exec_credentials must be allow or deny.")
@@ -73,6 +53,65 @@ func Validate(config *Config) error {
 		return newSafeError(ClassConfigurationInvalid, "config_log_level_invalid", "validate_configuration", "logging.level must be info, warn, or error.")
 	}
 	return nil
+}
+
+func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, allowUnconfigured bool) error {
+	if profile == nil || profile.Role != expectedRole || !profile.Role.valid() ||
+		!validModelProfileName(profile.Name) || !profile.CredentialReference.valid() ||
+		expectedRole == ModelRoleAgent && (profile.InheritAgent || profile.CredentialReference != ModelCredentialAgent) ||
+		expectedRole == ModelRoleApprovalReviewer && profile.CredentialReference != ModelCredentialAgent &&
+			profile.CredentialReference != ModelCredentialApprovalReviewer {
+		return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "Each model profile must have one unique name, its fixed role, and an admitted role-bound credential reference.")
+	}
+	if profile.ProviderKind != ProviderOpenAICompatible {
+		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "Each models profile provider_kind must be openai_compatible.")
+	}
+	if profile.ReasoningEffort != "" && profile.ReasoningEffort != ModelReasoningEffortNone {
+		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Model profile reasoning_effort must be omitted or set to none.")
+	}
+	if math.IsNaN(profile.Temperature) || math.IsInf(profile.Temperature, 0) || profile.Temperature < 0 || profile.Temperature > 0.2 {
+		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "Model profile temperature must be between 0 and 0.2.")
+	}
+	if profile.MaxOutputTokens < 0 {
+		return newSafeError(ClassConfigurationInvalid, "config_output_limit_invalid", "validate_configuration", "Model profile max_output_tokens must be omitted without endpoint evidence or set to a positive endpoint-supported value.")
+	}
+	if profile.RequestTimeoutSeconds < 1 || profile.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
+		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "Model profile request_timeout_seconds must be between 1 and 300.")
+	}
+	if expectedRole == ModelRoleAgent && (!profile.Streaming || !profile.ToolCallingRequired) ||
+		expectedRole == ModelRoleApprovalReviewer && (profile.Streaming || profile.ToolCallingRequired) {
+		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "The agent profile must stream with Tools; the approval_reviewer profile must be non-streaming and Tool-free.")
+	}
+	if profile.Endpoint != "" {
+		endpoint, origin, ok := canonicalEndpoint(profile.Endpoint)
+		if !ok {
+			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "Model endpoint must use HTTPS, or HTTP only with an explicit loopback host; user information, query, fragments, and ambiguous paths are not allowed.")
+		}
+		profile.Endpoint = endpoint
+		profile.Origin = origin
+	} else {
+		profile.Origin = ""
+	}
+	if profile.Model != "" && !validModelIdentifier(profile.Model) {
+		return newSafeError(ClassConfigurationInvalid, "config_model_identifier_invalid", "validate_configuration", "Model identifier must be bounded ASCII text without spaces or control characters.")
+	}
+	if !allowUnconfigured && (profile.Endpoint == "" || profile.Model == "") {
+		return modelProfileRequiredError(expectedRole)
+	}
+	return nil
+}
+
+func validModelProfileName(value string) bool {
+	if value == "" || len(value) > MaxModelProfileNameBytes {
+		return false
+	}
+	for index, current := range []byte(value) {
+		if current >= 'a' && current <= 'z' || current >= '0' && current <= '9' || current == '-' && index > 0 {
+			continue
+		}
+		return false
+	}
+	return value[len(value)-1] != '-'
 }
 
 // RedirectAllowed reports whether a redirect target remains on the exact

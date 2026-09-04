@@ -407,82 +407,57 @@ func TestCoordinatorBindsDirectStartupResumeToItsExactIntent(t *testing.T) {
 	}
 }
 
-func TestCoordinatorActivatesOnlyTheConfirmedLocalStartupScope(t *testing.T) {
+func TestCoordinatorResumeAcceptanceUsesOnlyCurrentScopeSnapshot(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name          string
-		savedScope    domain.ScopeCandidate
-		chooseCurrent bool
-		wantContext   string
-		wantNamespace string
-		wantGet       int
-		wantSelected  bool
-	}{
-		{
-			name: "same local scope", savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
-			wantContext: "current-context", wantNamespace: "default", wantGet: 1, wantSelected: true,
-		},
-		{
-			name: "keep different local scope", savedScope: domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"},
-			chooseCurrent: true, wantContext: "current-context", wantNamespace: "default",
-		},
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	current, err := manager.SwitchContext(context.Background(), "current-context", 0)
+	if err != nil {
+		t.Fatalf("SwitchContext() error = %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			recorder := newUIScopeActionRecorder()
-			recorder.actualUID = "saved-uid"
-			manager := newCoordinatorUIScopeManager(t, recorder, nil)
-			store := newRecordingSessionResumeStore()
-			resumedID := domain.SessionID(coordinatorUUID(64))
-			store.history = resumedRecordWithResource(
-				resumedID, time.Date(2026, 8, 10, 3, 30, 0, 0, time.UTC), test.savedScope, "saved-uid",
-			)
-			coordinator := newUIScopeCoordinatorHarness(t, manager, store)
-			start, err := coordinator.StartUI(context.Background(), UIStartIntent{
-				Kind: UIStartResumeID, SessionID: resumedID,
-			}, domain.PrivacyModeStandard)
-			if err != nil {
-				t.Fatalf("StartUI() error = %v", err)
-			}
-			currentCandidate := &domain.ScopeCandidate{Context: "current-context", Namespace: "default"}
-			if start.ScopeCandidate == nil || *start.ScopeCandidate != *currentCandidate ||
-				recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 {
-				t.Fatalf("local startup candidate = %#v, actions = %#v", start.ScopeCandidate, recorder.snapshot())
-			}
-			recorder.reset()
-			request := UIResumeRequest{RequestID: 5, Mode: UIResumeExact, SessionID: resumedID}
-			if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
-				t.Fatalf("ResumeUI() = %#v, %v", result, err)
-			}
-			if len(recorder.snapshot()) != 0 {
-				t.Fatalf("history load actions = %#v, want zero", recorder.snapshot())
-			}
-			selectedScope := &test.savedScope
-			if test.chooseCurrent {
-				selectedScope = currentCandidate
-			}
-			outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-				Kind: UICommandAcceptResume, RequestID: request.RequestID,
-				ExpectedScopeGeneration: 0, Scope: selectedScope,
-			})
-			if err != nil || outcome.Failure != "" || outcome.Scope == nil || outcome.Scope.Failure != "" {
-				t.Fatalf("resume acceptance = %#v, %v", outcome, err)
-			}
-			if recorder.count("create") != 1 || recorder.count("verify") != 1 ||
-				recorder.count("get-resource") != test.wantGet || recorder.count("agent-run") != 0 {
-				t.Fatalf("confirmed scope actions = %#v", recorder.snapshot())
-			}
-			view := manager.View()
-			if view.Scope == nil || view.Scope.Context != test.wantContext || view.Scope.Namespace != test.wantNamespace {
-				t.Fatalf("active scope = %#v", view)
-			}
-			selected, selectErr := manager.SelectedResource(*view.Scope)
-			if selectErr != nil || (selected != nil) != test.wantSelected {
-				t.Fatalf("SelectedResource() = %#v, %v", selected, selectErr)
-			}
-		})
+	selected := domain.ResourceRef{
+		APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "current-api",
+		UID: "current-uid", ResourceVersion: "31",
+	}
+	if err := manager.SelectResource(current, selected); err != nil {
+		t.Fatalf("SelectResource() error = %v", err)
+	}
+	recorder.reset()
+
+	store := newRecordingSessionResumeStore()
+	resumedID := domain.SessionID(coordinatorUUID(64))
+	store.history = resumedRecordWithResource(
+		resumedID, time.Date(2026, 8, 10, 3, 30, 0, 0, time.UTC),
+		domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"}, "saved-uid",
+	)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, store)
+	if _, err := coordinator.StartUI(context.Background(), UIStartIntent{
+		Kind: UIStartResumeID, SessionID: resumedID,
+	}, domain.PrivacyModeStandard); err != nil {
+		t.Fatalf("StartUI() error = %v", err)
+	}
+	recorder.reset()
+	request := UIResumeRequest{RequestID: 5, Mode: UIResumeExact, SessionID: resumedID}
+	if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
+		t.Fatalf("ResumeUI() = %#v, %v", result, err)
+	}
+	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandAcceptResume, RequestID: request.RequestID, ExpectedScopeGeneration: current.Generation,
+	})
+	if err != nil || outcome.Failure != "" || outcome.Scope == nil || outcome.Scope.Failure != "" ||
+		outcome.Scope.Context != current.Context || outcome.Scope.Namespace != current.Namespace || outcome.Resource != nil {
+		t.Fatalf("resume acceptance = %#v, %v", outcome, err)
+	}
+	if actions := recorder.snapshot(); len(actions) != 0 {
+		t.Fatalf("resume performed operational scope actions: %#v", actions)
+	}
+	view := manager.View()
+	if view.Scope == nil || *view.Scope != current {
+		t.Fatalf("resume changed current scope: %#v, want %#v", view, current)
+	}
+	if selected, selectErr := manager.SelectedResource(current); selectErr != nil || selected != nil {
+		t.Fatalf("resume retained Resource authority: %#v, %v", selected, selectErr)
 	}
 }
 
@@ -566,112 +541,37 @@ func TestCoordinatorResourceCompletionBoundsReadsAcrossFixedKinds(t *testing.T) 
 	}
 }
 
-func TestCoordinatorResumeAcceptanceRevalidatesSavedScopeAndResource(t *testing.T) {
+func TestCoordinatorResumeAcceptanceRejectsHistoricScopePayloadBeforeIO(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name             string
-		savedScope       domain.ScopeCandidate
-		savedUID         string
-		actualUID        string
-		verifyError      map[string]error
-		missingContext   bool
-		wantScopeFailure UIQueryFailureCode
-		wantGeneration   int64
-		wantCreate       int
-		wantVerify       int
-		wantGet          int
-		wantSelected     bool
-		wantContext      string
-		wantNamespace    string
-	}{
-		{
-			name: "same scope", savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
-			savedUID: "old-uid", actualUID: "old-uid", wantGeneration: 1, wantGet: 1, wantSelected: true,
-			wantContext: "current-context", wantNamespace: "default",
-		},
-		{
-			name: "different scope", savedScope: domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"},
-			savedUID: "saved-uid", actualUID: "saved-uid", wantGeneration: 2, wantCreate: 1, wantVerify: 1,
-			wantGet: 1, wantSelected: true, wantContext: "saved-context", wantNamespace: "payments",
-		},
-		{
-			name: "missing Context", savedScope: domain.ScopeCandidate{Context: "missing-context", Namespace: "payments"},
-			savedUID: "saved-uid", actualUID: "saved-uid", missingContext: true, wantScopeFailure: UIQueryUnavailable,
-			wantGeneration: 1, wantContext: "current-context", wantNamespace: "default",
-		},
-		{
-			name: "forbidden Namespace", savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "forbidden"},
-			savedUID: "saved-uid", actualUID: "saved-uid",
-			verifyError:      map[string]error{"forbidden": &testClassifiedError{class: domain.SafeErrorClassPermissionDenied}},
-			wantScopeFailure: UIQueryForbidden, wantGeneration: 1, wantVerify: 1,
-			wantContext: "current-context", wantNamespace: "default",
-		},
-		{
-			name: "resource UID changed", savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
-			savedUID: "old-uid", actualUID: "replacement-uid", wantGeneration: 1, wantGet: 1,
-			wantContext: "current-context", wantNamespace: "default",
-		},
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	current, err := manager.SwitchContext(context.Background(), "current-context", 0)
+	if err != nil {
+		t.Fatalf("SwitchContext() error = %v", err)
+	}
+	recorder.reset()
+	store := newRecordingSessionResumeStore()
+	resumedID := domain.SessionID(coordinatorUUID(81))
+	saved := domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"}
+	store.history = resumedRecordWithResource(
+		resumedID, time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC), saved, "saved-uid",
+	)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, store)
+	request := UIResumeRequest{RequestID: 9, Mode: UIResumeExact, SessionID: resumedID}
+	if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
+		t.Fatalf("ResumeUI() = %#v, %v", result, err)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			recorder := newUIScopeActionRecorder()
-			recorder.missingContext = test.missingContext
-			recorder.verifyError = test.verifyError
-			recorder.actualUID = test.actualUID
-			manager := newCoordinatorUIScopeManager(t, recorder, nil)
-			initial, err := manager.SwitchContext(context.Background(), "current-context", 0)
-			if err != nil {
-				t.Fatalf("initial SwitchContext() error = %v", err)
-			}
-			recorder.reset()
-
-			store := newRecordingSessionResumeStore()
-			resumedID := domain.SessionID(coordinatorUUID(81))
-			store.history = resumedRecordWithResource(resumedID, time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC), test.savedScope, test.savedUID)
-			coordinator := newUIScopeCoordinatorHarness(t, manager, store)
-			request := UIResumeRequest{RequestID: 9, Mode: UIResumeExact, SessionID: resumedID}
-			if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
-				t.Fatalf("ResumeUI() = %#v, %v", result, err)
-			}
-			if len(recorder.snapshot()) != 0 {
-				t.Fatalf("resume load actions = %#v, want zero", recorder.snapshot())
-			}
-
-			command := UICommand{
-				Kind: UICommandAcceptResume, RequestID: request.RequestID,
-				ExpectedScopeGeneration: initial.Generation, Scope: &test.savedScope,
-			}
-			outcome, err := coordinator.ExecuteUICommand(context.Background(), command)
-			if err != nil {
-				t.Fatalf("ExecuteUICommand() error = %v", err)
-			}
-			if outcome.Resumed == nil || outcome.Resumed.Session.ID != resumedID || coordinator.CurrentUISession().ID != resumedID {
-				t.Fatalf("resume acceptance outcome = %#v", outcome)
-			}
-			if outcome.Scope == nil || outcome.Scope.Failure != test.wantScopeFailure || outcome.Scope.ScopeGeneration != test.wantGeneration {
-				t.Fatalf("scope outcome = %#v", outcome.Scope)
-			}
-			if recorder.count("create") != test.wantCreate || recorder.count("verify") != test.wantVerify || recorder.count("get-resource") != test.wantGet {
-				t.Fatalf("actions = %#v, want create=%d verify=%d get=%d", recorder.snapshot(), test.wantCreate, test.wantVerify, test.wantGet)
-			}
-			if recorder.count("agent-run") != 0 {
-				t.Fatalf("resume acceptance started Agent work: %#v", recorder.snapshot())
-			}
-			view := manager.View()
-			if view.Scope == nil || view.Scope.Context != test.wantContext || view.Scope.Namespace != test.wantNamespace {
-				t.Fatalf("scope view = %#v", view)
-			}
-			selected, selectErr := manager.SelectedResource(*view.Scope)
-			if selectErr != nil || (selected != nil) != test.wantSelected {
-				t.Fatalf("SelectedResource() = %#v, %v", selected, selectErr)
-			}
-			if test.wantSelected && selected.UID != test.actualUID {
-				t.Fatalf("selected UID = %q, want %q", selected.UID, test.actualUID)
-			}
-		})
+	if outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandAcceptResume, RequestID: request.RequestID,
+		ExpectedScopeGeneration: current.Generation, Scope: &saved,
+	}); !errors.Is(err, ErrInvalidUICommand) || outcome != (UICommandOutcome{}) {
+		t.Fatalf("scope-bearing acceptance = %#v, %v", outcome, err)
+	}
+	if coordinator.CurrentUISession() != nil || len(recorder.snapshot()) != 0 {
+		t.Fatalf("rejected acceptance changed state or performed I/O: session %#v, actions %#v",
+			coordinator.CurrentUISession(), recorder.snapshot())
 	}
 }
 
@@ -711,7 +611,8 @@ func TestCoordinatorExplicitStartupScopeCannotBeReplacedBySavedCandidate(t *test
 		Kind: UICommandAcceptResume, RequestID: request.RequestID,
 		ExpectedScopeGeneration: current.Generation, Scope: &savedScope,
 	})
-	if err != nil || rejected.Failure != UIQueryUnavailable || coordinator.CurrentUISession() != nil || len(recorder.snapshot()) != 0 {
+	if !errors.Is(err, ErrInvalidUICommand) || rejected != (UICommandOutcome{}) ||
+		coordinator.CurrentUISession() != nil || len(recorder.snapshot()) != 0 {
 		t.Fatalf("saved-scope acceptance = %#v, error = %v, actions = %#v", rejected, err, recorder.snapshot())
 	}
 
@@ -720,7 +621,7 @@ func TestCoordinatorExplicitStartupScopeCannotBeReplacedBySavedCandidate(t *test
 		ExpectedScopeGeneration: current.Generation,
 	})
 	if err != nil || accepted.Failure != "" || accepted.Scope == nil || accepted.Scope.Failure != "" ||
-		accepted.Resource == nil || accepted.Resource.Failure != UIQueryUnavailable || coordinator.CurrentUISession() == nil ||
+		accepted.Resource != nil || coordinator.CurrentUISession() == nil ||
 		len(recorder.snapshot()) != 0 {
 		t.Fatalf("explicit-scope acceptance = %#v, error = %v, actions = %#v", accepted, err, recorder.snapshot())
 	}
@@ -1057,7 +958,7 @@ func newUIScopeCoordinatorHarnessWithPreferences(
 	persistence := new(memoryCoordinatorPersistence)
 	identifiers := new(coordinatorIDs)
 	coordinator, err := NewCoordinator(CoordinatorConfig{
-		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence,
+		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence, ModelContext: persistence,
 		Scope: manager, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
@@ -1099,7 +1000,7 @@ func newUICoordinatorHarness(
 	}}
 	identifiers := new(coordinatorIDs)
 	coordinator, err := NewCoordinator(CoordinatorConfig{
-		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence,
+		Sessions: persistence, Runs: persistence, Tools: persistence, Audits: persistence, ModelContext: persistence,
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: new(recordingUIEvents),
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,

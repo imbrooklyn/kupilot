@@ -127,8 +127,8 @@ func TestScopeManagerSwitchContextInvalidatesBeforeCreatingTarget(t *testing.T) 
 		}
 		select {
 		case <-cancelled:
+			t.Error("active-run cancellation ran before authority invalidation")
 		default:
-			t.Error("invalidation hook ran before active-run cancellation")
 		}
 		manager.mu.RLock()
 		defer manager.mu.RUnlock()
@@ -148,9 +148,9 @@ func TestScopeManagerSwitchContextInvalidatesBeforeCreatingTarget(t *testing.T) 
 	}
 	wantEvents := []string{
 		"contexts",
-		"cancel-run",
 		"approval-invalidation-hook",
 		"invalidation-hook",
+		"cancel-run",
 		"close:old-context",
 		"create:new-context",
 		"verify:team-b",

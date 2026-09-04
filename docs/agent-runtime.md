@@ -6,32 +6,46 @@ summarization middleware are confined to `internal/agent/einoadapter`; the rest
 of the system sees project-owned Session context, run inputs, events, bound
 capabilities, Evidence, ActionEnvelopes, outcomes, and safe errors.
 
-This is the accepted `v0.5` runtime target. The checked-in implementation is
-still the `v0.4` baseline and does not yet expose the expanded catalog,
-permission profiles, Reviewer, Session memory, or generic execution flow.
+This document distinguishes the accepted `v0.5` target from current
+reachability. The checked-in runtime now uses the stable Eino ADK path, named
+model profiles, role-bound consent, safe Session context and summarization,
+and separate Agent, Agent-summary, and Reviewer budgets. It also contains the
+deterministic permission/action foundation and Reviewer routing used by the
+existing supervised Deployment restart. The expanded capability catalog,
+public permission controls, optional data sources, and new execution or
+remediation paths remain targets and are not yet reachable.
 
-The currently implemented `v0.4` protocol versions are:
+The currently implemented protocol versions are:
 
 - System prompt: `kupilot-agent-policy-v7`
 - Capability catalog: `kupilot-operational-tools-v2`
 
 ## Frozen run input
 
-Application creates an immutable RunInput containing:
+Application currently creates an immutable RunInput containing:
 
 - run, Session, and user-message identifiers;
 - normalized user question;
-- verified Context, working Namespace, namespace-access policy, generation, and
-  activation time, plus the independent policy generation;
+- verified Context, working Namespace, namespace-access policy, scope
+  generation, and activation time;
 - optional selected ResourceRef;
 - exact prompt and capability-catalog versions;
-- permission profile, deterministic capability/risk policy, and current-process
-  Session-rule snapshot;
-- exact named model roles/profiles, canonical origin hashes, and role/category
-  consent already checked by Application;
-- eligible ordered same-Session context and summary coverage; and
-- independent finite Agent, Reviewer, summary, capability, process, data, time,
-  byte, item, stream, and cost budget snapshots.
+- eligible ordered same-Session context, safe summary, and content-free
+  coverage metadata; and
+- finite Agent and Agent-summary call, time, byte, stream, Tool, and cost
+  limits.
+
+The composition root separately binds the exact Agent profile and optional
+Reviewer profile. Application checks the current Agent role, canonical origin,
+category consent, and safe-context eligibility before creating a run. Reviewer
+transport and its independent consent and budget are connected only through
+Application's deterministic `review` route. A Reviewer recommendation is never
+permission or execution authority by itself.
+
+The current ActionEnvelope freezes policy generation, permission profile,
+capability/risk policy, exact action limits, and any matched process-local
+Session rule. Those values remain deliberately separate from Agent RunInput and
+are not reconstructed from model-visible context.
 
 The model cannot supply or modify these values. A Context, working-Namespace,
 or namespace-policy change invalidates scope generation. A permission,
@@ -82,11 +96,15 @@ indefinite correction loop.
 
 ## Capability binding
 
-The `v0.5` catalog contains the categories documented in [Scope](scope.md):
+The current `kupilot-operational-tools-v2` catalog contains seven fixed
+diagnostic Tools: resource get/list, Events, current/previous Pod logs, related
+resources, and cluster overview. The accepted `v0.5` catalog additionally
+admits the categories documented in [Scope](scope.md):
 built-in and exact policy-admitted CRD reads/queries, Events and logs, metrics,
 explicit optional data sources, container files, Pod diagnostics, typed
 remediation, restricted local argv, and a separate shell risk class. Every
-model schema is strict: all object properties are
+new category still requires its implementation and tests. Every current model
+schema is strict: all object properties are
 declared, every property is required, optional values use explicit `null`, and
 additional properties are rejected.
 
@@ -153,6 +171,10 @@ verified fact.
 
 ## Proposed actions
 
+The deterministic permission and controlled-action foundation described here
+is implemented. Current production composition uses it only for the existing
+supervised Deployment restart; the expanded remediation catalog is not exposed.
+
 The final response may contain only versioned typed proposals from the P0
 catalog: restart, scale, rollback, one controller-owned ordinary Pod delete,
 cordon, uncordon, drain, and separately admitted sensitive/remote/local
@@ -174,11 +196,11 @@ external execution is retried automatically. Verification is separately
 bounded and cannot rewrite the attempt outcome. See
 [Permissions and Controlled Actions](user-guide/approval.md).
 
-## Implemented `v0.4` budget profiles
+## Implemented budget profiles
 
-The following table records the current implementation. ADR-0044 retains the
-finite-profile and atomic-reservation principles but does not carry these small
-global values forward as universal `v0.5` limits.
+The following table records current code-owned safety ceilings. They are not
+claims about an endpoint's context window, token accounting, or monetary cost;
+endpoint evidence may require a tighter configuration.
 
 | Boundary | Compact | Balanced (default) | Extended | Hard ceiling |
 | --- | ---: | ---: | ---: | ---: |
@@ -186,7 +208,20 @@ global values forward as universal `v0.5` limits.
 | Agent steps | 12 | 32 | 64 | 128 |
 | Tool calls | 16 | 48 | 128 | 256 |
 | Model calls | 6 | 16 | 32 | 64 |
-| Model request | 60 sec | 120 sec | 300 sec | 300 sec |
+| Agent model request timeout | 60 sec | 120 sec | 300 sec | 300 sec |
+| Agent model request bytes | 256 KiB | 256 KiB | 256 KiB | 256 KiB |
+| Agent model stream bytes | 8 MiB | 8 MiB | 8 MiB | 8 MiB |
+| Agent model cost units | 6 | 16 | 32 | 32 |
+| Agent-summary calls | 1 | 2 | 4 | 4 |
+| Agent-summary request timeout | 30 sec | 45 sec | 60 sec | 60 sec |
+| Agent-summary request bytes | 256 KiB | 256 KiB | 256 KiB | 256 KiB |
+| Agent-summary output bytes | 16 KiB | 16 KiB | 16 KiB | 16 KiB |
+| Agent-summary cost units | 1 | 2 | 4 | 4 |
+| Reviewer calls | 2 | 8 | 16 | 16 |
+| Reviewer request timeout | 15 sec | 30 sec | 60 sec | 60 sec |
+| Reviewer request bytes | 48 KiB | 48 KiB | 48 KiB | 48 KiB |
+| Reviewer output bytes | 8 KiB | 8 KiB | 8 KiB | 8 KiB |
+| Reviewer cost units | 2 | 8 | 16 | 16 |
 | Kubernetes request | 15 sec | 30 sec | 60 sec | 60 sec |
 | Cumulative Tool results | 1 MiB | 4 MiB | 12 MiB | 16 MiB |
 | Pod-log calls | 4 | 12 | 32 | 32 |
@@ -201,13 +236,13 @@ Reservations happen before I/O. Completion accounts actual Tool-result bytes,
 accepted Evidence progress, and retryability. Once stopped, a budget cannot be
 reopened.
 
-For `v0.5`, Agent, Reviewer, Agent-summary, Tool, Kubernetes, data-source,
-remote-exec, local-process, item, line, sample, byte, stream, wall-time, idle,
-and estimated/known cost budgets are independently finite. Exact model context,
-input/output token, request, stream, summary-trigger, latency, concurrency, and
-cost values require evidence from the exact pinned Eino/OpenAI source/tests and
-selected endpoint. Missing token evidence never permits an unlimited request;
-conservative byte, call, time, and cost ceilings fail closed.
+The current Agent, Reviewer, and Agent-summary reservations are independent.
+Each model call consumes one code-defined cost unit; that unit is a finite call
+budget, not a price estimate. Exact context-window and token values still
+require evidence from the selected endpoint. Missing token evidence never
+permits an unlimited request; byte, call, time, and cost-unit ceilings fail
+closed. Data-source, remote-exec, local-process, sample, and idle budgets remain
+part of the accepted later capability work.
 
 ## Session context and summarization
 
@@ -236,6 +271,12 @@ sends no oversized or silently truncated context and preserves the last
 committed state. The existing SQLite messages are the stable durable source
 until a non-prerelease Eino runner-managed Session passes ADR-0047's gate.
 
+The current aggregate selection is capped at 4,096 eligible Messages and 4 MiB
+and is read in ascending keyset pages of 100. The Eino middleware is configured
+with `ContextMessages=160`, a 128 KiB UTF-8-content resource trigger, and an
+exact 16-Message recent tail. The resource counter is deliberately not called
+a tokenizer or token estimate. A safe summary is capped at 16 KiB.
+
 ## Cancellation and stale work
 
 Every model, Reviewer, Kubernetes, data-source, remote-exec, and local-process
@@ -262,16 +303,20 @@ for the hard Tool, Evidence, and model budgets but remains independently finite;
 the TUI receives a smaller projection because model-start and individual
 Evidence-acceptance events are not rendered as transcript entries.
 
-The transcript shows bounded provisional answer Markdown, compact capability
-steps, safe warnings, the validated final Markdown answer, permission routing,
-Reviewer state, and typed action/verification state.
+The current transcript shows bounded provisional answer Markdown, compact
+diagnostic steps, safe warnings, the existing restart approval interaction, and
+the validated final Markdown answer. Application already owns permission
+routing, Reviewer decisions, and content-free typed action status; complete
+permission and operation-specific delivery remains later work.
 The internal stream and the smaller UI projection have independent run-wide
-event ceilings; excess provisional refreshes may be omitted because the validated
-terminal answer replaces the draft. `/status` and `/permissions` are local
-Application queries exposing the catalog, namespace and permission policy,
-model roles/origin hashes, memory and summary coverage, budgets and usage, run
-and action states, privacy, and storage health without model, Kubernetes,
-Reviewer, process, or executor activity.
+event ceilings; excess provisional refreshes may be omitted because the
+validated terminal answer replaces the draft. `/status` is a local Application
+query exposing the current catalog, scope, named model roles/origin hashes,
+consent, content-free memory and summary coverage, budgets and usage, run state,
+the byte/call/time/cost-unit evidence basis with no endpoint-token claim,
+privacy, and storage health without model, Kubernetes, Reviewer, process, or
+executor activity. The complete `/permissions` interaction and detailed action
+outcome display remain later work.
 
 ## Failure classes
 

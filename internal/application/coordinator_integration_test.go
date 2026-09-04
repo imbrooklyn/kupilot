@@ -100,6 +100,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	}
 	agentAdapter, err := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: domain.ModelConfiguration{
+			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAICompatible,
 			Endpoint:            modelServer.URL + "/v1",
 			Origin:              modelServer.URL,

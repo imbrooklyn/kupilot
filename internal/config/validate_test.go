@@ -11,9 +11,9 @@ func TestDefaultsUseDefaultWorkingNamespaceWithoutChoosingContext(t *testing.T) 
 
 	config := Defaults()
 	if config.Context != "" || config.Namespace != DefaultNamespace ||
-		config.Model.MaxOutputTokens != MaxModelOutputTokens {
+		config.Models.Agent.MaxOutputTokens != 0 {
 		t.Fatalf("defaults = Context %q Namespace %q max output tokens %d",
-			config.Context, config.Namespace, config.Model.MaxOutputTokens)
+			config.Context, config.Namespace, config.Models.Agent.MaxOutputTokens)
 	}
 }
 
@@ -49,8 +49,8 @@ func TestValidateModelEndpointPolicy(t *testing.T) {
 			t.Parallel()
 
 			config := Defaults()
-			config.Model.Endpoint = tt.endpoint
-			config.Model.Model = "diagnostic-model"
+			config.Models.Agent.Endpoint = tt.endpoint
+			config.Models.Agent.Model = "diagnostic-model"
 			err := Validate(&config)
 			if tt.wantCode != "" {
 				assertSafeError(t, err, ClassConfigurationInvalid, tt.wantCode)
@@ -59,11 +59,11 @@ func TestValidateModelEndpointPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Validate() error = %v", err)
 			}
-			if config.Model.Endpoint != tt.wantBase {
-				t.Errorf("Endpoint = %q, want %q", config.Model.Endpoint, tt.wantBase)
+			if config.Models.Agent.Endpoint != tt.wantBase {
+				t.Errorf("Endpoint = %q, want %q", config.Models.Agent.Endpoint, tt.wantBase)
 			}
-			if config.Model.Origin != tt.wantOrigin {
-				t.Errorf("Origin = %q, want %q", config.Model.Origin, tt.wantOrigin)
+			if config.Models.Agent.Origin != tt.wantOrigin {
+				t.Errorf("Origin = %q, want %q", config.Models.Agent.Origin, tt.wantOrigin)
 			}
 		})
 	}
@@ -105,22 +105,21 @@ func TestValidateConfigurationFields(t *testing.T) {
 		mutate func(*Config)
 		code   string
 	}{
-		{name: "unsupported version", mutate: func(c *Config) { c.Version = 2 }, code: "config_version_unsupported"},
+		{name: "unsupported version", mutate: func(c *Config) { c.Version = 3 }, code: "config_version_unsupported"},
 		{name: "context control character", mutate: func(c *Config) { c.Context = "context\nname" }, code: "config_context_invalid"},
 		{name: "context too long", mutate: func(c *Config) { c.Context = strings.Repeat("c", MaxContextBytes+1) }, code: "config_context_invalid"},
 		{name: "namespace uppercase", mutate: func(c *Config) { c.Namespace = "Default" }, code: "config_namespace_invalid"},
 		{name: "namespace all", mutate: func(c *Config) { c.Namespace = "*" }, code: "config_namespace_invalid"},
 		{name: "budget profile", mutate: func(c *Config) { c.Runtime.BudgetProfile = "unlimited" }, code: "config_budget_profile_invalid"},
-		{name: "provider kind", mutate: func(c *Config) { c.Model.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
-		{name: "reasoning effort", mutate: func(c *Config) { c.Model.ReasoningEffort = "medium" }, code: "config_reasoning_effort_invalid"},
-		{name: "temperature below zero", mutate: func(c *Config) { c.Model.Temperature = -0.01 }, code: "config_temperature_invalid"},
-		{name: "temperature above maximum", mutate: func(c *Config) { c.Model.Temperature = 0.21 }, code: "config_temperature_invalid"},
-		{name: "output tokens zero", mutate: func(c *Config) { c.Model.MaxOutputTokens = 0 }, code: "config_output_limit_invalid"},
-		{name: "output tokens above maximum", mutate: func(c *Config) { c.Model.MaxOutputTokens = MaxModelOutputTokens + 1 }, code: "config_output_limit_invalid"},
-		{name: "request timeout zero", mutate: func(c *Config) { c.Model.RequestTimeoutSeconds = 0 }, code: "config_model_timeout_invalid"},
-		{name: "request timeout above maximum", mutate: func(c *Config) { c.Model.RequestTimeoutSeconds = MaxModelRequestTimeoutSeconds + 1 }, code: "config_model_timeout_invalid"},
-		{name: "streaming disabled", mutate: func(c *Config) { c.Model.Streaming = false }, code: "config_model_capability_invalid"},
-		{name: "tool calling disabled", mutate: func(c *Config) { c.Model.ToolCallingRequired = false }, code: "config_model_capability_invalid"},
+		{name: "provider kind", mutate: func(c *Config) { c.Models.Agent.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
+		{name: "reasoning effort", mutate: func(c *Config) { c.Models.Agent.ReasoningEffort = "medium" }, code: "config_reasoning_effort_invalid"},
+		{name: "temperature below zero", mutate: func(c *Config) { c.Models.Agent.Temperature = -0.01 }, code: "config_temperature_invalid"},
+		{name: "temperature above maximum", mutate: func(c *Config) { c.Models.Agent.Temperature = 0.21 }, code: "config_temperature_invalid"},
+		{name: "output tokens negative", mutate: func(c *Config) { c.Models.Agent.MaxOutputTokens = -1 }, code: "config_output_limit_invalid"},
+		{name: "request timeout zero", mutate: func(c *Config) { c.Models.Agent.RequestTimeoutSeconds = 0 }, code: "config_model_timeout_invalid"},
+		{name: "request timeout above maximum", mutate: func(c *Config) { c.Models.Agent.RequestTimeoutSeconds = MaxModelRequestTimeoutSeconds + 1 }, code: "config_model_timeout_invalid"},
+		{name: "streaming disabled", mutate: func(c *Config) { c.Models.Agent.Streaming = false }, code: "config_model_capability_invalid"},
+		{name: "tool calling disabled", mutate: func(c *Config) { c.Models.Agent.ToolCallingRequired = false }, code: "config_model_capability_invalid"},
 		{name: "unknown exec policy", mutate: func(c *Config) { c.Kubernetes.ExecCredentials = "prompt" }, code: "config_exec_credentials_invalid"},
 		{name: "debug logging", mutate: func(c *Config) { c.Logging.Level = "debug" }, code: "config_log_level_invalid"},
 	}
@@ -141,12 +140,12 @@ func TestModelConfigurationRequiresEndpointAndModel(t *testing.T) {
 	t.Parallel()
 
 	config := Defaults()
-	_, err := config.ValidatedModel()
-	assertSafeError(t, err, ClassConfigurationInvalid, "config_model_required")
+	_, err := config.ValidatedProfile(ModelRoleAgent)
+	assertSafeError(t, err, ClassConfigurationInvalid, "config_model_profile_required")
 
-	config.Model.Endpoint = "https://model.example.test/v1"
-	config.Model.Model = "diagnostic-model"
-	model, err := config.ValidatedModel()
+	config.Models.Agent.Endpoint = "https://model.example.test/v1"
+	config.Models.Agent.Model = "diagnostic-model"
+	model, err := config.ValidatedProfile(ModelRoleAgent)
 	if err != nil {
 		t.Fatalf("ValidatedModel() error = %v", err)
 	}
@@ -180,13 +179,13 @@ func TestValidateAcceptsPartialModelConfigurationForInteractiveCompletion(t *tes
 			t.Parallel()
 
 			config := Defaults()
-			config.Model.Endpoint = tt.endpoint
-			config.Model.Model = tt.model
+			config.Models.Agent.Endpoint = tt.endpoint
+			config.Models.Agent.Model = tt.model
 			if err := Validate(&config); err != nil {
 				t.Fatalf("Validate() error = %v", err)
 			}
-			if config.Model.Origin != tt.wantOrigin {
-				t.Fatalf("Origin = %q, want %q", config.Model.Origin, tt.wantOrigin)
+			if config.Models.Agent.Origin != tt.wantOrigin {
+				t.Fatalf("Origin = %q, want %q", config.Models.Agent.Origin, tt.wantOrigin)
 			}
 		})
 	}

@@ -1,11 +1,9 @@
 # Troubleshooting
 
-The accepted `v0.5` contracts describe a future implementation target. The
-checked-in binary, strict version 1 configuration, and RBAC fixtures still
-implement `v0.4`. Do not expect named model roles, permission profiles,
-Session summarization, optional data sources, Pod Exec, diagnostic Pods, local
-argv, shell, or the expanded remediation catalog until their implementation
-and tests land.
+The checked-in binary now implements strict version 2 named model profiles and
+safe Session context/summarization. Permission profiles, optional data sources,
+Pod Exec, diagnostic Pods, local argv, shell, and the expanded remediation
+catalog remain Accepted `v0.5` targets and are not yet reachable.
 
 Kupilot fails closed when configuration, credential, scope, consent, storage,
 model, or Kubernetes safety checks cannot be completed. A safe error may omit a
@@ -44,11 +42,13 @@ Check all of the following:
   normalized path.
 - The file is regular, not a symlink, and no larger than 64 KiB. Wider existing
   permissions produce a warning rather than a rejection.
-- The document contains `version: 1` and no unknown, duplicate, null, alias,
-  merge, or second-document content.
+- The document contains `version: 2` with a complete required
+  `models.agent` profile, or a supported legacy `version: 1` profile, and no
+  unknown, duplicate, null, alias, merge, or second-document content.
 - Values use the exact types and bounds in [Configuration](configuration.md).
-- Each supplied `model.endpoint` and `model.model` value is valid. A missing
-  endpoint, model identifier, or API key starts the TUI in model-setup mode.
+- Each supplied `models.<role>.endpoint` and `models.<role>.model` value is
+  valid. A missing Agent endpoint, model identifier, or API key starts the TUI
+  in model-setup mode.
 
 `config.example.yaml` deliberately contains no real credential. Copy it to the
 fixed Home configuration or select an absolute external file. Do not add a real
@@ -61,10 +61,13 @@ parsing or cache maintenance from startup failure.
 
 ## The model API key is missing or rejected
 
-Use the masked TUI setup, optional plaintext `model.api_key`, or
-`KUPILOT_MODEL_API_KEY`. The environment value overrides a file value. The
-effective value must be non-empty, valid UTF-8 without spaces or controls, and
-at most 4096 bytes. It cannot be supplied as a CLI value.
+Use masked TUI setup, optional plaintext `models.agent.api_key`, or exactly one
+of `KUPILOT_AGENT_API_KEY` and the legacy `KUPILOT_MODEL_API_KEY` alias. A
+Reviewer with `credential_ref: approval_reviewer` uses
+`models.approval_reviewer.api_key` or
+`KUPILOT_APPROVAL_REVIEWER_API_KEY`. An environment value overrides its role's
+file value. Each effective value must be non-empty, valid UTF-8 without spaces
+or controls, and at most 4096 bytes. It cannot be supplied as a CLI value.
 
 Kupilot reads and removes the entry from its own process environment once. That
 does not remove an exported value from the parent shell. If a secret launcher
@@ -98,10 +101,11 @@ See [Model Compatibility](model-compatibility.md).
 For the official OpenAI API, a compatible configuration example is:
 
 ```yaml
-model:
-  provider_kind: openai_compatible
-  endpoint: https://api.openai.com/v1
-  model: gpt-4o-mini
+models:
+  agent:
+    provider_kind: openai_compatible
+    endpoint: https://api.openai.com/v1
+    model: gpt-4o-mini
 ```
 
 OpenAI documents `gpt-4o-mini` and later models as supporting Structured
@@ -115,8 +119,9 @@ does not combine with function Tools. When the provider explicitly requires
 reasoning to be disabled, configure:
 
 ```yaml
-model:
-  reasoning_effort: none
+models:
+  agent:
+    reasoning_effort: none
 ```
 
 Kupilot then sends `reasoning_effort: "none"` on every model request. It omits

@@ -113,6 +113,61 @@ func TestExportedAgentAdapterBoundaryContainsNoEinoTypes(t *testing.T) {
 	}
 }
 
+func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() did not return the test path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	adapterRoot := filepath.Join(repositoryRoot, "internal", "agent", "einoadapter")
+	forbiddenTypes := map[string]bool{
+		"MemoryManager": true, "ConversationLoop": true, "ReActLoop": true,
+		"CheckpointStore": true, "TranscriptStore": true, "ContextProvider": true,
+		"SummaryEngine": true, "Summarizer": true,
+	}
+	runnerCalls, chatModelAgentCalls, summarizationCalls := 0, 0, 0
+	err := filepath.WalkDir(filepath.Join(repositoryRoot, "internal"), func(path string, entry os.DirEntry, walkError error) error {
+		if walkError != nil {
+			return walkError
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(content)
+		if strings.Contains(text, "github.com/cloudwego/eino/flow/agent/react") {
+			t.Errorf("%s imports the retired flow/agent/react runtime", path)
+		}
+		if strings.HasPrefix(path, adapterRoot+string(filepath.Separator)) {
+			runnerCalls += strings.Count(text, "adk.NewRunner(")
+			chatModelAgentCalls += strings.Count(text, "adk.NewChatModelAgent(")
+			summarizationCalls += strings.Count(text, "summarization.New(")
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			specification, ok := node.(*ast.TypeSpec)
+			if ok && forbiddenTypes[specification.Name.Name] {
+				t.Errorf("%s defines prohibited parallel runtime abstraction %s", path, specification.Name.Name)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir() error = %v", err)
+	}
+	if runnerCalls != 1 || chatModelAgentCalls != 1 || summarizationCalls != 1 {
+		t.Fatalf("production Eino constructors = Runner %d, ChatModelAgent %d, summarization %d; want 1/1/1",
+			runnerCalls, chatModelAgentCalls, summarizationCalls)
+	}
+}
+
 func assertNoEinoType(t *testing.T, current reflect.Type, seen map[reflect.Type]bool) {
 	t.Helper()
 	if current == nil || seen[current] {

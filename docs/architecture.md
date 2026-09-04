@@ -2,10 +2,13 @@
 
 Status: Accepted architecture target for Kupilot `v0.5`.
 
-The checked-in implementation is still the `v0.4` baseline. This document
-defines the target package ownership and runtime boundaries; it does not claim
-that the new catalog, permission, model-role, Session-memory, or execution
-paths are already implemented.
+The checked-in implementation now includes the named-model, stable Eino ADK,
+role-scoped consent, safe Session-memory/summarization, deterministic
+permission routing, common ActionEnvelope/approval lifecycle, and related
+budget and status foundations. Only the existing typed Deployment restart is
+composed through that lifecycle. The expanded catalog, permission delivery
+interactions, optional data sources, and new execution or remediation paths
+remain targets; this document does not claim they are reachable.
 
 This document is normative for package ownership, dependency direction, scope
 and run isolation, capability dispatch, action approval, data ownership, and
@@ -353,12 +356,12 @@ source into an allowed source.
 
 ## 7. Runtime budgets, permissions, and status
 
-RunInput contains an immutable local profile under ADR-0044. Reservations are
-independent for Agent, Reviewer, Agent-summary, capability calls, Kubernetes,
-data sources, remote execution, local processes, result items/bytes/lines,
-streaming, wall time, idle time, and estimated or known cost. Reservations are
-atomic and occur before I/O. Child deadlines are no later than the owning
-operation or run.
+The current RunInput contains immutable Agent and Agent-summary limits, while
+the optional Reviewer has a separate role budget owned by Application.
+Reservations are atomic and occur before model I/O, and child deadlines are no
+later than the owning operation or run. The accepted later permission and
+capability work adds independent data-source, remote/local execution, item,
+line, sample, and idle limits.
 
 All budgets remain finite. Exact context windows, input/output tokens, request
 and stream limits, summary thresholds, latency, concurrency, and cost ceilings
@@ -367,13 +370,15 @@ endpoint. The earlier `v0.4` global limits are not universal `v0.5` values.
 Absent exact token evidence, conservative byte, call, time, and cost ceilings
 still fail closed.
 
-`/permissions` exposes and changes only permitted local profile and rule state.
-`/status` combines an Application-owned read-only query over bounded safe state
-with TUI display data. It includes Session memory/coverage, named model roles
-and origin hashes, consent, both generations, capability catalog, permission
-and Reviewer state, action outcome/verification, budgets, and storage health.
-Neither command performs model, Kubernetes, Tool, Reviewer, process, or
-executor I/O or exposes credentials or content.
+The current `/status` combines an Application-owned read-only query over bounded
+safe state with TUI display data. It includes Session memory/coverage, named
+model roles and origin hashes, consent, scope generation, capability catalog,
+Agent/summary/Reviewer budgets, run state, and storage health. Application also
+provides content-free local permission-policy, Session-rule, and active-action
+status queries. These queries perform no model, Kubernetes, Tool, Reviewer,
+process, or executor I/O and expose no credentials or content. The complete
+`/permissions` interaction and operation-specific outcome or verification
+display remain later delivery work.
 
 ## 8. Free-form answer and Evidence model
 
@@ -434,6 +439,15 @@ Application then performs this fixed sequence:
 9. at most one external execution attempt;
 10. accepted, failed, or ambiguous/unknown outcome classification; and
 11. separate bounded verification and post-operation audit.
+
+The checked-in foundation implements the closed project-owned action types,
+canonical digest, all five deterministic permission profiles, process-local
+Session-rule creation/list/revocation APIs, strict Reviewer routing, durable
+decision and single-use consumption, final generation checks, and content-free
+status. The composition root still enables only the existing typed Deployment
+restart executor under the default `ask` profile. Merely naming another
+admitted operation in the closed catalog does not enable it, grant RBAC, or
+make an executor reachable.
 
 `ask` is the default permission profile. Reviewer delegation applies only to
 `review`; `critical` remains human-routed under `ask` and `auto-review`.

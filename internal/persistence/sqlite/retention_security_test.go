@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/imbrooklyn/kupilot/internal/approval"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
@@ -39,6 +40,8 @@ func TestDatabaseAndWALExcludeProhibitedContentCanaries(t *testing.T) {
 		{name: "full prompt", value: strings.Join([]string{"synthetic", "full", "prompt", "canary", "7104"}, "-")},
 		{name: "response body", value: strings.Join([]string{"synthetic", "response", "body", "canary", "7105"}, "-")},
 		{name: "raw Tool output", value: strings.Join([]string{"synthetic", "raw", "tool", "output", "canary", "7106"}, "-")},
+		{name: "raw executable", value: strings.Join([]string{"synthetic", "executable", "canary", "7107"}, "-")},
+		{name: "raw argv", value: strings.Join([]string{"synthetic", "argv", "canary", "7108"}, "-")},
 	}
 
 	eligibleCanary := strings.Join([]string{"eligible", "projected", "metadata", "canary", "7199"}, "-")
@@ -59,6 +62,46 @@ func TestDatabaseAndWALExcludeProhibitedContentCanaries(t *testing.T) {
 	}
 	if err := NewSettingsRepository(db).Put(context.Background(), testRetentionSetting(30, time.UnixMilli(706).UTC())); err != nil {
 		t.Fatalf("Put(safe setting) error = %v", err)
+	}
+	arguments, err := domain.NewActionArguments([]string{prohibited[7].value, "--bounded"})
+	if err != nil {
+		t.Fatalf("NewActionArguments() error = %v", err)
+	}
+	action := testApprovalRequest(
+		t, "00000000-0000-7000-8000-000000007014", run, time.UnixMilli(707).UTC(), 0x71,
+	)
+	action.Intent.Operation = domain.ActionOperationPodDiagnostic
+	action.Intent.OperationSchemaVersion = action.Intent.Operation.SchemaVersion()
+	action.Intent.Effect = domain.CapabilityEffectRemoteExecute
+	action.Intent.Target = domain.ActionTarget{Resource: domain.ResourceRef{
+		APIVersion: "v1", Kind: "Pod", Namespace: run.Scope.Namespace, Name: "sample-pod",
+		UID: "sample-pod-uid", ResourceVersion: "18",
+	}, Subresource: "exec"}
+	action.Intent.Parameters = domain.ActionParameters{
+		Kind: domain.ActionParametersRemoteArgv, Container: "app",
+		Executable: prohibited[6].value, Arguments: arguments,
+	}
+	action.Intent.DataCategories = domain.ActionDataContainerOutput
+	action.Intent.AllowedSinks = domain.ActionSinkTerminal
+	action.Intent.NetworkEffects = domain.ActionNetworkKubernetesAPI | domain.ActionNetworkRemotePod
+	action.Intent.Limits = domain.ActionLimits{Timeout: 30 * time.Second, MaximumItems: 1, MaximumOutput: 4096}
+	action.Intent.VerificationPlanID = "pod-diagnostic/v1"
+	action.Intent.ReasonSummary = "Run one exact predefined diagnostic."
+	action.Intent.RiskSummary = "The diagnostic executes fixed arguments in one exact Pod container."
+	action.Digest, err = approval.OperationDigest(action)
+	if err != nil || action.Validate() != nil {
+		t.Fatalf("generic action request error/value = %v/%#v", err, action)
+	}
+	if err := NewApprovalRepository(db).CreateWithAudit(
+		context.Background(), action,
+		testApprovalAudit(t, action, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", action.RequestedAt),
+	); err != nil {
+		t.Fatalf("CreateWithAudit(generic action) error = %v", err)
+	}
+	stored, _, err := NewApprovalRepository(db).Get(context.Background(), action.ID)
+	if err != nil || stored.Intent.ParameterKind != domain.ActionParametersRemoteArgv ||
+		stored.Intent.ParameterDigest != action.Intent.Parameters.Digest() {
+		t.Fatalf("stored generic action projection = %#v/%v", stored, err)
 	}
 
 	var storageBytes []byte
@@ -166,6 +209,7 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 	}
 	approvalPrefix := filepath.Join(repositoryRoot, "internal", "approval") + string(filepath.Separator)
 	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
+	domainAction := filepath.Join(repositoryRoot, "internal", "domain", "action.go")
 	applicationPrefix := filepath.Join(repositoryRoot, "internal", "application") + string(filepath.Separator)
 	agentPrompt := filepath.Join(repositoryRoot, "internal", "agent", "prompt.go")
 	tuiStatus := filepath.Join(repositoryRoot, "internal", "tui", "update.go")
@@ -174,13 +218,13 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 	kubePrefix := filepath.Join(repositoryRoot, "internal", "kube") + string(filepath.Separator)
 	kubeGateway := filepath.Join(repositoryRoot, "internal", "kube", "gateway.go")
 	kubeRuntimeGateway := filepath.Join(repositoryRoot, "internal", "kube", "runtime_gateway.go")
-	forbiddenEverywhere := []string{"WriteExecutor", "RestartDeployment("}
+	forbiddenEverywhere := []string{"WriteExecutor"}
 	approvalOnly := []string{
 		"ApprovalService", "RestartDeploymentExecution", "RestartDeploymentExecutor",
 		"RestartDeploymentRevalidator", "RestartDeploymentAcceptance",
 		"ExecuteApprovedRestart(", "DeploymentRestarter",
 	}
-	executeCaller := filepath.Join(repositoryRoot, "internal", "approval", "service.go")
+	executeCaller := filepath.Join(repositoryRoot, "internal", "application", "approval_coordinator.go")
 	executeContract := filepath.Join(repositoryRoot, "internal", "approval", "execution.go")
 	patchCalls := 0
 	executeOccurrences := 0
@@ -211,7 +255,7 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 			t.Errorf("ApprovalCoordinator escaped the Application package: %s", path)
 		}
 		if bytes.Contains(content, []byte("restart_deployment")) &&
-			filepath.Clean(path) != domainApproval && filepath.Clean(path) != agentPrompt &&
+			filepath.Clean(path) != domainApproval && filepath.Clean(path) != domainAction && filepath.Clean(path) != agentPrompt &&
 			filepath.Clean(path) != tuiStatus &&
 			filepath.Clean(path) != restartAdapter && filepath.Clean(path) != rolloutAdapter &&
 			!strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) {
@@ -246,7 +290,7 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 		if executeCount != 0 {
 			cleaned := filepath.Clean(path)
 			if executeCount != 1 || (cleaned != executeCaller && cleaned != executeContract && cleaned != restartAdapter) {
-				t.Errorf("restart executor occurrence escaped its one contract, service call, or adapter method: %s", path)
+				t.Errorf("restart executor occurrence escaped its one contract, Application call, or adapter method: %s", path)
 			}
 		}
 		for _, deliveryPrefix := range []string{

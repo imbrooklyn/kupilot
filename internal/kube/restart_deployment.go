@@ -51,19 +51,19 @@ func (restarter *DeploymentRestarter) PrepareRestartDeploymentProposal(
 	scope domain.ScopeSnapshot,
 	target domain.ResourceRef,
 	reason string,
-) (domain.OperationIntent, error) {
+) (domain.ActionTarget, error) {
 	if ctx == nil || scope.Validate() != nil || target.Validate() != nil ||
 		target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
 		target.Kind != domain.RestartDeploymentTargetKind || target.Namespace != scope.Namespace ||
 		target.UID != "" || target.ResourceVersion != "" || !domain.ValidApprovalReasonSummary(reason) {
-		return domain.OperationIntent{}, restartInputError("prepare_restart_deployment")
+		return domain.ActionTarget{}, restartInputError("prepare_restart_deployment")
 	}
 	if ctx.Err() != nil {
-		return domain.OperationIntent{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
+		return domain.ActionTarget{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
 	}
 	bundle, client, err := restarter.capture(scope, "prepare_restart_deployment")
 	if err != nil {
-		return domain.OperationIntent{}, err
+		return domain.ActionTarget{}, err
 	}
 	object, rawErr := bundle.typed.AppsV1().Deployments(scope.Namespace).Get(
 		ctx,
@@ -71,37 +71,35 @@ func (restarter *DeploymentRestarter) PrepareRestartDeploymentProposal(
 		metav1.GetOptions{},
 	)
 	if ctx.Err() != nil {
-		return domain.OperationIntent{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
+		return domain.ActionTarget{}, classifyContextError(ctx.Err(), "prepare_restart_deployment")
 	}
 	if rawErr != nil {
-		return domain.OperationIntent{}, classifyKubernetesError("prepare_restart_deployment", rawErr)
+		return domain.ActionTarget{}, classifyKubernetesError("prepare_restart_deployment", rawErr)
 	}
 	if object == nil || object.APIVersion != "" && object.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
 		object.Kind != "" && object.Kind != domain.RestartDeploymentTargetKind ||
-		object.Namespace != scope.Namespace || object.Name != target.Name || object.UID == "" || object.Generation < 1 {
-		return domain.OperationIntent{}, invalidKubernetesProjectionError("prepare_restart_deployment")
+		object.Namespace != scope.Namespace || object.Name != target.Name || object.UID == "" ||
+		object.ResourceVersion == "" || object.Generation < 1 {
+		return domain.ActionTarget{}, invalidKubernetesProjectionError("prepare_restart_deployment")
 	}
 	fingerprint, err := deploymentTemplateFingerprint(object.Spec.Template)
 	if err != nil {
-		return domain.OperationIntent{}, invalidKubernetesProjectionError("prepare_restart_deployment")
+		return domain.ActionTarget{}, invalidKubernetesProjectionError("prepare_restart_deployment")
 	}
-	intent := domain.OperationIntent{
-		Operation:            domain.ApprovalOperationRestartDeployment,
-		Scope:                scope,
-		DeploymentName:       object.Name,
-		DeploymentUID:        string(object.UID),
-		TemplateFingerprint:  fingerprint,
-		DeploymentGeneration: object.Generation,
-		PolicyVersion:        domain.RestartDeploymentApprovalPolicyVersion,
-		ReasonSummary:        reason,
+	prepared := domain.ActionTarget{
+		Resource: domain.ResourceRef{
+			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
+			Namespace: object.Namespace, Name: object.Name, UID: string(object.UID), ResourceVersion: object.ResourceVersion,
+		},
+		Fingerprint: fingerprint, Generation: object.Generation,
 	}
-	if intent.Validate() != nil {
-		return domain.OperationIntent{}, restartInputError("prepare_restart_deployment")
+	if prepared.Validate() != nil {
+		return domain.ActionTarget{}, restartInputError("prepare_restart_deployment")
 	}
 	if !restarter.bindingCurrent(client, scope) {
-		return domain.OperationIntent{}, restartStaleScopeError("prepare_restart_deployment")
+		return domain.ActionTarget{}, restartStaleScopeError("prepare_restart_deployment")
 	}
-	return intent, nil
+	return prepared, nil
 }
 
 // RevalidateApprovedRestart performs the mandatory exact fresh Deployment GET
@@ -110,7 +108,7 @@ func (restarter *DeploymentRestarter) RevalidateApprovedRestart(
 	ctx context.Context,
 	intent domain.OperationIntent,
 ) (approval.RestartDeploymentObservation, error) {
-	if ctx == nil || intent.Validate() != nil {
+	if ctx == nil || intent.ValidateRestartDeployment() != nil {
 		return approval.RestartDeploymentObservation{}, restartInputError("revalidate_restart_deployment")
 	}
 	if ctx.Err() != nil {
@@ -122,7 +120,7 @@ func (restarter *DeploymentRestarter) RevalidateApprovedRestart(
 	}
 	object, rawErr := bundle.typed.AppsV1().Deployments(intent.Scope.Namespace).Get(
 		ctx,
-		intent.DeploymentName,
+		intent.Target.Resource.Name,
 		metav1.GetOptions{},
 	)
 	if ctx.Err() != nil {
@@ -133,7 +131,7 @@ func (restarter *DeploymentRestarter) RevalidateApprovedRestart(
 	}
 	if object == nil || object.APIVersion != "" && object.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
 		object.Kind != "" && object.Kind != domain.RestartDeploymentTargetKind ||
-		object.Namespace != intent.Scope.Namespace || object.Name != intent.DeploymentName ||
+		object.Namespace != intent.Scope.Namespace || object.Name != intent.Target.Resource.Name ||
 		object.UID == "" || object.ResourceVersion == "" || object.Generation < 1 {
 		return approval.RestartDeploymentObservation{}, invalidKubernetesProjectionError("revalidate_restart_deployment")
 	}
@@ -141,8 +139,8 @@ func (restarter *DeploymentRestarter) RevalidateApprovedRestart(
 	if err != nil {
 		return approval.RestartDeploymentObservation{}, invalidKubernetesProjectionError("revalidate_restart_deployment")
 	}
-	if string(object.UID) != intent.DeploymentUID || fingerprint != intent.TemplateFingerprint ||
-		object.Generation != intent.DeploymentGeneration {
+	if string(object.UID) != intent.Target.Resource.UID || object.ResourceVersion != intent.Target.Resource.ResourceVersion ||
+		fingerprint != intent.Target.Fingerprint || object.Generation != intent.Target.Generation {
 		return approval.RestartDeploymentObservation{}, restartTargetChangedError()
 	}
 	observation := approval.RestartDeploymentObservation{

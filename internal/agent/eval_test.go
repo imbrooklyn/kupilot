@@ -488,6 +488,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	sink := &fixtureEventSink{}
 	adapter, err := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: domain.ModelConfiguration{
+			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAICompatible,
 			Endpoint:            modelServer.URL + "/v1",
 			Origin:              modelServer.URL,

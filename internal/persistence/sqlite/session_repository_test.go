@@ -348,7 +348,7 @@ func TestSessionRepositoryDeleteCascadesCompleteGraphAndRollsBack(t *testing.T) 
 		if strings.Contains(err.Error(), "synthetic delete rollback canary") {
 			t.Fatal("Delete() error disclosed driver text")
 		}
-		assertSessionGraphRowCount(t, db, 10)
+		assertSessionGraphRowCount(t, db, 11)
 	})
 
 	t.Run("serialized with retention cleanup", func(t *testing.T) {
@@ -460,7 +460,7 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 	diagnosisID := rawSessionID[:len(rawSessionID)-2] + "57"
 	approvalID := rawSessionID[:len(rawSessionID)-2] + "58"
 	auditID := rawSessionID[:len(rawSessionID)-2] + "59"
-	decisionDigest := strings.Repeat("7", 64)
+	actionReviewID := rawSessionID[:len(rawSessionID)-2] + "60"
 	content := "Safe graph message"
 	statements := []struct {
 		query string
@@ -475,28 +475,46 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 		{`INSERT INTO diagnoses (id, run_id, confirmed_json, hypotheses_json, missing_json, actions_json, answer_markdown, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{diagnosisID, runID, `[]`, `[]`, `[]`, `[]`, "Safe answer", 2}},
 		{`
 			INSERT INTO approvals (
-				id, run_id, session_id, operation, operation_schema_version,
-				policy_version, scope_context, scope_namespace, scope_generation,
-				target_api_version, target_kind, target_namespace,
-				deployment_name, deployment_uid, template_fingerprint,
-				deployment_generation, reason_summary, risk_summary,
+				id, run_id, session_id, envelope_schema_version, digest_version,
+				operation, operation_schema_version, policy_version, permission_profile,
+				policy_generation, risk, effect, scope_context, scope_namespace,
+				namespace_access, scope_generation, target_api_version, target_kind,
+				target_namespace, target_name, target_uid, target_resource_version,
+				target_subresource, target_fingerprint, target_generation, target_revision,
+				target_set_digest, target_count, parameter_kind, parameter_digest,
+				stdin, tty, shell, data_categories, allowed_sinks, network_effects,
+				network_destination_hash,
+				timeout_ms, maximum_items, maximum_lines, maximum_bytes,
+				maximum_output, verification_plan_id, reason_summary, risk_summary,
 				operation_digest, nonce_hash, status, state_reason,
 				requested_at_ms, expires_at_ms, state_changed_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (
+				?, ?, ?, 'kupilot.action-envelope/v1', 'kupilot.action-digest/v1',
+				'restart_deployment', 'restart_deployment/v1', 'kupilot.action-policy/2026-09-04', 'ask',
+				1, 'review', 'cluster_mutation', 'test-context', 'test-namespace',
+				'current', 1, 'apps/v1', 'Deployment',
+				'test-namespace', 'sample-workload', 'synthetic-deployment-uid', '17', '',
+				?, 1, 0, '', 0, 'none', ?,
+				0, 0, 0, 1, 5, 2, '', 120000, 1, 0, 0, 0,
+				'restart-rollout/v1', 'Synthetic request', ?,
+				?, ?, 'rejected', 'user_rejected', 1001, 61001, 2000
+			)
 		`, []any{
-			approvalID, runID, sessionID, "restart_deployment", "restart_deployment/v1",
-			"restart-deployment-approval/v1", "test-context", "test-namespace", 1,
-			"apps/v1", "Deployment", "test-namespace",
-			"sample-workload", "synthetic-deployment-uid", strings.Repeat("5", 64),
-			1, "Synthetic request", domain.RestartDeploymentRiskSummary,
-			strings.Repeat("4", 64), strings.Repeat("6", 64), "rejected", "user_rejected",
-			1_001, 61_001, 2_000,
+			approvalID, runID, sessionID, strings.Repeat("5", 64), strings.Repeat("8", 64),
+			domain.RestartDeploymentRiskSummary, strings.Repeat("4", 64), strings.Repeat("6", 64),
 		}},
 		{`
 			INSERT INTO approval_decisions (
-				approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?)
-		`, []any{approvalID, strings.Repeat("4", 64), decisionDigest, "reject", "local_user", 1_500}},
+				approval_id, shown_digest, nonce_hash, decision, actor,
+				permission_disposition, decided_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, []any{approvalID, strings.Repeat("4", 64), strings.Repeat("6", 64), "reject", "local_user", "human", 1_500}},
+		{`
+			INSERT INTO action_reviews (
+				approval_id, model_request_id, profile_name, origin_hash,
+				policy_generation, disposition, rationale_summary, occurred_at_ms
+			) VALUES (?, ?, 'approval_reviewer', ?, 1, 'deny', 'Synthetic safe rationale.', 1600)
+		`, []any{approvalID, actionReviewID, strings.Repeat("9", 64)}},
 		{`INSERT INTO audit_events (id, session_id, run_id, event_type, actor, outcome, details_json, occurred_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, []any{auditID, sessionID, runID, "run_completed", "system", "success", `{}`, 2}},
 	}
 	for index, statement := range statements {
@@ -521,6 +539,7 @@ func assertSessionGraphRowCount(t *testing.T, db *DB, want int) {
 			+ (SELECT count(id) FROM diagnoses)
 			+ (SELECT count(id) FROM approvals)
 			+ (SELECT count(approval_id) FROM approval_decisions)
+			+ (SELECT count(model_request_id) FROM action_reviews)
 			+ (SELECT count(id) FROM audit_events)
 	`); err != nil {
 		t.Fatalf("graph count query error = %v", err)

@@ -161,7 +161,7 @@ func (command UICommand) Validate() error {
 		}
 	case UICommandAcceptResume:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.Resource != nil ||
-			(command.Scope != nil && command.Scope.Validate() != nil) || command.hasPrivacyPayload() {
+			command.Scope != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandCancelResume:

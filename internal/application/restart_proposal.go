@@ -16,5 +16,5 @@ type RestartDeploymentProposalPreparer interface {
 		domain.ScopeSnapshot,
 		domain.ResourceRef,
 		string,
-	) (domain.OperationIntent, error)
+	) (domain.ActionTarget, error)
 }

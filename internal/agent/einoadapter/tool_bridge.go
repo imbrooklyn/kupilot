@@ -54,7 +54,7 @@ func (bridge *toolBridge) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &copied, nil
 }
 
-func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON string, options ...einotool.Option) (string, error) {
+func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...einotool.Option) (string, error) {
 	if bridge == nil || bridge.state == nil {
 		return "", failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
@@ -62,7 +62,7 @@ func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON stri
 		bridge.state.abortToolBatch(err)
 		return "", err
 	}
-	if ctx == nil || len(options) != 0 {
+	if ctx == nil {
 		return failBatch(failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil))
 	}
 	callID := compose.GetToolCallID(ctx)

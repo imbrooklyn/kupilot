@@ -102,6 +102,38 @@ func TestRunBudgetEnforcesSelectedProfileLimits(t *testing.T) {
 		assertBudgetStop(t, firstError(budget.ReserveModelCall(context.Background())), RunStopModelCallLimit)
 	})
 
+	t.Run("summary calls one over", func(t *testing.T) {
+		clock := newFakeClock()
+		budget, err := NewRunBudget(limits, clock.Now(), clock.Now)
+		if err != nil {
+			t.Fatalf("NewRunBudget() error = %v", err)
+		}
+		for index := 0; index < limits.SummaryCalls; index++ {
+			reservation, reserveErr := budget.ReserveSummaryCall(context.Background())
+			if reserveErr != nil {
+				t.Fatalf("ReserveSummaryCall(%d) error = %v", index, reserveErr)
+			}
+			if reservation.Timeout > limits.SummaryRequestTimeout || reservation.CostUnits != 1 {
+				t.Fatalf("summary reservation = %#v", reservation)
+			}
+		}
+		assertBudgetStop(t, firstError(budget.ReserveSummaryCall(context.Background())), RunStopSummaryCallLimit)
+	})
+
+	t.Run("summary cost one over", func(t *testing.T) {
+		clock := newFakeClock()
+		costLimits := limits
+		costLimits.SummaryCostUnits = 1
+		budget, err := NewRunBudget(costLimits, clock.Now(), clock.Now)
+		if err != nil {
+			t.Fatalf("NewRunBudget() error = %v", err)
+		}
+		if _, err := budget.ReserveSummaryCall(context.Background()); err != nil {
+			t.Fatalf("first ReserveSummaryCall() error = %v", err)
+		}
+		assertBudgetStop(t, firstError(budget.ReserveSummaryCall(context.Background())), RunStopSummaryCostLimit)
+	})
+
 	t.Run("Tool calls", func(t *testing.T) {
 		clock := newFakeClock()
 		budget, err := NewRunBudget(DefaultRunBudgetLimits(), clock.Now(), clock.Now)
@@ -285,12 +317,20 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		{name: "steps", mutate: func(limits *RunBudgetLimits) { limits.Steps++ }},
 		{name: "Tool calls", mutate: func(limits *RunBudgetLimits) { limits.ToolCalls++ }},
 		{name: "model calls", mutate: func(limits *RunBudgetLimits) { limits.ModelCalls++ }},
+		{name: "model request bytes", mutate: func(limits *RunBudgetLimits) { limits.ModelRequestBytes++ }},
+		{name: "model stream bytes", mutate: func(limits *RunBudgetLimits) { limits.ModelStreamBytes++ }},
+		{name: "model cost", mutate: func(limits *RunBudgetLimits) { limits.ModelCostUnits++ }},
+		{name: "summary calls", mutate: func(limits *RunBudgetLimits) { limits.SummaryCalls++ }},
+		{name: "summary request bytes", mutate: func(limits *RunBudgetLimits) { limits.SummaryRequestBytes++ }},
+		{name: "summary output bytes", mutate: func(limits *RunBudgetLimits) { limits.SummaryOutputBytes++ }},
+		{name: "summary cost", mutate: func(limits *RunBudgetLimits) { limits.SummaryCostUnits++ }},
 		{name: "result bytes", mutate: func(limits *RunBudgetLimits) { limits.ToolResultBytes = domain.MaxToolResultBytes + 1 }},
 		{name: "run result bytes", mutate: func(limits *RunBudgetLimits) { limits.RunToolResultBytes++ }},
 		{name: "no progress", mutate: func(limits *RunBudgetLimits) { limits.NoProgressSteps++ }},
 		{name: "model timeout", mutate: func(limits *RunBudgetLimits) {
 			limits.ModelRequestTimeout++
 		}},
+		{name: "summary timeout", mutate: func(limits *RunBudgetLimits) { limits.SummaryRequestTimeout++ }},
 		{name: "Tool timeout", mutate: func(limits *RunBudgetLimits) { limits.ToolRequestTimeout++ }},
 		{name: "log calls", mutate: func(limits *RunBudgetLimits) { limits.LogCalls++ }},
 	}
@@ -305,17 +345,25 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 	}
 
 	tightened := RunBudgetLimits{
-		Profile:             BudgetProfileBalanced,
-		RunDuration:         time.Second,
-		Steps:               1,
-		ToolCalls:           1,
-		ModelCalls:          1,
-		ToolResultBytes:     1024,
-		RunToolResultBytes:  1024,
-		NoProgressSteps:     1,
-		ModelRequestTimeout: 500 * time.Millisecond,
-		ToolRequestTimeout:  500 * time.Millisecond,
-		LogCalls:            1,
+		Profile:               BudgetProfileBalanced,
+		RunDuration:           time.Second,
+		Steps:                 1,
+		ToolCalls:             1,
+		ModelCalls:            1,
+		ModelRequestBytes:     1024,
+		ModelStreamBytes:      1024,
+		ModelCostUnits:        1,
+		SummaryCalls:          1,
+		SummaryRequestBytes:   1024,
+		SummaryOutputBytes:    1024,
+		SummaryCostUnits:      1,
+		ToolResultBytes:       1024,
+		RunToolResultBytes:    1024,
+		NoProgressSteps:       1,
+		ModelRequestTimeout:   500 * time.Millisecond,
+		SummaryRequestTimeout: 500 * time.Millisecond,
+		ToolRequestTimeout:    500 * time.Millisecond,
+		LogCalls:              1,
 	}
 	if err := tightened.Validate(); err != nil {
 		t.Fatalf("tightened RunBudgetLimits.Validate() error = %v", err)

@@ -66,7 +66,7 @@ func TestCoordinatorUnconfiguredModelDeniesRunBeforePersistenceOrAgent(t *testin
 	}
 }
 
-func TestCoordinatorModelSetupCancelsAndJoinsRunBeforeAtomicReplacement(t *testing.T) {
+func TestCoordinatorModelSetupConstructsReplacementBeforeCancellingAndAtomicallySwaps(t *testing.T) {
 	t.Parallel()
 	clock := newCoordinatorClock()
 	started := make(chan struct{})
@@ -99,8 +99,8 @@ func TestCoordinatorModelSetupCancelsAndJoinsRunBeforeAtomicReplacement(t *testi
 	factory := &recordingModelFactory{build: func(ModelSetupRequest) (ModelRuntime, error) {
 		select {
 		case <-ended:
+			t.Fatal("the active run was cancelled before the replacement passed local construction")
 		default:
-			t.Fatal("replacement construction started before the active run joined")
 		}
 		return replacement, nil
 	}}

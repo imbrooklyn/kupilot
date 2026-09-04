@@ -32,6 +32,17 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 			{Role: domain.MessageRoleUser, Content: "Inspect failures with " + credentialCanary, CreatedAt: createdAt.Add(time.Second)},
 			{Role: domain.MessageRoleAssistant, Content: "The projected answer is bounded.", CreatedAt: createdAt.Add(2 * time.Second)},
 		},
+		ContextSummary: &domain.SessionContextSummary{
+			SessionID: exportTestSessionID, Text: "Historic safe context " + credentialCanary,
+			SummaryHash:      domain.SHA256Hex("Historic safe context " + credentialCanary),
+			SchemaVersion:    domain.SessionContextSummarySchemaVersion,
+			PolicyVersion:    domain.SafeConversationContextPolicyVersion,
+			CoveredFirstID:   "0198a46e-7d2a-7d34-9b6f-2df5f45a3211",
+			CoveredThroughID: "0198a46e-7d2a-7d34-9b6f-2df5f45a3212",
+			CoveredCount:     2, CoveredBytes: 42, CoverageDigest: domain.SHA256Hex("coverage"),
+			GeneratedAt: createdAt.Add(30 * time.Second), AgentProfile: "agent",
+			AgentOriginHash: domain.SHA256Hex("https://model.example"),
+		},
 		Diagnoses: []ExportDiagnosisRecord{{
 			AnswerMarkdown: "The bounded answer includes " + credentialCanary,
 			CreatedAt:      createdAt.Add(3 * time.Second),
@@ -65,10 +76,40 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 	if !bytes.Contains(content, []byte("REDACTED")) || bytes.Contains(content, []byte(credentialCanary)) {
 		t.Fatalf("credential processing failed: %s", content)
 	}
+	if summary.ContextSummary == nil || !summary.ContextSummary.Redacted ||
+		!bytes.Contains(content, []byte("## Model context")) ||
+		!bytes.Contains(content, []byte("untrusted historic conversation context only")) {
+		t.Fatalf("safe model-context export missing: %#v\n%s", summary.ContextSummary, content)
+	}
 	for _, deniedLabel := range []string{"Tool input", "Tool result", "Model payload", "Approval digest"} {
 		if strings.Contains(string(content), deniedLabel) {
 			t.Fatalf("denylisted schema label %q reached export", deniedLabel)
 		}
+	}
+}
+
+func TestExportSummaryRejectsInvalidContextSummary(t *testing.T) {
+	t.Parallel()
+	createdAt := time.UnixMilli(1_775_000_000_000).UTC()
+	snapshot := SessionExportSnapshot{
+		Session: ExportSessionRecord{
+			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		ContextSummary: &domain.SessionContextSummary{
+			SessionID: "0198a46e-7d2a-7d34-9b6f-2df5f45a3299", Text: "Wrong Session context.",
+			SummaryHash:      domain.SHA256Hex("Wrong Session context."),
+			SchemaVersion:    domain.SessionContextSummarySchemaVersion,
+			PolicyVersion:    domain.SafeConversationContextPolicyVersion,
+			CoveredFirstID:   "0198a46e-7d2a-7d34-9b6f-2df5f45a3211",
+			CoveredThroughID: "0198a46e-7d2a-7d34-9b6f-2df5f45a3212",
+			CoveredCount:     2, CoveredBytes: 42, CoverageDigest: domain.SHA256Hex("coverage"),
+			GeneratedAt: createdAt, AgentProfile: "agent",
+			AgentOriginHash: domain.SHA256Hex("https://model.example"),
+		},
+	}
+	if _, err := ProjectExportSummary(snapshot, createdAt.Add(time.Second), security.NewRedactor()); !errors.Is(err, ErrInvalidExportSummary) {
+		t.Fatalf("ProjectExportSummary(wrong Session context) error = %v, want ErrInvalidExportSummary", err)
 	}
 }
 

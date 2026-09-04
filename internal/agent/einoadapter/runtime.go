@@ -40,6 +40,9 @@ type runState struct {
 	toolInvocationIDs map[domain.ToolInvocationID]struct{}
 	toolBatchFailure  error
 	provisionalEvents int
+	profileName       string
+	originHash        string
+	summaryPlan       *summaryPlan
 }
 
 func (state *runState) toolBatchAbort() error {
@@ -296,6 +299,9 @@ func (state *runState) finishLocalDiagnosis(ctx context.Context, failure *runtim
 	case agent.RunStopStepLimit,
 		agent.RunStopToolCallLimit,
 		agent.RunStopModelCallLimit,
+		agent.RunStopModelCostLimit,
+		agent.RunStopSummaryCallLimit,
+		agent.RunStopSummaryCostLimit,
 		agent.RunStopToolResultBytes,
 		agent.RunStopLogCallLimit:
 		kind = domain.MissingInformationTruncated

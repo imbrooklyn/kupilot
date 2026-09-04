@@ -15,39 +15,60 @@ import (
 const (
 	insertApprovalSQL = `
 		INSERT INTO approvals (
-			id, run_id, session_id, operation, operation_schema_version,
-			policy_version, scope_context, scope_namespace, scope_generation,
-			target_api_version, target_kind, target_namespace,
-			deployment_name, deployment_uid, template_fingerprint,
-			deployment_generation, reason_summary, risk_summary,
+			id, run_id, session_id, envelope_schema_version, digest_version,
+			operation, operation_schema_version, policy_version, permission_profile,
+			policy_generation, risk, effect, scope_context, scope_namespace,
+			namespace_access, scope_generation, target_api_version, target_kind,
+			target_namespace, target_name, target_uid, target_resource_version,
+			target_subresource, target_fingerprint, target_generation, target_revision,
+			target_set_digest, target_count, parameter_kind, parameter_digest,
+			stdin, tty, shell, data_categories, allowed_sinks, network_effects,
+			network_destination_hash,
+			timeout_ms, maximum_items, maximum_lines, maximum_bytes,
+			maximum_output, verification_plan_id, reason_summary, risk_summary,
 			operation_digest, nonce_hash, status, state_reason,
 			requested_at_ms, expires_at_ms, state_changed_at_ms
-		) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		) SELECT
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE EXISTS (
 			SELECT id FROM agent_runs WHERE id = ? AND session_id = ?
 		)
 	`
 	selectApprovalSQL = `
 		SELECT
-			id, run_id, session_id, operation, operation_schema_version,
-			policy_version, scope_context, scope_namespace, scope_generation,
-			target_api_version, target_kind, target_namespace,
-			deployment_name, deployment_uid, template_fingerprint,
-			deployment_generation, reason_summary, risk_summary,
+			id, run_id, session_id, envelope_schema_version, digest_version,
+			operation, operation_schema_version, policy_version, permission_profile,
+			policy_generation, risk, effect, scope_context, scope_namespace,
+			namespace_access, scope_generation, target_api_version, target_kind,
+			target_namespace, target_name, target_uid, target_resource_version,
+			target_subresource, target_fingerprint, target_generation, target_revision,
+			target_set_digest, target_count, parameter_kind, parameter_digest,
+			stdin, tty, shell, data_categories, allowed_sinks, network_effects,
+			network_destination_hash,
+			timeout_ms, maximum_items, maximum_lines, maximum_bytes,
+			maximum_output, verification_plan_id, reason_summary, risk_summary,
 			operation_digest, nonce_hash, status, state_reason,
 			requested_at_ms, expires_at_ms, state_changed_at_ms
 		FROM approvals
 		WHERE id = ?
 	`
 	selectApprovalDecisionSQL = `
-		SELECT approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
+		SELECT approval_id, shown_digest, nonce_hash, decision, actor,
+			permission_disposition, permission_rule_id, reviewer_profile,
+			reviewer_origin_hash, rationale_summary, decided_at_ms
 		FROM approval_decisions
 		WHERE approval_id = ?
 	`
 	insertApprovalDecisionSQL = `
 		INSERT INTO approval_decisions (
-			approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?)
+			approval_id, shown_digest, nonce_hash, decision, actor,
+			permission_disposition, permission_rule_id, reviewer_profile,
+			reviewer_origin_hash, rationale_summary, decided_at_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	updateApprovalStateSQL = `
 		UPDATE approvals
@@ -56,11 +77,17 @@ const (
 	`
 	listRecoverableApprovalsSQL = `
 		SELECT
-			id, run_id, session_id, operation, operation_schema_version,
-			policy_version, scope_context, scope_namespace, scope_generation,
-			target_api_version, target_kind, target_namespace,
-			deployment_name, deployment_uid, template_fingerprint,
-			deployment_generation, reason_summary, risk_summary,
+			id, run_id, session_id, envelope_schema_version, digest_version,
+			operation, operation_schema_version, policy_version, permission_profile,
+			policy_generation, risk, effect, scope_context, scope_namespace,
+			namespace_access, scope_generation, target_api_version, target_kind,
+			target_namespace, target_name, target_uid, target_resource_version,
+			target_subresource, target_fingerprint, target_generation, target_revision,
+			target_set_digest, target_count, parameter_kind, parameter_digest,
+			stdin, tty, shell, data_categories, allowed_sinks, network_effects,
+			network_destination_hash,
+			timeout_ms, maximum_items, maximum_lines, maximum_bytes,
+			maximum_output, verification_plan_id, reason_summary, risk_summary,
 			operation_digest, nonce_hash, status, state_reason,
 			requested_at_ms, expires_at_ms, state_changed_at_ms
 		FROM approvals
@@ -75,19 +102,46 @@ type approvalRequestRow struct {
 	ID                     string `db:"id"`
 	RunID                  string `db:"run_id"`
 	SessionID              string `db:"session_id"`
+	EnvelopeSchemaVersion  string `db:"envelope_schema_version"`
+	DigestVersion          string `db:"digest_version"`
 	Operation              string `db:"operation"`
 	OperationSchemaVersion string `db:"operation_schema_version"`
 	PolicyVersion          string `db:"policy_version"`
+	PermissionProfile      string `db:"permission_profile"`
+	PolicyGeneration       int64  `db:"policy_generation"`
+	Risk                   string `db:"risk"`
+	Effect                 string `db:"effect"`
 	ScopeContext           string `db:"scope_context"`
 	ScopeNamespace         string `db:"scope_namespace"`
+	NamespaceAccess        string `db:"namespace_access"`
 	ScopeGeneration        int64  `db:"scope_generation"`
 	TargetAPIVersion       string `db:"target_api_version"`
 	TargetKind             string `db:"target_kind"`
 	TargetNamespace        string `db:"target_namespace"`
-	DeploymentName         string `db:"deployment_name"`
-	DeploymentUID          string `db:"deployment_uid"`
-	TemplateFingerprint    string `db:"template_fingerprint"`
-	DeploymentGeneration   int64  `db:"deployment_generation"`
+	TargetName             string `db:"target_name"`
+	TargetUID              string `db:"target_uid"`
+	TargetResourceVersion  string `db:"target_resource_version"`
+	TargetSubresource      string `db:"target_subresource"`
+	TargetFingerprint      string `db:"target_fingerprint"`
+	TargetGeneration       int64  `db:"target_generation"`
+	TargetRevision         int64  `db:"target_revision"`
+	TargetSetDigest        string `db:"target_set_digest"`
+	TargetCount            int    `db:"target_count"`
+	ParameterKind          string `db:"parameter_kind"`
+	ParameterDigest        string `db:"parameter_digest"`
+	Stdin                  int    `db:"stdin"`
+	TTY                    int    `db:"tty"`
+	Shell                  int    `db:"shell"`
+	DataCategories         int64  `db:"data_categories"`
+	AllowedSinks           int64  `db:"allowed_sinks"`
+	NetworkEffects         int64  `db:"network_effects"`
+	NetworkDestinationHash string `db:"network_destination_hash"`
+	TimeoutMS              int64  `db:"timeout_ms"`
+	MaximumItems           int    `db:"maximum_items"`
+	MaximumLines           int    `db:"maximum_lines"`
+	MaximumBytes           int    `db:"maximum_bytes"`
+	MaximumOutput          int    `db:"maximum_output"`
+	VerificationPlanID     string `db:"verification_plan_id"`
 	ReasonSummary          string `db:"reason_summary"`
 	RiskSummary            string `db:"risk_summary"`
 	OperationDigest        string `db:"operation_digest"`
@@ -100,12 +154,17 @@ type approvalRequestRow struct {
 }
 
 type approvalDecisionRow struct {
-	ApprovalID  string `db:"approval_id"`
-	ShownDigest string `db:"shown_digest"`
-	NonceHash   string `db:"nonce_hash"`
-	Decision    string `db:"decision"`
-	Actor       string `db:"actor"`
-	DecidedAtMS int64  `db:"decided_at_ms"`
+	ApprovalID         string         `db:"approval_id"`
+	ShownDigest        string         `db:"shown_digest"`
+	NonceHash          string         `db:"nonce_hash"`
+	Decision           string         `db:"decision"`
+	Actor              string         `db:"actor"`
+	Disposition        string         `db:"permission_disposition"`
+	PermissionRuleID   sql.NullString `db:"permission_rule_id"`
+	ReviewerProfile    sql.NullString `db:"reviewer_profile"`
+	ReviewerOriginHash sql.NullString `db:"reviewer_origin_hash"`
+	RationaleSummary   sql.NullString `db:"rationale_summary"`
+	DecidedAtMS        int64          `db:"decided_at_ms"`
 }
 
 // ApprovalRepository persists approval state and its audit event atomically.
@@ -293,7 +352,10 @@ func (repository *ApprovalRepository) ResolveWithAudit(
 		}
 		if _, err := tx.ExecContext(ctx, insertApprovalDecisionSQL,
 			storedDecision.RequestID, storedDecision.ShownDigest, storedDecision.NonceHash,
-			storedDecision.Choice.String(), storedDecision.Actor, storedDecision.DecidedAt.UnixMilli(),
+			storedDecision.Choice.String(), storedDecision.Actor, storedDecision.Disposition,
+			nullableRuleID(storedDecision.RuleID), nullableText(storedDecision.ReviewerProfile),
+			nullableText(storedDecision.ReviewerOriginHash), nullableText(storedDecision.RationaleSummary),
+			storedDecision.DecidedAt.UnixMilli(),
 		); err != nil {
 			return err
 		}
@@ -391,13 +453,21 @@ func (repository *ApprovalRepository) RecoverWithAudits(ctx context.Context, tra
 }
 
 func insertApproval(ctx context.Context, tx *sqlx.Tx, request approvalcontract.StoredRequest) error {
+	intent := request.Intent
+	target := intent.Target
 	result, err := tx.ExecContext(ctx, insertApprovalSQL,
-		request.ID, request.RunID, request.SessionID, request.Intent.Operation,
-		domain.RestartDeploymentOperationSchemaVersion, request.Intent.PolicyVersion,
-		request.Intent.Scope.Context, request.Intent.Scope.Namespace, request.Intent.Scope.Generation,
-		domain.RestartDeploymentTargetAPIVersion, domain.RestartDeploymentTargetKind, request.Intent.Scope.Namespace,
-		request.Intent.DeploymentName, request.Intent.DeploymentUID, request.Intent.TemplateFingerprint,
-		request.Intent.DeploymentGeneration, request.Intent.ReasonSummary, domain.RestartDeploymentRiskSummary,
+		request.ID, request.RunID, request.SessionID, domain.ActionEnvelopeSchemaVersion, domain.ActionDigestVersion,
+		intent.Operation, intent.OperationSchemaVersion, intent.PolicyVersion, intent.PermissionProfile,
+		intent.PolicyGeneration, intent.Risk, intent.Effect, intent.Scope.Context, intent.Scope.Namespace,
+		intent.NamespaceAccess, intent.Scope.Generation, target.Resource.APIVersion, target.Resource.Kind,
+		target.Resource.Namespace, target.Resource.Name, target.Resource.UID, target.Resource.ResourceVersion,
+		target.Subresource, target.Fingerprint, target.Generation, target.Revision, target.TargetSetDigest, target.TargetCount,
+		intent.ParameterKind, intent.ParameterDigest, boolInteger(intent.Stdin), boolInteger(intent.TTY),
+		boolInteger(intent.Shell), intent.DataCategories, intent.AllowedSinks, intent.NetworkEffects,
+		intent.NetworkDestinationHash,
+		intent.Limits.Timeout.Milliseconds(), intent.Limits.MaximumItems, intent.Limits.MaximumLines,
+		intent.Limits.MaximumBytes, intent.Limits.MaximumOutput, intent.VerificationPlanID,
+		intent.ReasonSummary, intent.RiskSummary,
 		request.Digest, request.NonceHash, request.State, request.StateReason,
 		request.RequestedAt.UnixMilli(), request.ExpiresAt.UnixMilli(), request.StateChangedAt.UnixMilli(),
 		request.RunID, request.SessionID,
@@ -438,20 +508,36 @@ func updateStoredApprovalState(ctx context.Context, tx *sqlx.Tx, expected domain
 }
 
 func (row approvalRequestRow) storedRequest() (approvalcontract.StoredRequest, error) {
-	if row.OperationSchemaVersion != domain.RestartDeploymentOperationSchemaVersion ||
-		row.TargetAPIVersion != domain.RestartDeploymentTargetAPIVersion ||
-		row.TargetKind != domain.RestartDeploymentTargetKind || row.TargetNamespace != row.ScopeNamespace ||
-		row.RiskSummary != domain.RestartDeploymentRiskSummary {
+	if row.EnvelopeSchemaVersion != domain.ActionEnvelopeSchemaVersion || row.DigestVersion != domain.ActionDigestVersion ||
+		(row.Stdin != 0 && row.Stdin != 1) || (row.TTY != 0 && row.TTY != 1) || (row.Shell != 0 && row.Shell != 1) {
 		return approvalcontract.StoredRequest{}, approvalcontract.ErrInvalidStoredApproval
 	}
 	request := approvalcontract.StoredRequest{
 		ID: domain.ApprovalID(row.ID), RunID: domain.AgentRunID(row.RunID), SessionID: domain.SessionID(row.SessionID),
-		Intent: domain.OperationIntent{
-			Operation:      domain.ApprovalOperation(row.Operation),
-			Scope:          domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
-			DeploymentName: row.DeploymentName, DeploymentUID: row.DeploymentUID,
-			TemplateFingerprint: row.TemplateFingerprint, DeploymentGeneration: row.DeploymentGeneration,
-			PolicyVersion: row.PolicyVersion, ReasonSummary: row.ReasonSummary,
+		Intent: approvalcontract.StoredActionIntent{
+			Operation: domain.ActionOperation(row.Operation), OperationSchemaVersion: row.OperationSchemaVersion,
+			PolicyVersion: row.PolicyVersion, PermissionProfile: domain.PermissionProfile(row.PermissionProfile),
+			PolicyGeneration: domain.PolicyGeneration(row.PolicyGeneration), Risk: domain.RiskClass(row.Risk),
+			Effect:          domain.CapabilityEffectClass(row.Effect),
+			Scope:           domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
+			NamespaceAccess: domain.NamespaceAccessPolicy(row.NamespaceAccess),
+			Target: domain.ActionTarget{
+				Resource: domain.ResourceRef{APIVersion: row.TargetAPIVersion, Kind: row.TargetKind,
+					Namespace: row.TargetNamespace, Name: row.TargetName, UID: row.TargetUID,
+					ResourceVersion: row.TargetResourceVersion},
+				Subresource: row.TargetSubresource, Fingerprint: row.TargetFingerprint,
+				Generation: row.TargetGeneration, Revision: row.TargetRevision,
+				TargetSetDigest: domain.ActionDigest(row.TargetSetDigest), TargetCount: row.TargetCount,
+			},
+			ParameterKind: domain.ActionParameterKind(row.ParameterKind), ParameterDigest: domain.ActionDigest(row.ParameterDigest),
+			Stdin: row.Stdin == 1, TTY: row.TTY == 1, Shell: row.Shell == 1,
+			DataCategories: domain.ActionDataCategories(row.DataCategories), AllowedSinks: domain.ActionSinks(row.AllowedSinks),
+			NetworkEffects:         domain.ActionNetworkEffects(row.NetworkEffects),
+			NetworkDestinationHash: domain.ActionDigest(row.NetworkDestinationHash),
+			Limits: domain.ActionLimits{Timeout: time.Duration(row.TimeoutMS) * time.Millisecond,
+				MaximumItems: row.MaximumItems, MaximumLines: row.MaximumLines,
+				MaximumBytes: row.MaximumBytes, MaximumOutput: row.MaximumOutput},
+			VerificationPlanID: row.VerificationPlanID, ReasonSummary: row.ReasonSummary, RiskSummary: row.RiskSummary,
 		},
 		Digest: domain.ApprovalDigest(row.OperationDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
 		State: domain.ApprovalState(row.Status), StateReason: domain.ApprovalStateReason(row.StateReason),
@@ -474,12 +560,29 @@ func (row approvalDecisionRow) storedDecision() (approvalcontract.StoredDecision
 	decision := approvalcontract.StoredDecision{
 		RequestID: domain.ApprovalID(row.ApprovalID), Choice: choice,
 		ShownDigest: domain.ApprovalDigest(row.ShownDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
-		Actor: domain.ApprovalActor(row.Actor), DecidedAt: time.UnixMilli(row.DecidedAtMS).UTC(),
+		Actor: domain.ApprovalActor(row.Actor), Disposition: domain.ReviewDisposition(row.Disposition),
+		RuleID: domain.PermissionRuleID(row.PermissionRuleID.String), ReviewerProfile: row.ReviewerProfile.String,
+		ReviewerOriginHash: row.ReviewerOriginHash.String, RationaleSummary: row.RationaleSummary.String,
+		DecidedAt: time.UnixMilli(row.DecidedAtMS).UTC(),
 	}
 	if decision.Validate() != nil {
 		return approvalcontract.StoredDecision{}, approvalcontract.ErrInvalidStoredApproval
 	}
 	return decision, nil
+}
+
+func nullableRuleID(value domain.PermissionRuleID) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func validateApprovalAudit(request approvalcontract.StoredRequest, event domain.AuditEvent) error {

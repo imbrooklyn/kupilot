@@ -1,7 +1,8 @@
 package config
 
 const (
-	CurrentVersion                    = 1
+	LegacyVersion                     = 1
+	CurrentVersion                    = 2
 	ProviderOpenAICompatible          = "openai_compatible"
 	ModelReasoningEffortNone          = "none"
 	BudgetProfileCompact              = "compact"
@@ -14,48 +15,88 @@ const (
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
-	MaxModelOutputTokens              = 8192
-	DefaultMaxModelOutputTokens       = MaxModelOutputTokens
+	LegacyDefaultMaxModelOutputTokens = 8192
 	DefaultModelRequestTimeoutSeconds = 300
+	DefaultReviewerTimeoutSeconds     = 30
 	MaxModelRequestTimeoutSeconds     = 300
 	MaxContextBytes                   = 253
 	MaxNamespaceBytes                 = 63
 	DefaultNamespace                  = "default"
 	MaxModelIdentifierBytes           = 128
+	MaxModelProfileNameBytes          = 128
 	MaxPathBytes                      = 4096
 )
+
+// ModelRole is one fixed consumer binding admitted by the configuration
+// schema. It is deliberately not an arbitrary routing key.
+type ModelRole string
+
+const (
+	ModelRoleAgent            ModelRole = "agent"
+	ModelRoleApprovalReviewer ModelRole = "approval_reviewer"
+)
+
+func (role ModelRole) valid() bool {
+	return role == ModelRoleAgent || role == ModelRoleApprovalReviewer
+}
+
+// ModelCredentialReference selects one of the two fixed opaque credential
+// slots. It never contains a credential or arbitrary lookup key.
+type ModelCredentialReference string
+
+const (
+	ModelCredentialAgent            ModelCredentialReference = "agent"
+	ModelCredentialApprovalReviewer ModelCredentialReference = "approval_reviewer"
+)
+
+func (reference ModelCredentialReference) valid() bool {
+	return reference == ModelCredentialAgent || reference == ModelCredentialApprovalReviewer
+}
 
 // Config is the complete serializable, non-sensitive startup configuration.
 // Paths and transport credentials are intentionally absent.
 type Config struct {
-	Version    int              `mapstructure:"version" yaml:"version" json:"version"`
-	Context    string           `mapstructure:"context" yaml:"context,omitempty" json:"context,omitempty"`
-	Namespace  string           `mapstructure:"namespace" yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	NoColor    bool             `mapstructure:"no_color" yaml:"no_color" json:"no_color"`
-	Runtime    RuntimeConfig    `mapstructure:"runtime" yaml:"runtime" json:"runtime"`
-	Model      ModelConfig      `mapstructure:"model" yaml:"model" json:"model"`
-	Kubernetes KubernetesConfig `mapstructure:"kubernetes" yaml:"kubernetes" json:"kubernetes"`
-	Logging    LoggingConfig    `mapstructure:"logging" yaml:"logging" json:"logging"`
+	Version    int                 `yaml:"version" json:"version"`
+	Context    string              `yaml:"context,omitempty" json:"context,omitempty"`
+	Namespace  string              `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	NoColor    bool                `yaml:"no_color" json:"no_color"`
+	Runtime    RuntimeConfig       `yaml:"runtime" json:"runtime"`
+	Models     ModelProfilesConfig `yaml:"models" json:"models"`
+	Kubernetes KubernetesConfig    `yaml:"kubernetes" json:"kubernetes"`
+	Logging    LoggingConfig       `yaml:"logging" json:"logging"`
 }
 
 // RuntimeConfig selects one code-defined run envelope. Individual limits are
 // intentionally not free-form configuration.
 type RuntimeConfig struct {
-	BudgetProfile string `mapstructure:"budget_profile" yaml:"budget_profile" json:"budget_profile"`
+	BudgetProfile string `yaml:"budget_profile" json:"budget_profile"`
 }
 
-// ModelConfig contains only validated, non-sensitive model settings.
-type ModelConfig struct {
-	ProviderKind          string  `mapstructure:"provider_kind" yaml:"provider_kind" json:"provider_kind"`
-	Endpoint              string  `mapstructure:"endpoint" yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
-	Origin                string  `mapstructure:"-" yaml:"-" json:"origin,omitempty"`
-	Model                 string  `mapstructure:"model" yaml:"model,omitempty" json:"model,omitempty"`
-	ReasoningEffort       string  `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-	Temperature           float64 `mapstructure:"temperature" yaml:"temperature" json:"temperature"`
-	MaxOutputTokens       int     `mapstructure:"max_output_tokens" yaml:"max_output_tokens" json:"max_output_tokens"`
-	RequestTimeoutSeconds int     `mapstructure:"request_timeout_seconds" yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
-	Streaming             bool    `mapstructure:"streaming" yaml:"streaming" json:"streaming"`
-	ToolCallingRequired   bool    `mapstructure:"tool_calling_required" yaml:"tool_calling_required" json:"tool_calling_required"`
+// ModelProfilesConfig has fixed role fields rather than a generic map. The
+// resolved runtime value always contains a complete Agent profile.
+type ModelProfilesConfig struct {
+	Agent            ModelProfileConfig  `yaml:"agent" json:"agent"`
+	ApprovalReviewer *ModelProfileConfig `yaml:"approval_reviewer,omitempty" json:"approval_reviewer,omitempty"`
+}
+
+// ModelProfileConfig contains one resolved, explicitly named and role-bound
+// profile. InheritAgent records only the user's v2 shorthand; all runtime
+// settings below are complete after loading.
+type ModelProfileConfig struct {
+	Name                  string                   `yaml:"name" json:"name"`
+	Role                  ModelRole                `yaml:"role" json:"role"`
+	InheritAgent          bool                     `yaml:"inherit_agent,omitempty" json:"inherit_agent,omitempty"`
+	CredentialReference   ModelCredentialReference `yaml:"credential_ref" json:"credential_ref"`
+	ProviderKind          string                   `yaml:"provider_kind" json:"provider_kind"`
+	Endpoint              string                   `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Origin                string                   `yaml:"-" json:"origin,omitempty"`
+	Model                 string                   `yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Temperature           float64                  `yaml:"temperature" json:"temperature"`
+	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	Streaming             bool                     `yaml:"streaming" json:"streaming"`
+	ToolCallingRequired   bool                     `yaml:"tool_calling_required" json:"tool_calling_required"`
 }
 
 // CredentialSource identifies the selected sensitive source without exposing
@@ -66,30 +107,57 @@ const (
 	CredentialSourceNone        CredentialSource = ""
 	CredentialSourceFile        CredentialSource = "file"
 	CredentialSourceEnvironment CredentialSource = "environment"
+	CredentialSourceInherited   CredentialSource = "inherited"
 )
 
-// Loaded is one complete startup load. Embedding keeps non-sensitive settings
-// convenient while the opaque credential and fixed paths remain separate.
+// ProfileCredential keeps one role's independently owned opaque wrapper and
+// non-sensitive source metadata outside Config.
+type ProfileCredential struct {
+	Role      ModelRole
+	Reference ModelCredentialReference
+	Source    CredentialSource
+	Value     SecretValue
+}
+
+// ModelCredentials contains only the two fixed role slots.
+type ModelCredentials struct {
+	Agent            ProfileCredential
+	ApprovalReviewer *ProfileCredential
+}
+
+// Destroy overwrites every independently owned role credential.
+func (credentials *ModelCredentials) Destroy() {
+	if credentials == nil {
+		return
+	}
+	credentials.Agent.Value.Destroy()
+	if credentials.ApprovalReviewer != nil {
+		credentials.ApprovalReviewer.Value.Destroy()
+	}
+}
+
+// Loaded is one complete startup load. Non-sensitive settings and role-bound
+// opaque credentials remain distinct.
 type Loaded struct {
 	Config
-	Paths            Paths
-	Credential       SecretValue
-	CredentialSource CredentialSource
-	Warnings         []string
+	Paths         Paths
+	SourceVersion int
+	Credentials   ModelCredentials
+	Warnings      []string
 }
 
 // KubernetesConfig contains the non-sensitive kubeconfig execution policy.
 type KubernetesConfig struct {
-	ExecCredentials string `mapstructure:"exec_credentials" yaml:"exec_credentials" json:"exec_credentials"`
-	NamespaceAccess string `mapstructure:"namespace_access" yaml:"namespace_access" json:"namespace_access"`
+	ExecCredentials string `yaml:"exec_credentials" json:"exec_credentials"`
+	NamespaceAccess string `yaml:"namespace_access" json:"namespace_access"`
 }
 
 // LoggingConfig controls the fixed local file logger. Rotation ceilings remain
 // code-defined in the logging adapter and cannot be expanded by configuration.
 type LoggingConfig struct {
-	Enabled              bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
-	Level                string `mapstructure:"level" yaml:"level" json:"level"`
-	SensitiveDiagnostics bool   `mapstructure:"sensitive_diagnostics" yaml:"sensitive_diagnostics" json:"sensitive_diagnostics"`
+	Enabled              bool   `yaml:"enabled" json:"enabled"`
+	Level                string `yaml:"level" json:"level"`
+	SensitiveDiagnostics bool   `yaml:"sensitive_diagnostics" json:"sensitive_diagnostics"`
 }
 
 // StringOverride distinguishes an absent CLI value from an explicit value.
@@ -112,42 +180,73 @@ type Overrides struct {
 	NoColor    BoolOverride
 }
 
+func defaultAgentProfile() ModelProfileConfig {
+	return ModelProfileConfig{
+		Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
+		ProviderKind: ProviderOpenAICompatible, Temperature: DefaultModelTemperature,
+		RequestTimeoutSeconds: DefaultModelRequestTimeoutSeconds,
+		Streaming:             true, ToolCallingRequired: true,
+	}
+}
+
+func defaultReviewerProfile() ModelProfileConfig {
+	return ModelProfileConfig{
+		Name: "approval-reviewer", Role: ModelRoleApprovalReviewer,
+		CredentialReference: ModelCredentialApprovalReviewer,
+		ProviderKind:        ProviderOpenAICompatible, Temperature: 0,
+		RequestTimeoutSeconds: DefaultReviewerTimeoutSeconds,
+		Streaming:             false, ToolCallingRequired: false,
+	}
+}
+
 // Defaults returns the code-defined configuration defaults.
 func Defaults() Config {
 	return Config{
 		Version: CurrentVersion, Namespace: DefaultNamespace,
-		Runtime: RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
-		Model: ModelConfig{
-			ProviderKind:          ProviderOpenAICompatible,
-			Temperature:           DefaultModelTemperature,
-			MaxOutputTokens:       DefaultMaxModelOutputTokens,
-			RequestTimeoutSeconds: DefaultModelRequestTimeoutSeconds,
-			Streaming:             true,
-			ToolCallingRequired:   true,
-		},
+		Runtime:    RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
+		Models:     ModelProfilesConfig{Agent: defaultAgentProfile()},
 		Kubernetes: KubernetesConfig{ExecCredentials: ExecCredentialsAllow, NamespaceAccess: DefaultNamespaceAccess},
-		Logging: LoggingConfig{
-			Enabled:              true,
-			Level:                "info",
-			SensitiveDiagnostics: false,
-		},
+		Logging:    LoggingConfig{Enabled: true, Level: "info", SensitiveDiagnostics: false},
 	}
 }
 
-// ValidatedModel returns a complete model configuration suitable for adapter
-// construction. It never contains the API key value.
-func (config Config) ValidatedModel() (ModelConfig, error) {
-	if config.Model.Endpoint == "" || config.Model.Model == "" {
-		return ModelConfig{}, newSafeError(
-			ClassConfigurationInvalid,
-			"config_model_required",
-			"validate_model_configuration",
-			"Model endpoint and model identifier are required; set model.endpoint and model.model or their documented environment variables.",
-		)
+// ValidatedProfile returns one complete role-bound profile suitable for
+// adapter construction. It never contains an API key.
+func (config Config) ValidatedProfile(role ModelRole) (ModelProfileConfig, error) {
+	var profile *ModelProfileConfig
+	switch role {
+	case ModelRoleAgent:
+		profile = &config.Models.Agent
+	case ModelRoleApprovalReviewer:
+		profile = config.Models.ApprovalReviewer
+	default:
+		return ModelProfileConfig{}, modelProfileRequiredError(role)
+	}
+	if profile == nil || profile.Endpoint == "" || profile.Model == "" {
+		return ModelProfileConfig{}, modelProfileRequiredError(role)
 	}
 	copy := config
 	if err := Validate(&copy); err != nil {
-		return ModelConfig{}, err
+		return ModelProfileConfig{}, err
 	}
-	return copy.Model, nil
+	if role == ModelRoleAgent {
+		return copy.Models.Agent, nil
+	}
+	if copy.Models.ApprovalReviewer == nil {
+		return ModelProfileConfig{}, modelProfileRequiredError(role)
+	}
+	return *copy.Models.ApprovalReviewer, nil
+}
+
+func modelProfileRequiredError(role ModelRole) error {
+	name := string(role)
+	if name == "" {
+		name = "requested"
+	}
+	return newSafeError(
+		ClassConfigurationInvalid,
+		"config_model_profile_required",
+		"validate_model_configuration",
+		"The "+name+" model profile requires an endpoint, model identifier, and role-bound credential.",
+	)
 }

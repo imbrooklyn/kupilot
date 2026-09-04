@@ -28,6 +28,21 @@ type responseEnvelope struct {
 	Usage json.RawMessage `json:"usage,omitempty"`
 }
 
+// validateResponseMessage observes one non-streaming OpenAI-compatible
+// response while leaving Eino responsible for decoding it.
+func validateResponseMessage(
+	_ context.Context,
+	message *schema.Message,
+	rawBody []byte,
+) (*schema.Message, error) {
+	var envelope responseEnvelope
+	if message == nil || len(rawBody) == 0 || !utf8.Valid(rawBody) || json.Unmarshal(rawBody, &envelope) != nil ||
+		len(envelope.Choices) != 1 || envelope.Choices[0].Index == nil || *envelope.Choices[0].Index != 0 {
+		return nil, errMalformedProviderChunk
+	}
+	return message, nil
+}
+
 // validateResponseChunk observes Eino's decoded OpenAI stream without
 // replacing either the provider payload or Eino's message conversion.
 func validateResponseChunk(
@@ -258,6 +273,32 @@ func (validator *modelStreamValidator) admitAndClearEinoMetadata(message *schema
 	message.ReasoningContent = ""
 	message.Extra = nil
 	return len(reasoning), nil
+}
+
+// admitAndClearNonStreamingMetadata accepts only the request identifier that
+// the pinned Eino OpenAI component adds to every generated message. Summary
+// and Reviewer responses do not admit reasoning or any other vendor metadata.
+func admitAndClearNonStreamingMetadata(message *schema.Message, credential *config.SecretValue) error {
+	if message == nil || credential == nil || !credential.IsSet() {
+		return errUnsupportedProviderChunk
+	}
+	if len(message.Extra) == 0 {
+		return nil
+	}
+	requestIDValue, ok := message.Extra[einoRequestIDKey]
+	if !ok || len(message.Extra) != 1 {
+		return errUnsupportedProviderChunk
+	}
+	reflected := reflect.ValueOf(requestIDValue)
+	if !reflected.IsValid() || reflected.Kind() != reflect.String {
+		return errUnsupportedProviderChunk
+	}
+	requestID := reflected.String()
+	if !validProviderRequestIDText(requestID) || requestID != "" && credentialAppearsInStrings(credential, requestID) {
+		return errMalformedProviderChunk
+	}
+	message.Extra = nil
+	return nil
 }
 
 func validProviderRequestIDText(requestID string) bool {

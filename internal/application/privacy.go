@@ -11,12 +11,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const (
 	// PrivacyPolicyVersion changes whenever an eligible category or its meaning changes.
-	PrivacyPolicyVersion       = "2026-08-10.v1"
-	PrivacyRecordSchemaVersion = 1
+	PrivacyPolicyVersion       = "2026-09-04.v2"
+	PrivacyRecordSchemaVersion = 2
 	maxPrivacyPolicyBytes      = 64
 )
 
@@ -77,7 +79,7 @@ type privacyCategoryDefinition struct {
 
 var privacyCategoryCatalog = [...]privacyCategoryDefinition{
 	{DataCategoryUserQuestion, "Your question after local text cleanup, sensitive-value handling, and size limits."},
-	{DataCategorySafeConversationContext, "Relevant conversation context from this diagnostic run, including safe cluster-read results and supporting observations."},
+	{DataCategorySafeConversationContext, "Retained safe user questions, final validated assistant answers, and a bounded untrusted summary from this exact Session."},
 	{DataCategoryResourceReferences, "The active Context and Namespace, plus permitted resource names and references used by this diagnostic run."},
 	{DataCategoryProjectedStatus, "Permitted Kubernetes status, conditions, counts, times, and resource relationships."},
 	{DataCategoryProjectedEvents, "Recent permitted Kubernetes Event reasons and messages after local safety checks."},
@@ -103,6 +105,7 @@ type PrivacyCategoryReview struct {
 // PrivacyReview is the exact Application projection shown before a decision.
 // Revision binds the visible origin, policy version, and enabled categories.
 type PrivacyReview struct {
+	Role          domain.ModelRole
 	Origin        string
 	PolicyVersion string
 	Revision      string
@@ -114,7 +117,7 @@ type PrivacyReview struct {
 
 // Validate rejects forged or widened privacy display data.
 func (review PrivacyReview) Validate() error {
-	if !validPrivacyOrigin(review.Origin) || !validPrivacyPolicyVersion(review.PolicyVersion) ||
+	if !review.Role.Valid() || !validPrivacyOrigin(review.Origin) || !validPrivacyPolicyVersion(review.PolicyVersion) ||
 		!validPrivacyDigest(review.Revision) || !review.Decision.valid() ||
 		len(review.Categories) != len(privacyCategoryCatalog) || len(review.NeverEligible) != len(neverEligibleModelData) {
 		return ErrPrivacyRecord
@@ -131,7 +134,7 @@ func (review PrivacyReview) Validate() error {
 			return ErrPrivacyRecord
 		}
 	}
-	wantRevision := privacyRevision(review.PolicyVersion, privacyOriginHash(review.Origin), enabledPrivacyCategories(review.LogsEnabled))
+	wantRevision := privacyRevision(review.PolicyVersion, review.Role, privacyOriginHash(review.Origin), enabledPrivacyCategories(review.LogsEnabled))
 	if review.Revision != wantRevision {
 		return ErrPrivacyRecord
 	}
@@ -141,6 +144,7 @@ func (review PrivacyReview) Validate() error {
 // PrivacyRecord is the complete durable allowlist. It intentionally contains
 // an origin hash rather than the configured origin itself.
 type PrivacyRecord struct {
+	Role          domain.ModelRole
 	PolicyVersion string
 	OriginHash    string
 	Categories    []ModelDataCategory
@@ -151,7 +155,7 @@ type PrivacyRecord struct {
 
 // Validate checks the storage-neutral consent tuple and fixed category set.
 func (record PrivacyRecord) Validate() error {
-	if !validPrivacyPolicyVersion(record.PolicyVersion) || !validPrivacyDigest(record.OriginHash) ||
+	if !record.Role.Valid() || !validPrivacyPolicyVersion(record.PolicyVersion) || !validPrivacyDigest(record.OriginHash) ||
 		!record.Decision.valid() || !validCoordinatorTime(record.DecidedAt) ||
 		record.SchemaVersion != PrivacyRecordSchemaVersion {
 		return ErrPrivacyRecord
@@ -167,7 +171,7 @@ func (decision PrivacyDecision) valid() bool {
 		decision == PrivacyDecisionRejected || decision == PrivacyDecisionRevoked
 }
 
-// PrivacyStore persists the one process-global model-transfer decision tuple.
+// PrivacyStore persists one role-bound model-transfer decision tuple.
 type PrivacyStore interface {
 	LoadPrivacy(context.Context) (PrivacyRecord, bool, error)
 	SavePrivacy(context.Context, PrivacyRecord) error
@@ -176,6 +180,7 @@ type PrivacyStore interface {
 // PrivacyManagerConfig contains only code-owned policy and a narrow store.
 type PrivacyManagerConfig struct {
 	Store         PrivacyStore
+	Role          domain.ModelRole
 	Origin        string
 	PolicyVersion string
 	LogsEnabled   bool
@@ -186,6 +191,7 @@ type PrivacyManagerConfig struct {
 // no goroutine and performs no I/O while holding its state mutex.
 type PrivacyManager struct {
 	store         PrivacyStore
+	role          domain.ModelRole
 	origin        string
 	originHash    string
 	policyVersion string
@@ -199,18 +205,30 @@ type PrivacyManager struct {
 	record      *PrivacyRecord
 }
 
+// PrivacyBindingSnapshot is a content-free, no-I/O status projection.
+type PrivacyBindingSnapshot struct {
+	Role       domain.ModelRole
+	OriginHash string
+	Loaded     bool
+	Accepted   bool
+}
+
 // NewPrivacyManager constructs the policy without loading durable state.
 func NewPrivacyManager(config PrivacyManagerConfig) (*PrivacyManager, error) {
 	version := config.PolicyVersion
 	if version == "" {
 		version = PrivacyPolicyVersion
 	}
+	role := config.Role
+	if role == "" {
+		role = domain.ModelRoleAgent
+	}
 	if config.Store == nil || config.Now == nil || !validCoordinatorTime(config.Now()) ||
-		config.Origin != "" && !validPrivacyOrigin(config.Origin) || !validPrivacyPolicyVersion(version) {
+		!role.Valid() || config.Origin != "" && !validPrivacyOrigin(config.Origin) || !validPrivacyPolicyVersion(version) {
 		return nil, ErrPrivacyConfiguration
 	}
 	return &PrivacyManager{
-		store: config.Store, origin: config.Origin, originHash: privacyOriginHash(config.Origin),
+		store: config.Store, role: role, origin: config.Origin, originHash: privacyOriginHash(config.Origin),
 		policyVersion: version, now: config.Now, logsEnabled: config.LogsEnabled,
 	}, nil
 }
@@ -257,6 +275,29 @@ func (manager *PrivacyManager) AuthorizeModel(ctx context.Context) (bool, error)
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.acceptedLocked(), nil
+}
+
+// OriginHash returns the current content-free canonical origin binding without I/O.
+func (manager *PrivacyManager) OriginHash() string {
+	if manager == nil {
+		return ""
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.originHash
+}
+
+// Snapshot reports current in-memory consent state without loading storage.
+func (manager *PrivacyManager) Snapshot() PrivacyBindingSnapshot {
+	if manager == nil {
+		return PrivacyBindingSnapshot{}
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return PrivacyBindingSnapshot{
+		Role: manager.role, OriginHash: manager.originHash,
+		Loaded: manager.loaded, Accepted: manager.loaded && manager.acceptedLocked(),
+	}
 }
 
 // AuthorizeLogs fails closed before either fixed container-log Tool can read.
@@ -330,7 +371,7 @@ func (manager *PrivacyManager) Decide(
 	}
 	decidedAt := manager.now().UTC()
 	record := PrivacyRecord{
-		PolicyVersion: manager.policyVersion, OriginHash: manager.originHash,
+		Role: manager.role, PolicyVersion: manager.policyVersion, OriginHash: manager.originHash,
 		Categories: enabledPrivacyCategories(nextLogs), Decision: decision,
 		DecidedAt: decidedAt, SchemaVersion: PrivacyRecordSchemaVersion,
 	}
@@ -391,7 +432,7 @@ func (manager *PrivacyManager) ensureLoaded(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPrivacyPersistence, err)
 	}
-	if found && record.Validate() != nil {
+	if found && (record.Validate() != nil || record.Role != manager.role) {
 		return ErrPrivacyPersistence
 	}
 	manager.mu.Lock()
@@ -426,8 +467,8 @@ func (manager *PrivacyManager) reviewLocked() PrivacyReview {
 	never := append([]string(nil), neverEligibleModelData[:]...)
 	enabled := enabledPrivacyCategories(manager.logsEnabled)
 	return PrivacyReview{
-		Origin: manager.origin, PolicyVersion: manager.policyVersion,
-		Revision: privacyRevision(manager.policyVersion, manager.originHash, enabled),
+		Role: manager.role, Origin: manager.origin, PolicyVersion: manager.policyVersion,
+		Revision: privacyRevision(manager.policyVersion, manager.role, manager.originHash, enabled),
 		Decision: decision, LogsEnabled: manager.logsEnabled,
 		Categories: categories, NeverEligible: never,
 	}
@@ -438,7 +479,7 @@ func (manager *PrivacyManager) acceptedLocked() bool {
 }
 
 func (manager *PrivacyManager) recordMatchesLocked() bool {
-	if manager.record == nil || manager.record.PolicyVersion != manager.policyVersion ||
+	if manager.record == nil || manager.record.Role != manager.role || manager.record.PolicyVersion != manager.policyVersion ||
 		manager.record.OriginHash != manager.originHash {
 		return false
 	}
@@ -491,12 +532,12 @@ func privacyOriginHash(origin string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func privacyRevision(policyVersion, originHash string, categories []ModelDataCategory) string {
+func privacyRevision(policyVersion string, role domain.ModelRole, originHash string, categories []ModelDataCategory) string {
 	values := make([]string, len(categories))
 	for index, category := range categories {
 		values[index] = string(category)
 	}
-	digest := sha256.Sum256([]byte(policyVersion + "\n" + originHash + "\n" + strings.Join(values, "\n")))
+	digest := sha256.Sum256([]byte(policyVersion + "\n" + string(role) + "\n" + originHash + "\n" + strings.Join(values, "\n")))
 	return hex.EncodeToString(digest[:])
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestPrivacyRepositoryPersistsOnlyBoundedConsentTuple(t *testing.T) {
@@ -76,13 +77,63 @@ func TestPrivacyRepositoryRejectsCancellationAndCorruptRows(t *testing.T) {
 	}
 	if _, err := db.handle.ExecContext(context.Background(), `
 		INSERT INTO privacy_consents (
-			singleton_id, policy_version, origin_hash, categories_json,
+			role, policy_version, origin_hash, categories_json,
 			decision, decided_at_ms, schema_version
-		) VALUES (1, '2026-08-10.v1', ?, '["unknown"]', 'accepted', 1, 1)
+		) VALUES ('agent', '2026-09-04.v2', ?, '["unknown"]', 'accepted', 1, 2)
 	`, strings.Repeat("0", 64)); err != nil {
 		t.Fatalf("corrupt row setup error = %v", err)
 	}
 	if _, found, err := repository.LoadPrivacy(context.Background()); err == nil || found {
 		t.Fatalf("corrupt LoadPrivacy() found/error = %v/%v", found, err)
+	}
+}
+
+func TestPrivacyRepositoriesRoundTripIndependentRoleRows(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t, context.Background(), testStateDir(t), "privacy-role-rows")
+	agentRepository := NewRolePrivacyRepository(database, domain.ModelRoleAgent)
+	reviewerRepository := NewRolePrivacyRepository(database, domain.ModelRoleApprovalReviewer)
+	now := func() time.Time { return time.UnixMilli(25_000).UTC() }
+	for _, fixture := range []struct {
+		role       domain.ModelRole
+		origin     string
+		repository *PrivacyRepository
+	}{
+		{role: domain.ModelRoleAgent, origin: "https://agent.example", repository: agentRepository},
+		{role: domain.ModelRoleApprovalReviewer, origin: "https://reviewer.example", repository: reviewerRepository},
+	} {
+		manager, err := application.NewPrivacyManager(application.PrivacyManagerConfig{
+			Store: fixture.repository, Role: fixture.role, Origin: fixture.origin, Now: now,
+		})
+		if err != nil {
+			t.Fatalf("NewPrivacyManager(%s) error = %v", fixture.role, err)
+		}
+		review, err := manager.Review(context.Background())
+		if err != nil {
+			t.Fatalf("Review(%s) error = %v", fixture.role, err)
+		}
+		if _, err := manager.Decide(context.Background(), application.PrivacyActionAccept, review.Revision, nil); err != nil {
+			t.Fatalf("Decide(%s) error = %v", fixture.role, err)
+		}
+	}
+	agentRecord, agentFound, err := agentRepository.LoadPrivacy(context.Background())
+	if err != nil || !agentFound || agentRecord.Role != domain.ModelRoleAgent {
+		t.Fatalf("agent LoadPrivacy() = %#v/%v/%v", agentRecord, agentFound, err)
+	}
+	reviewerRecord, reviewerFound, err := reviewerRepository.LoadPrivacy(context.Background())
+	if err != nil || !reviewerFound || reviewerRecord.Role != domain.ModelRoleApprovalReviewer ||
+		reviewerRecord.OriginHash == agentRecord.OriginHash {
+		t.Fatalf("reviewer LoadPrivacy() = %#v/%v/%v", reviewerRecord, reviewerFound, err)
+	}
+	if err := agentRepository.SavePrivacy(context.Background(), reviewerRecord); !errors.Is(err, application.ErrPrivacyRecord) {
+		t.Fatalf("agent repository accepted reviewer record: %v", err)
+	}
+	if err := reviewerRepository.SavePrivacy(context.Background(), agentRecord); !errors.Is(err, application.ErrPrivacyRecord) {
+		t.Fatalf("reviewer repository accepted agent record: %v", err)
+	}
+	var rows int
+	if err := database.handle.GetContext(context.Background(), &rows, `SELECT count(role) FROM privacy_consents`); err != nil || rows != 2 {
+		t.Fatalf("privacy role rows = %d/%v", rows, err)
 	}
 }

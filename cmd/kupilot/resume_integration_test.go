@@ -103,7 +103,7 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 	}
 }
 
-func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t *testing.T) {
+func TestResumeIntegrationSeparatesExplicitScopeActivationFromZeroIOAcceptance(t *testing.T) {
 	tests := []struct {
 		name                   string
 		initialContext         string
@@ -114,9 +114,6 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 		forbiddenNamespace     string
 		wantActions            []string
 		wantScopeFailure       application.UIQueryFailureCode
-		wantResourceFailure    application.UIQueryFailureCode
-		wantResourceResult     bool
-		wantSelected           bool
 		wantContextAfterward   string
 		wantNamespaceAfterward string
 	}{
@@ -124,44 +121,36 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			name: "same scope", initialContext: "saved-context", initialNamespace: "payments",
 			savedScope: domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"},
 			savedUID:   "deployment-uid", actualUID: "deployment-uid",
-			wantActions:        []string{"GET /apis/apps/v1/namespaces/payments/deployments/payment-api"},
-			wantResourceResult: true, wantSelected: true,
+			wantActions:          nil,
 			wantContextAfterward: "saved-context", wantNamespaceAfterward: "payments",
 		},
 		{
 			name: "different scope", initialContext: "current-context", initialNamespace: "default",
 			savedScope: domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"},
 			savedUID:   "deployment-uid", actualUID: "deployment-uid",
-			wantActions: []string{
-				"GET /api/v1/namespaces/payments",
-				"GET /apis/apps/v1/namespaces/payments/deployments/payment-api",
-			},
-			wantResourceResult: true, wantSelected: true,
+			wantActions:          []string{"GET /api/v1/namespaces/payments"},
 			wantContextAfterward: "saved-context", wantNamespaceAfterward: "payments",
 		},
 		{
 			name: "missing Context", initialContext: "current-context", initialNamespace: "default",
 			savedScope: domain.ScopeCandidate{Context: "missing-context", Namespace: "payments"},
 			savedUID:   "deployment-uid", actualUID: "deployment-uid",
-			wantScopeFailure:    application.UIQueryUnavailable,
-			wantResourceFailure: application.UIQueryUnavailable, wantResourceResult: true,
+			wantScopeFailure:     application.UIQueryUnavailable,
 			wantContextAfterward: "current-context", wantNamespaceAfterward: "default",
 		},
 		{
 			name: "forbidden Namespace", initialContext: "current-context", initialNamespace: "default",
 			savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "forbidden"},
 			savedUID:   "deployment-uid", actualUID: "deployment-uid", forbiddenNamespace: "forbidden",
-			wantActions:         []string{"GET /api/v1/namespaces/forbidden"},
-			wantScopeFailure:    application.UIQueryForbidden,
-			wantResourceFailure: application.UIQueryUnavailable, wantResourceResult: true,
+			wantActions:          []string{"GET /api/v1/namespaces/forbidden"},
+			wantScopeFailure:     application.UIQueryForbidden,
 			wantContextAfterward: "current-context", wantNamespaceAfterward: "default",
 		},
 		{
 			name: "Resource UID changed", initialContext: "current-context", initialNamespace: "default",
 			savedScope: domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
 			savedUID:   "deployment-uid", actualUID: "replacement-uid",
-			wantActions:         []string{"GET /apis/apps/v1/namespaces/default/deployments/payment-api"},
-			wantResourceFailure: application.UIQueryUnavailable, wantResourceResult: true,
+			wantActions:          nil,
 			wantContextAfterward: "current-context", wantNamespaceAfterward: "default",
 		},
 	}
@@ -198,6 +187,7 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			seedIntegrationResumeHistoryForScope(
 				t, ctx, sessions, messages, now, test.savedScope, test.savedUID,
 			)
+			seedIntegrationCompletedTurn(t, ctx, runs, now, test.savedScope)
 			service := sessionServiceForIntegration(sessions, messages, runs, database)
 
 			loader := kube.NewConfigLoader()
@@ -219,7 +209,7 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			}
 			defer scopeManager.Close()
 
-			runner := new(integrationRunner)
+			runner := &integrationRunner{now: func() time.Time { return now }}
 			identifiers, err := application.NewIdentifierGenerator(func() time.Time { return now })
 			if err != nil {
 				t.Fatalf("application.NewIdentifierGenerator() error = %v", err)
@@ -230,9 +220,17 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			if err != nil {
 				t.Fatalf("application.NewPrivacyManager() error = %v", err)
 			}
+			privacyReview, err := privacyManager.Review(ctx)
+			if err != nil {
+				t.Fatalf("Privacy Review() error = %v", err)
+			}
+			if _, err := privacyManager.Decide(ctx, application.PrivacyActionAccept, privacyReview.Revision, nil); err != nil {
+				t.Fatalf("Privacy Decide() error = %v", err)
+			}
 			coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 				Sessions: sessions, Runs: runs, Tools: tools, Audits: audits, Scope: scopeManager,
-				Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
+				ModelContext: messages,
+				Runner:       runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 				Questions: security.NewRedactor(), Privacy: privacyManager, UIEvents: integrationUIEvents{},
 				Observer: application.RunObserverFunc(func(context.Context, application.RunObservation) {}),
 				Now:      func() time.Time { return now },
@@ -281,28 +279,70 @@ func TestResumeIntegrationUsesTemporaryDatabaseAndRevalidatesOnlyAcceptedScope(t
 			}
 
 			savedScope := *resumeResult.Session.SavedScope
-			outcome, err := coordinator.ExecuteUICommand(ctx, application.UICommand{
-				Kind: application.UICommandAcceptResume, RequestID: resumeRequest.RequestID,
+			activation, err := coordinator.ExecuteUICommand(ctx, application.UICommand{
+				Kind: application.UICommandActivateScope, RequestID: resumeRequest.RequestID,
 				ExpectedScopeGeneration: scopeManager.View().Generation, Scope: &savedScope,
 			})
-			if err != nil || outcome.Validate() != nil || outcome.Resumed == nil || outcome.Scope == nil ||
-				outcome.Scope.Failure != test.wantScopeFailure || (outcome.Resource != nil) != test.wantResourceResult {
-				t.Fatalf("resume acceptance = %#v, %v", outcome, err)
+			if err != nil || activation.Validate() != nil || activation.Scope == nil ||
+				activation.Scope.Failure != test.wantScopeFailure {
+				t.Fatalf("explicit scope activation = %#v, %v", activation, err)
 			}
-			if outcome.Resource != nil && outcome.Resource.Failure != test.wantResourceFailure {
-				t.Fatalf("Resource revalidation = %#v, want failure %q", outcome.Resource, test.wantResourceFailure)
+			if actions := recorder.snapshot(); !reflect.DeepEqual(actions, test.wantActions) || runner.calls.Load() != 0 {
+				t.Fatalf("scope activation actions = %#v, model calls = %d", actions, runner.calls.Load())
 			}
-			actions := recorder.snapshot()
-			if !reflect.DeepEqual(actions, test.wantActions) || runner.calls.Load() != 0 {
-				t.Fatalf("accepted actions = %#v, model calls = %d", actions, runner.calls.Load())
+			recorder.reset()
+			if test.wantScopeFailure != "" {
+				cancelled, cancelErr := coordinator.ExecuteUICommand(ctx, application.UICommand{
+					Kind: application.UICommandCancelResume, RequestID: resumeRequest.RequestID,
+				})
+				if cancelErr != nil || cancelled.Validate() != nil || cancelled.Resumed != nil || cancelled.Session != nil {
+					t.Fatalf("resume cancellation = %#v, %v", cancelled, cancelErr)
+				}
+			} else {
+				outcome, acceptErr := coordinator.ExecuteUICommand(ctx, application.UICommand{
+					Kind: application.UICommandAcceptResume, RequestID: resumeRequest.RequestID,
+					ExpectedScopeGeneration: scopeManager.View().Generation,
+				})
+				if acceptErr != nil || outcome.Validate() != nil || outcome.Resumed == nil || outcome.Scope == nil ||
+					outcome.Scope.Failure != "" || outcome.Resource != nil {
+					t.Fatalf("resume acceptance = %#v, %v", outcome, acceptErr)
+				}
+			}
+			if actions := recorder.snapshot(); len(actions) != 0 || runner.calls.Load() != 0 {
+				t.Fatalf("resume decision actions = %#v, model calls = %d", actions, runner.calls.Load())
 			}
 			view := scopeManager.View()
 			if view.Scope == nil || view.Scope.Context != test.wantContextAfterward || view.Scope.Namespace != test.wantNamespaceAfterward {
 				t.Fatalf("final scope = %#v", view)
 			}
 			selected, err := scopeManager.SelectedResource(*view.Scope)
-			if err != nil || (selected != nil) != test.wantSelected || test.wantSelected && selected.UID != test.actualUID {
+			if err != nil || selected != nil {
 				t.Fatalf("selected ResourceRef = %#v, %v", selected, err)
+			}
+			if test.wantScopeFailure == "" {
+				runID, startErr := coordinator.StartRun(ctx, application.StartRunCommand{
+					SessionID: integrationSessionID, Question: "Use the resumed safe conversation context.",
+				})
+				if startErr != nil {
+					t.Fatalf("resumed StartRun() error = %v", startErr)
+				}
+				if _, waitErr := coordinator.WaitRun(ctx, runID); waitErr != nil {
+					t.Fatalf("resumed WaitRun() error = %v", waitErr)
+				}
+				inputs := runner.Inputs()
+				if len(inputs) != 1 {
+					t.Fatalf("resumed Agent inputs = %d", len(inputs))
+				}
+				turns := inputs[0].Conversation().Turns()
+				if len(turns) != 2 || turns[0].Role != domain.MessageRoleUser || turns[0].Content != "Durable prior question." ||
+					turns[1].Role != domain.MessageRoleAssistant || turns[1].Content != "Durable prior final answer." {
+					t.Fatalf("resumed model context = %#v", turns)
+				}
+				for _, turn := range turns {
+					if turn.Content == "Historic diagnosis content." {
+						t.Fatal("unpaired render history entered model context")
+					}
+				}
 			}
 		})
 	}
@@ -425,6 +465,48 @@ func seedIntegrationResumeHistoryForScope(
 	}
 }
 
+func seedIntegrationCompletedTurn(
+	t *testing.T,
+	ctx context.Context,
+	runs *sqlite.AgentRunRepository,
+	now time.Time,
+	scopeCandidate domain.ScopeCandidate,
+) {
+	t.Helper()
+	runID := domain.AgentRunID("0198a46e-7d2a-7d34-9b6f-2df5f45a2c01")
+	requestID := domain.MessageID("0198a46e-7d2a-7d34-9b6f-2df5f45a2c02")
+	answerID := domain.MessageID("0198a46e-7d2a-7d34-9b6f-2df5f45a2c03")
+	startedAt := now.Add(time.Millisecond)
+	finishedAt := startedAt.Add(time.Millisecond)
+	scope := domain.ScopeSnapshot{Context: scopeCandidate.Context, Namespace: scopeCandidate.Namespace, Generation: 4}
+	question := "Durable prior question."
+	request := domain.Message{
+		ID: requestID, SessionID: integrationSessionID, RunID: &runID,
+		Role: domain.MessageRoleUser, Content: question, Format: domain.MessageFormatPlain,
+		Status: domain.MessageStatusCommitted, Scope: &scope, Hash: domain.MessageContentHash(question), CreatedAt: startedAt,
+	}
+	running := domain.AgentRun{
+		ID: runID, SessionID: integrationSessionID, RequestMessageID: requestID,
+		Status: domain.AgentRunStatusRunning, Scope: scope,
+		PromptVersion: agent.SystemPromptVersion, ToolCatalogVersion: agent.ToolCatalogVersion, StartedAt: &startedAt,
+	}
+	if err := runs.Begin(ctx, request, running); err != nil {
+		t.Fatalf("seed AgentRun Begin() error = %v", err)
+	}
+	terminal := running
+	terminal.Status = domain.AgentRunStatusCompleted
+	terminal.FinishedAt = &finishedAt
+	answer := "Durable prior final answer."
+	assistant := domain.Message{
+		ID: answerID, SessionID: integrationSessionID, RunID: &runID,
+		Role: domain.MessageRoleAssistant, Content: answer, Format: domain.MessageFormatMarkdown,
+		Status: domain.MessageStatusCommitted, Scope: &scope, Hash: domain.MessageContentHash(answer), CreatedAt: finishedAt,
+	}
+	if err := runs.FinishWithMessage(ctx, assistant, terminal); err != nil {
+		t.Fatalf("seed AgentRun FinishWithMessage() error = %v", err)
+	}
+}
+
 func sessionServiceForIntegration(
 	sessions *sqlite.SessionRepository,
 	messages *sqlite.MessageRepository,
@@ -437,11 +519,42 @@ func sessionServiceForIntegration(
 	}
 }
 
-type integrationRunner struct{ calls atomic.Int64 }
+type integrationRunner struct {
+	calls  atomic.Int64
+	mu     sync.Mutex
+	inputs []agent.RunInput
+	now    func() time.Time
+}
 
-func (runner *integrationRunner) Run(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
+func (runner *integrationRunner) Run(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
 	runner.calls.Add(1)
-	return agent.RunOutcome{}
+	runner.mu.Lock()
+	runner.inputs = append(runner.inputs, input)
+	runner.mu.Unlock()
+	publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, runner.now, sink)
+	if err != nil {
+		return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+	}
+	if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil {
+		return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+	}
+	diagnosis := domain.Diagnosis{
+		ID: "0198a46e-7d2a-7d34-9b6f-2df5f45a2d01", RunID: input.RunID(), Scope: input.Scope().Snapshot(),
+		AnswerMarkdown: "The resumed context was observed by the scripted Agent.", CreatedAt: runner.now(),
+	}
+	if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventDiagnosisReady, Diagnosis: &diagnosis}); err != nil {
+		return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+	}
+	if _, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunCompleted}); err != nil {
+		return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+	}
+	return agent.RunOutcome{Status: domain.AgentRunStatusCompleted, Diagnosis: &diagnosis}
+}
+
+func (runner *integrationRunner) Inputs() []agent.RunInput {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	return append([]agent.RunInput(nil), runner.inputs...)
 }
 
 type integrationUIEvents struct{}

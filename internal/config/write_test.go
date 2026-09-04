@@ -20,7 +20,7 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	}
 	defer secret.Destroy()
 	base := Defaults()
-	base.Model.ReasoningEffort = ModelReasoningEffortNone
+	base.Models.Agent.ReasoningEffort = ModelReasoningEffortNone
 	base.Logging.SensitiveDiagnostics = true
 	if err := SaveModelProfile(context.Background(), paths, base, ModelProfile{
 		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
@@ -35,11 +35,11 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	defer loaded.Credential.Destroy()
-	if loaded.Model.Endpoint != "https://model.example.test/v1" || loaded.Model.Model != "diagnostic-model" ||
-		loaded.Model.ReasoningEffort != ModelReasoningEffortNone || loaded.CredentialSource != CredentialSourceFile ||
-		!loaded.Credential.IsSet() || !loaded.Logging.SensitiveDiagnostics {
-		t.Fatalf("loaded model profile = %#v source=%q credential=%v", loaded.Model, loaded.CredentialSource, loaded.Credential.IsSet())
+	defer loaded.Credentials.Destroy()
+	if loaded.Models.Agent.Endpoint != "https://model.example.test/v1" || loaded.Models.Agent.Model != "diagnostic-model" ||
+		loaded.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || loaded.Credentials.Agent.Source != CredentialSourceFile ||
+		!loaded.Credentials.Agent.Value.IsSet() || !loaded.Logging.SensitiveDiagnostics {
+		t.Fatalf("loaded model profile = %#v source=%q credential=%v", loaded.Models.Agent, loaded.Credentials.Agent.Source, loaded.Credentials.Agent.Value.IsSet())
 	}
 	encoded, err := json.Marshal(loaded.Config)
 	if err != nil {
@@ -71,10 +71,48 @@ func TestLoadEnvironmentCredentialOverridesFileAndIsUnsetOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	defer loaded.Credential.Destroy()
-	if loaded.Model.Endpoint != "https://environment.example.test/v1" || loaded.Model.Model != "environment-model" ||
-		loaded.CredentialSource != CredentialSourceEnvironment || unsetCalls != 1 {
-		t.Fatalf("environment precedence = %#v source=%q unset=%d", loaded.Model, loaded.CredentialSource, unsetCalls)
+	defer loaded.Credentials.Destroy()
+	if loaded.Models.Agent.Endpoint != "https://environment.example.test/v1" || loaded.Models.Agent.Model != "environment-model" ||
+		loaded.Credentials.Agent.Source != CredentialSourceEnvironment || unsetCalls != 1 {
+		t.Fatalf("environment precedence = %#v source=%q unset=%d", loaded.Models.Agent, loaded.Credentials.Agent.Source, unsetCalls)
+	}
+}
+
+func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "home")
+	paths := pathsForHome(root)
+	base := Defaults()
+	reviewer := defaultReviewerProfile()
+	reviewer.Endpoint = "https://reviewer.example.test/v1"
+	reviewer.Model = "reviewer-model"
+	base.Models.ApprovalReviewer = &reviewer
+	agentKey, _ := NewSecretValue("saved-agent-key-generated")
+	reviewerKey, _ := NewSecretValue("saved-reviewer-key-generated")
+	defer agentKey.Destroy()
+	defer reviewerKey.Destroy()
+	if err := SaveModelProfiles(context.Background(), paths, base, ModelProfile{
+		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+	}, &agentKey, &reviewerKey); err != nil {
+		t.Fatalf("SaveModelProfiles() error = %v", err)
+	}
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.SourceVersion != CurrentVersion || loaded.Credentials.Agent.Source != CredentialSourceFile ||
+		loaded.Credentials.ApprovalReviewer == nil || loaded.Credentials.ApprovalReviewer.Source != CredentialSourceFile ||
+		loaded.Models.ApprovalReviewer == nil || loaded.Models.ApprovalReviewer.Role != ModelRoleApprovalReviewer {
+		t.Fatalf("saved role profiles = %#v credentials=%#v", loaded.Models, loaded.Credentials)
+	}
+	content, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "version: 2") || !strings.Contains(string(content), "approval_reviewer:") ||
+		strings.Contains(string(content), "\nmodel:\n") {
+		t.Fatalf("saved schema is not version 2: %s", content)
 	}
 }
 

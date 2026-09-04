@@ -328,12 +328,35 @@ func testUIApprovalRequest(t *testing.T, requestedAt time.Time, sequence int64) 
 		t.Fatalf("NewApprovalNonce() error = %v", err)
 	}
 	intent := domain.OperationIntent{
-		Operation:      domain.ApprovalOperationRestartDeployment,
-		Scope:          domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
-		DeploymentName: "sample-deployment", DeploymentUID: "sample-deployment-uid",
-		TemplateFingerprint: strings.Repeat("a", 64), DeploymentGeneration: 8,
-		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion,
-		ReasonSummary: "Restart after the bounded diagnosis.",
+		Operation:              domain.ActionOperationRestartDeployment,
+		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
+		PolicyVersion:          domain.ActionPolicyVersion,
+		PermissionProfile:      domain.PermissionProfileAsk,
+		Risk:                   domain.RiskReview,
+		Effect:                 domain.CapabilityEffectClusterMutation,
+		PolicyGeneration:       1,
+		Scope:                  domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
+		NamespaceAccess:        domain.NamespaceAccessCurrent,
+		Target: domain.ActionTarget{
+			Resource: domain.ResourceRef{
+				APIVersion:      domain.RestartDeploymentTargetAPIVersion,
+				Kind:            domain.RestartDeploymentTargetKind,
+				Namespace:       "test-namespace",
+				Name:            "sample-deployment",
+				UID:             "sample-deployment-uid",
+				ResourceVersion: "sample-deployment-resource-version",
+			},
+			Fingerprint: strings.Repeat("a", 64),
+			Generation:  8,
+		},
+		Parameters:         domain.ActionParameters{Kind: domain.ActionParametersNone},
+		DataCategories:     domain.ActionDataResourceMetadata,
+		AllowedSinks:       domain.ActionSinkTerminal | domain.ActionSinkKubernetesAPI,
+		NetworkEffects:     domain.ActionNetworkKubernetesAPI,
+		Limits:             domain.ActionLimits{Timeout: domain.RestartDeploymentActionTimeout, MaximumItems: 1},
+		VerificationPlanID: domain.RestartDeploymentVerificationPlanID,
+		ReasonSummary:      "Restart after the bounded diagnosis.",
+		RiskSummary:        domain.RestartDeploymentRiskSummary,
 	}
 	domainRequest := domain.ApprovalRequest{
 		ID: "00000000-0000-7000-8000-000000008401", RunID: testRunID,
@@ -347,14 +370,16 @@ func testUIApprovalRequest(t *testing.T, requestedAt time.Time, sequence int64) 
 	}
 	return application.UIApprovalRequest{
 		RequestID: domainRequest.ID, RunID: domainRequest.RunID, SessionID: domainRequest.SessionID,
-		Sequence: sequence, Operation: intent.Operation, Scope: intent.Scope,
-		Target: domain.ResourceRef{
-			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
-			Namespace: intent.Scope.Namespace, Name: intent.DeploymentName, UID: intent.DeploymentUID,
-		},
-		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
-		ReasonSummary: intent.ReasonSummary, RiskSummary: domain.RestartDeploymentRiskSummary,
-		CurrentSummary:  "Deployment generation 8 with Pod template fingerprint " + intent.TemplateFingerprint + ".",
+		Sequence: sequence, Operation: intent.Operation, OperationSchema: intent.OperationSchemaVersion,
+		PolicyVersion: intent.PolicyVersion, PermissionProfile: intent.PermissionProfile,
+		PolicyGeneration: intent.PolicyGeneration, Risk: intent.Risk, Effect: intent.Effect,
+		Scope: intent.Scope, NamespaceAccess: intent.NamespaceAccess, Target: intent.Target.Resource,
+		TemplateFingerprint: intent.Target.Fingerprint, DeploymentGeneration: intent.Target.Generation,
+		Parameters: intent.Parameters, DataCategories: intent.DataCategories,
+		AllowedSinks: intent.AllowedSinks, NetworkEffects: intent.NetworkEffects,
+		Limits: intent.Limits, VerificationPlanID: intent.VerificationPlanID,
+		ReasonSummary: intent.ReasonSummary, RiskSummary: intent.RiskSummary,
+		CurrentSummary:  "Deployment generation 8 with Pod template fingerprint " + intent.Target.Fingerprint + ".",
 		ProposedSummary: "Update only the Kupilot-owned restart annotation to create a new Pod template revision.",
 		Digest:          domainRequest.Digest, Nonce: nonce, RequestedAt: requestedAt, ExpiresAt: domainRequest.ExpiresAt,
 	}

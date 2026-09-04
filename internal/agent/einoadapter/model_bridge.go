@@ -43,10 +43,27 @@ func (model *guardedChatModel) Generate(ctx context.Context, input []*schema.Mes
 }
 
 func (model *guardedChatModel) Stream(ctx context.Context, input []*schema.Message, options ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
-	if model == nil || model.state == nil || model.model == nil || ctx == nil || len(options) != 0 {
+	if model == nil || model.state == nil || ctx == nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	message, err := model.state.callModel(ctx, model.model, input)
+	bound := model.model
+	if bound == nil {
+		parsed := einomodel.GetCommonOptions(&einomodel.Options{}, options...)
+		if len(options) == 0 || parsed.Temperature != nil || parsed.Model != nil || parsed.TopP != nil ||
+			parsed.MaxTokens != nil || len(parsed.Stop) != 0 || parsed.ToolChoice != nil ||
+			len(parsed.AllowedToolNames) != 0 || len(parsed.DeferredTools) != 0 || parsed.ToolSearchTool != nil ||
+			parsed.AgenticToolChoice != nil || validateBoundToolInfos(parsed.Tools) != nil {
+			return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+		}
+		var err error
+		bound, err = model.state.client.withTools(parsed.Tools)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(options) != 0 {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	message, err := model.state.callModel(ctx, bound, input)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +92,8 @@ func (state *runState) callModel(
 	if err != nil {
 		return nil, err
 	}
-	if err := state.validateConversation(messages); err != nil {
+	safeMessages := stripRunnerMessageMetadata(messages)
+	if err := state.validateConversation(safeMessages); err != nil {
 		return nil, err
 	}
 	if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID}); err != nil {
@@ -91,7 +109,7 @@ func (state *runState) callModel(
 		cancel()
 		return nil, err
 	}
-	message, modelError := state.client.stream(modelCtx, requestID, model, messages, preview.accept)
+	message, modelError := state.client.streamBounded(modelCtx, requestID, model, safeMessages, reservation, preview.accept)
 	var finishError error
 	if modelError == nil && preview.failure == nil && message != nil && message.ResponseMeta != nil &&
 		message.ResponseMeta.FinishReason == "stop" {
@@ -115,6 +133,16 @@ func (state *runState) callModel(
 		return nil, runtimeFailureFromModel(modelError)
 	}
 	return state.acceptModelMessage(ctx, message)
+}
+
+func stripRunnerMessageMetadata(messages []*schema.Message) []*schema.Message {
+	result := cloneEinoMessages(messages)
+	for _, message := range result {
+		if message != nil {
+			message.Extra = nil
+		}
+	}
+	return result
 }
 
 func (state *runState) acceptModelMessage(ctx context.Context, message *schema.Message) (*schema.Message, error) {

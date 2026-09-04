@@ -2,9 +2,9 @@
 
 These terms are canonical public product language.
 
-The checked-in implementation remains the `v0.4` baseline. Terms marked as
-`v0.5` targets describe the Accepted next implementation contract, not current
-reachability.
+The checked-in implementation includes the named-model and safe Session-context
+runtime slice. Other terms marked as `v0.5` targets describe the Accepted
+implementation contract, not current reachability.
 
 ## AgentRun
 

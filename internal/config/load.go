@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -25,8 +24,24 @@ type LoadOptions struct {
 	Unsetenv  func(string) error
 }
 
-// Load applies defaults, a strict YAML file, admitted environment variables,
-// and typed CLI overrides in increasing precedence order.
+type extractedCredentials struct {
+	agent         SecretValue
+	agentFound    bool
+	reviewer      SecretValue
+	reviewerFound bool
+}
+
+func (credentials *extractedCredentials) destroy() {
+	if credentials == nil {
+		return
+	}
+	credentials.agent.Destroy()
+	credentials.reviewer.Destroy()
+}
+
+// Load applies defaults, a strict versioned YAML file, admitted environment
+// variables, and typed CLI overrides in increasing precedence order. A v1
+// document is migrated in memory and is never rewritten by loading.
 func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
@@ -35,6 +50,31 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
+	agentEnvironment := &EnvironmentSecretSource{
+		LookupEnv: lookup, Unsetenv: options.Unsetenv,
+		Variables: []string{AgentAPIKeyEnvironmentVariable, ModelAPIKeyEnvironmentVariable},
+	}
+	reviewerEnvironment := &EnvironmentSecretSource{
+		LookupEnv: lookup, Unsetenv: options.Unsetenv,
+		Variables: []string{ApprovalReviewerAPIKeyEnvironmentVariable},
+	}
+	agentEnvironmentCredential, agentEnvironmentFound, agentEnvironmentErr := agentEnvironment.ReadOptional()
+	reviewerEnvironmentCredential, reviewerEnvironmentFound, reviewerEnvironmentErr := reviewerEnvironment.ReadOptional()
+	if agentEnvironmentErr != nil || reviewerEnvironmentErr != nil {
+		agentEnvironmentCredential.Destroy()
+		reviewerEnvironmentCredential.Destroy()
+		if agentEnvironmentErr != nil {
+			return Loaded{}, agentEnvironmentErr
+		}
+		return Loaded{}, reviewerEnvironmentErr
+	}
+	environmentCredentialsTransferred := false
+	defer func() {
+		if !environmentCredentialsTransferred {
+			agentEnvironmentCredential.Destroy()
+			reviewerEnvironmentCredential.Destroy()
+		}
+	}()
 
 	configFile := options.Paths.ConfigFile
 	explicitFile := false
@@ -50,154 +90,481 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_file_path_invalid", "load_configuration", "The configuration file path must be absolute and normalized.")
 	}
 
-	instance := viper.New()
-	instance.SetConfigType("yaml")
-	setDefaults(instance)
 	content, found, permissionsWider, err := readConfigFile(ctx, configFile, explicitFile)
 	if err != nil {
 		return Loaded{}, err
 	}
-	var fileCredential SecretValue
+	config := Defaults()
+	sourceVersion := CurrentVersion
+	var fileCredentials extractedCredentials
 	if found {
 		var sanitized []byte
-		sanitized, fileCredential, _, err = extractSensitiveConfig(content)
+		sanitized, fileCredentials, sourceVersion, err = extractSensitiveConfig(content)
 		zeroBytes(content)
 		content = nil
 		if err != nil {
 			return Loaded{}, err
 		}
-		if err := validateStrictYAML(sanitized); err != nil {
-			fileCredential.Destroy()
+		config, err = decodeConfigDocument(sanitized, sourceVersion)
+		zeroBytes(sanitized)
+		if err != nil {
+			fileCredentials.destroy()
 			return Loaded{}, err
-		}
-		if err := instance.ReadConfig(bytes.NewReader(sanitized)); err != nil {
-			fileCredential.Destroy()
-			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must be valid YAML and match the documented schema exactly.")
 		}
 	}
 
-	if err := applyEnvironment(instance, lookup); err != nil {
-		fileCredential.Destroy()
+	if err := applyEnvironment(&config, lookup); err != nil {
+		fileCredentials.destroy()
 		return Loaded{}, err
 	}
-	applyOverrides(instance, options.Overrides)
-	config := Defaults()
-	if err := instance.UnmarshalExact(&config); err != nil {
-		fileCredential.Destroy()
-		return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must match the documented types and schema exactly.")
-	}
+	applyOverrides(&config, options.Overrides)
 	if err := Validate(&config); err != nil {
-		fileCredential.Destroy()
+		fileCredentials.destroy()
 		return Loaded{}, err
 	}
-	environmentSource := &EnvironmentSecretSource{LookupEnv: lookup, Unsetenv: options.Unsetenv}
-	environmentCredential, environmentFound, err := environmentSource.ReadOptional()
-	if err != nil {
-		fileCredential.Destroy()
-		return Loaded{}, err
+
+	agentCredential := fileCredentials.agent
+	agentSource := CredentialSourceNone
+	if fileCredentials.agentFound {
+		agentSource = CredentialSourceFile
 	}
-	credential := fileCredential
-	credentialSource := CredentialSourceNone
-	if credential.IsSet() {
-		credentialSource = CredentialSourceFile
+	if agentEnvironmentFound {
+		fileCredentials.agent.Destroy()
+		agentCredential = agentEnvironmentCredential
+		agentSource = CredentialSourceEnvironment
 	}
-	if environmentFound {
-		fileCredential.Destroy()
-		credential = environmentCredential
-		credentialSource = CredentialSourceEnvironment
+	credentials := ModelCredentials{Agent: ProfileCredential{
+		Role: ModelRoleAgent, Reference: ModelCredentialAgent, Source: agentSource, Value: agentCredential,
+	}}
+
+	if config.Models.ApprovalReviewer == nil {
+		fileCredentials.reviewer.Destroy()
+		reviewerEnvironmentCredential.Destroy()
+		if fileCredentials.reviewerFound || reviewerEnvironmentFound {
+			credentials.Destroy()
+			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_reviewer_credential_unbound", "load_configuration", "An approval_reviewer API key requires an approval_reviewer model profile.")
+		}
+	} else {
+		reviewerProfile := config.Models.ApprovalReviewer
+		reviewerCredential := ProfileCredential{
+			Role: ModelRoleApprovalReviewer, Reference: reviewerProfile.CredentialReference,
+		}
+		switch reviewerProfile.CredentialReference {
+		case ModelCredentialAgent:
+			fileCredentials.reviewer.Destroy()
+			reviewerEnvironmentCredential.Destroy()
+			if fileCredentials.reviewerFound || reviewerEnvironmentFound {
+				credentials.Destroy()
+				return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_reviewer_credential_conflict", "load_configuration", "A reviewer that references the agent credential must not define another reviewer API key.")
+			}
+			if credentials.Agent.Value.IsSet() {
+				clone, cloneErr := credentials.Agent.Value.Clone()
+				if cloneErr != nil {
+					credentials.Destroy()
+					return Loaded{}, cloneErr
+				}
+				reviewerCredential.Value = clone
+				reviewerCredential.Source = CredentialSourceInherited
+			}
+		case ModelCredentialApprovalReviewer:
+			reviewerCredential.Value = fileCredentials.reviewer
+			if fileCredentials.reviewerFound {
+				reviewerCredential.Source = CredentialSourceFile
+			}
+			if reviewerEnvironmentFound {
+				fileCredentials.reviewer.Destroy()
+				reviewerCredential.Value = reviewerEnvironmentCredential
+				reviewerCredential.Source = CredentialSourceEnvironment
+			}
+		default:
+			credentials.Destroy()
+			fileCredentials.reviewer.Destroy()
+			reviewerEnvironmentCredential.Destroy()
+			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "load_configuration", "The reviewer credential reference is invalid.")
+		}
+		credentials.ApprovalReviewer = &reviewerCredential
 	}
+
 	if err := ctx.Err(); err != nil {
-		credential.Destroy()
+		credentials.Destroy()
 		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
 	}
-	warnings := make([]string, 0, 2)
+	warnings := make([]string, 0, 4)
+	if sourceVersion == LegacyVersion {
+		warnings = append(warnings, "Configuration schema version 1 was loaded in compatibility mode and was not rewritten; a future explicit save writes version 2.")
+	}
 	if options.Paths.HomePermissionsWider {
 		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; Kupilot will respect the existing user-managed permissions.")
 	}
 	if permissionsWider {
-		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain a plaintext model API key.")
+		warnings = append(warnings, "The selected configuration file is accessible beyond its owner; it may contain plaintext model API keys.")
 	}
 	if config.Logging.SensitiveDiagnostics {
 		warnings = append(warnings, "Sensitive model diagnostics are enabled; local logs may contain endpoint details, provider error content, and source paths.")
 	}
+	environmentCredentialsTransferred = true
 	return Loaded{
-		Config: config, Paths: options.Paths, Credential: credential,
-		CredentialSource: credentialSource, Warnings: warnings,
+		Config: config, Paths: options.Paths, SourceVersion: sourceVersion,
+		Credentials: credentials, Warnings: warnings,
 	}, nil
 }
 
-// extractSensitiveConfig removes the sole admitted credential field before
-// strict decoding or Viper sees the document.
-func extractSensitiveConfig(content []byte) ([]byte, SecretValue, bool, error) {
+type configV1Document struct {
+	Version    int               `yaml:"version"`
+	Context    string            `yaml:"context,omitempty"`
+	Namespace  string            `yaml:"namespace,omitempty"`
+	NoColor    bool              `yaml:"no_color"`
+	Runtime    RuntimeConfig     `yaml:"runtime"`
+	Model      legacyModelConfig `yaml:"model"`
+	Kubernetes KubernetesConfig  `yaml:"kubernetes"`
+	Logging    LoggingConfig     `yaml:"logging"`
+}
+
+type legacyModelConfig struct {
+	ProviderKind          string  `yaml:"provider_kind"`
+	Endpoint              string  `yaml:"endpoint,omitempty"`
+	Model                 string  `yaml:"model,omitempty"`
+	ReasoningEffort       string  `yaml:"reasoning_effort,omitempty"`
+	Temperature           float64 `yaml:"temperature"`
+	MaxOutputTokens       int     `yaml:"max_output_tokens"`
+	RequestTimeoutSeconds int     `yaml:"request_timeout_seconds"`
+	Streaming             bool    `yaml:"streaming"`
+	ToolCallingRequired   bool    `yaml:"tool_calling_required"`
+}
+
+type configV2Document struct {
+	Version    int                 `yaml:"version"`
+	Context    *string             `yaml:"context,omitempty"`
+	Namespace  *string             `yaml:"namespace,omitempty"`
+	NoColor    *bool               `yaml:"no_color,omitempty"`
+	Runtime    *runtimeDocument    `yaml:"runtime,omitempty"`
+	Models     *modelsDocument     `yaml:"models"`
+	Kubernetes *kubernetesDocument `yaml:"kubernetes,omitempty"`
+	Logging    *loggingDocument    `yaml:"logging,omitempty"`
+}
+
+type runtimeDocument struct {
+	BudgetProfile *string `yaml:"budget_profile"`
+}
+
+type modelsDocument struct {
+	Agent            *modelProfileDocument `yaml:"agent"`
+	ApprovalReviewer *modelProfileDocument `yaml:"approval_reviewer,omitempty"`
+}
+
+type modelProfileDocument struct {
+	Name                  *string                   `yaml:"name"`
+	Role                  *ModelRole                `yaml:"role"`
+	InheritAgent          *bool                     `yaml:"inherit_agent,omitempty"`
+	CredentialReference   *ModelCredentialReference `yaml:"credential_ref"`
+	ProviderKind          *string                   `yaml:"provider_kind,omitempty"`
+	Endpoint              *string                   `yaml:"endpoint,omitempty"`
+	Model                 *string                   `yaml:"model,omitempty"`
+	ReasoningEffort       *string                   `yaml:"reasoning_effort,omitempty"`
+	Temperature           *float64                  `yaml:"temperature,omitempty"`
+	MaxOutputTokens       *int                      `yaml:"max_output_tokens,omitempty"`
+	RequestTimeoutSeconds *int                      `yaml:"request_timeout_seconds,omitempty"`
+	Streaming             *bool                     `yaml:"streaming,omitempty"`
+	ToolCallingRequired   *bool                     `yaml:"tool_calling_required,omitempty"`
+}
+
+type kubernetesDocument struct {
+	ExecCredentials *string `yaml:"exec_credentials,omitempty"`
+	NamespaceAccess *string `yaml:"namespace_access,omitempty"`
+}
+
+type loggingDocument struct {
+	Enabled              *bool   `yaml:"enabled,omitempty"`
+	Level                *string `yaml:"level,omitempty"`
+	SensitiveDiagnostics *bool   `yaml:"sensitive_diagnostics,omitempty"`
+}
+
+func decodeConfigDocument(content []byte, version int) (Config, error) {
+	switch version {
+	case LegacyVersion:
+		defaults := Defaults()
+		document := configV1Document{
+			Version: LegacyVersion, Namespace: defaults.Namespace, Runtime: defaults.Runtime,
+			Model: legacyModelConfig{
+				ProviderKind: defaults.Models.Agent.ProviderKind,
+				Temperature:  defaults.Models.Agent.Temperature, MaxOutputTokens: LegacyDefaultMaxModelOutputTokens,
+				RequestTimeoutSeconds: defaults.Models.Agent.RequestTimeoutSeconds,
+				Streaming:             defaults.Models.Agent.Streaming, ToolCallingRequired: defaults.Models.Agent.ToolCallingRequired,
+			},
+			Kubernetes: defaults.Kubernetes, Logging: defaults.Logging,
+		}
+		if err := decodeStrictDocument(content, &document); err != nil {
+			return Config{}, err
+		}
+		config := Config{
+			Version: CurrentVersion, Context: document.Context, Namespace: document.Namespace, NoColor: document.NoColor,
+			Runtime: document.Runtime,
+			Models: ModelProfilesConfig{Agent: ModelProfileConfig{
+				Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
+				ProviderKind: document.Model.ProviderKind, Endpoint: document.Model.Endpoint, Model: document.Model.Model,
+				ReasoningEffort: document.Model.ReasoningEffort, Temperature: document.Model.Temperature,
+				MaxOutputTokens: document.Model.MaxOutputTokens, RequestTimeoutSeconds: document.Model.RequestTimeoutSeconds,
+				Streaming: document.Model.Streaming, ToolCallingRequired: document.Model.ToolCallingRequired,
+			}},
+			Kubernetes: document.Kubernetes, Logging: document.Logging,
+		}
+		return config, nil
+	case CurrentVersion:
+		var document configV2Document
+		if err := decodeStrictDocument(content, &document); err != nil {
+			return Config{}, err
+		}
+		if document.Version != CurrentVersion || document.Models == nil || document.Models.Agent == nil ||
+			!document.Models.Agent.complete(false) ||
+			(*document.Models.Agent.Endpoint == "") != (*document.Models.Agent.Model == "") {
+			return Config{}, schemaError("Configuration version 2 requires one complete models.agent profile.")
+		}
+		config := Defaults()
+		applyRootDocument(&config, document)
+		config.Models.Agent = applyProfileDocument(defaultAgentProfile(), document.Models.Agent)
+		if reviewer := document.Models.ApprovalReviewer; reviewer != nil {
+			if reviewer.Name == nil || reviewer.Role == nil || reviewer.InheritAgent == nil || reviewer.CredentialReference == nil {
+				return Config{}, schemaError("The approval_reviewer profile must explicitly name its role, inheritance choice, and credential reference.")
+			}
+			if !*reviewer.InheritAgent && !reviewer.complete(true) {
+				return Config{}, schemaError("A non-inheriting approval_reviewer profile must provide every model setting.")
+			}
+			base := defaultReviewerProfile()
+			if *reviewer.InheritAgent {
+				base = config.Models.Agent
+				base.Role = ModelRoleApprovalReviewer
+				base.Streaming = false
+				base.ToolCallingRequired = false
+			}
+			resolved := applyProfileDocument(base, reviewer)
+			config.Models.ApprovalReviewer = &resolved
+		}
+		return config, nil
+	default:
+		return Config{}, newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "decode_configuration", "Configuration version is unsupported; use version 2 or migrate a version 1 file.")
+	}
+}
+
+func (profile *modelProfileDocument) complete(requireInheritance bool) bool {
+	return profile != nil && profile.Name != nil && profile.Role != nil && profile.CredentialReference != nil &&
+		(!requireInheritance || profile.InheritAgent != nil) && profile.ProviderKind != nil && profile.Endpoint != nil &&
+		profile.Model != nil && profile.Temperature != nil &&
+		profile.RequestTimeoutSeconds != nil && profile.Streaming != nil && profile.ToolCallingRequired != nil
+}
+
+func applyRootDocument(config *Config, document configV2Document) {
+	if document.Context != nil {
+		config.Context = *document.Context
+	}
+	if document.Namespace != nil {
+		config.Namespace = *document.Namespace
+	}
+	if document.NoColor != nil {
+		config.NoColor = *document.NoColor
+	}
+	if document.Runtime != nil && document.Runtime.BudgetProfile != nil {
+		config.Runtime.BudgetProfile = *document.Runtime.BudgetProfile
+	}
+	if document.Kubernetes != nil {
+		if document.Kubernetes.ExecCredentials != nil {
+			config.Kubernetes.ExecCredentials = *document.Kubernetes.ExecCredentials
+		}
+		if document.Kubernetes.NamespaceAccess != nil {
+			config.Kubernetes.NamespaceAccess = *document.Kubernetes.NamespaceAccess
+		}
+	}
+	if document.Logging != nil {
+		if document.Logging.Enabled != nil {
+			config.Logging.Enabled = *document.Logging.Enabled
+		}
+		if document.Logging.Level != nil {
+			config.Logging.Level = *document.Logging.Level
+		}
+		if document.Logging.SensitiveDiagnostics != nil {
+			config.Logging.SensitiveDiagnostics = *document.Logging.SensitiveDiagnostics
+		}
+	}
+}
+
+func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocument) ModelProfileConfig {
+	if document.Name != nil {
+		profile.Name = *document.Name
+	}
+	if document.Role != nil {
+		profile.Role = *document.Role
+	}
+	if document.InheritAgent != nil {
+		profile.InheritAgent = *document.InheritAgent
+	}
+	if document.CredentialReference != nil {
+		profile.CredentialReference = *document.CredentialReference
+	}
+	if document.ProviderKind != nil {
+		profile.ProviderKind = *document.ProviderKind
+	}
+	if document.Endpoint != nil {
+		profile.Endpoint = *document.Endpoint
+	}
+	if document.Model != nil {
+		profile.Model = *document.Model
+	}
+	if document.ReasoningEffort != nil {
+		profile.ReasoningEffort = *document.ReasoningEffort
+	}
+	if document.Temperature != nil {
+		profile.Temperature = *document.Temperature
+	}
+	if document.MaxOutputTokens != nil {
+		profile.MaxOutputTokens = *document.MaxOutputTokens
+	}
+	if document.RequestTimeoutSeconds != nil {
+		profile.RequestTimeoutSeconds = *document.RequestTimeoutSeconds
+	}
+	if document.Streaming != nil {
+		profile.Streaming = *document.Streaming
+	}
+	if document.ToolCallingRequired != nil {
+		profile.ToolCallingRequired = *document.ToolCallingRequired
+	}
+	return profile
+}
+
+func decodeStrictDocument(content []byte, target any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(target); err != nil && !errors.Is(err, io.EOF) {
+		return schemaError("Configuration must be valid YAML and match the documented types and schema exactly.")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return schemaError("Configuration must contain exactly one YAML document.")
+	}
+	return nil
+}
+
+func schemaError(message string) error {
+	return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", message)
+}
+
+// extractSensitiveConfig removes both fixed role credential fields before
+// ordinary configuration decoding.
+func extractSensitiveConfig(content []byte) ([]byte, extractedCredentials, int, error) {
 	var document yaml.Node
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
 	decodeErr := decoder.Decode(&document)
 	var extra any
 	extraErr := decoder.Decode(&extra)
+	version, versionOK := configDocumentVersion(&document)
 	if decodeErr != nil || !errors.Is(extraErr, io.EOF) || containsProhibitedYAMLNode(&document) ||
-		!validConfigYAMLDocument(&document, true) {
-		return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must use the documented YAML types and must not use null, alias, or merge values.")
+		!versionOK || (version != LegacyVersion && version != CurrentVersion) {
+		return nil, extractedCredentials{}, version, schemaError("Configuration values must use a supported version and the documented YAML types without null, alias, or merge values.")
+	}
+	if !validConfigYAMLDocument(&document, true, version) {
+		return nil, extractedCredentials{}, version, schemaError("Configuration values must use the documented YAML types and must not contain unknown or duplicate fields.")
 	}
 	root := document.Content[0]
-	var credential SecretValue
-	found := false
-	for index := 0; index < len(root.Content); index += 2 {
-		if root.Content[index].Value != "model" {
-			continue
-		}
-		model := root.Content[index+1]
-		filtered := make([]*yaml.Node, 0, len(model.Content))
-		for field := 0; field < len(model.Content); field += 2 {
-			key, value := model.Content[field], model.Content[field+1]
-			if key.Value != "api_key" {
-				filtered = append(filtered, key, value)
-				continue
-			}
-			if found {
-				return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must not contain duplicate fields.")
-			}
+	var credentials extractedCredentials
+	if version == LegacyVersion {
+		model := mappingValue(root, "model")
+		if model != nil {
 			var err error
-			credential, err = NewSecretValue(value.Value)
+			credentials.agent, credentials.agentFound, err = extractProfileCredential(model)
 			if err != nil {
-				return nil, SecretValue{}, false, err
+				return nil, extractedCredentials{}, version, err
 			}
-			value.Value = ""
-			found = true
 		}
-		model.Content = filtered
+	} else {
+		models := mappingValue(root, "models")
+		if models != nil {
+			if agent := mappingValue(models, "agent"); agent != nil {
+				var err error
+				credentials.agent, credentials.agentFound, err = extractProfileCredential(agent)
+				if err != nil {
+					return nil, extractedCredentials{}, version, err
+				}
+			}
+			if reviewer := mappingValue(models, "approval_reviewer"); reviewer != nil {
+				var err error
+				credentials.reviewer, credentials.reviewerFound, err = extractProfileCredential(reviewer)
+				if err != nil {
+					credentials.destroy()
+					return nil, extractedCredentials{}, version, err
+				}
+			}
+		}
 	}
 	sanitized, err := yaml.Marshal(&document)
 	if err != nil || len(sanitized) > MaxConfigFileBytes {
-		credential.Destroy()
-		return nil, SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration could not be decoded safely.")
+		credentials.destroy()
+		return nil, extractedCredentials{}, version, schemaError("Configuration could not be decoded safely.")
 	}
-	return sanitized, credential, found, nil
+	return sanitized, credentials, version, nil
 }
 
-func validateStrictYAML(content []byte) error {
-	decoder := yaml.NewDecoder(bytes.NewReader(content))
-	decoder.KnownFields(true)
-	var decoded Config
-	if err := decoder.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
-		return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must be valid YAML and match the documented types and schema exactly.")
+func extractProfileCredential(profile *yaml.Node) (SecretValue, bool, error) {
+	filtered := make([]*yaml.Node, 0, len(profile.Content))
+	var credential SecretValue
+	found := false
+	for index := 0; index < len(profile.Content); index += 2 {
+		key, value := profile.Content[index], profile.Content[index+1]
+		if key.Value != "api_key" {
+			filtered = append(filtered, key, value)
+			continue
+		}
+		if found {
+			return SecretValue{}, false, schemaError("Configuration must not contain duplicate credential fields.")
+		}
+		var err error
+		credential, err = NewSecretValue(value.Value)
+		value.Value = ""
+		if err != nil {
+			return SecretValue{}, false, err
+		}
+		found = true
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration must contain exactly one YAML document.")
-	}
+	profile.Content = filtered
+	return credential, found, nil
+}
 
-	var document yaml.Node
-	if err := yaml.Unmarshal(content, &document); err != nil || containsProhibitedYAMLNode(&document) || !validConfigYAMLDocument(&document, false) {
-		return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_configuration", "Configuration values must use the documented YAML types and must not use null, alias, or merge values.")
+func mappingValue(mapping *yaml.Node, name string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == name {
+			return mapping.Content[index+1]
+		}
 	}
 	return nil
 }
 
-func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
-	if document == nil || document.Kind == 0 {
-		return false
+func configDocumentVersion(document *yaml.Node) (int, bool) {
+	if document == nil || document.Kind != yaml.DocumentNode || len(document.Content) != 1 ||
+		document.Content[0].Kind != yaml.MappingNode {
+		return 0, false
 	}
-	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
+	root := document.Content[0]
+	seen := false
+	version := 0
+	for index := 0; index < len(root.Content); index += 2 {
+		if root.Content[index].Value != "version" {
+			continue
+		}
+		if seen || !yamlScalar(root.Content[index+1], "!!int") {
+			return 0, false
+		}
+		parsed, err := strconv.Atoi(root.Content[index+1].Value)
+		if err != nil {
+			return 0, false
+		}
+		seen = true
+		version = parsed
+	}
+	return version, seen
+}
+
+func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version int) bool {
+	if document == nil || document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
 		return false
 	}
 	root := document.Content[0]
@@ -234,7 +601,11 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 				return false
 			}
 		case "model":
-			if !validModelYAML(value, allowCredential) {
+			if version != LegacyVersion || !validModelYAML(value, allowCredential, false) {
+				return false
+			}
+		case "models":
+			if version != CurrentVersion || !validModelsYAML(value, allowCredential) {
 				return false
 			}
 		case "kubernetes":
@@ -258,9 +629,19 @@ func validRuntimeYAML(node *yaml.Node) bool {
 	})
 }
 
-func validModelYAML(node *yaml.Node, allowCredential bool) bool {
+func validModelsYAML(node *yaml.Node, allowCredential bool) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		return (key == "agent" || key == "approval_reviewer") && validModelYAML(value, allowCredential, true)
+	})
+}
+
+func validModelYAML(node *yaml.Node, allowCredential, named bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
+		case "name", "role", "credential_ref":
+			return named && yamlString(value)
+		case "inherit_agent":
+			return named && yamlScalar(value, "!!bool")
 		case "provider_kind", "endpoint", "model", "reasoning_effort":
 			return yamlString(value)
 		case "api_key":
@@ -345,29 +726,6 @@ func containsProhibitedYAMLNode(node *yaml.Node) bool {
 	return false
 }
 
-func setDefaults(instance *viper.Viper) {
-	defaults := Defaults()
-	instance.SetDefault("version", defaults.Version)
-	instance.SetDefault("context", defaults.Context)
-	instance.SetDefault("namespace", defaults.Namespace)
-	instance.SetDefault("no_color", defaults.NoColor)
-	instance.SetDefault("runtime.budget_profile", defaults.Runtime.BudgetProfile)
-	instance.SetDefault("model.provider_kind", defaults.Model.ProviderKind)
-	instance.SetDefault("model.endpoint", defaults.Model.Endpoint)
-	instance.SetDefault("model.model", defaults.Model.Model)
-	instance.SetDefault("model.reasoning_effort", defaults.Model.ReasoningEffort)
-	instance.SetDefault("model.temperature", defaults.Model.Temperature)
-	instance.SetDefault("model.max_output_tokens", defaults.Model.MaxOutputTokens)
-	instance.SetDefault("model.request_timeout_seconds", defaults.Model.RequestTimeoutSeconds)
-	instance.SetDefault("model.streaming", defaults.Model.Streaming)
-	instance.SetDefault("model.tool_calling_required", defaults.Model.ToolCallingRequired)
-	instance.SetDefault("kubernetes.exec_credentials", defaults.Kubernetes.ExecCredentials)
-	instance.SetDefault("kubernetes.namespace_access", defaults.Kubernetes.NamespaceAccess)
-	instance.SetDefault("logging.enabled", defaults.Logging.Enabled)
-	instance.SetDefault("logging.level", defaults.Logging.Level)
-	instance.SetDefault("logging.sensitive_diagnostics", defaults.Logging.SensitiveDiagnostics)
-}
-
 type environmentValueKind uint8
 
 const (
@@ -377,40 +735,101 @@ const (
 	environmentFloat
 )
 
-func applyEnvironment(instance *viper.Viper, lookup func(string) (string, bool)) error {
-	fields := []struct {
-		environment string
-		key         string
-		kind        environmentValueKind
-	}{
-		{environment: "KUPILOT_CONTEXT", key: "context", kind: environmentString},
-		{environment: "KUPILOT_NAMESPACE", key: "namespace", kind: environmentString},
-		{environment: "KUPILOT_BUDGET_PROFILE", key: "runtime.budget_profile", kind: environmentString},
-		{environment: "KUPILOT_NO_COLOR", key: "no_color", kind: environmentBool},
-		{environment: "KUPILOT_MODEL_ENDPOINT", key: "model.endpoint", kind: environmentString},
-		{environment: "KUPILOT_MODEL", key: "model.model", kind: environmentString},
-		{environment: "KUPILOT_MODEL_REASONING_EFFORT", key: "model.reasoning_effort", kind: environmentString},
-		{environment: "KUPILOT_MODEL_TEMPERATURE", key: "model.temperature", kind: environmentFloat},
-		{environment: "KUPILOT_MODEL_MAX_OUTPUT_TOKENS", key: "model.max_output_tokens", kind: environmentInt},
-		{environment: "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS", key: "model.request_timeout_seconds", kind: environmentInt},
-		{environment: "KUPILOT_EXEC_CREDENTIALS", key: "kubernetes.exec_credentials", kind: environmentString},
-		{environment: "KUPILOT_NAMESPACE_ACCESS", key: "kubernetes.namespace_access", kind: environmentString},
-		{environment: "KUPILOT_LOG_ENABLED", key: "logging.enabled", kind: environmentBool},
-		{environment: "KUPILOT_LOG_LEVEL", key: "logging.level", kind: environmentString},
+func applyEnvironment(config *Config, lookup func(string) (string, bool)) error {
+	if config == nil || lookup == nil {
+		return schemaError("Configuration environment processing is unavailable.")
 	}
-	for _, field := range fields {
-		if value, ok := lookup(field.environment); ok {
-			parsed, err := parseEnvironmentValue(value, field.kind)
-			if err != nil {
-				return newSafeError(ClassConfigurationInvalid, "config_schema_invalid", "decode_environment_configuration", "An admitted configuration environment variable has an invalid type or value.")
-			}
-			instance.Set(field.key, parsed)
+	type field struct {
+		names []string
+		kind  environmentValueKind
+		apply func(any)
+	}
+	fields := []field{
+		{[]string{"KUPILOT_CONTEXT"}, environmentString, func(value any) { config.Context = value.(string) }},
+		{[]string{"KUPILOT_NAMESPACE"}, environmentString, func(value any) { config.Namespace = value.(string) }},
+		{[]string{"KUPILOT_BUDGET_PROFILE"}, environmentString, func(value any) { config.Runtime.BudgetProfile = value.(string) }},
+		{[]string{"KUPILOT_NO_COLOR"}, environmentBool, func(value any) { config.NoColor = value.(bool) }},
+		{[]string{"KUPILOT_AGENT_ENDPOINT", "KUPILOT_MODEL_ENDPOINT"}, environmentString, func(value any) { config.Models.Agent.Endpoint = value.(string) }},
+		{[]string{"KUPILOT_AGENT_MODEL", "KUPILOT_MODEL"}, environmentString, func(value any) { config.Models.Agent.Model = value.(string) }},
+		{[]string{"KUPILOT_AGENT_REASONING_EFFORT", "KUPILOT_MODEL_REASONING_EFFORT"}, environmentString, func(value any) { config.Models.Agent.ReasoningEffort = value.(string) }},
+		{[]string{"KUPILOT_AGENT_TEMPERATURE", "KUPILOT_MODEL_TEMPERATURE"}, environmentFloat, func(value any) { config.Models.Agent.Temperature = value.(float64) }},
+		{[]string{"KUPILOT_AGENT_MAX_OUTPUT_TOKENS", "KUPILOT_MODEL_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { config.Models.Agent.MaxOutputTokens = value.(int) }},
+		{[]string{"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS", "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { config.Models.Agent.RequestTimeoutSeconds = value.(int) }},
+		{[]string{"KUPILOT_EXEC_CREDENTIALS"}, environmentString, func(value any) { config.Kubernetes.ExecCredentials = value.(string) }},
+		{[]string{"KUPILOT_NAMESPACE_ACCESS"}, environmentString, func(value any) { config.Kubernetes.NamespaceAccess = value.(string) }},
+		{[]string{"KUPILOT_LOG_ENABLED"}, environmentBool, func(value any) { config.Logging.Enabled = value.(bool) }},
+		{[]string{"KUPILOT_LOG_LEVEL"}, environmentString, func(value any) { config.Logging.Level = value.(string) }},
+	}
+	for _, candidate := range fields {
+		value, found, err := lookupUniqueEnvironment(lookup, candidate.names)
+		if err != nil {
+			return err
 		}
+		if !found {
+			continue
+		}
+		parsed, err := parseEnvironmentValue(value, candidate.kind)
+		if err != nil {
+			return schemaError("An admitted configuration environment variable has an invalid type or value.")
+		}
+		candidate.apply(parsed)
 	}
 	if _, ok := lookup("NO_COLOR"); ok {
-		instance.Set("no_color", true)
+		config.NoColor = true
+	}
+	if config.Models.ApprovalReviewer != nil {
+		reviewer := config.Models.ApprovalReviewer
+		reviewerFields := []field{
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_ENDPOINT"}, environmentString, func(value any) { reviewer.Endpoint = value.(string) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_MODEL"}, environmentString, func(value any) { reviewer.Model = value.(string) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_REASONING_EFFORT"}, environmentString, func(value any) { reviewer.ReasoningEffort = value.(string) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_TEMPERATURE"}, environmentFloat, func(value any) { reviewer.Temperature = value.(float64) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { reviewer.MaxOutputTokens = value.(int) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { reviewer.RequestTimeoutSeconds = value.(int) }},
+		}
+		for _, candidate := range reviewerFields {
+			value, found, err := lookupUniqueEnvironment(lookup, candidate.names)
+			if err != nil {
+				return err
+			}
+			if !found {
+				continue
+			}
+			parsed, err := parseEnvironmentValue(value, candidate.kind)
+			if err != nil {
+				return schemaError("An approval_reviewer environment variable has an invalid type or value.")
+			}
+			candidate.apply(parsed)
+		}
+	} else {
+		for _, name := range []string{
+			"KUPILOT_APPROVAL_REVIEWER_ENDPOINT", "KUPILOT_APPROVAL_REVIEWER_MODEL",
+			"KUPILOT_APPROVAL_REVIEWER_REASONING_EFFORT", "KUPILOT_APPROVAL_REVIEWER_TEMPERATURE",
+			"KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS", "KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS",
+		} {
+			if _, found := lookup(name); found {
+				return schemaError("Approval reviewer environment settings require an explicit models.approval_reviewer profile.")
+			}
+		}
 	}
 	return nil
+}
+
+func lookupUniqueEnvironment(lookup func(string) (string, bool), names []string) (string, bool, error) {
+	value := ""
+	found := false
+	for _, name := range names {
+		candidate, present := lookup(name)
+		if !present {
+			continue
+		}
+		if found {
+			return "", false, schemaError("Legacy and role-specific aliases for the same setting must not both be set.")
+		}
+		value = candidate
+		found = true
+	}
+	return value, found, nil
 }
 
 func parseEnvironmentValue(value string, kind environmentValueKind) (any, error) {
@@ -428,15 +847,15 @@ func parseEnvironmentValue(value string, kind environmentValueKind) (any, error)
 	}
 }
 
-func applyOverrides(instance *viper.Viper, overrides Overrides) {
+func applyOverrides(config *Config, overrides Overrides) {
 	if overrides.Context.Set {
-		instance.Set("context", overrides.Context.Value)
+		config.Context = overrides.Context.Value
 	}
 	if overrides.Namespace.Set {
-		instance.Set("namespace", overrides.Namespace.Value)
+		config.Namespace = overrides.Namespace.Value
 	}
 	if overrides.NoColor.Set {
-		instance.Set("no_color", overrides.NoColor.Value)
+		config.NoColor = overrides.NoColor.Value
 	}
 }
 
@@ -459,7 +878,7 @@ func readConfigFile(ctx context.Context, path string, required bool) ([]byte, bo
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "Kupilot could not read the selected configuration file.")
+		return nil, false, false, newSafeError(ClassConfigurationInvalid, "config_file_unavailable", "read_configuration", "Kupilot could not read the configuration file.")
 	}
 	defer file.Close()
 	openedInfo, err := file.Stat()

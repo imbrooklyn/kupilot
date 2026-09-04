@@ -320,8 +320,9 @@ func (manager *ScopeManager) switchContext(
 	if err != nil {
 		return domain.ClusterScope{}, err
 	}
-	manager.finishLocalInvalidation(generation, cancel)
+	manager.finishLocalInvalidation(generation)
 	hookErr := manager.invalidateHook(generation)
+	cancelInvalidatedRun(cancel)
 	if oldClient != nil {
 		oldClient.Close()
 	}
@@ -418,12 +419,14 @@ func (manager *ScopeManager) SwitchNamespace(ctx context.Context, target string,
 			"The active Kubernetes client changed unexpectedly.",
 		)
 	}
-	manager.finishLocalInvalidation(generation, cancel)
+	manager.finishLocalInvalidation(generation)
 	if err := manager.invalidateHook(generation); err != nil {
+		cancelInvalidatedRun(cancel)
 		client.Close()
 		manager.markUnavailable(generation)
 		return domain.ClusterScope{}, err
 	}
+	cancelInvalidatedRun(cancel)
 	return manager.publishActive(client, current.Context, target, generation)
 }
 
@@ -712,8 +715,9 @@ func (manager *ScopeManager) Close() error {
 	if err != nil {
 		return err
 	}
-	manager.finishLocalInvalidation(generation, cancel)
+	manager.finishLocalInvalidation(generation)
 	hookErr := manager.invalidateHook(generation)
+	cancelInvalidatedRun(cancel)
 	if client != nil {
 		client.Close()
 	}
@@ -755,10 +759,7 @@ func (manager *ScopeManager) beginInvalidation() (int64, ScopeClient, context.Ca
 	return manager.generation, client, cancel, nil
 }
 
-func (manager *ScopeManager) finishLocalInvalidation(generation int64, cancel context.CancelFunc) {
-	if cancel != nil {
-		cancel()
-	}
+func (manager *ScopeManager) finishLocalInvalidation(generation int64) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.generation != generation {
@@ -767,6 +768,12 @@ func (manager *ScopeManager) finishLocalInvalidation(generation int64, cancel co
 	manager.selectedResource = nil
 	clear(manager.namespaceCache)
 	clear(manager.resourceCache)
+}
+
+func cancelInvalidatedRun(cancel context.CancelFunc) {
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (manager *ScopeManager) invalidateHook(generation int64) error {

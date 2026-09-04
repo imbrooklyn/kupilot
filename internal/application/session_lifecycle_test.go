@@ -673,7 +673,7 @@ func TestCoordinatorDeleteSessionInvalidatesPendingAndApprovedApprovalBeforeDele
 			}))
 			session := createCoordinatorSession(t, coordinator)
 			approvalFixture := newApprovalCoordinatorFixture(t)
-			approvalFixture.sessionID = session.ID
+			approvalFixture.bindSession(t, session.ID)
 			request := approvalFixture.submit(t, 36)
 			if state == domain.ApprovalStateApproved {
 				approved, err := approvalFixture.coordinator.Decide(
@@ -726,7 +726,7 @@ func TestCoordinatorDeleteSessionApprovalFailureAndConsumingStateFailClosed(t *t
 			}))
 			session := createCoordinatorSession(t, coordinator)
 			approvalFixture := newApprovalCoordinatorFixture(t)
-			approvalFixture.sessionID = session.ID
+			approvalFixture.bindSession(t, session.ID)
 			request := approvalFixture.submit(t, 37)
 			test.configure(approvalFixture, request)
 			coordinator.approvals = approvalFixture.coordinator
@@ -749,7 +749,7 @@ func TestCoordinatorDeleteSessionDatabaseFailureKeepsApprovalNonExecutable(t *te
 	}))
 	session := createCoordinatorSession(t, coordinator)
 	approvalFixture := newApprovalCoordinatorFixture(t)
-	approvalFixture.sessionID = session.ID
+	approvalFixture.bindSession(t, session.ID)
 	request := approvalFixture.submit(t, 38)
 	coordinator.approvals = approvalFixture.coordinator
 	persistence.setDeleteFailure(true)

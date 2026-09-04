@@ -112,16 +112,30 @@ func TestCoordinatorStatusProjectsFrozenBudgetWithoutExternalWork(t *testing.T) 
 		return agent.RunOutcome{}
 	}))
 	session := createCoordinatorSession(t, coordinator)
+	seedCoordinatorContext(t, coordinator, persistence, session, 4)
 	limits := agent.DefaultRunBudgetLimits()
-	input, err := agent.NewRunInput(
+	conversation, err := coordinator.conversationForRun(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("conversationForRun() error = %v", err)
+	}
+	input, err := agent.NewRunInputWithContext(
 		domain.AgentRunID(coordinatorUUID(901)), session.ID, domain.MessageID(coordinatorUUID(902)),
-		"Inspect the selected Pod.", scope.scope, nil, limits,
+		"Inspect the selected Pod.", scope.scope, nil, limits, conversation,
 	)
 	if err != nil {
 		t.Fatalf("NewRunInput() error = %v", err)
 	}
+	summary, err := summaryForRunInput(input, clock.Now(), 2)
+	if err != nil {
+		t.Fatalf("summaryForRunInput() error = %v", err)
+	}
 	startedAt := clock.Now().Add(-90 * time.Second)
 	coordinator.mu.Lock()
+	coordinator.modelContext.summary = &summary
+	coordinator.modelContext.turns = append([]agent.ConversationTurn(nil), conversation.Turns()[2:]...)
+	coordinator.modelContext.recentTailCount = 2
+	compressedAt := summary.GeneratedAt
+	coordinator.modelContext.compressedAt = &compressedAt
 	coordinator.active = &activeRun{
 		input: input,
 		run: domain.AgentRun{
@@ -132,6 +146,7 @@ func TestCoordinatorStatusProjectsFrozenBudgetWithoutExternalWork(t *testing.T) 
 		},
 		toolResultBytes: 96 * 1024,
 		logCalls:        2,
+		summaryCalls:    1,
 	}
 	coordinator.mu.Unlock()
 
@@ -139,7 +154,14 @@ func TestCoordinatorStatusProjectsFrozenBudgetWithoutExternalWork(t *testing.T) 
 	if !status.valid() || !status.RunActive || status.RunID != input.RunID() ||
 		status.Budget.Profile != agent.BudgetProfileBalanced || status.Budget.StepsUsed != 3 ||
 		status.Budget.ToolCallsUsed != 5 || status.Budget.ModelCallsUsed != 3 ||
+		status.Budget.ModelCostUnitsUsed != 3 || status.Budget.SummaryCallsUsed != 1 ||
+		status.Budget.SummaryCostUnitsUsed != 1 || status.Budget.ReviewerCallsMaximum != 8 ||
 		status.Budget.ToolResultBytesUsed != 96*1024 || status.Budget.LogCallsUsed != 2 ||
+		status.ModelContext.EligibleMessages != 4 || status.ModelContext.EligibleBytes == 0 ||
+		!status.ModelContext.Compressed || status.ModelContext.CompressedAtUnixMillis != summary.GeneratedAt.UnixMilli() ||
+		status.ModelContext.CoveredThroughMessageID != summary.CoveredThroughID ||
+		status.ModelContext.RecentTailMessages != 2 || status.ModelContext.SummaryCallsUsed != 1 ||
+		status.ModelContext.SummaryCallsMaximum != 2 || !status.ModelContext.StorageHealthy ||
 		status.Budget.ElapsedMilliseconds < 90_000 || status.Budget.RemainingMilliseconds >= limits.RunDuration.Milliseconds() {
 		t.Fatalf("UI status = %#v", status)
 	}
@@ -591,6 +613,12 @@ type memoryCoordinatorPersistence struct {
 	clearHistoryCount    int
 	clearHistoryFailure  bool
 	clearHistoryReady    <-chan struct{}
+	contextMessages      map[domain.SessionID][]domain.Message
+	contextPending       map[domain.AgentRunID]domain.Message
+	contextSummaries     map[domain.SessionID]domain.SessionContextSummary
+	contextReadFailure   bool
+	contextWriteFailure  bool
+	contextSummaryWrites int
 }
 
 func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
@@ -663,6 +691,13 @@ func (persistence *memoryCoordinatorPersistence) DeleteSessionGraph(_ context.Co
 		return errors.New("generated missing Session")
 	}
 	delete(persistence.sessions, id)
+	delete(persistence.contextMessages, id)
+	delete(persistence.contextSummaries, id)
+	for runID, message := range persistence.contextPending {
+		if message.SessionID == id {
+			delete(persistence.contextPending, runID)
+		}
+	}
 	return nil
 }
 
@@ -682,6 +717,9 @@ func (persistence *memoryCoordinatorPersistence) ClearHistory(_ context.Context)
 	}
 	persistence.sessions = make(map[domain.SessionID]domain.Session)
 	persistence.audits = nil
+	persistence.contextMessages = nil
+	persistence.contextPending = nil
+	persistence.contextSummaries = nil
 	return nil
 }
 
@@ -730,6 +768,12 @@ func (persistence *memoryCoordinatorPersistence) BeginWithAudit(
 	if message.Validate() != nil || run.Validate() != nil || audit.Validate() != nil {
 		return errors.New("invalid begin values")
 	}
+	if session, ok := persistence.sessions[run.SessionID]; ok && session.PrivacyMode == domain.PrivacyModeStandard {
+		if persistence.contextPending == nil {
+			persistence.contextPending = make(map[domain.AgentRunID]domain.Message)
+		}
+		persistence.contextPending[run.ID] = message
+	}
 	persistence.audits = append(persistence.audits, audit)
 	return nil
 }
@@ -749,6 +793,7 @@ func (persistence *memoryCoordinatorPersistence) FinishWithAudit(
 	}
 	persistence.finishCount++
 	persistence.finished = append(persistence.finished, run)
+	delete(persistence.contextPending, run.ID)
 	persistence.audits = append(persistence.audits, audit)
 	return nil
 }
@@ -765,8 +810,100 @@ func (persistence *memoryCoordinatorPersistence) CompleteWithAudit(
 	}
 	persistence.mu.Lock()
 	persistence.diagnoses = append(persistence.diagnoses, cloneDiagnosis(diagnosis))
+	if session, ok := persistence.sessions[run.SessionID]; ok && session.PrivacyMode == domain.PrivacyModeStandard {
+		if persistence.contextMessages == nil {
+			persistence.contextMessages = make(map[domain.SessionID][]domain.Message)
+		}
+		request, found := persistence.contextPending[run.ID]
+		if !found {
+			persistence.mu.Unlock()
+			return errors.New("missing pending model-context request")
+		}
+		persistence.contextMessages[run.SessionID] = append(persistence.contextMessages[run.SessionID], request, message)
+	}
 	persistence.mu.Unlock()
 	return persistence.FinishWithAudit(ctx, run, audit)
+}
+
+func (persistence *memoryCoordinatorPersistence) ListEligibleModelContext(
+	ctx context.Context,
+	request ModelContextPageRequest,
+) (ModelContextPage, error) {
+	if err := ctx.Err(); err != nil {
+		return ModelContextPage{}, err
+	}
+	if request.Validate() != nil {
+		return ModelContextPage{}, ErrModelContextUnavailable
+	}
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	if persistence.contextReadFailure {
+		return ModelContextPage{}, errors.New("generated model-context read failure")
+	}
+	values := persistence.contextMessages[request.SessionID]
+	start := 0
+	if request.After != nil {
+		for start < len(values) {
+			message := values[start]
+			if message.CreatedAt.After(request.After.CreatedAt) ||
+				message.CreatedAt.Equal(request.After.CreatedAt) && message.ID > request.After.ID {
+				break
+			}
+			start++
+		}
+	}
+	end := min(start+request.Limit, len(values))
+	page := ModelContextPage{Messages: append([]domain.Message(nil), values[start:end]...)}
+	if end < len(values) {
+		last := page.Messages[len(page.Messages)-1]
+		page.Next = &ModelContextCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	return page, nil
+}
+
+func (persistence *memoryCoordinatorPersistence) LoadSessionContextSummary(
+	ctx context.Context,
+	sessionID domain.SessionID,
+) (domain.SessionContextSummary, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.SessionContextSummary{}, false, err
+	}
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	if persistence.contextReadFailure {
+		return domain.SessionContextSummary{}, false, errors.New("generated model-context read failure")
+	}
+	value, ok := persistence.contextSummaries[sessionID]
+	return value, ok, nil
+}
+
+func (persistence *memoryCoordinatorPersistence) SaveSessionContextSummary(
+	ctx context.Context,
+	summary domain.SessionContextSummary,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if summary.Validate() != nil {
+		return ErrModelContextUnavailable
+	}
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	persistence.contextSummaryWrites++
+	if persistence.contextWriteFailure {
+		return errors.New("generated model-context write failure")
+	}
+	if persistence.contextSummaries == nil {
+		persistence.contextSummaries = make(map[domain.SessionID]domain.SessionContextSummary)
+	}
+	persistence.contextSummaries[summary.SessionID] = summary
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) summaryWrites() int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return persistence.contextSummaryWrites
 }
 
 func (persistence *memoryCoordinatorPersistence) Append(_ context.Context, event domain.AuditEvent) error {
@@ -875,6 +1012,8 @@ type coordinatorScope struct {
 }
 
 func (scope *coordinatorScope) CurrentScope() (domain.ClusterScope, bool) {
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
 	return scope.scope, true
 }
 
@@ -938,8 +1077,8 @@ func newCoordinatorHarness(
 	identifiers := new(coordinatorIDs)
 	coordinator, err := NewCoordinator(CoordinatorConfig{
 		Sessions: persistence, Runs: persistence, Tools: persistence,
-		Audits: persistence,
-		Scope:  scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
+		Audits: persistence, ModelContext: persistence,
+		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: ui,
 		Observer: RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
 	})

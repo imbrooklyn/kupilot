@@ -70,8 +70,8 @@ func (coordinator *ApprovalCoordinator) finishRestartExecution(
 			return coordinator.finishUnavailableRollout(ctx, tracked, eventIndex, safeApprovalExecutionClass(consumeErr))
 		}
 		request := RestartRolloutRequest{
-			Scope: tracked.request.Intent.Scope, DeploymentName: tracked.request.Intent.DeploymentName,
-			DeploymentUID:    tracked.request.Intent.DeploymentUID,
+			Scope: tracked.request.Intent.Scope, DeploymentName: tracked.request.Intent.Target.Resource.Name,
+			DeploymentUID:    tracked.request.Intent.Target.Resource.UID,
 			TargetGeneration: acceptedTarget.TargetGeneration, TargetReplicas: acceptedTarget.TargetReplicas,
 		}
 		if !coordinator.approvalScopeMatches(request.Scope) {
@@ -147,8 +147,8 @@ func (coordinator *ApprovalCoordinator) finishObservedRollout(
 		return coordinator.finishUnavailableRollout(ctx, tracked, eventIndex, domain.SafeErrorClassStaleScope)
 	}
 	if request.Scope != tracked.request.Intent.Scope ||
-		request.DeploymentName != tracked.request.Intent.DeploymentName ||
-		request.DeploymentUID != tracked.request.Intent.DeploymentUID ||
+		request.DeploymentName != tracked.request.Intent.Target.Resource.Name ||
+		request.DeploymentUID != tracked.request.Intent.Target.Resource.UID ||
 		result.ValidateFor(request) != nil {
 		return coordinator.finishUnavailableRollout(
 			ctx, tracked, eventIndex, domain.SafeErrorClassInvalidExternalResponse,
@@ -221,10 +221,7 @@ func (coordinator *ApprovalCoordinator) persistRestartAudit(
 	policy := tracked.request.Intent.PolicyVersion
 	scope := tracked.request.Intent.Scope
 	sessionID, runID := tracked.request.SessionID, tracked.request.RunID
-	subject := domain.ResourceRef{
-		APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
-		Namespace: scope.Namespace, Name: tracked.request.Intent.DeploymentName, UID: tracked.request.Intent.DeploymentUID,
-	}
+	subject := tracked.request.Intent.Target.Resource
 	details := domain.AuditDetails{
 		Operation: &operation, DetailCode: &detail, PolicyVersion: &policy, Count: count,
 	}
@@ -317,6 +314,9 @@ func safeApprovalExecutionClass(err error) domain.SafeErrorClass {
 	}
 	if errors.Is(err, errApprovalRolloutStaleScope) {
 		return domain.SafeErrorClassStaleScope
+	}
+	if errors.Is(err, ErrPermissionDenied) || errors.Is(err, ErrPermissionStale) || errors.Is(err, ErrPermissionUnavailable) {
+		return domain.SafeErrorClassPolicyDenied
 	}
 	var classified interface{ Class() domain.SafeErrorClass }
 	if errors.As(err, &classified) && classified.Class().Valid() {

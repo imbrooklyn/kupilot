@@ -12,6 +12,8 @@ import (
 const (
 	maxToolRequestDuration = 60 * time.Second
 	maxLogCalls            = 32
+	maxSummaryCalls        = 4
+	maxSummaryRequestTime  = 60 * time.Second
 )
 
 var (
@@ -37,17 +39,25 @@ func (profile BudgetProfile) Valid() bool {
 // RunBudgetLimits is frozen in RunInput. Every value may be tightened but may
 // not exceed its code-defined maximum.
 type RunBudgetLimits struct {
-	Profile             BudgetProfile
-	RunDuration         time.Duration
-	Steps               int
-	ToolCalls           int
-	ModelCalls          int
-	ToolResultBytes     int
-	RunToolResultBytes  int
-	NoProgressSteps     int
-	ModelRequestTimeout time.Duration
-	ToolRequestTimeout  time.Duration
-	LogCalls            int
+	Profile               BudgetProfile
+	RunDuration           time.Duration
+	Steps                 int
+	ToolCalls             int
+	ModelCalls            int
+	ModelRequestBytes     int
+	ModelStreamBytes      int
+	ModelCostUnits        int
+	SummaryCalls          int
+	SummaryRequestBytes   int
+	SummaryOutputBytes    int
+	SummaryCostUnits      int
+	ToolResultBytes       int
+	RunToolResultBytes    int
+	NoProgressSteps       int
+	ModelRequestTimeout   time.Duration
+	SummaryRequestTimeout time.Duration
+	ToolRequestTimeout    time.Duration
+	LogCalls              int
 }
 
 // DefaultRunBudgetLimits returns the balanced operational profile.
@@ -59,13 +69,23 @@ func DefaultRunBudgetLimits() RunBudgetLimits {
 // RunBudgetLimitsForProfile returns the exact immutable limits for one known
 // profile. Unknown profiles fail before a run can perform external I/O.
 func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
-	limits := RunBudgetLimits{Profile: profile, ToolResultBytes: domain.MaxToolResultBytes}
+	limits := RunBudgetLimits{
+		Profile: profile, ToolResultBytes: domain.MaxToolResultBytes,
+		ModelRequestBytes:   domain.MaxModelRequestBytes,
+		ModelStreamBytes:    domain.MaxModelStreamBytes,
+		SummaryRequestBytes: domain.MaxModelRequestBytes,
+		SummaryOutputBytes:  domain.MaxSessionSummaryBytes,
+	}
 	switch profile {
 	case BudgetProfileCompact:
 		limits.RunDuration = 2 * time.Minute
 		limits.Steps = 12
 		limits.ToolCalls = 16
 		limits.ModelCalls = 6
+		limits.ModelCostUnits = 6
+		limits.SummaryCalls = 1
+		limits.SummaryCostUnits = 1
+		limits.SummaryRequestTimeout = 30 * time.Second
 		limits.ModelRequestTimeout = 60 * time.Second
 		limits.ToolRequestTimeout = 15 * time.Second
 		limits.RunToolResultBytes = 1 * 1024 * 1024
@@ -76,6 +96,10 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.Steps = 32
 		limits.ToolCalls = 48
 		limits.ModelCalls = 16
+		limits.ModelCostUnits = 16
+		limits.SummaryCalls = 2
+		limits.SummaryCostUnits = 2
+		limits.SummaryRequestTimeout = 45 * time.Second
 		limits.ModelRequestTimeout = 120 * time.Second
 		limits.ToolRequestTimeout = 30 * time.Second
 		limits.RunToolResultBytes = 4 * 1024 * 1024
@@ -86,6 +110,10 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.Steps = 64
 		limits.ToolCalls = 128
 		limits.ModelCalls = 32
+		limits.ModelCostUnits = 32
+		limits.SummaryCalls = 4
+		limits.SummaryCostUnits = 4
+		limits.SummaryRequestTimeout = 60 * time.Second
 		limits.ModelRequestTimeout = 300 * time.Second
 		limits.ToolRequestTimeout = 60 * time.Second
 		limits.RunToolResultBytes = 12 * 1024 * 1024
@@ -105,10 +133,18 @@ func (limits RunBudgetLimits) Validate() error {
 		limits.Steps <= 0 || limits.Steps > profileLimits.Steps || limits.Steps > domain.MaxAgentSteps ||
 		limits.ToolCalls <= 0 || limits.ToolCalls > profileLimits.ToolCalls || limits.ToolCalls > domain.MaxAgentToolCalls ||
 		limits.ModelCalls <= 0 || limits.ModelCalls > profileLimits.ModelCalls || limits.ModelCalls > domain.MaxAgentModelCalls ||
+		limits.ModelRequestBytes <= 0 || limits.ModelRequestBytes > profileLimits.ModelRequestBytes || limits.ModelRequestBytes > domain.MaxModelRequestBytes ||
+		limits.ModelStreamBytes <= 0 || limits.ModelStreamBytes > profileLimits.ModelStreamBytes || limits.ModelStreamBytes > domain.MaxModelStreamBytes ||
+		limits.ModelCostUnits <= 0 || limits.ModelCostUnits > profileLimits.ModelCostUnits ||
+		limits.SummaryCalls <= 0 || limits.SummaryCalls > profileLimits.SummaryCalls || limits.SummaryCalls > maxSummaryCalls ||
+		limits.SummaryRequestBytes <= 0 || limits.SummaryRequestBytes > profileLimits.SummaryRequestBytes || limits.SummaryRequestBytes > domain.MaxModelRequestBytes ||
+		limits.SummaryOutputBytes <= 0 || limits.SummaryOutputBytes > profileLimits.SummaryOutputBytes || limits.SummaryOutputBytes > domain.MaxSessionSummaryBytes ||
+		limits.SummaryCostUnits <= 0 || limits.SummaryCostUnits > profileLimits.SummaryCostUnits ||
 		limits.ToolResultBytes <= 0 || limits.ToolResultBytes > profileLimits.ToolResultBytes || limits.ToolResultBytes > domain.MaxToolResultBytes ||
 		limits.RunToolResultBytes <= 0 || limits.RunToolResultBytes > profileLimits.RunToolResultBytes || limits.RunToolResultBytes > domain.MaxAgentRunToolResultBytes ||
 		limits.NoProgressSteps <= 0 || limits.NoProgressSteps > profileLimits.NoProgressSteps || limits.NoProgressSteps > domain.MaxAgentNoProgressSteps ||
 		limits.ModelRequestTimeout <= 0 || limits.ModelRequestTimeout > profileLimits.ModelRequestTimeout || limits.ModelRequestTimeout > domain.MaxModelRequestTimeout ||
+		limits.SummaryRequestTimeout <= 0 || limits.SummaryRequestTimeout > profileLimits.SummaryRequestTimeout || limits.SummaryRequestTimeout > maxSummaryRequestTime ||
 		limits.ToolRequestTimeout <= 0 || limits.ToolRequestTimeout > profileLimits.ToolRequestTimeout || limits.ToolRequestTimeout > maxToolRequestDuration ||
 		limits.LogCalls <= 0 || limits.LogCalls > profileLimits.LogCalls || limits.LogCalls > maxLogCalls {
 		return ErrInvalidRunBudget
@@ -120,20 +156,25 @@ func (limits RunBudgetLimits) Validate() error {
 type RunStopReason string
 
 const (
-	RunStopCompleted        RunStopReason = "completed"
-	RunStopCancelled        RunStopReason = "cancelled"
-	RunStopTimedOut         RunStopReason = "timed_out"
-	RunStopStaleScope       RunStopReason = "stale_scope"
-	RunStopFailed           RunStopReason = "failed"
-	RunStopInterrupted      RunStopReason = "interrupted"
-	RunStopStepLimit        RunStopReason = "step_limit"
-	RunStopToolCallLimit    RunStopReason = "tool_call_limit"
-	RunStopModelCallLimit   RunStopReason = "model_call_limit"
-	RunStopToolResultBytes  RunStopReason = "tool_result_byte_limit"
-	RunStopRepeatedToolCall RunStopReason = "repeated_tool_call"
-	RunStopNoProgress       RunStopReason = "no_progress"
-	RunStopLogCallLimit     RunStopReason = "log_call_limit"
-	RunStopInvalidState     RunStopReason = "invalid_runtime_state"
+	RunStopCompleted         RunStopReason = "completed"
+	RunStopCancelled         RunStopReason = "cancelled"
+	RunStopTimedOut          RunStopReason = "timed_out"
+	RunStopStaleScope        RunStopReason = "stale_scope"
+	RunStopFailed            RunStopReason = "failed"
+	RunStopInterrupted       RunStopReason = "interrupted"
+	RunStopStepLimit         RunStopReason = "step_limit"
+	RunStopToolCallLimit     RunStopReason = "tool_call_limit"
+	RunStopModelCallLimit    RunStopReason = "model_call_limit"
+	RunStopModelCostLimit    RunStopReason = "model_cost_limit"
+	RunStopSummaryCallLimit  RunStopReason = "summary_call_limit"
+	RunStopSummaryCostLimit  RunStopReason = "summary_cost_limit"
+	RunStopReviewerCallLimit RunStopReason = "reviewer_call_limit"
+	RunStopReviewerCostLimit RunStopReason = "reviewer_cost_limit"
+	RunStopToolResultBytes   RunStopReason = "tool_result_byte_limit"
+	RunStopRepeatedToolCall  RunStopReason = "repeated_tool_call"
+	RunStopNoProgress        RunStopReason = "no_progress"
+	RunStopLogCallLimit      RunStopReason = "log_call_limit"
+	RunStopInvalidState      RunStopReason = "invalid_runtime_state"
 )
 
 // RunBudgetError exposes only a stable stop reason, class, and code-defined
@@ -176,7 +217,11 @@ func (budgetError *RunBudgetError) Class() domain.SafeErrorClass {
 
 // CallReservation is one atomic permission to start an external call.
 type CallReservation struct {
-	Timeout time.Duration
+	Timeout      time.Duration
+	RequestBytes int
+	OutputBytes  int
+	StreamBytes  int
+	CostUnits    int
 }
 
 // ToolCallOutcome contains only runtime-observed accounting metadata. It is not
@@ -204,6 +249,9 @@ type RunBudgetSnapshot struct {
 	Steps                 int
 	ToolCalls             int
 	ModelCalls            int
+	ModelCostUnits        int
+	SummaryCalls          int
+	SummaryCostUnits      int
 	ToolResultBytes       int
 	LogCalls              int
 	ConsecutiveNoProgress int
@@ -225,6 +273,9 @@ type RunBudget struct {
 	stepPending           bool
 	toolCalls             int
 	modelCalls            int
+	modelCostUnits        int
+	summaryCalls          int
+	summaryCostUnits      int
 	toolResultBytes       int
 	logCalls              int
 	consecutiveNoProgress int
@@ -306,8 +357,41 @@ func (budget *RunBudget) ReserveModelCall(ctx context.Context) (CallReservation,
 	if budget.modelCalls >= budget.limits.ModelCalls {
 		return CallReservation{}, budget.stopLocked(RunStopModelCallLimit)
 	}
+	if budget.modelCostUnits >= budget.limits.ModelCostUnits {
+		return CallReservation{}, budget.stopLocked(RunStopModelCostLimit)
+	}
 	budget.modelCalls++
-	return budget.reservationLocked(current, budget.limits.ModelRequestTimeout), nil
+	budget.modelCostUnits++
+	reservation := budget.reservationLocked(current, budget.limits.ModelRequestTimeout)
+	reservation.RequestBytes = budget.limits.ModelRequestBytes
+	reservation.OutputBytes = domain.MaxModelMessageBytes
+	reservation.StreamBytes = budget.limits.ModelStreamBytes
+	reservation.CostUnits = 1
+	return reservation, nil
+}
+
+// ReserveSummaryCall atomically admits one independent Agent-profile summary
+// request. It never consumes the main investigation model-call allowance.
+func (budget *RunBudget) ReserveSummaryCall(ctx context.Context) (CallReservation, error) {
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	current, err := budget.activeLocked(ctx)
+	if err != nil {
+		return CallReservation{}, err
+	}
+	if budget.summaryCalls >= budget.limits.SummaryCalls {
+		return CallReservation{}, budget.stopLocked(RunStopSummaryCallLimit)
+	}
+	if budget.summaryCostUnits >= budget.limits.SummaryCostUnits {
+		return CallReservation{}, budget.stopLocked(RunStopSummaryCostLimit)
+	}
+	budget.summaryCalls++
+	budget.summaryCostUnits++
+	reservation := budget.reservationLocked(current, budget.limits.SummaryRequestTimeout)
+	reservation.RequestBytes = budget.limits.SummaryRequestBytes
+	reservation.OutputBytes = budget.limits.SummaryOutputBytes
+	reservation.CostUnits = 1
+	return reservation, nil
 }
 
 // ReserveToolCall admits a model-selected call only when repetition state
@@ -423,6 +507,9 @@ func (budget *RunBudget) Snapshot() RunBudgetSnapshot {
 		Steps:                 budget.steps,
 		ToolCalls:             budget.toolCalls,
 		ModelCalls:            budget.modelCalls,
+		ModelCostUnits:        budget.modelCostUnits,
+		SummaryCalls:          budget.summaryCalls,
+		SummaryCostUnits:      budget.summaryCostUnits,
 		ToolResultBytes:       budget.toolResultBytes,
 		LogCalls:              budget.logCalls,
 		ConsecutiveNoProgress: budget.consecutiveNoProgress,
@@ -491,6 +578,16 @@ func newRunBudgetError(reason RunStopReason) *RunBudgetError {
 		budgetError.message = "The diagnostic run reached its cluster-read limit."
 	case RunStopModelCallLimit:
 		budgetError.message = "The diagnostic run reached its model-request limit."
+	case RunStopModelCostLimit:
+		budgetError.message = "The diagnostic run reached its model cost-reservation limit."
+	case RunStopSummaryCallLimit:
+		budgetError.message = "The diagnostic run reached its conversation-summary request limit."
+	case RunStopSummaryCostLimit:
+		budgetError.message = "The diagnostic run reached its conversation-summary cost-reservation limit."
+	case RunStopReviewerCallLimit:
+		budgetError.message = "The approval reviewer reached its request limit."
+	case RunStopReviewerCostLimit:
+		budgetError.message = "The approval reviewer reached its cost-reservation limit."
 	case RunStopToolResultBytes:
 		budgetError.message = "The diagnostic run reached its collected-data size limit."
 	case RunStopRepeatedToolCall:

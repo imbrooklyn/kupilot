@@ -65,7 +65,7 @@ func TestEnvironmentSecretSourceRejectsSafelyAndAlwaysUnsetsPresentValues(t *tes
 		unset   int
 	}{
 		{name: "missing", code: "model_api_key_missing"},
-		{name: "empty", present: true, code: "model_api_key_missing", unset: 1},
+		{name: "empty", present: true, code: "model_api_key_invalid", unset: 1},
 		{name: "oversized", present: true, value: strings.Repeat("x", MaxModelAPIKeyBytes+1), code: "model_api_key_invalid", unset: 1},
 		{name: "line break", present: true, value: "generated\nvalue", code: "model_api_key_invalid", unset: 1},
 	}
@@ -91,6 +91,30 @@ func TestEnvironmentSecretSourceRejectsSafelyAndAlwaysUnsetsPresentValues(t *tes
 				t.Fatal("safe error contains the rejected API key")
 			}
 		})
+	}
+}
+
+func TestEnvironmentSecretSourceRejectsMultipleAliasesEvenWhenOneIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	environment := map[string]string{
+		AgentAPIKeyEnvironmentVariable: "agent-key-generated",
+		ModelAPIKeyEnvironmentVariable: "",
+	}
+	unsetCalls := 0
+	source := EnvironmentSecretSource{
+		LookupEnv: lookupMap(environment),
+		Unsetenv: func(key string) error {
+			unsetCalls++
+			delete(environment, key)
+			return nil
+		},
+		Variables: []string{AgentAPIKeyEnvironmentVariable, ModelAPIKeyEnvironmentVariable},
+	}
+	_, _, err := source.ReadOptional()
+	assertSafeError(t, err, ClassConfigurationInvalid, "model_api_key_ambiguous")
+	if unsetCalls != 2 || len(environment) != 0 {
+		t.Fatalf("alias cleanup = %d calls, environment %#v", unsetCalls, environment)
 	}
 }
 
@@ -159,15 +183,38 @@ func TestFilterChildEnvironmentRemovesEveryModelAPIKeyEntry(t *testing.T) {
 	environment := []string{
 		"PATH=/usr/bin",
 		ModelAPIKeyEnvironmentVariable + "=" + canary,
+		AgentAPIKeyEnvironmentVariable + "=" + canary + "-agent",
+		ApprovalReviewerAPIKeyEnvironmentVariable + "=" + canary + "-reviewer",
 		"KUPILOT_CONTEXT=development",
 		ModelAPIKeyEnvironmentVariable + "=" + canary + "-duplicate",
 	}
 	got := FilterChildEnvironment(environment)
 	joined := strings.Join(got, "\x00")
-	if strings.Contains(joined, ModelAPIKeyEnvironmentVariable) || strings.Contains(joined, canary) {
+	if strings.Contains(joined, ModelAPIKeyEnvironmentVariable) ||
+		strings.Contains(joined, AgentAPIKeyEnvironmentVariable) ||
+		strings.Contains(joined, ApprovalReviewerAPIKeyEnvironmentVariable) || strings.Contains(joined, canary) {
 		t.Fatal("filtered child environment contains the model API key")
 	}
 	if len(got) != 2 || got[0] != "PATH=/usr/bin" || got[1] != "KUPILOT_CONTEXT=development" {
 		t.Fatalf("FilterChildEnvironment() = %#v", got)
+	}
+}
+
+func TestSecretValueCloneOwnsAnIndependentOpaqueBuffer(t *testing.T) {
+	t.Parallel()
+	canary := "independent-profile-key-generated"
+	original, err := NewSecretValue(canary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone, err := original.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.Destroy()
+	defer clone.Destroy()
+	matched := false
+	if err := clone.Use(func(value string) { matched = value == canary }); err != nil || !matched {
+		t.Fatalf("independent clone unavailable: %v", err)
 	}
 }

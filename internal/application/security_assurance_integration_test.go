@@ -176,6 +176,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 	tool := &assuranceNoopTool{}
 	adapter, modelErr := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: domain.ModelConfiguration{
+			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAICompatible,
 			Endpoint:            server.URL + "/v1",
 			Origin:              server.URL,

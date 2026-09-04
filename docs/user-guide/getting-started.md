@@ -1,9 +1,9 @@
 # Getting Started
 
-This guide keeps the currently reachable `v0.4` startup commands while
-documenting the Accepted `v0.5` target. The new named model profiles,
-permissions, Session memory, data sources, execution, and remediation features
-are not available until their implementation and tests land.
+This guide distinguishes current behavior from the Accepted `v0.5` target.
+Named model profiles and safe Session context/summarization are now reachable.
+Permission profiles, expanded data sources, and new execution or remediation
+features remain unavailable until their implementation and tests land.
 
 ## Requirements
 
@@ -14,8 +14,9 @@ and `arm64`. You need:
 - A UTF-8-capable terminal.
 - A local kubeconfig Context and an identity with the documented
   [least-privilege RBAC](../rbac/README.md).
-- For the current binary, one model endpoint that satisfies the
-  [Model Compatibility Contract](../model-compatibility.md).
+- For the current binary, an Agent model endpoint that satisfies the
+  [Model Compatibility Contract](../model-compatibility.md), plus an optional
+  independently configured Reviewer endpoint when that role is enabled.
 - Permission under your organization's policy to send the displayed diagnostic
   data categories to that model destination.
 
@@ -41,30 +42,43 @@ No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
 the endpoint, model identifier, or API key is absent.
 
-If you prefer a file, Kupilot accepts one strict version 1 YAML document. For
-example:
+If you prefer a file, Kupilot writes strict schema version 2. It also reads a
+legacy version 1 document through an in-memory migration without rewriting the
+file. A minimal explicit version 2 Agent profile looks like:
 
 ```yaml
-version: 1
+version: 2
 context: example-context
 namespace: example-namespace
 
 runtime:
   budget_profile: balanced
 
-model:
-  endpoint: https://model.example.invalid/v1
-  model: example-model
+models:
+  agent:
+    name: agent
+    role: agent
+    credential_ref: agent
+    provider_kind: openai_compatible
+    endpoint: https://model.example.invalid/v1
+    model: example-model
+    temperature: 0.1
+    request_timeout_seconds: 300
+    streaming: true
+    tool_calling_required: true
 
 kubernetes:
   namespace_access: all
 ```
 
 The endpoint and names are deliberately non-working placeholders. Replace them
-with approved values. The default file is `KUPILOT_HOME/config.yaml`. An
-optional plaintext `model.api_key` is admitted, but do not put a real key in a
-repository, example, chat message, or public report. A separately selected file
-must use an absolute normalized path:
+with approved values. `max_output_tokens` remains omitted until exact evidence
+for that selected endpoint supports a positive configured value; independent
+byte, call, time, stream, and cost-unit limits remain active. The default file
+is `KUPILOT_HOME/config.yaml`. An
+optional plaintext `models.agent.api_key` is admitted, but do not put a real
+key in a repository, example, chat message, or public report. A separately
+selected file must use an absolute normalized path:
 
 ```sh
 ./bin/kupilot --config /absolute/path/to/config.yaml
@@ -75,11 +89,13 @@ documents, and files larger than 64 KiB are rejected. Existing user-managed
 file permissions are respected; new Kupilot-created Home directories use
 `0700` and new files use `0600` on supported Unix platforms.
 
-The key can instead come from `KUPILOT_MODEL_API_KEY`, which overrides a file
-value, is read once, and is removed from the Kupilot process environment. It is
-also accepted through the masked TUI setup. Choose `save` only after reviewing
-the plaintext, not-encrypted disclosure; choose `session` to keep the key in
-this process only. No credential-valued CLI option exists.
+The Agent key can instead come from exactly one of
+`KUPILOT_AGENT_API_KEY` and the legacy `KUPILOT_MODEL_API_KEY` alias. A distinct
+Reviewer key uses `KUPILOT_APPROVAL_REVIEWER_API_KEY`. Present role variables
+are read once and removed from the Kupilot process environment. The Agent key
+is also accepted through masked TUI setup. Choose `save` only after reviewing
+the role-specific plaintext, not-encrypted disclosure; choose `session` to keep
+the key in this process only. No credential-valued CLI option exists.
 
 See [Configuration](../configuration.md) for the full schema, Home layout,
 precedence, environment variables, endpoint rules, and credential boundary.
@@ -124,18 +140,21 @@ verified through an exact read before it becomes an active ClusterScope. Empty
 Namespace input never means all Namespaces. The configured namespace-access
 policy is frozen into each run and is visible through `/status`.
 
-## Accepted `v0.5` supervision flow
+## Current model and Session flow
 
-When implemented, startup must produce one required named `agent` model profile
-and may produce one `approval_reviewer` profile. Each profile has an explicit
-origin, opaque credential, role-bound consent, and independent budget. There is
-no fallback or router. Summarization reuses `agent` rather than introducing a
-`context_compactor` role.
+Startup produces one required named `agent` model profile and may produce one
+`approval_reviewer` profile. Each profile has an explicit origin, opaque
+credential, role-bound consent, and independent budget. There is no fallback
+or router. Summarization reuses `agent` rather than introducing a
+`context_compactor` role. The Reviewer transport is connected only to the
+deterministic `review` route and its recommendation never becomes permission or
+execution authority by itself.
 
-The user reviews the verified Context and Namespace, namespace policy, and
-permission profile. `ask` is the default. `/permissions` is the planned local
-control; `full-access` is explicit and never enables a default-off capability
-or bypasses RBAC, consent, scope, audit, or hard denial.
+The current permission foundation uses `ask` by default and exposes only local,
+content-free status plus the existing supervised Deployment restart flow. The
+complete `/permissions` interaction remains planned; `full-access` remains
+unreachable through current delivery and cannot enable a default-off capability
+or bypass RBAC, consent, scope, audit, or hard denial.
 
 Every question after the first in a Session receives one ordered, bounded
 representation of all retained eligible safe history when such history exists.
@@ -147,13 +166,13 @@ budget gates pass; failure causes zero model calls and no current-question-only
 fallback. Historic scope, Evidence, permissions, rules, ActionEnvelopes, and
 execution never regain authority.
 
-Operational steps may include the P0 typed reads, logs, metrics, optional data
-sources, remote diagnostics, local argv, and remediation documented in
-[Operational Capabilities](../diagnostic-capabilities.md). Every sensitive or
-effectful request shows deterministic risk and an immutable ActionEnvelope;
-ambiguous attempts are never retried automatically.
+Later capability work may include the additional P0 typed reads,
+metrics, optional data sources, remote diagnostics, local argv, and remediation
+documented in [Operational Capabilities](../diagnostic-capabilities.md). It
+will require deterministic risk and an immutable ActionEnvelope for every
+sensitive or effectful request; none is made reachable by this guide.
 
-## Current `v0.4` first-run flow
+## Current first-run flow
 
 1. If model configuration is incomplete, complete the four-step endpoint,
    model, storage, and masked-key flow. Each field has a persistent label above
@@ -178,14 +197,14 @@ ambiguous attempts are never retried automatically.
 Changing Context, Namespace, or the container-output privacy category cancels
 an active AgentRun and invalidates stale work before another transfer.
 
-## Current `v0.4` TUI commands
+## Current TUI commands
 
 The compile-time command registry is fixed:
 
 | Command | Behavior |
 | --- | --- |
 | `/help` | Show commands and key bindings. |
-| `/model` | Configure or replace the single model runtime. |
+| `/model` | Configure or replace the required Agent runtime; an optional Reviewer remains file-configured. |
 | `/context [filter]` | Select a kubeconfig Context. |
 | `/namespace [filter]`, `/ns` | Select a Namespace in the current Context. |
 | `/resource [filter]`, `/res` | Select or clear a direct target resource. |

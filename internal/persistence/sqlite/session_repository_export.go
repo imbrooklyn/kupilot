@@ -170,6 +170,11 @@ func readSessionExportSnapshot(
 	}
 	snapshot.Messages = messages
 	snapshot.Truncated = truncated
+	contextSummary, err := readExportContextSummary(ctx, tx, sessionID)
+	if err != nil {
+		return application.SessionExportSnapshot{}, err
+	}
+	snapshot.ContextSummary = contextSummary
 
 	diagnoses, truncated, err := readExportDiagnoses(ctx, tx, sessionID)
 	if err != nil {
@@ -189,6 +194,24 @@ func readSessionExportSnapshot(
 	snapshot.Evidence = evidence
 	snapshot.Truncated = snapshot.Truncated || truncated
 	return snapshot, nil
+}
+
+func readExportContextSummary(
+	ctx context.Context,
+	tx *sqlx.Tx,
+	sessionID domain.SessionID,
+) (*domain.SessionContextSummary, error) {
+	var row sessionContextSummaryRow
+	if err := tx.GetContext(ctx, &row, loadSessionContextSummarySQL, sessionID); errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	summary := row.domainSummary()
+	if summary.Validate() != nil || summary.SessionID != sessionID {
+		return nil, domain.ErrInvalidSessionContextSummary
+	}
+	return &summary, nil
 }
 
 func readExportMessages(ctx context.Context, tx *sqlx.Tx, sessionID domain.SessionID) ([]application.ExportMessageRecord, bool, error) {

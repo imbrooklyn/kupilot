@@ -14,18 +14,20 @@ import (
 const MaxRunEvents = 32 * 1024
 
 var (
-	// ErrInvalidRunEvent reports an invalid neutral event without echoing data.
+	// ErrInvalidRunEvent reports an invalid project event without echoing data.
 	ErrInvalidRunEvent = errors.New("RunEvent data is invalid")
 	// ErrRunEventTerminal reports an event attempted after terminal publication.
 	ErrRunEventTerminal = errors.New("the Agent run event stream is terminal")
 )
 
-// RunEventKind identifies one Eino-neutral ordered Agent event.
+// RunEventKind identifies one project-owned ordered Agent event.
 type RunEventKind string
 
 const (
 	RunEventRunStarted         RunEventKind = "run_started"
 	RunEventModelStreamStarted RunEventKind = "model_stream_started"
+	RunEventSummaryStarted     RunEventKind = "summary_started"
+	RunEventSummaryReady       RunEventKind = "summary_ready"
 	RunEventTextDelta          RunEventKind = "text_delta"
 	RunEventToolCallRequested  RunEventKind = "tool_call_requested"
 	RunEventToolCallStarted    RunEventKind = "tool_call_started"
@@ -72,6 +74,7 @@ type RunEvent struct {
 	OccurredAt        time.Time
 	Kind              RunEventKind
 	ModelRequestID    *domain.ModelRequestID
+	Summary           *domain.SessionContextSummary
 	TextDelta         string
 	ToolInvocation    *domain.ToolInvocation
 	Evidence          *domain.Evidence
@@ -101,6 +104,9 @@ func (event RunEvent) Validate() error {
 	if event.ModelRequestID != nil {
 		payloads++
 	}
+	if event.Summary != nil {
+		payloads++
+	}
 	if event.TextDelta != "" {
 		payloads++
 	}
@@ -124,8 +130,12 @@ func (event RunEvent) Validate() error {
 		if payloads != 0 {
 			return ErrInvalidRunEvent
 		}
-	case RunEventModelStreamStarted:
+	case RunEventModelStreamStarted, RunEventSummaryStarted:
 		if payloads != 1 || event.ModelRequestID == nil || !event.ModelRequestID.Valid() {
+			return ErrInvalidRunEvent
+		}
+	case RunEventSummaryReady:
+		if payloads != 1 || event.Summary == nil || event.Summary.Validate() != nil {
 			return ErrInvalidRunEvent
 		}
 	case RunEventTextDelta:

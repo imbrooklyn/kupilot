@@ -60,7 +60,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 5 {
+	if err != nil || len(migrations) != 7 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -140,11 +140,18 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := applyMigration(context.Background(), db, migrations[4], "0.4.0", false); err != nil {
 		t.Fatalf("apply v0.4 migration error = %v", err)
 	}
+	if err := applyMigration(context.Background(), db, migrations[5], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 model-context migration error = %v", err)
+	}
+	if err := applyMigration(context.Background(), db, migrations[6], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 action-permission migration error = %v", err)
+	}
 	wantRows := map[string]int{
 		"sessions": 1, "messages": 1, "agent_runs": 1, "model_requests": 1,
 		"tool_invocations": 1, "evidence_items": 1, "diagnoses": 1, "audit_events": 1,
-		"settings": 1, "privacy_consents": 1, "approvals": 1, "approval_decisions": 0,
-		"schema_migrations": 5,
+		"settings": 1, "privacy_consents": 1, "approvals": 0, "approval_decisions": 0,
+		"legacy_restart_approvals": 1, "legacy_restart_approval_decisions": 0,
+		"action_reviews": 0, "schema_migrations": 7, "session_context_summaries": 0,
 	}
 	for table, want := range wantRows {
 		var got int
@@ -162,10 +169,39 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		t.Fatalf("retained request Message = %q/%v", retainedMessageID, err)
 	}
 	var approvalState string
-	if err := db.GetContext(context.Background(), &approvalState, `SELECT status FROM approvals WHERE id = ?`, approvalID); err != nil || approvalState != "pending" {
+	if err := db.GetContext(context.Background(), &approvalState, `SELECT status FROM legacy_restart_approvals WHERE id = ?`, approvalID); err != nil || approvalState != "cancelled" {
 		t.Fatalf("migrated approval state = %q/%v", approvalState, err)
 	}
-	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0"}
+	var migratedConsent struct {
+		Role           string `db:"role"`
+		PolicyVersion  string `db:"policy_version"`
+		CategoriesJSON string `db:"categories_json"`
+		Decision       string `db:"decision"`
+		SchemaVersion  int    `db:"schema_version"`
+	}
+	if err := db.GetContext(context.Background(), &migratedConsent, `
+		SELECT role, policy_version, categories_json, decision, schema_version
+		FROM privacy_consents
+	`); err != nil || migratedConsent.Role != "agent" || migratedConsent.PolicyVersion != "privacy-policy-v1" ||
+		migratedConsent.CategoriesJSON != `["user_question"]` || migratedConsent.Decision != "accepted" ||
+		migratedConsent.SchemaVersion != 2 {
+		t.Fatalf("migrated consent = %#v/%v", migratedConsent, err)
+	}
+	var migratedModelRequest struct {
+		ProfileName      string `db:"profile_name"`
+		ModelRole        string `db:"model_role"`
+		Invocation       string `db:"invocation"`
+		ReservedCostUnit int    `db:"reserved_cost_units"`
+	}
+	if err := db.GetContext(context.Background(), &migratedModelRequest, `
+		SELECT profile_name, model_role, invocation, reserved_cost_units
+		FROM model_requests WHERE id = ?
+	`, modelRequestID); err != nil || migratedModelRequest.ProfileName != "agent" ||
+		migratedModelRequest.ModelRole != "agent" || migratedModelRequest.Invocation != "agent" ||
+		migratedModelRequest.ReservedCostUnit != 1 {
+		t.Fatalf("migrated model request = %#v/%v", migratedModelRequest, err)
+	}
+	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0"}
 	assertMigrationApplicationVersions(t, db, wantVersions)
 	assertNoMigrationForeignKeyViolation(t, db)
 
@@ -182,7 +218,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	defer reopened.Close()
 	assertInitialSchema(t, reopened.handle.DB)
 	var reopenedRows int
-	if err := reopened.handle.GetContext(context.Background(), &reopenedRows, `SELECT count(id) FROM approvals WHERE id = ?`, approvalID); err != nil || reopenedRows != 1 {
+	if err := reopened.handle.GetContext(context.Background(), &reopenedRows, `SELECT count(id) FROM legacy_restart_approvals WHERE id = ?`, approvalID); err != nil || reopenedRows != 1 {
 		t.Fatalf("reopened approval rows = %d/%v", reopenedRows, err)
 	}
 }
@@ -238,7 +274,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 5 {
+	if err != nil || len(migrations) != 7 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -293,7 +329,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 5 {
+	if err != nil || len(migrations) != 7 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -379,7 +415,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 5 {
+	if err != nil || len(migrations) != 7 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -444,7 +480,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 5 {
+		if err != nil || len(migrations) != 7 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -525,7 +561,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 5 {
+		if err != nil || len(migrations) != 7 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -628,7 +664,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 6, "000006_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 8, "000008_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -776,6 +812,40 @@ func TestInitialSchemaContainsOnlyAllowlistedStorageColumns(t *testing.T) {
 	}
 }
 
+func TestActionAuthoritySchemaContainsNoRawParameterOrTransportColumns(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "action-schema-safety")
+	rows, err := db.handle.QueryxContext(context.Background(), `
+		SELECT schema_table.name AS table_name, table_column.name AS column_name
+		FROM sqlite_schema AS schema_table
+		JOIN pragma_table_info(schema_table.name) AS table_column
+		WHERE schema_table.type = 'table'
+		  AND schema_table.name IN ('approvals', 'approval_decisions', 'action_reviews')
+		ORDER BY schema_table.name, table_column.cid
+	`)
+	if err != nil {
+		t.Fatalf("action schema column query error = %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tableName string
+		var columnName string
+		if err := rows.Scan(&tableName, &columnName); err != nil {
+			t.Fatalf("action schema column scan error = %v", err)
+		}
+		lower := strings.ToLower(columnName)
+		for _, forbidden := range []string{
+			"raw", "json", "payload", "body", "command", "executable", "argv", "environment",
+		} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("forbidden action authority column %s.%s", tableName, columnName)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("action schema rows error = %v", err)
+	}
+}
+
 func assertInitialSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 	rows, err := db.QueryContext(context.Background(), `
@@ -800,16 +870,20 @@ func assertInitialSchema(t *testing.T, db *sql.DB) {
 		t.Fatalf("table rows error = %v", err)
 	}
 	want := []string{
+		"action_reviews",
 		"agent_runs",
 		"approval_decisions",
 		"approvals",
 		"audit_events",
 		"diagnoses",
 		"evidence_items",
+		"legacy_restart_approval_decisions",
+		"legacy_restart_approvals",
 		"messages",
 		"model_requests",
 		"privacy_consents",
 		"schema_migrations",
+		"session_context_summaries",
 		"sessions",
 		"settings",
 		"tool_invocations",
@@ -837,6 +911,8 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000003_approval_runtime.sql",
 		"000004_minimal_run_identity.sql",
 		"000005_v04_runtime_limits.sql",
+		"000006_session_model_context.sql",
+		"000007_action_permission_foundation.sql",
 	}
 	count := 0
 	for rows.Next() {

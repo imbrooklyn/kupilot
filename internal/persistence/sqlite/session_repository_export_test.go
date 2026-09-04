@@ -113,13 +113,37 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	if err := NewAgentRunRepository(db).FinishWithMessage(context.Background(), assistant, terminal); err != nil {
 		t.Fatalf("FinishWithMessage() error = %v", err)
 	}
+	contextPage, err := NewMessageRepository(db).ListEligibleModelContext(context.Background(), application.ModelContextPageRequest{
+		SessionID: run.SessionID, Limit: 10,
+	})
+	if err != nil || len(contextPage.Messages) != 2 {
+		t.Fatalf("ListEligibleModelContext() = %#v/%v", contextPage, err)
+	}
+	coverageDigest, coveredBytes, err := domain.SessionContextCoverageDigest(contextPage.Messages)
+	if err != nil {
+		t.Fatalf("SessionContextCoverageDigest() error = %v", err)
+	}
+	contextSummary := domain.SessionContextSummary{
+		SessionID: run.SessionID, Text: "Historic safe context with " + credentialCanary,
+		SummaryHash:    domain.SHA256Hex("Historic safe context with " + credentialCanary),
+		SchemaVersion:  domain.SessionContextSummarySchemaVersion,
+		PolicyVersion:  domain.SafeConversationContextPolicyVersion,
+		CoveredFirstID: contextPage.Messages[0].ID, CoveredThroughID: contextPage.Messages[1].ID,
+		CoveredCount: 2, CoveredBytes: coveredBytes, CoverageDigest: coverageDigest,
+		GeneratedAt: startedAt.Add(30 * time.Minute), AgentProfile: "agent",
+		AgentOriginHash: domain.SHA256Hex("https://model.example"),
+	}
+	if err := NewMessageRepository(db).SaveSessionContextSummary(context.Background(), contextSummary); err != nil {
+		t.Fatalf("SaveSessionContextSummary() error = %v", err)
+	}
 
 	snapshot, err := NewSessionRepository(db).ReadExportSnapshot(context.Background(), run.SessionID)
 	if err != nil {
 		t.Fatalf("ReadExportSnapshot() error = %v", err)
 	}
 	if snapshot.Session.ID != run.SessionID || snapshot.Session.PrivacyMode != domain.PrivacyModeStandard ||
-		len(snapshot.Messages) != 2 || len(snapshot.Diagnoses) != 1 || len(snapshot.Evidence) != 1 {
+		len(snapshot.Messages) != 2 || len(snapshot.Diagnoses) != 1 || len(snapshot.Evidence) != 1 ||
+		snapshot.ContextSummary == nil || snapshot.ContextSummary.CoverageDigest != coverageDigest {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	if snapshot.Evidence[0].Resource.UID != "" || snapshot.Evidence[0].Resource.ResourceVersion != "" {
@@ -136,6 +160,10 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	}
 	if !bytes.Contains(content, []byte("REDACTED")) || bytes.Contains(content, []byte(credentialCanary)) {
 		t.Fatalf("credential canary result:\n%s", content)
+	}
+	if !bytes.Contains(content, []byte("## Model context")) ||
+		!bytes.Contains(content, []byte(coverageDigest)) {
+		t.Fatalf("model-context coverage missing:\n%s", content)
 	}
 	for _, canary := range []string{
 		rawToolCanary,

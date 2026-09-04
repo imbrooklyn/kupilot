@@ -111,9 +111,9 @@ func (executor *fakeRestartExecutor) RevalidateApprovedRestart(
 	executor.intents = append(executor.intents, intent)
 	executor.mu.Unlock()
 	return RestartDeploymentObservation{
-		Scope: intent.Scope, DeploymentName: intent.DeploymentName, DeploymentUID: intent.DeploymentUID,
-		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
-		ResourceVersion: "fresh-resource-version",
+		Scope: intent.Scope, DeploymentName: intent.Target.Resource.Name, DeploymentUID: intent.Target.Resource.UID,
+		TemplateFingerprint: intent.Target.Fingerprint, DeploymentGeneration: intent.Target.Generation,
+		ResourceVersion: intent.Target.Resource.ResourceVersion,
 	}, nil
 }
 
@@ -174,14 +174,24 @@ func testNonce(t *testing.T, marker byte) domain.ApprovalNonce {
 
 func testIntent() domain.OperationIntent {
 	return domain.OperationIntent{
-		Operation:            domain.ApprovalOperationRestartDeployment,
-		Scope:                domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
-		DeploymentName:       "sample-deployment",
-		DeploymentUID:        "deployment-uid",
-		TemplateFingerprint:  domain.SHA256Hex("projected-pod-template"),
-		DeploymentGeneration: 11,
-		PolicyVersion:        domain.RestartDeploymentApprovalPolicyVersion,
-		ReasonSummary:        "Restart after diagnosis.",
+		Operation:              domain.ActionOperationRestartDeployment,
+		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
+		PolicyVersion:          domain.ActionPolicyVersion, PermissionProfile: domain.PermissionProfileAsk,
+		Risk: domain.RiskReview, Effect: domain.CapabilityEffectClusterMutation, PolicyGeneration: 1,
+		Scope:           domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
+		NamespaceAccess: domain.NamespaceAccessCurrent,
+		Target: domain.ActionTarget{
+			Resource: domain.ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "test-namespace",
+				Name: "sample-deployment", UID: "deployment-uid", ResourceVersion: "fresh-resource-version"},
+			Fingerprint: domain.SHA256Hex("projected-pod-template"), Generation: 11,
+		},
+		Parameters:         domain.ActionParameters{Kind: domain.ActionParametersNone},
+		DataCategories:     domain.ActionDataResourceMetadata,
+		AllowedSinks:       domain.ActionSinkTerminal | domain.ActionSinkKubernetesAPI,
+		NetworkEffects:     domain.ActionNetworkKubernetesAPI,
+		Limits:             domain.ActionLimits{Timeout: domain.RestartDeploymentActionTimeout, MaximumItems: 1},
+		VerificationPlanID: domain.RestartDeploymentVerificationPlanID,
+		ReasonSummary:      "Restart after diagnosis.", RiskSummary: domain.RestartDeploymentRiskSummary,
 	}
 }
 
@@ -200,7 +210,7 @@ func newTestService(t *testing.T, now time.Time, nonceValues ...domain.ApprovalN
 	executor := &fakeRestartExecutor{}
 	service, err := NewService(ServiceConfig{
 		Clock: clock, Nonces: &sequenceNonceSource{values: nonceValues},
-		Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+		Store: executor, AuditIDs: executor,
 	})
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -215,6 +225,8 @@ func approveCommand(request domain.ApprovalRequest) DecisionCommand {
 		ShownDigest:  request.ShownDigest(),
 		Nonce:        request.Nonce,
 		CurrentScope: request.Intent.Scope,
+		Actor:        domain.ApprovalActorLocalUser,
+		Disposition:  domain.ReviewDispositionHuman,
 	}
 }
 

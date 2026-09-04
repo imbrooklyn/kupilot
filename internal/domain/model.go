@@ -16,8 +16,6 @@ import (
 )
 
 const (
-	// MaxModelOutputTokens is the accepted per-request output-token ceiling.
-	MaxModelOutputTokens = 8192
 	// MaxModelRequestBytes bounds the serialized request at the transport boundary.
 	MaxModelRequestBytes = 256 * 1024
 	// MaxModelStreamBytes bounds all wire bytes consumed for one response stream.
@@ -27,8 +25,8 @@ const (
 	// MaxModelStreamChunkBytes bounds one decoded provider stream chunk.
 	MaxModelStreamChunkBytes = 64 * 1024
 	// MaxModelStreamChunks bounds SSE data records and decoded provider chunks in
-	// one response stream. Tokens and stream chunks are not one-to-one, so this
-	// ceiling leaves finite fragmentation headroom above MaxModelOutputTokens.
+	// one response stream. Tokens and stream chunks are not one-to-one; this
+	// finite ceiling does not assert an endpoint token limit.
 	MaxModelStreamChunks = 32 * 1024
 	// MaxModelInputMessageBytes bounds system, user, and Tool content sent to a model.
 	MaxModelInputMessageBytes = maxMessageContentBytes
@@ -50,6 +48,34 @@ const (
 	maxModelCorrelationIDBytes = 128
 	maxModelErrorMessageBytes  = 1024
 )
+
+// ModelRole is one code-owned consumer of an explicitly named model profile.
+type ModelRole string
+
+const (
+	ModelRoleAgent            ModelRole = "agent"
+	ModelRoleApprovalReviewer ModelRole = "approval_reviewer"
+)
+
+// Valid reports whether the role is admitted by the public model contract.
+func (role ModelRole) Valid() bool {
+	return role == ModelRoleAgent || role == ModelRoleApprovalReviewer
+}
+
+// ModelInvocation identifies why a model request consumes a role budget.
+type ModelInvocation string
+
+const (
+	ModelInvocationAgent        ModelInvocation = "agent"
+	ModelInvocationAgentSummary ModelInvocation = "agent_summary"
+	ModelInvocationReview       ModelInvocation = "approval_review"
+)
+
+// Valid reports whether the invocation is one fixed runtime path.
+func (invocation ModelInvocation) Valid() bool {
+	return invocation == ModelInvocationAgent || invocation == ModelInvocationAgentSummary ||
+		invocation == ModelInvocationReview
+}
 
 var (
 	// ErrInvalidModelConfiguration reports a non-secret configuration invariant failure.
@@ -89,6 +115,8 @@ const (
 // ModelConfiguration contains only validated, serializable, non-sensitive
 // settings. It contains no credential, header, client, callback, or SDK value.
 type ModelConfiguration struct {
+	ProfileName         string
+	Role                ModelRole
 	ProviderKind        ModelProviderKind
 	Endpoint            string
 	Origin              string
@@ -105,17 +133,19 @@ type ModelConfiguration struct {
 
 // Validate checks the fixed model profile without accepting a credential.
 func (configuration ModelConfiguration) Validate() error {
-	if configuration.ProviderKind != ModelProviderOpenAICompatible ||
+	if !ValidModelToken(configuration.ProfileName, 128) || !configuration.Role.Valid() ||
+		configuration.ProviderKind != ModelProviderOpenAICompatible ||
 		configuration.APIKeySource != ModelAPIKeySourceRuntime ||
 		configuration.TransportPolicy != ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP ||
-		!configuration.StreamingRequired || !configuration.ToolCallingRequired ||
 		!validModelEndpoint(configuration.Endpoint, configuration.Origin) ||
 		!validModelIdentifier(configuration.Model) ||
 		configuration.ReasoningEffort != ModelReasoningEffortOmitted && configuration.ReasoningEffort != ModelReasoningEffortNone ||
 		math.IsNaN(configuration.Temperature) || math.IsInf(configuration.Temperature, 0) ||
 		configuration.Temperature < 0 || configuration.Temperature > 0.2 ||
-		configuration.MaxOutputTokens < 1 || configuration.MaxOutputTokens > MaxModelOutputTokens ||
-		configuration.RequestTimeout <= 0 || configuration.RequestTimeout > MaxModelRequestTimeout {
+		configuration.MaxOutputTokens < 0 ||
+		configuration.RequestTimeout <= 0 || configuration.RequestTimeout > MaxModelRequestTimeout ||
+		configuration.Role == ModelRoleAgent && (!configuration.StreamingRequired || !configuration.ToolCallingRequired) ||
+		configuration.Role == ModelRoleApprovalReviewer && (configuration.StreamingRequired || configuration.ToolCallingRequired) {
 		return ErrInvalidModelConfiguration
 	}
 	return nil

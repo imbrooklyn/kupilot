@@ -44,6 +44,7 @@ type CoordinatorConfig struct {
 	ModelRuntime       ModelRuntime
 	ModelFactory       ModelRuntimeFactory
 	ModelProfiles      ModelProfileWriter
+	ReviewerModel      *ReviewerModelBinding
 	Identifiers        ApplicationIdentifierSource
 	AuditIdentifiers   AuditIdentifierSource
 	Questions          QuestionProcessor
@@ -51,6 +52,7 @@ type CoordinatorConfig struct {
 	ExportFiles        ExportFileWriter
 	ExportText         ExportTextProcessor
 	Privacy            *PrivacyManager
+	ModelContext       ModelContextPersistence
 	UIEvents           UIEventSink
 	Observer           RunObserver
 	Now                func() time.Time
@@ -89,43 +91,46 @@ type Coordinator struct {
 	mu        sync.Mutex
 	startupMu sync.Mutex
 
-	sessions         SessionPersistence
-	runs             RunPersistence
-	tools            ToolEvidencePersistence
-	audits           AuditPersistence
-	scope            ActiveScope
-	runner           agent.AgentRunner
-	modelRuntime     ModelRuntime
-	modelFactory     ModelRuntimeFactory
-	modelProfiles    ModelProfileWriter
-	identifiers      ApplicationIdentifierSource
-	auditIdentifiers AuditIdentifierSource
-	questions        QuestionProcessor
-	privacy          *PrivacyManager
-	uiEvents         UIEventSink
-	observer         RunObserver
-	now              func() time.Time
-	budgetLimits     agent.RunBudgetLimits
-	persistenceLimit time.Duration
-	resumeSessions   SessionResumeStore
-	sessionSearch    SessionSearchReader
-	titles           SessionTitleStore
-	startup          StartupMaintenance
-	uiScopes         *ScopeManager
-	scopePreferences ScopePreferenceStore
-	approvals        *ApprovalCoordinator
-	restartProposals RestartDeploymentProposalPreparer
-	evidenceDetails  EvidenceDetailReader
-	localState       LocalStateDeleter
-	exports          SessionExportReader
-	exportFiles      ExportFileWriter
-	exportText       ExportTextProcessor
-	startupPrepared  bool
-	currentSession   *domain.Session
-	currentResumed   bool
-	pendingResume    *pendingResume
-	startupResume    *startupResumeState
-	privacyChallenge *privacyChallenge
+	sessions          SessionPersistence
+	runs              RunPersistence
+	tools             ToolEvidencePersistence
+	audits            AuditPersistence
+	scope             ActiveScope
+	runner            agent.AgentRunner
+	modelRuntime      ModelRuntime
+	modelFactory      ModelRuntimeFactory
+	modelProfiles     ModelProfileWriter
+	reviewerModel     *ReviewerModelBinding
+	identifiers       ApplicationIdentifierSource
+	auditIdentifiers  AuditIdentifierSource
+	questions         QuestionProcessor
+	privacy           *PrivacyManager
+	modelContextStore ModelContextPersistence
+	uiEvents          UIEventSink
+	observer          RunObserver
+	now               func() time.Time
+	budgetLimits      agent.RunBudgetLimits
+	persistenceLimit  time.Duration
+	resumeSessions    SessionResumeStore
+	sessionSearch     SessionSearchReader
+	titles            SessionTitleStore
+	startup           StartupMaintenance
+	uiScopes          *ScopeManager
+	scopePreferences  ScopePreferenceStore
+	approvals         *ApprovalCoordinator
+	restartProposals  RestartDeploymentProposalPreparer
+	evidenceDetails   EvidenceDetailReader
+	localState        LocalStateDeleter
+	exports           SessionExportReader
+	exportFiles       ExportFileWriter
+	exportText        ExportTextProcessor
+	startupPrepared   bool
+	currentSession    *domain.Session
+	currentResumed    bool
+	pendingResume     *pendingResume
+	startupResume     *startupResumeState
+	privacyChallenge  *privacyChallenge
+	modelContext      sessionModelContext
 
 	closed                  bool
 	persistenceDegraded     bool
@@ -155,6 +160,7 @@ type activeRun struct {
 	minimalPersistence       bool
 	toolResultBytes          int
 	logCalls                 int
+	summaryCalls             int
 
 	lastAgentSequence int64
 	publishing        bool
@@ -172,11 +178,9 @@ type pendingTool struct {
 }
 
 type pendingResume struct {
-	request          UIResumeRequest
-	record           ResumedSessionRecord
-	projection       UIResumedSession
-	explicitScope    bool
-	currentCandidate *domain.ScopeCandidate
+	request    UIResumeRequest
+	record     ResumedSessionRecord
+	projection UIResumedSession
 }
 
 type startupResumeState struct {
@@ -196,6 +200,7 @@ const (
 	persistToolEvidence
 	persistTerminal
 	appendAuditOnly
+	persistSessionSummary
 )
 
 type persistenceAction struct {
@@ -204,6 +209,7 @@ type persistenceAction struct {
 	evidence   []domain.Evidence
 	event      agent.RunEvent
 	audit      auditSpec
+	summary    *domain.SessionContextSummary
 }
 
 type auditSpec struct {
@@ -241,6 +247,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		config.AuditIdentifiers == nil || config.Questions == nil || config.UIEvents == nil || config.Observer == nil ||
 		config.Privacy == nil || config.Now == nil || !validCoordinatorTime(config.Now()) || limits.Validate() != nil ||
 		persistenceLimit <= 0 || persistenceLimit > MaxPersistenceTimeout {
+		return nil, ErrCoordinatorDependency
+	}
+	if config.ReviewerModel != nil && (!config.ReviewerModel.valid() ||
+		config.ReviewerModel.Budget.Snapshot().Limits.Profile != limits.Profile) {
 		return nil, ErrCoordinatorDependency
 	}
 	if config.UI != nil && (config.UI.Sessions == nil || config.UI.Search == nil || config.UI.Titles == nil || config.UI.Startup == nil) {
@@ -297,10 +307,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		sessions: config.Sessions, runs: config.Runs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
 		runner: runner, modelRuntime: config.ModelRuntime,
-		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles,
+		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles, reviewerModel: config.ReviewerModel,
 		identifiers:      config.Identifiers,
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
-		privacy:  config.Privacy,
+		privacy: config.Privacy, modelContextStore: config.ModelContext,
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
@@ -390,12 +400,6 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 		return ModelSetupResult{}, err
 	}
 	defer coordinator.finishOperation()
-	if err := coordinator.stopRunForModelSetup(ctx); err != nil {
-		return ModelSetupResult{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return ModelSetupResult{}, err
-	}
 
 	coordinator.mu.Lock()
 	factory := coordinator.modelFactory
@@ -419,6 +423,25 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 	if contextErr := ctx.Err(); contextErr != nil {
 		replacement.Close()
 		return ModelSetupResult{}, contextErr
+	}
+	coordinator.mu.Lock()
+	currentRuntime := coordinator.modelRuntime
+	approvals := coordinator.approvals
+	coordinator.mu.Unlock()
+	originChanged := currentRuntime == nil || currentRuntime.Origin() != replacement.Origin()
+	if originChanged && approvals != nil {
+		if err := approvals.InvalidateModelOrigin(ctx); err != nil {
+			replacement.Close()
+			return ModelSetupResult{}, ErrModelSetupFailed
+		}
+	}
+	if err := coordinator.stopRunForModelSetup(ctx); err != nil {
+		replacement.Close()
+		return ModelSetupResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		replacement.Close()
+		return ModelSetupResult{}, err
 	}
 	if request.Persist {
 		if err := profiles.SaveModelProfile(ctx, request); err != nil {
@@ -444,9 +467,26 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 		return ModelSetupResult{}, ErrCoordinatorClosed
 	}
 	previous := coordinator.modelRuntime
+	previousProfile := ""
+	previousOrigin := ""
+	if previous != nil {
+		previousOrigin = previous.Origin()
+		if named, ok := previous.(namedModelRuntime); ok {
+			previousProfile = named.ProfileName()
+		}
+	}
 	coordinator.modelRuntime = replacement
 	coordinator.runner = replacement
 	coordinator.privacyChallenge = nil
+	replacementProfile := "agent"
+	if named, ok := replacement.(namedModelRuntime); ok {
+		replacementProfile = named.ProfileName()
+	}
+	if coordinator.currentSession != nil &&
+		(previousOrigin != replacement.Origin() || previousProfile != replacementProfile) {
+		loaded := coordinator.currentSession.PrivacyMode == domain.PrivacyModeMinimal
+		coordinator.modelContext = newSessionModelContext(*coordinator.currentSession, loaded)
+	}
 	coordinator.mu.Unlock()
 	if previous != nil {
 		previous.Close()
@@ -767,15 +807,11 @@ func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRe
 		return UIResumeResult{}, err
 	}
 	coordinator.mu.Lock()
-	explicitScope := false
-	var currentCandidate *domain.ScopeCandidate
 	if coordinator.startupResume != nil {
 		if !resumeRequestMatchesStart(request, coordinator.startupResume.intent) {
 			coordinator.mu.Unlock()
 			return UIResumeResult{}, ErrInvalidUIQuery
 		}
-		explicitScope = coordinator.startupResume.intent.ExplicitScope
-		currentCandidate = cloneScopeCandidate(coordinator.startupResume.currentCandidate)
 		coordinator.startupResume = nil
 	}
 	coordinator.mu.Unlock()
@@ -824,7 +860,6 @@ func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRe
 	if coordinator.pendingResume == nil || request.RequestID > coordinator.pendingResume.request.RequestID {
 		coordinator.pendingResume = &pendingResume{
 			request: request, record: record, projection: projection,
-			explicitScope: explicitScope, currentCandidate: currentCandidate,
 		}
 	}
 	coordinator.mu.Unlock()
@@ -1156,8 +1191,6 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	}
 	record := pending.record
 	projection := pending.projection
-	explicitScope := pending.explicitScope
-	currentCandidate := cloneScopeCandidate(pending.currentCandidate)
 	coordinator.mu.Unlock()
 
 	if coordinator.uiScopes == nil {
@@ -1169,28 +1202,14 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 		outcome.Failure = UIQueryUnavailable
 		return outcome
 	}
-	savedScope, savedResource := resumeSavedState(record)
-	if explicitScope && command.Scope != nil {
-		outcome.Failure = UIQueryUnavailable
-		return outcome
+	var scopeResult UIScopeResult
+	if view.State == ScopeStateActive && view.Scope != nil {
+		clearScopeResource(coordinator.uiScopes, *view.Scope)
+		scopeResult = successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, *view.Scope)
+	} else {
+		scopeResult = failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
 	}
-	if command.Scope != nil {
-		matchesSaved := savedScope != nil && *command.Scope == *savedScope
-		matchesCurrent := currentCandidate != nil && *command.Scope == *currentCandidate
-		if !matchesSaved && !matchesCurrent {
-			outcome.Failure = UIQueryUnavailable
-			return outcome
-		}
-	}
-
-	scopeResult := coordinator.resumeScopeResult(ctx, command)
 	outcome.Scope = &scopeResult
-	liveView := coordinator.uiScopes.View()
-	if liveView.State == ScopeStateActive && liveView.Scope != nil {
-		clearScopeResource(coordinator.uiScopes, *liveView.Scope)
-		resourceResult := coordinator.revalidateResumedResource(ctx, command.RequestID, *liveView.Scope, savedScope, savedResource)
-		outcome.Resource = &resourceResult
-	}
 
 	coordinator.mu.Lock()
 	if coordinator.pendingResume == nil || coordinator.pendingResume.request.RequestID != command.RequestID {
@@ -1198,13 +1217,34 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 		outcome.Failure = UIQueryUnavailable
 		return outcome
 	}
+	if coordinator.approvals != nil {
+		coordinator.mu.Unlock()
+		if err := coordinator.approvals.BindSessionAuthority(ctx, record.Session.ID); err != nil {
+			outcome.Failure = UIQueryUnavailable
+			return outcome
+		}
+		coordinator.mu.Lock()
+		if coordinator.pendingResume == nil || coordinator.pendingResume.request.RequestID != command.RequestID {
+			coordinator.mu.Unlock()
+			outcome.Failure = UIQueryUnavailable
+			return outcome
+		}
+	}
 	copy := record.Session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = true
+	coordinator.modelContext = newSessionModelContext(copy, false)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
 	coordinator.pendingResume = nil
 	coordinator.mu.Unlock()
+	if _, contextErr := coordinator.conversationForRun(ctx, copy.ID); contextErr != nil {
+		coordinator.mu.Lock()
+		if coordinator.modelContext.sessionID == copy.ID {
+			coordinator.modelContext.storageHealthy = false
+		}
+		coordinator.mu.Unlock()
+	}
 	outcome.Session = projectUISession(record.Session, true)
 	projectionCopy := projection
 	outcome.Resumed = &projectionCopy
@@ -1222,76 +1262,6 @@ func resumeRequestMatchesStart(request UIResumeRequest, intent UIStartIntent) bo
 	default:
 		return false
 	}
-}
-
-func (coordinator *Coordinator) resumeScopeResult(
-	ctx context.Context,
-	command UICommand,
-) UIScopeResult {
-	if command.Scope != nil {
-		return coordinator.executeScopeCommand(ctx, UICommand{
-			Kind: UICommandActivateScope, RequestID: command.RequestID,
-			ExpectedScopeGeneration: command.ExpectedScopeGeneration, Scope: command.Scope,
-		})
-	}
-	view := coordinator.uiScopes.View()
-	if view.State != ScopeStateActive || view.Scope == nil {
-		return failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
-	}
-	return successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, *view.Scope)
-}
-
-func resumeSavedState(record ResumedSessionRecord) (*domain.ScopeCandidate, *domain.ResourceRef) {
-	scope := cloneScopeCandidate(record.Session.LastScope)
-	resource := cloneResource(record.Session.SelectedResource)
-	for _, message := range record.Messages {
-		if message.Scope != nil {
-			scope = &domain.ScopeCandidate{Context: message.Scope.Context, Namespace: message.Scope.Namespace}
-		}
-		if message.Resource != nil {
-			resource = cloneResource(message.Resource)
-		}
-	}
-	return scope, resource
-}
-
-func (coordinator *Coordinator) revalidateResumedResource(
-	ctx context.Context,
-	requestID uint64,
-	scope domain.ClusterScope,
-	savedScope *domain.ScopeCandidate,
-	reference *domain.ResourceRef,
-) UIResourceSelectionResult {
-	result := UIResourceSelectionResult{RequestID: requestID, ScopeGeneration: scope.Generation, Cleared: true}
-	if reference == nil {
-		return result
-	}
-	if savedScope == nil || savedScope.Context != scope.Context || savedScope.Namespace != scope.Namespace ||
-		!domain.ReferenceMatchesWorkingNamespace(*reference, scope.Namespace) {
-		result.Cleared = false
-		result.Failure = UIQueryUnavailable
-		return result
-	}
-	actual, err := coordinator.uiScopes.GetResource(ctx, scope, *reference)
-	if err != nil {
-		result.Cleared = false
-		result.Failure = uiFailureCode(err)
-		return result
-	}
-	if reference.UID != "" && actual.Reference.UID != reference.UID {
-		result.Cleared = false
-		result.Failure = UIQueryUnavailable
-		return result
-	}
-	if err := coordinator.uiScopes.SelectResource(scope, actual.Reference); err != nil {
-		result.Cleared = false
-		result.Failure = uiFailureCode(err)
-		return result
-	}
-	result.Cleared = false
-	selected := actual.Reference
-	result.Resource = &selected
-	return result
 }
 
 func (coordinator *Coordinator) executeScopeCommand(ctx context.Context, command UICommand) UIScopeResult {
@@ -1466,14 +1436,28 @@ func (coordinator *Coordinator) executeRenameCommand(ctx context.Context, comman
 
 func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	limits := coordinator.budgetLimits
+	reviewerLimits, _ := agent.ReviewerBudgetLimitsForProfile(limits.Profile)
 	result := UIStatusResult{
 		Session: coordinator.CurrentUISession(), CapabilityCatalogVersion: agent.ToolCatalogVersion,
 		Budget: UIBudgetStatus{
-			Profile: limits.Profile, RunMilliseconds: limits.RunDuration.Milliseconds(),
+			ModelEvidenceBasis: ModelBudgetEvidenceBasis,
+			Profile:            limits.Profile, RunMilliseconds: limits.RunDuration.Milliseconds(),
 			RemainingMilliseconds: limits.RunDuration.Milliseconds(),
 			StepsMaximum:          limits.Steps, ToolCallsMaximum: limits.ToolCalls, ModelCallsMaximum: limits.ModelCalls,
+			ModelCostUnitsMaximum: limits.ModelCostUnits,
+			SummaryCallsMaximum:   limits.SummaryCalls, SummaryCostUnitsMaximum: limits.SummaryCostUnits,
+			ReviewerCallsMaximum: reviewerLimits.Calls, ReviewerCostUnitsMaximum: reviewerLimits.CostUnits,
 			ToolResultBytesMaximum: limits.RunToolResultBytes, LogCallsMaximum: limits.LogCalls,
 		},
+	}
+	if coordinator.approvals != nil {
+		permission, action := coordinator.approvals.Status()
+		result.Permission = UIPermissionStatus{
+			Configured: true, Profile: permission.Profile, PolicyGeneration: permission.PolicyGeneration,
+			Healthy: permission.Healthy, FullAccessAllowed: permission.FullAccessAllowed,
+			HighRiskAcknowledged: permission.HighRiskAcknowledged, SessionRuleCount: len(permission.SessionRules),
+		}
+		result.Action = action
 	}
 	if coordinator.uiScopes != nil {
 		view := coordinator.uiScopes.View()
@@ -1495,6 +1479,9 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 		result.Budget.StepsUsed = state.run.StepCount
 		result.Budget.ToolCallsUsed = state.run.ToolCallCount
 		result.Budget.ModelCallsUsed = state.run.ModelRequestCount
+		result.Budget.ModelCostUnitsUsed = state.run.ModelRequestCount
+		result.Budget.SummaryCallsUsed = state.summaryCalls
+		result.Budget.SummaryCostUnitsUsed = state.summaryCalls
 		result.Budget.ToolResultBytesUsed = state.toolResultBytes
 		result.Budget.LogCallsUsed = state.logCalls
 		if state.run.StartedAt != nil {
@@ -1508,6 +1495,43 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 			result.Budget.ElapsedMilliseconds = elapsed.Milliseconds()
 			result.Budget.RemainingMilliseconds = limits.RunDuration.Milliseconds() - result.Budget.ElapsedMilliseconds
 		}
+	}
+	if coordinator.currentSession != nil {
+		contextState := coordinator.modelContext
+		result.ModelContext = UIModelContextStatus{
+			Mode: contextState.mode, EligibleMessages: len(contextState.coverage), EligibleBytes: contextState.eligibleBytes,
+			RecentTailMessages: contextState.recentTailCount, SummaryCallsMaximum: limits.SummaryCalls,
+			StorageHealthy: contextState.storageHealthy,
+		}
+		if contextState.summary != nil {
+			result.ModelContext.Compressed = true
+			result.ModelContext.CompressedAtUnixMillis = contextState.summary.GeneratedAt.UnixMilli()
+			result.ModelContext.CoveredThroughMessageID = contextState.summary.CoveredThroughID
+		}
+		if coordinator.active != nil && !coordinator.active.terminal {
+			result.ModelContext.SummaryCallsUsed = coordinator.active.summaryCalls
+		}
+	}
+	if coordinator.modelRuntime != nil {
+		profile, originHash := coordinator.currentAgentBindingLocked()
+		privacy := coordinator.privacy.Snapshot()
+		result.AgentModel = UIModelRoleStatus{
+			Role: domain.ModelRoleAgent, Profile: profile, OriginHash: originHash,
+			Configured: true, Available: true, Consented: privacy.Accepted,
+		}
+	} else {
+		result.AgentModel.Role = domain.ModelRoleAgent
+	}
+	if coordinator.reviewerModel != nil && coordinator.reviewerModel.valid() {
+		privacy := coordinator.reviewerModel.Privacy.Snapshot()
+		budget := coordinator.reviewerModel.Budget.Snapshot()
+		result.ReviewerModel = UIModelRoleStatus{
+			Role: domain.ModelRoleApprovalReviewer, Profile: coordinator.reviewerModel.Profile,
+			OriginHash: privacy.OriginHash, Configured: true, Available: coordinator.reviewerModel.Available,
+			Consented: privacy.Accepted && coordinator.reviewerModel.Available,
+		}
+		result.Budget.ReviewerCallsUsed = budget.Calls
+		result.Budget.ReviewerCostUnitsUsed = budget.CostUnits
 	}
 	coordinator.mu.Unlock()
 	return result
@@ -1720,10 +1744,16 @@ func (coordinator *Coordinator) createSessionWithinOperation(
 		coordinator.markGlobalPersistenceDegraded()
 		return domain.Session{}, ErrPersistenceUnavailable
 	}
+	if coordinator.approvals != nil {
+		if err := coordinator.approvals.BindSessionAuthority(ctx, session.ID); err != nil {
+			return domain.Session{}, ErrPermissionUnavailable
+		}
+	}
 	coordinator.mu.Lock()
 	copy := session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = false
+	coordinator.modelContext = newSessionModelContext(copy, true)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
 	coordinator.pendingResume = nil
@@ -1828,14 +1858,30 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	if !current || scope.Validate() != nil || command.Resource != nil && !domain.ReferenceMatchesWorkingNamespace(*command.Resource, scope.Namespace) {
 		return "", ErrScopeUnavailable
 	}
+	conversation, contextErr := coordinator.conversationForRun(runContext, command.SessionID)
+	if contextErr != nil {
+		coordinator.markGlobalPersistenceDegraded()
+		return "", ErrPersistenceUnavailable
+	}
+	if currentScope, stillCurrent := coordinator.scope.CurrentScope(); !stillCurrent || currentScope != scope {
+		return "", ErrScopeUnavailable
+	}
+	if authorized, privacyErr = coordinator.privacy.AuthorizeModel(runContext); privacyErr != nil || !authorized {
+		if privacyErr != nil {
+			coordinator.privacy.FailClosed()
+			coordinator.markGlobalPersistenceDegraded()
+			return "", ErrPersistenceUnavailable
+		}
+		return "", ErrConsentRequired
+	}
 	runID, runErr := coordinator.identifiers.NewAgentRunID()
 	messageID, messageErr := coordinator.identifiers.NewMessageID()
 	startedAt := coordinator.now()
 	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
 		return "", ErrCoordinatorDependency
 	}
-	input, err := agent.NewRunInput(
-		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits,
+	input, err := agent.NewRunInputWithContext(
+		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits, conversation,
 	)
 	if err != nil {
 		return "", ErrCoordinatorDependency
@@ -1915,17 +1961,29 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	if coordinator == nil || ctx == nil || event.Validate() != nil {
 		return agent.EventSinkRejected
 	}
-	modelAuthorized := true
-	var privacyErr error
-	if event.Kind == agent.RunEventModelStreamStarted {
-		modelAuthorized, privacyErr = coordinator.privacy.AuthorizeModel(ctx)
-	}
 	coordinator.mu.Lock()
 	state := coordinator.active
 	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
 		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
 		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
-		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted {
+		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
+		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) {
+		coordinator.mu.Unlock()
+		return agent.EventSinkRejected
+	}
+	coordinator.mu.Unlock()
+	modelAuthorized := true
+	var privacyErr error
+	if event.Kind == agent.RunEventModelStreamStarted || event.Kind == agent.RunEventSummaryStarted {
+		modelAuthorized, privacyErr = coordinator.privacy.AuthorizeModel(ctx)
+	}
+	coordinator.mu.Lock()
+	state = coordinator.active
+	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
+		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
+		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
+		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
+		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) {
 		coordinator.mu.Unlock()
 		return agent.EventSinkRejected
 	}
@@ -1971,6 +2029,9 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	persistenceErr := coordinator.performPersistence(ctx, state, action)
 	persistenceFailed := errors.Is(persistenceErr, ErrPersistenceUnavailable)
+	if event.Kind == agent.RunEventSummaryReady && persistenceErr != nil {
+		bridgeFailed = true
+	}
 	if persistenceFailed {
 		bridgeFailed = coordinator.markRunPersistenceDegraded(ctx, state) != nil || bridgeFailed
 	} else if persistenceErr != nil {
@@ -2002,6 +2063,24 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	return agent.EventSinkAccepted
 }
 
+func runEventRequiresCurrentScope(kind agent.RunEventKind) bool {
+	switch kind {
+	case agent.RunEventRunFailed, agent.RunEventRunCancelled, agent.RunEventRunTimedOut,
+		agent.RunEventRunStaleScope, agent.RunEventRunInterrupted:
+		return false
+	default:
+		return true
+	}
+}
+
+func (coordinator *Coordinator) runScopeCurrentLocked(state *activeRun) bool {
+	if coordinator == nil || coordinator.scope == nil || state == nil {
+		return false
+	}
+	current, ok := coordinator.scope.CurrentScope()
+	return ok && current.Snapshot() == state.run.Scope
+}
+
 func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, state *activeRun) error {
 	if coordinator == nil || coordinator.approvals == nil || coordinator.restartProposals == nil ||
 		state == nil || state.diagnosis == nil || state.bridge == nil {
@@ -2027,15 +2106,23 @@ func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, stat
 		proposed.Target.ResourceVersion != "" {
 		return ErrApprovalUnavailable
 	}
-	intent, err := coordinator.restartProposals.PrepareRestartDeploymentProposal(
+	policy, liveScope, err := coordinator.approvals.PrepareRestartActionPolicy(state.run.SessionID, state.run.Scope)
+	if err != nil {
+		return err
+	}
+	preparedTarget, err := coordinator.restartProposals.PrepareRestartDeploymentProposal(
 		ctx,
 		state.run.Scope,
 		*proposed.Target,
 		proposed.Action,
 	)
-	if err != nil || intent.Validate() != nil || intent.Scope != state.run.Scope ||
-		intent.Operation != domain.ApprovalOperationRestartDeployment ||
-		intent.DeploymentName != proposed.Target.Name || intent.ReasonSummary != proposed.Action {
+	if err != nil || preparedTarget.Validate() != nil || preparedTarget.Resource.Name != proposed.Target.Name {
+		return ErrApprovalUnavailable
+	}
+	intent, err := NewRestartDeploymentActionIntent(policy, liveScope, preparedTarget, proposed.Action)
+	if err != nil || intent.ValidateRestartDeployment() != nil || intent.Scope != state.run.Scope ||
+		intent.Operation != domain.ActionOperationRestartDeployment ||
+		intent.Target.Resource.Name != proposed.Target.Name || intent.ReasonSummary != proposed.Action {
 		return ErrApprovalUnavailable
 	}
 	sequence := state.bridge.sequence + 1
@@ -2218,6 +2305,21 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			eventType: domain.AuditEventModelRequested,
 			actor:     domain.AuditActorAgent, outcome: domain.AuditOutcomeSuccess,
 		}}, nil
+	case agent.RunEventSummaryStarted:
+		state.summaryCalls++
+		if state.summaryCalls > state.input.BudgetLimits().SummaryCalls {
+			return persistenceAction{}, ErrInvalidAgentEvent
+		}
+		return persistenceAction{kind: appendAuditOnly, audit: auditSpec{
+			eventType: domain.AuditEventModelRequested,
+			actor:     domain.AuditActorAgent, outcome: domain.AuditOutcomeSuccess,
+		}}, nil
+	case agent.RunEventSummaryReady:
+		if coordinator.validateSummaryForRunLocked(state, *event.Summary) != nil {
+			return persistenceAction{}, ErrInvalidAgentEvent
+		}
+		summary := *event.Summary
+		return persistenceAction{kind: persistSessionSummary, summary: &summary}, nil
 	case agent.RunEventTextDelta:
 		return persistenceAction{}, nil
 	case agent.RunEventToolCallRequested:
@@ -2340,6 +2442,21 @@ func (coordinator *Coordinator) performPersistence(ctx context.Context, state *a
 			return nil
 		}
 		return coordinator.appendRunAudit(ctx, state, action.audit)
+	case persistSessionSummary:
+		if action.summary == nil {
+			return ErrPersistenceUnavailable
+		}
+		if !state.minimalPersistence {
+			if coordinator.modelContextStore == nil {
+				return ErrPersistenceUnavailable
+			}
+			if err := coordinator.persist(ctx, func(operationContext context.Context) error {
+				return coordinator.modelContextStore.SaveSessionContextSummary(operationContext, *action.summary)
+			}); err != nil {
+				return err
+			}
+		}
+		return coordinator.acceptStoredSummary(state, *action.summary)
 	default:
 		return ErrPersistenceUnavailable
 	}
@@ -2370,11 +2487,6 @@ func (coordinator *Coordinator) persistTerminal(
 	if err != nil {
 		return ErrPersistenceUnavailable
 	}
-	if state.minimalPersistence {
-		return coordinator.persist(ctx, func(operationContext context.Context) error {
-			return coordinator.runs.FinishWithAudit(operationContext, run, audit)
-		})
-	}
 	if run.Status != domain.AgentRunStatusCompleted || state.persistenceBad {
 		return coordinator.persist(ctx, func(operationContext context.Context) error {
 			return coordinator.runs.FinishWithAudit(operationContext, run, audit)
@@ -2398,9 +2510,27 @@ func (coordinator *Coordinator) persistTerminal(
 	if message.Validate() != nil {
 		return ErrPersistenceUnavailable
 	}
-	return coordinator.persist(ctx, func(operationContext context.Context) error {
-		return coordinator.runs.CompleteWithAudit(operationContext, diagnosis, message, run, audit)
-	})
+	if state.minimalPersistence {
+		if err := coordinator.persist(ctx, func(operationContext context.Context) error {
+			return coordinator.runs.FinishWithAudit(operationContext, run, audit)
+		}); err != nil {
+			return err
+		}
+	} else {
+		if err := coordinator.persist(ctx, func(operationContext context.Context) error {
+			return coordinator.runs.CompleteWithAudit(operationContext, diagnosis, message, run, audit)
+		}); err != nil {
+			return err
+		}
+	}
+	if err := coordinator.recordCompletedConversation(state, message.ID, diagnosis.AnswerMarkdown); err != nil {
+		coordinator.mu.Lock()
+		if coordinator.modelContext.sessionID == run.SessionID {
+			coordinator.modelContext.storageHealthy = false
+		}
+		coordinator.mu.Unlock()
+	}
+	return nil
 }
 
 func (coordinator *Coordinator) newSessionAudit(

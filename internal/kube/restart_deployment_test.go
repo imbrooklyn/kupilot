@@ -45,9 +45,9 @@ func TestDeploymentRestarterPreparesProposalFromFreshProjectionWithoutWrite(t *t
 	if err != nil {
 		t.Fatalf("PrepareRestartDeploymentProposal() error = %v", err)
 	}
-	want := restartTestIntent(t, deployment)
-	if intent != want || intent.DeploymentUID != string(deployment.UID) ||
-		intent.DeploymentGeneration != deployment.Generation || intent.TemplateFingerprint == "" {
+	want := restartTestIntent(t, deployment).Target
+	if intent != want || intent.Resource.UID != string(deployment.UID) ||
+		intent.Generation != deployment.Generation || intent.Fingerprint == "" {
 		t.Fatalf("prepared intent = %#v, want %#v", intent, want)
 	}
 	if actions := fakeClient.Actions(); len(actions) != 1 {
@@ -119,9 +119,7 @@ func TestDeploymentRestarterUsesFreshResourceVersionAndFixedPatch(t *testing.T) 
 		response.Generation = 12
 		return true, response, nil
 	})
-	approved := deployment.DeepCopy()
-	approved.ResourceVersion = "16"
-	intent := restartTestIntent(t, approved)
+	intent := restartTestIntent(t, deployment)
 
 	observation, err := restarter.RevalidateApprovedRestart(context.Background(), intent)
 	if err != nil {
@@ -290,7 +288,7 @@ func TestDeploymentRestarterSendsOnlyTheFixedWirePatch(t *testing.T) {
 
 func TestDeploymentRestarterRejectsChangedTargetBeforePatch(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 9, 10, 11, 0, time.UTC)
-	approved := restartTestDeployment("16")
+	approved := restartTestDeployment("17")
 	intent := restartTestIntent(t, approved)
 	tests := []struct {
 		name   string
@@ -304,13 +302,13 @@ func TestDeploymentRestarterRejectsChangedTargetBeforePatch(t *testing.T) {
 			value.Spec.Template.Annotations = map[string]string{"kupilot.io/restartedAt": "2026-08-12T08:00:00Z"}
 		}},
 		{name: "generation", mutate: func(value *appsv1.Deployment) { value.Generation++ }},
+		{name: "resource version", mutate: func(value *appsv1.Deployment) { value.ResourceVersion = "18" }},
 		{name: "namespace", mutate: func(value *appsv1.Deployment) { value.Namespace = "other-namespace" }},
 		{name: "name", mutate: func(value *appsv1.Deployment) { value.Name = "other-deployment" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fresh := approved.DeepCopy()
-			fresh.ResourceVersion = "17"
 			test.mutate(fresh)
 			restarter, closeClient, fakeClient := newFakeDeploymentRestarter(t, now, approved)
 			defer closeClient()
@@ -529,12 +527,24 @@ func restartTestIntent(t *testing.T, deployment *appsv1.Deployment) domain.Opera
 		t.Fatalf("deploymentTemplateFingerprint() error = %v", err)
 	}
 	return domain.OperationIntent{
-		Operation:      domain.ApprovalOperationRestartDeployment,
-		Scope:          domain.ScopeSnapshot{Context: "selected", Namespace: "team-a", Generation: 7},
-		DeploymentName: deployment.Name, DeploymentUID: string(deployment.UID),
-		TemplateFingerprint: fingerprint, DeploymentGeneration: deployment.Generation,
-		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion,
-		ReasonSummary: "Restart after the bounded diagnosis.",
+		Operation:              domain.ActionOperationRestartDeployment,
+		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
+		PolicyVersion:          domain.ActionPolicyVersion, PermissionProfile: domain.PermissionProfileAsk,
+		Risk: domain.RiskReview, Effect: domain.CapabilityEffectClusterMutation, PolicyGeneration: 1,
+		Scope:           domain.ScopeSnapshot{Context: "selected", Namespace: "team-a", Generation: 7},
+		NamespaceAccess: domain.NamespaceAccessCurrent,
+		Target: domain.ActionTarget{Resource: domain.ResourceRef{
+			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
+			Namespace: deployment.Namespace, Name: deployment.Name, UID: string(deployment.UID),
+			ResourceVersion: deployment.ResourceVersion,
+		}, Fingerprint: fingerprint, Generation: deployment.Generation},
+		Parameters:         domain.ActionParameters{Kind: domain.ActionParametersNone},
+		DataCategories:     domain.ActionDataResourceMetadata,
+		AllowedSinks:       domain.ActionSinkTerminal | domain.ActionSinkKubernetesAPI,
+		NetworkEffects:     domain.ActionNetworkKubernetesAPI,
+		Limits:             domain.ActionLimits{Timeout: domain.RestartDeploymentActionTimeout, MaximumItems: 1},
+		VerificationPlanID: domain.RestartDeploymentVerificationPlanID,
+		ReasonSummary:      "Restart after the bounded diagnosis.", RiskSummary: domain.RestartDeploymentRiskSummary,
 	}
 }
 

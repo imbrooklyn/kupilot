@@ -89,6 +89,7 @@ decision.
   findings. Go 1.25.12 is not an acceptable release fallback for this baseline.
 
 The supported cluster matrix remains in
-[Kubernetes Compatibility](kubernetes-compatibility.md), and the single model
-wire profile remains in [Model Compatibility](model-compatibility.md). Those
-dependency groups are not expanded by the Go toolchain baseline.
+[Kubernetes Compatibility](kubernetes-compatibility.md), and the single
+provider protocol with explicit Agent and optional Reviewer profiles remains
+in [Model Compatibility](model-compatibility.md). Those dependency groups are
+not expanded by the Go toolchain baseline.

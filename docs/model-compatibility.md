@@ -1,9 +1,12 @@
 # Model Compatibility Contract
 
 This document defines the one model protocol kind and explicit named-profile
-contract accepted for Kupilot `v0.5`. The checked-in implementation remains
-the `v0.4` single-profile baseline. New roles, origins, ADK composition, and
-limits described here are targets, not claims of current reachability.
+contract accepted for Kupilot `v0.5`. The checked-in runtime implements the
+required `agent` profile, optional `approval_reviewer` transport seam, Eino ADK
+composition, safe Session context, Agent-profile summarization, and the strict
+Reviewer transport consumed by deterministic permission routing. Reviewer
+output remains non-authoritative and only the existing supervised Deployment
+restart consumes the current action foundation.
 
 The protocol is intentionally narrower than the broad and inconsistent use of
 the term "OpenAI-compatible." Compatibility means passing this contract for
@@ -13,7 +16,7 @@ follow from a product label or provider claim.
 ## Named profiles and evidence boundary
 
 Kupilot retains exactly one provider kind, `openai_compatible`, while allowing
-several explicitly configured named profiles and canonical origins. The fixed
+the two fixed explicitly configured profiles and canonical origins. The fixed
 consumer roles are required `agent` and optional `approval_reviewer`.
 Summarization reuses `agent` with an independent reserved budget; there is no
 predeclared `context_compactor` role.
@@ -106,13 +109,14 @@ The production model transport uses
 `github.com/cloudwego/eino` v0.9.13. The component, ReAct runtime, and hardened
 `net/http` wrapper are all contained in `internal/agent/einoadapter`.
 
-Those pins describe the current `v0.4` implementation and the tagged source
-reviewed for the `v0.5` decision. Tagged Eino v0.9.13 provides stable ADK
-`ChatModelAgent`, `Runner`, and summarization middleware, but no suitable stable
-runner-managed durable Session contract. On 2026-09-03 the visible upstream
-stable release was v0.9.19 and the v0.10.0-alpha.30 line was prerelease. S02
-must re-evaluate the exact dependency state; this document neither upgrades a
-module nor permits a prerelease Session API.
+Those pins are the implemented runtime and the exact tagged source reviewed for
+this slice. Tagged Eino v0.9.13 provides stable ADK `ChatModelAgent`, `Runner`,
+message state, Tool pairing, and summarization middleware, but no suitable
+stable runner-managed durable Session contract. The review on 2026-09-04 found
+v0.9.19 as the latest visible stable release and v0.10.0-alpha.31 as
+prerelease. The implementation therefore remains on v0.9.13 and uses the
+existing SQLite safe Messages through a thin project-owned selection bridge;
+it does not adopt a prerelease Session API or maintain a second runtime.
 
 The Eino component is the only Chat Completions serializer and stream decoder.
 Kupilot does not replace or reconstruct its JSON request. A payload observer
@@ -142,34 +146,39 @@ component performs no application retry, fallback, tracing, or persistence.
 Every returned Eino stream and its tracked HTTP response body are closed on all
 terminal paths.
 
-## Implemented `v0.4` model configuration
+## Implemented named model configuration
 
 The current ordinary typed `ModelConfiguration` contains only validated,
 non-sensitive values:
 
 - The fixed provider kind `openai_compatible`.
+- One explicit profile name and fixed consumer role: required `agent` or
+  optional `approval_reviewer`.
 - One canonical endpoint base URL and its exact canonical origin.
 - A user-configured model identifier.
 - The fixed `runtime` credential-source marker, never the selected source or
   key value.
-- Temperature from 0 through 0.2, a `v0.4` output-token limit from 1 through
-  8,192, and a configured request timeout no greater than 300 seconds. These
-  are current compatibility values, not universal `v0.5` role or endpoint
+- Temperature from 0 through 0.2, an optional positive endpoint-evidenced
+  output-token limit, and a configured request timeout no greater than 300
+  seconds. Without endpoint evidence, Kupilot omits the token parameter and
+  relies on independent output-byte, stream, call, time, and cost-unit safety
   limits. The immutable run profile and remaining run time may impose a shorter
   deadline.
-- Required streaming and structured Tool-calling capability flags.
+- Required streaming and structured Tool-calling flags for `agent`; fixed
+  non-streaming and Tool-free flags for `approval_reviewer`.
 - The fixed transport policy: normally verified HTTPS, HTTP only on an explicit
   loopback host, and same-origin redirects only.
 
 The model request contains no endpoint, origin, credential, Context, Namespace,
 deadline, redirect setting, arbitrary Tool, or hard-limit override. Every model
-request carries the complete frozen catalog of exactly seven strict `v0.4` Tool
-specifications. The `v0.5` catalog remains versioned and code-owned but is
-capability-driven rather than frozen to that count. "Strict" here describes
-Kupilot's closed JSON Schemas and local
-binder; it does not require a provider-specific strict-output flag.
+request made for Agent investigation carries the complete current frozen
+catalog of exactly seven strict Tool specifications. Summary and Reviewer
+requests are non-streaming and Tool-free. The wider `v0.5` catalog remains a
+later implementation target and is not claimed here. "Strict" describes
+Kupilot's closed JSON Schemas and local binder; it does not require a
+provider-specific strict-output flag.
 
-## Implemented `v0.4` Agent Chat Completions wire profile
+## Implemented Agent Chat Completions wire profile
 
 The configured endpoint is a base URL. The accepted request target is:
 
@@ -180,9 +189,10 @@ POST {configured-endpoint}/chat/completions
 The request uses the fields emitted by the pinned Eino ChatModel and asks for
 one streamed choice. The required effective values are the configured `model`,
 bounded conversation `messages`, seven function `tools`, `stream: true`,
-`stream_options.include_usage: true`, the bounded `temperature`, and
-`max_tokens`. When typed configuration explicitly sets
-`model.reasoning_effort: none`, Eino also emits
+`stream_options.include_usage: true`, and the bounded `temperature`.
+`max_tokens` is present only when typed configuration explicitly sets
+`models.agent.max_output_tokens` from endpoint evidence. When configuration sets
+`models.agent.reasoning_effort: none`, Eino also emits
 `reasoning_effort: "none"`; otherwise that field is absent. The adapter never
 infers it from a model name or retries based on endpoint error text. Temperature
 is the one fixed, adapter-owned Eino `ExtraFields` entry: its value is the
@@ -254,7 +264,7 @@ objects never become Application or Domain metadata. Only the project-owned
 safe provisional text event may cross into Application, and it is never Domain
 state, a successful result, or durable content.
 
-## Implemented `v0.4` capability validation strategy
+## Implemented Agent capability validation strategy
 
 Adapter construction is deliberately network-free and does not send a
 speculative capability probe. After Application admits a transfer, the first
@@ -265,7 +275,7 @@ Kupilot does not retry that failure automatically, downgrade to non-streaming or
 prose-parsed Tools, route to another origin, or retain partial output as a
 successful result.
 
-## Implemented `v0.4` Agent capability matrix
+## Implemented Agent capability matrix
 
 <!-- markdownlint-disable MD013 -->
 
@@ -298,7 +308,7 @@ successful result.
 Indexed Tool-call fragments do not imply concurrent Tool execution. Agent
 runtime policy remains serial and applies the fixed call and step budgets.
 
-## Implemented `v0.4` fixed limits
+## Implemented fixed safety limits
 
 All values in this table are measured locally by the current implementation. A
 server-side limit does not replace them, and current configuration may tighten
@@ -311,10 +321,13 @@ or summarization call.
 | Boundary | Maximum |
 | --- | ---: |
 | Serialized JSON request body | 256 KiB |
-| Messages per request | 322, derived from two initial messages plus the 64-model-call and 256-Tool-call hard ceilings |
+| Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
+| Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
+| Eligible durable recent tail after summarization | Exactly 16 user/assistant Messages (eight complete turns); any current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
+| Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |
-| Tool specifications per request | Exactly 7 |
+| Tool specifications per Agent investigation request | Exactly 7; summary and Reviewer requests carry none |
 | One strict Tool input schema | 16 KiB |
 | One assembled Tool argument object | 8 KiB |
 | One Tool-call identifier | 256 bytes |
@@ -322,7 +335,7 @@ or summarization call.
 | One SSE data record or decoded Eino chunk | 64 KiB |
 | SSE data records or decoded Eino chunks | 32,768, whichever is reached first |
 | Discarded HTTP error-body read | 4 KiB |
-| Configured output tokens | 8,192 |
+| Configured output tokens | No universal default; the request field is omitted unless the selected endpoint has exact evidence |
 | One model request | At most 300 seconds, further capped by the selected profile and owning AgentRun deadline |
 
 <!-- markdownlint-enable MD013 -->
@@ -333,18 +346,17 @@ partial, malformed, error, and terminal paths. Reaching a fixed byte or event
 limit returns `budget_exhausted`; discarded bytes are never included in an
 error, log, event, or persistence value.
 
-The current stream ceilings leave finite compatibility headroom for SSE and JSON
-framing at the 8,192-token configuration ceiling: up to 1 KiB of wire data and
-four data records per configured output token at the hard maximum. Tokens and
-stream records are not equivalent, so these are local resource bounds rather
-than a promise about provider fragmentation. The 64 KiB record ceiling and
-128 KiB assembled-assistant ceiling remain independent and narrower.
+The stream ceilings are independent finite local resource bounds. They are not
+derived from a token-to-byte or token-to-record estimate and do not promise any
+provider fragmentation behavior. The 64 KiB record ceiling and 128 KiB
+assembled-assistant ceiling remain independent and narrower.
 
-`v0.5` retains finite request, stream, message, response, token, time, call, and
-cost ceilings independently for Agent, Reviewer, and Agent-summary calls. Exact
-values are set only after the evidence gate above. Missing exact token evidence
-does not permit an unlimited request; conservative byte, call, and wall-time
-limits apply and unresolved paths remain unreachable.
+Finite request, stream, message, response, time, call, byte, and cost ceilings
+are reserved independently for Agent, Reviewer, and Agent-summary calls.
+Endpoint-exact token and monetary cost evidence is still not available, so the
+implementation makes no context-window or precise-token claim. Missing token
+evidence does not permit an unlimited request; conservative byte, call, output,
+and wall-time limits apply.
 
 ## Safe error mapping
 
@@ -390,16 +402,17 @@ hostname validate against the process trust store. At most three same-origin
 redirects are followed, and only when the redirect preserves the authenticated
 POST and body; method-changing or otherwise ambiguous redirects are rejected.
 
-The model API key is a transport-only credential extracted from masked TUI
-input, an optional local plaintext file field, or the one-shot environment
-override. It is never an ordinary typed configuration field. The Eino component
+Each model API key is a role-owned transport-only credential extracted from
+masked Agent setup, an optional named-profile plaintext file field, or the
+role's one-shot environment source. It is never an ordinary typed configuration
+field. The Eino component
 receives a fixed non-secret placeholder; the guarded HTTP transport replaces it
 with the real Authorization value only after validating the exact origin,
 request method, content type, and bounded body.
 The placeholder is restored before redirect processing, and Authorization is
 attached only to the validated origin. A dedicated extractor removes the
-optional `model.api_key` before Viper and the ordinary configuration object see
-it. The key is never a Domain value, model message, request body, Application
+optional role `api_key` fields before the strict typed decoder and ordinary
+configuration object see them. A key is never a Domain value, model message, request body, Application
 event, rendered TUI or history value, safe error, ordinary log field, callback,
 audit field, SQLite value, or child environment entry. Request and logger
 capture tests may inspect a generated synthetic value in memory, but logs never
@@ -460,11 +473,15 @@ synthetic English content and loopback `httptest` servers.
 These fixtures define protocol compatibility, not model quality, prompt
 obedience, or suitability of any particular hosted service.
 
-The `v0.5` fixture matrix must additionally cover role selection, same- and
+The deterministic fixture matrix now covers role selection, same- and
 different-origin profiles, independent credentials and consent, strict
 non-streaming no-Tool Reviewer responses, malformed/timeout/cancelled review,
 safe Session context ordering, current-question-once, ADK summarization,
 coverage/recent-tail integrity, and proof of no fallback or cross-origin retry.
+The current fixtures also cover Reviewer permission routing, durable decisions,
+pre-operation audit, and one-attempt execution for the existing supervised
+Deployment restart. Each additional action still requires its own later exact
+transport and execution fixtures before it may be claimed reachable.
 
 Deterministic CI remains the required protocol and safety proof. Opt-in tagged
 live integration may establish compatibility only for the exact endpoint,

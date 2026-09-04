@@ -91,11 +91,30 @@ ceilings and 128 KiB final assistant Messages while preserving the 64 KiB user
 and system-notice limit. Any copy, graph, commit, or restoration failure leaves
 the prior schema and migration ledger intact.
 
+Migration 6 replaces the single-origin consent row with fixed `agent` and
+`approval_reviewer` role keys, adds profile/role/invocation/cost metadata to
+model requests, and adds the bounded `session_context_summaries` table. Legacy
+consent and model-request rows receive conservative Agent-role metadata; loading
+still applies the current policy/category checks before any transfer. The
+migration stores no framework message, assembled prompt, Tool transcript,
+credential, or generic payload.
+
+Migration 7 makes every legacy pending or approved restart request terminal,
+archives the legacy restart tables, and creates the generalized approval,
+decision, and Reviewer-metadata tables. An approval stores explicit bounded
+ActionEnvelope metadata plus a typed-parameter kind and SHA-256 digest; it does
+not store raw parameters, executable, argv, command, environment, output, or a
+generic payload. A Reviewer record stores only bounded safe disposition or
+failure metadata. Startup recovery restores no authority from either table.
+Terminal rows in the legacy archive participate in the same bounded 180-day
+approval cleanup as generalized approvals.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
-`audit_events`, and `settings`. Approval rows support the sole supervised
-Deployment restart and remain bound to fixed typed state rather than a generic
-payload or write command.
+`approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
+common approval schema remains bound to fixed typed state rather than a generic
+payload or write command. Only the existing supervised Deployment restart is
+currently composed through it.
 
 The `settings` table admits only code-owned typed records. In addition to the
 retention setting, `scope.last_context` schema version 1 stores one strict,
@@ -164,7 +183,10 @@ bounded the source data:
 
 | Durable category | Stored representation and hard bound |
 | --- | --- |
-| Model request | Lifecycle metadata, token counts, latency, model identifier, origin hash, and prompt or response fingerprints only. No prompt, response body, header, stream, or provider object is accepted. Model and prompt-version text are at most 128 bytes, and a provider request identifier is at most 256 bytes. |
+| Model request | Lifecycle metadata, named profile, fixed role and invocation, reserved cost units, token counts when evidenced, latency, model identifier, origin hash, and prompt or response fingerprints only. No prompt, response body, header, stream, or provider object is accepted. Model, profile, and prompt-version text are at most 128 bytes, and a provider request identifier is at most 256 bytes. |
+| Session context summary | One bounded safe summary with its hash, schema/policy versions, covered first/last Message IDs, ordered count/byte count/digest, generation time, Agent profile/origin hash, and degraded/truncation markers. Text is at most 16 KiB; coverage is at most 4,096 Messages and 4 MiB. Recent-tail text remains in Message rows. |
+| Action approval | Explicit bounded ActionEnvelope identity, scope and policy generations, target facts, effect bitsets, limits, typed-parameter kind and digest, nonce hash, lifecycle state, and decision metadata. No raw typed parameter, executable, argv, command, environment, external output, or generic payload is accepted. Legacy unexecuted restart authority is made terminal by migration 7. |
+| Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
 | ToolInvocation | One of the seven admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
 | Evidence | A project-owned ResourceRef projection, category, concise fact, source path, severity, redaction and truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. |
 | Diagnosis | Validated free-form Markdown, claim-to-Evidence citations, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every retained confirmed fact cites same-run Evidence when written. |

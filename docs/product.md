@@ -3,10 +3,13 @@
 - Status: Accepted `v0.5` target
 - Date: 2026-09-03
 
-The checked-in implementation is still the `v0.4` baseline. This contract and
-ADR-0044 through ADR-0047 define the next implementation target; they do not
-claim that `v0.5` configuration, RBAC, runtime behavior, tests, or release
-artifacts already exist.
+The checked-in implementation now includes the named-model, Eino ADK runtime,
+role-scoped consent, safe Session context and summarization, and deterministic
+permission/action foundation of ADR-0044 through ADR-0047. Only the existing
+supervised Deployment restart is composed through that action lifecycle. The
+broader capabilities, public permission controls, RBAC, and new execution or
+remediation paths remain implementation targets; no `v0.5` release artifact is
+claimed.
 
 ## Product definition
 

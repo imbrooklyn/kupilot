@@ -1,11 +1,15 @@
 # Kupilot Data Retention Contract
 
 - Status: Accepted target for `v0.5`
-- Date: 2026-09-03
+- Date: 2026-09-04
 
-The checked-in SQLite schema and repositories remain the `v0.4`
-implementation. This contract admits the `v0.5` data categories but does not
-claim that their forward-only migration, retention code, or tests exist.
+The checked-in SQLite schema is now at forward-only migration 7. It implements
+the safe Session-summary/coverage record, role-scoped consent, named
+model-request metadata, and minimal generalized ActionEnvelope, approval, and
+Reviewer-decision metadata described here. Only the existing typed Deployment
+restart is composed through the action lifecycle. Data-source and new execution
+records remain accepted targets unless separately identified as implemented;
+this document does not make them reachable.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -233,6 +237,17 @@ Human Session rules are current-process authority and are not persisted for
 resume. Audit may retain the safe fact that a rule matched, but not a reusable
 rule or token.
 
+Migration 7 first makes every legacy pending or approved restart request
+terminal with the `process_restarted` reason, then archives the legacy tables
+for historic context and creates the generalized approval and Reviewer tables.
+The new approval row stores an exact typed-parameter kind and digest, never raw
+argv, executable, command, environment, typed parameter body, or framework
+payload. Reviewer rows contain only request identity, profile and origin hash,
+policy generation, safe disposition, and either a bounded validated rationale
+or stable error class. Neither table restores authority after process restart.
+Terminal rows in the legacy archive remain subject to the same bounded
+180-day approval cleanup as generalized approval rows.
+
 ## 4. Minimal-persistence
 
 Minimal-persistence is selected before an AgentRun starts and is frozen in its
@@ -338,15 +353,13 @@ a smaller bound. Oversized input is rejected or explicitly truncated according
 to its field contract; it is never silently moved to a raw attachment or
 generic payload.
 
-The checked-in `v0.4` implementation currently uses 64 KiB for one user or
-system-notice Message, 128 KiB for one final assistant Message or complete
-Diagnosis, 4 KiB for one safe summary, 2 KiB for one Evidence fact, and 2 MiB
-for one `kupilot.export-summary.v2` document. Those values remain historical
-compatibility limits until the `v0.5` schema work establishes explicit finite
-values from retention, Eino middleware, endpoint, memory, and export evidence.
-In particular, `v0.5` must not treat the 4 KiB summary value or a character-to-
-token estimate as a universal long-context limit. No new persistence path is
-reachable while its exact byte ceiling is unresolved.
+The current implementation uses 64 KiB for one user or system-notice Message,
+128 KiB for one final assistant Message or complete Diagnosis, 16 KiB for one
+safe Session-context summary, 2 KiB for one Evidence fact, and 2 MiB for one
+`kupilot.export-summary.v2` document. Safe model-context selection is capped at
+4,096 eligible Messages and 4 MiB. The Eino compaction working-set resource
+trigger counts UTF-8 content bytes against 128 KiB; it is deliberately not a
+token estimate or a model context-window claim.
 
 ### 6.1 User-controlled redacted summary export
 

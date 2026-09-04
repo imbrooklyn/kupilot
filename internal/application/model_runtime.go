@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const (
@@ -167,6 +168,40 @@ type ModelRuntime interface {
 	Close()
 	ModelName() string
 	Origin() string
+}
+
+type namedModelRuntime interface {
+	ProfileName() string
+}
+
+// ReviewerModelBinding is a content-free composition projection for the
+// optional transport and its independent consent and budget owners. A binding
+// alone grants no authority; deterministic permission orchestration owns every
+// review route and resulting durable decision.
+type ReviewerModelBinding struct {
+	Profile   string
+	Model     string
+	Available bool
+	Privacy   *PrivacyManager
+	Budget    *agent.ReviewerBudget
+	Transport ActionReviewer
+}
+
+// ActionReviewer is the sole strict Tool-free, non-streaming reviewer
+// transport consumed by Application permission orchestration.
+type ActionReviewer interface {
+	Review(context.Context, agent.ReviewerRequest, agent.CallReservation) (agent.ReviewerResult, error)
+}
+
+func (binding *ReviewerModelBinding) valid() bool {
+	if binding == nil || !domain.ValidModelToken(binding.Profile, 128) ||
+		!validModelSetupText(binding.Model, MaxModelSetupNameBytes) || binding.Privacy == nil || binding.Budget == nil {
+		return false
+	}
+	snapshot := binding.Privacy.Snapshot()
+	budget := binding.Budget.Snapshot()
+	return snapshot.Role == domain.ModelRoleApprovalReviewer && validPrivacyDigest(snapshot.OriginHash) &&
+		budget.Limits.Validate() == nil && binding.Available == (binding.Transport != nil)
 }
 
 // ModelRuntimeFactory constructs exactly one replacement runtime.

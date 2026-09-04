@@ -16,15 +16,17 @@ import (
 const (
 	insertModelRequestSQL = `
 		INSERT INTO model_requests (
-			id, run_id, sequence, provider_kind, endpoint_origin_hash,
+			id, run_id, sequence, profile_name, model_role, invocation, reserved_cost_units,
+			provider_kind, endpoint_origin_hash,
 			model, status, error_class, provider_request_id,
 			prompt_version, prompt_fingerprint, response_fingerprint,
 			input_tokens, output_tokens, latency_ms, started_at_ms, finished_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getModelRequestByIDSQL = `
 		SELECT
-			id, run_id, sequence, provider_kind, endpoint_origin_hash,
+			id, run_id, sequence, profile_name, model_role, invocation, reserved_cost_units,
+			provider_kind, endpoint_origin_hash,
 			model, status, error_class, provider_request_id,
 			prompt_version, prompt_fingerprint, response_fingerprint,
 			input_tokens, output_tokens, latency_ms, started_at_ms, finished_at_ms
@@ -33,7 +35,8 @@ const (
 	`
 	listModelRequestsByRunSQL = `
 		SELECT
-			id, run_id, sequence, provider_kind, endpoint_origin_hash,
+			id, run_id, sequence, profile_name, model_role, invocation, reserved_cost_units,
+			provider_kind, endpoint_origin_hash,
 			model, status, error_class, provider_request_id,
 			prompt_version, prompt_fingerprint, response_fingerprint,
 			input_tokens, output_tokens, latency_ms, started_at_ms, finished_at_ms
@@ -62,6 +65,10 @@ type modelRequestRow struct {
 	ID                  string         `db:"id"`
 	RunID               string         `db:"run_id"`
 	Sequence            int            `db:"sequence"`
+	ProfileName         string         `db:"profile_name"`
+	ModelRole           string         `db:"model_role"`
+	Invocation          string         `db:"invocation"`
+	ReservedCostUnits   int            `db:"reserved_cost_units"`
 	ProviderKind        string         `db:"provider_kind"`
 	EndpointOriginHash  sql.NullString `db:"endpoint_origin_hash"`
 	Model               string         `db:"model"`
@@ -112,6 +119,10 @@ func (repository *ModelRequestRepository) Save(ctx context.Context, request doma
 			request.ID,
 			request.RunID,
 			request.Sequence,
+			request.ProfileName,
+			request.ModelRole,
+			request.Invocation,
+			request.ReservedCostUnits,
 			request.ProviderKind,
 			nullableString(optionalString(request.EndpointOriginHash)),
 			request.Model,
@@ -196,6 +207,10 @@ func (row modelRequestRow) domainModelRequest() (domain.ModelRequestMetadata, er
 		ID:                  domain.ModelRequestID(row.ID),
 		RunID:               domain.AgentRunID(row.RunID),
 		Sequence:            row.Sequence,
+		ProfileName:         row.ProfileName,
+		ModelRole:           domain.ModelRole(row.ModelRole),
+		Invocation:          domain.ModelInvocation(row.Invocation),
+		ReservedCostUnits:   row.ReservedCostUnits,
 		ProviderKind:        domain.ModelProviderKind(row.ProviderKind),
 		EndpointOriginHash:  stringPointer(row.EndpointOriginHash),
 		Model:               row.Model,

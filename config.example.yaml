@@ -1,12 +1,8 @@
-# This is the currently implemented typed version 1 schema. Interactive setup
-# may add a plaintext model.api_key to the local KUPILOT_HOME/config.yaml file.
-#
-# The accepted v0.5 contract adds named agent/reviewer profiles, permission
-# profiles, Session memory, optional data sources, and exact capability policy.
-# Their versioned schema is intentionally absent until implementation evidence
-# and migration tests exist. Do not add speculative v0.5 fields to this file;
-# the current strict parser will reject them.
-version: 1
+# This is the implemented strict version 2 schema. Interactive Agent setup may
+# add a plaintext models.agent.api_key to KUPILOT_HOME/config.yaml. An existing
+# file-sourced approval_reviewer key is preserved only when the setup disclosure
+# names it. Environment-sourced keys are never written implicitly.
+version: 2
 
 context: development
 namespace: default
@@ -16,17 +12,34 @@ runtime:
   # compact, balanced, or extended
   budget_profile: balanced
 
-model:
-  provider_kind: openai_compatible
-  endpoint: https://model.example.invalid/v1
-  model: diagnostic-model
-  # reasoning_effort: none
-  temperature: 0.1
-  # Implemented v0.4 compatibility value, not a universal v0.5 model limit.
-  max_output_tokens: 8192
-  request_timeout_seconds: 300
-  streaming: true
-  tool_calling_required: true
+models:
+  agent:
+    name: agent
+    role: agent
+    credential_ref: agent
+    provider_kind: openai_compatible
+    endpoint: https://model.example.invalid/v1
+    model: diagnostic-model
+    # reasoning_effort: none
+    temperature: 0.1
+    # max_output_tokens is omitted until the selected endpoint has exact
+    # evidence. Byte, call, time, stream, and cost-unit limits still apply.
+    request_timeout_seconds: 300
+    streaming: true
+    tool_calling_required: true
+
+  # The optional Reviewer is non-streaming and Tool-free. This shorthand
+  # inherits the Agent origin and unspecified non-secret model settings while
+  # retaining a distinct role and consent tuple.
+  # approval_reviewer:
+  #   name: approval-reviewer
+  #   role: approval_reviewer
+  #   inherit_agent: true
+  #   credential_ref: agent
+  #   model: reviewer-model
+  #   temperature: 0
+  #   # max_output_tokens: 512 # only with endpoint evidence
+  #   request_timeout_seconds: 30
 
 kubernetes:
   exec_credentials: allow

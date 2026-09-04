@@ -3,9 +3,10 @@
 - Status: Accepted `v0.5` target
 - Date: 2026-09-03
 
-The current code remains the `v0.4` implementation baseline. The items below
-define the admitted `v0.5` implementation scope and must not be described as
-reachable until their code, configuration, RBAC, migrations, tests, and
+The current code now includes the named-model and safe Session-context runtime
+slice. The items below define the complete admitted `v0.5` scope; broader
+capabilities, permissions, RBAC, and execution must not be described as
+reachable until their specific code, configuration, migrations, tests, and
 evidence gates pass.
 
 ## In scope for `v0.5`

@@ -243,9 +243,21 @@ func TestResumeScopeConflictHasZeroScopeActionUntilExplicitChoice(t *testing.T) 
 	}
 	useSaved, cmd = updateModel(t, useSaved, tea.KeyPressMsg{Code: tea.KeyEnter})
 	command := fake.consumeApplicationCommand(t, cmd)
-	if command.Kind != application.UICommandAcceptResume || command.Scope == nil ||
+	if command.Kind != application.UICommandActivateScope || command.Scope == nil ||
 		command.Scope.Context != "saved" || fake.scopeActions != 1 || !useSaved.scope.Switching {
 		t.Fatalf("saved-scope command = %#v, actions = %d", command, fake.scopeActions)
+	}
+	useSaved, cmd = updateModel(t, useSaved, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandActivateScope, RequestID: command.RequestID,
+		Scope: &application.UIScopeResult{
+			RequestID: command.RequestID, ExpectedGeneration: 7, ScopeGeneration: 8,
+			Context: "saved", Namespace: "payments", ReadOnly: true,
+		},
+	}})
+	accept := fake.consumeApplicationCommand(t, cmd)
+	if accept.Kind != application.UICommandAcceptResume || accept.Scope != nil ||
+		accept.ExpectedScopeGeneration != 8 || !useSaved.scope.Switching {
+		t.Fatalf("post-activation resume command = %#v", accept)
 	}
 }
 

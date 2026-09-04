@@ -1,12 +1,15 @@
 # Kupilot Security Threat Model
 
 - Status: Accepted target for Kupilot `v0.5`
-- Last updated: 2026-09-03
+- Last updated: 2026-09-04
 
-The checked-in implementation remains the `v0.4` baseline. The broader reads,
-permission profiles, model roles, remote diagnostics, local processes, and
-typed remediation in this threat model are accepted targets, not claims of
-current reachability or completed security testing.
+The checked-in implementation now includes named model roles, role-scoped
+consent, safe Session context/summarization, deterministic permission routing,
+and the common ActionEnvelope/approval foundation. Only the existing typed
+Deployment restart is composed through that foundation. Broader reads,
+permission delivery interactions, remote diagnostics, local processes, and
+expanded typed remediation in this threat model remain accepted targets, not
+claims of current reachability or completed security testing.
 
 ## 1. Scope and security posture
 
@@ -400,6 +403,14 @@ Predefined read-only Pod diagnostics, other Pod Exec, diagnostic Pods,
 restricted local argv, and shell remain separate schemas and risk classes.
 Typed operations are preferred. No decision for one envelope authorizes a
 different target, parameter, command, attempt, or cleanup.
+
+The current deterministic evaluator covers every profile/effect/risk
+combination and rejects disabled, unadmitted, incompatible, and hard-deny
+inputs before Reviewer or executor access. Its process-local Session-rule APIs
+and generalized durable approval state do not make a new capability reachable.
+The composition root retains the default `ask` profile and the sole existing
+typed Deployment restart executor; full permission interaction and every new
+executor remain later work.
 
 ## 9. Privacy and retention interactions
 

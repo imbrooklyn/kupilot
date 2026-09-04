@@ -21,7 +21,12 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 	}
 	model = pasteAndSubmitSetup(t, model, "https://model.example.test/v1", modelSetupName)
 	model = pasteAndSubmitSetup(t, model, "diagnostic-model", modelSetupStorage)
+	assertModelSetupStorageDisclosure(t, model)
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || model.dialog.Open() || model.modelSetup.Stage != modelSetupStorage {
+		t.Fatalf("storage disclosure close = %#v command=%v dialog=%v", model.modelSetup, cmd != nil, model.dialog.Open())
+	}
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil || model.modelSetup.Stage != modelSetupCredential {
 		t.Fatalf("default storage selection = %#v command=%v", model.modelSetup, cmd != nil)
 	}
@@ -55,7 +60,7 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		Origin: "https://model.example.test", Persisted: true,
 	}})
 	if !model.modelConfigured || model.modelSetup != nil || cmd != nil ||
-		!transcriptContains(model, "Model configured.") ||
+		!transcriptContains(model, "Agent model configured.") ||
 		strings.Contains(model.footerView(), "model") ||
 		strings.Contains(model.render(), canary) || strings.Contains(model.TerminalTranscript(), canary) {
 		t.Fatalf("configured model state = configured=%v setup=%#v footer=%q", model.modelConfigured, model.modelSetup, model.footerView())
@@ -91,6 +96,13 @@ func TestModelSetupKeepsAFieldLabelVisibleAfterTypingAtEveryStep(t *testing.T) {
 		model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != step.want {
 			t.Fatalf("stage after %s = %#v command=%v", step.label, model.modelSetup, cmd != nil)
+		}
+		if step.want == modelSetupStorage {
+			assertModelSetupStorageDisclosure(t, model)
+			model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if cmd != nil || model.dialog.Open() || model.modelSetup.Stage != modelSetupStorage {
+				t.Fatalf("storage disclosure close = %#v command=%v", model.modelSetup, cmd != nil)
+			}
 		}
 	}
 	model.composer.SetValue("generated-labelled-key")
@@ -274,6 +286,10 @@ func TestModelSlashReconfiguresAndFailureRestartsEditableFlow(t *testing.T) {
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.composer.SetValue("new-model")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !model.dialog.Open() {
+		t.Fatal("/model did not disclose plaintext storage before selection")
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.composer.SetValue("session")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.composer.SetValue("generated-session-key")
@@ -299,6 +315,8 @@ func TestInvalidModelCredentialKeepsComposerMaskedAndOutOfHistory(t *testing.T) 
 		ModelEndpoint: "https://model.example.test/v1", ModelName: "diagnostic-model",
 		ModelConfiguredSet: true, ModelConfigured: false,
 	})
+	assertModelSetupStorageDisclosure(t, model)
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupCredential {
 		t.Fatalf("storage submission state = %#v", model.modelSetup)
@@ -344,4 +362,25 @@ func pasteAndSubmitSetup(t *testing.T, model Model, value string, want modelSetu
 		t.Fatalf("setup stage after %q = %#v command=%v", value, model.modelSetup, cmd != nil)
 	}
 	return model
+}
+
+func assertModelSetupStorageDisclosure(t *testing.T, model Model) {
+	t.Helper()
+	rendered := model.render()
+	for _, value := range []string{
+		"Plaintext credential storage",
+		"models.agent.api_key",
+		"models.approval_reviewer.api_key",
+		"plaintext",
+		"(not",
+		"encrypted)",
+		"KUPILOT_HOME/config.yaml",
+	} {
+		if !strings.Contains(rendered, value) {
+			t.Fatalf("storage disclosure is missing %q: %q", value, rendered)
+		}
+	}
+	if !model.dialog.Open() || model.modelSetup == nil || model.modelSetup.Stage != modelSetupStorage {
+		t.Fatalf("storage disclosure state = setup %#v dialog=%v", model.modelSetup, model.dialog.Open())
+	}
 }

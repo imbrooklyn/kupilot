@@ -311,7 +311,8 @@ func TestRetentionRepositoryRemovesExpiredTerminalApprovalsButPreservesAuthority
 		}
 		decision := domain.ApprovalDecision{
 			RequestID: request.ID, Choice: choice, ShownDigest: request.Digest,
-			Nonce: request.Nonce, Actor: domain.ApprovalActorLocalUser, DecidedAt: decided.StateChangedAt,
+			Nonce: request.Nonce, Actor: domain.ApprovalActorLocalUser,
+			Disposition: domain.ReviewDispositionHuman, DecidedAt: decided.StateChangedAt,
 		}
 		decisionAudit := testApprovalAudit(t, decided, eventType, domain.AuditActorUser, outcome, detail, decided.StateChangedAt)
 		decisionAudit.ID = domain.AuditEventID([]string{
@@ -351,6 +352,138 @@ func TestRetentionRepositoryRemovesExpiredTerminalApprovalsButPreservesAuthority
 		if _, err := sessions.GetByID(context.Background(), retained.sessionID); err != nil {
 			t.Fatalf("Session with %s approval was removed: %v", retained.state, err)
 		}
+	}
+}
+
+func TestRetentionRepositoryRemovesExpiredLegacyApprovalArchive(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "retention-legacy-approvals")
+	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	requestedAt := now.Add(-181 * 24 * time.Hour)
+	run := seedStandardRun(
+		t,
+		db,
+		"00000000-0000-7000-8000-000000006171",
+		"00000000-0000-7000-8000-000000006172",
+		"00000000-0000-7000-8000-000000006173",
+		requestedAt,
+	)
+	approvalID := "00000000-0000-7000-8000-000000006174"
+	digest := strings.Repeat("a", 64)
+	nonceHash := strings.Repeat("b", 64)
+	if _, err := db.handle.ExecContext(context.Background(), `
+		INSERT INTO legacy_restart_approvals (
+			id, run_id, session_id, operation, operation_schema_version,
+			policy_version, scope_context, scope_namespace, scope_generation,
+			target_api_version, target_kind, target_namespace, deployment_name,
+			deployment_uid, template_fingerprint, deployment_generation,
+			reason_summary, risk_summary, operation_digest, nonce_hash,
+			status, state_reason, requested_at_ms, expires_at_ms,
+			state_changed_at_ms
+		) VALUES (
+			?, ?, ?, 'restart_deployment', 'restart_deployment/v1',
+			'restart-deployment-approval/v1', 'test-context', 'test-namespace', 1,
+			'apps/v1', 'Deployment', 'test-namespace', 'sample-deployment',
+			'deployment-uid', ?, 1, ?, ?, ?, ?,
+			'rejected', 'user_rejected', ?, ?, ?
+		)
+	`, approvalID, run.ID, run.SessionID, strings.Repeat("c", 64), "Safe legacy reason.",
+		domain.RestartDeploymentRiskSummary, digest, nonceHash, requestedAt.UnixMilli(),
+		requestedAt.Add(time.Minute).UnixMilli(), requestedAt.Add(time.Second).UnixMilli()); err != nil {
+		t.Fatalf("legacy approval insert error = %v", err)
+	}
+	if _, err := db.handle.ExecContext(context.Background(), `
+		INSERT INTO legacy_restart_approval_decisions (
+			approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
+		) VALUES (?, ?, ?, 'reject', 'local_user', ?)
+	`, approvalID, digest, nonceHash, requestedAt.Add(time.Second).UnixMilli()); err != nil {
+		t.Fatalf("legacy approval decision insert error = %v", err)
+	}
+
+	result, err := NewRetentionRepository(db).Cleanup(context.Background(), auditcontract.CleanupRequest{
+		Now: now, OperationalDetailRetentionDays: 30, BatchSize: 1,
+	})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if result.ApprovalRecords != 1 || !result.More {
+		t.Fatalf("Cleanup() = %#v, want one bounded legacy approval deletion", result)
+	}
+	var requests, decisions int
+	if err := db.handle.GetContext(context.Background(), &requests, `SELECT count(id) FROM legacy_restart_approvals`); err != nil {
+		t.Fatalf("legacy approval count error = %v", err)
+	}
+	if err := db.handle.GetContext(context.Background(), &decisions, `SELECT count(approval_id) FROM legacy_restart_approval_decisions`); err != nil {
+		t.Fatalf("legacy approval decision count error = %v", err)
+	}
+	if requests != 0 || decisions != 0 {
+		t.Fatalf("legacy approval/decision counts = %d/%d, want 0/0", requests, decisions)
+	}
+}
+
+func TestRetentionRepositoryPreservesMinimalSessionWithRetainedLegacyApproval(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "retention-recent-legacy-approval")
+	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	requestedAt := now.Add(-179 * 24 * time.Hour)
+	sessionID := domain.SessionID("00000000-0000-7000-8000-000000006181")
+	messageID := domain.MessageID("00000000-0000-7000-8000-000000006182")
+	runID := domain.AgentRunID("00000000-0000-7000-8000-000000006183")
+	if err := NewSessionRepository(db).Create(
+		context.Background(), testSession(string(sessionID), "", domain.PrivacyModeMinimal, requestedAt),
+	); err != nil {
+		t.Fatalf("Create(Session) error = %v", err)
+	}
+	message, running := testRunningPair(messageID, runID, sessionID, requestedAt)
+	runs := NewAgentRunRepository(db)
+	if err := runs.Begin(context.Background(), message, running); err != nil {
+		t.Fatalf("Begin(AgentRun) error = %v", err)
+	}
+	if err := runs.Finish(context.Background(), testTerminalRun(running, domain.AgentRunStatusCompleted, requestedAt.Add(time.Millisecond))); err != nil {
+		t.Fatalf("Finish(AgentRun) error = %v", err)
+	}
+
+	approvalID := "00000000-0000-7000-8000-000000006184"
+	digest := strings.Repeat("d", 64)
+	nonceHash := strings.Repeat("e", 64)
+	if _, err := db.handle.ExecContext(context.Background(), `
+		INSERT INTO legacy_restart_approvals (
+			id, run_id, session_id, operation, operation_schema_version,
+			policy_version, scope_context, scope_namespace, scope_generation,
+			target_api_version, target_kind, target_namespace, deployment_name,
+			deployment_uid, template_fingerprint, deployment_generation,
+			reason_summary, risk_summary, operation_digest, nonce_hash,
+			status, state_reason, requested_at_ms, expires_at_ms,
+			state_changed_at_ms
+		) VALUES (
+			?, ?, ?, 'restart_deployment', 'restart_deployment/v1',
+			'restart-deployment-approval/v1', 'test-context', 'test-namespace', 1,
+			'apps/v1', 'Deployment', 'test-namespace', 'sample-deployment',
+			'deployment-uid', ?, 1, ?, ?, ?, ?,
+			'rejected', 'user_rejected', ?, ?, ?
+		)
+	`, approvalID, runID, sessionID, strings.Repeat("f", 64), "Safe recent legacy reason.",
+		domain.RestartDeploymentRiskSummary, digest, nonceHash, requestedAt.UnixMilli(),
+		requestedAt.Add(time.Minute).UnixMilli(), requestedAt.Add(time.Second).UnixMilli()); err != nil {
+		t.Fatalf("legacy approval insert error = %v", err)
+	}
+	if _, err := db.handle.ExecContext(context.Background(), `
+		INSERT INTO legacy_restart_approval_decisions (
+			approval_id, shown_digest, nonce_hash, decision, actor, decided_at_ms
+		) VALUES (?, ?, ?, 'reject', 'local_user', ?)
+	`, approvalID, digest, nonceHash, requestedAt.Add(time.Second).UnixMilli()); err != nil {
+		t.Fatalf("legacy approval decision insert error = %v", err)
+	}
+
+	result, err := NewRetentionRepository(db).Cleanup(context.Background(), auditcontract.CleanupRequest{
+		Now: now, OperationalDetailRetentionDays: 30, BatchSize: auditcontract.MaxCleanupBatchSize,
+	})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if result.ApprovalRecords != 0 || result.MinimalSessions != 0 {
+		t.Fatalf("Cleanup() = %#v, want retained legacy approval and minimal Session", result)
+	}
+	if _, err := NewSessionRepository(db).GetByID(context.Background(), sessionID); err != nil {
+		t.Fatalf("minimal Session with retained legacy approval was removed: %v", err)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestPrivacyConsentLifecycleBindsOriginCategoriesAndPolicy(t *testing.T) {
@@ -106,6 +108,76 @@ func TestPrivacyManagerDefersStoreIOUntilModelOriginIsConfigured(t *testing.T) {
 	review, err := manager.Review(context.Background())
 	if err != nil || review.Decision != PrivacyDecisionPending || store.loadCalls != 1 || store.saveCalls != 0 {
 		t.Fatalf("configured Review() = %#v, %v; load %d save %d", review, err, store.loadCalls, store.saveCalls)
+	}
+}
+
+func TestPrivacyConsentIsIndependentForEachModelRoleAtTheSameOrigin(t *testing.T) {
+	t.Parallel()
+
+	now := privacyTestClock()
+	agentStore := new(privacyTestStore)
+	reviewerStore := new(privacyTestStore)
+	agentManager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: agentStore, Role: domain.ModelRoleAgent, Origin: "https://model.example", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager(agent) error = %v", err)
+	}
+	reviewerManager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: reviewerStore, Role: domain.ModelRoleApprovalReviewer, Origin: "https://model.example", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager(reviewer) error = %v", err)
+	}
+	agentReview, err := agentManager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review(agent) error = %v", err)
+	}
+	reviewerReview, err := reviewerManager.Review(context.Background())
+	if err != nil {
+		t.Fatalf("Review(reviewer) error = %v", err)
+	}
+	if agentReview.Role != domain.ModelRoleAgent || reviewerReview.Role != domain.ModelRoleApprovalReviewer ||
+		agentReview.Revision == reviewerReview.Revision {
+		t.Fatalf("role reviews = agent %#v, reviewer %#v", agentReview, reviewerReview)
+	}
+	if _, err := agentManager.Decide(context.Background(), PrivacyActionAccept, agentReview.Revision, nil); err != nil {
+		t.Fatalf("Decide(agent) error = %v", err)
+	}
+	if allowed, err := agentManager.AuthorizeModel(context.Background()); err != nil || !allowed {
+		t.Fatalf("AuthorizeModel(agent) = %v/%v", allowed, err)
+	}
+	if allowed, err := reviewerManager.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("AuthorizeModel(reviewer) = %v/%v", allowed, err)
+	}
+	if agentStore.snapshot().Role != domain.ModelRoleAgent || reviewerStore.saveCalls != 0 {
+		t.Fatalf("role stores = agent %#v, reviewer saves %d", agentStore.snapshot(), reviewerStore.saveCalls)
+	}
+}
+
+func TestPrivacyManagerRejectsAConsentRecordFromAnotherRole(t *testing.T) {
+	t.Parallel()
+
+	store := &privacyTestStore{
+		found: true,
+		record: PrivacyRecord{
+			Role: domain.ModelRoleAgent, PolicyVersion: PrivacyPolicyVersion,
+			OriginHash: privacyOriginHash("https://model.example"), Categories: enabledPrivacyCategories(false),
+			Decision: PrivacyDecisionAccepted, DecidedAt: time.UnixMilli(10_000).UTC(),
+			SchemaVersion: PrivacyRecordSchemaVersion,
+		},
+	}
+	manager, err := NewPrivacyManager(PrivacyManagerConfig{
+		Store: store, Role: domain.ModelRoleApprovalReviewer, Origin: "https://model.example", Now: privacyTestClock(),
+	})
+	if err != nil {
+		t.Fatalf("NewPrivacyManager() error = %v", err)
+	}
+	if allowed, err := manager.AuthorizeModel(context.Background()); allowed || !errors.Is(err, ErrPrivacyPersistence) {
+		t.Fatalf("AuthorizeModel() = %v/%v", allowed, err)
+	}
+	if store.loadCalls != 1 || store.saveCalls != 0 {
+		t.Fatalf("misrouted role store calls = load %d save %d", store.loadCalls, store.saveCalls)
 	}
 }
 

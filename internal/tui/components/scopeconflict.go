@@ -15,7 +15,8 @@ type ScopeConflictStyles struct {
 	Muted    lipgloss.Style
 }
 
-// ScopeConflictDialog confirms a resumed historic scope and owns no editor.
+// ScopeConflictDialog lets the user choose whether to verify a historic scope
+// candidate before separately accepting a resumed Session. It owns no editor.
 type ScopeConflictDialog struct {
 	open          bool
 	useSavedScope bool
@@ -71,11 +72,11 @@ func (dialog ScopeConflictDialog) View(width int) string {
 	}
 	content := []string{
 		dialog.styles.Title.Render("Confirm Session scope"),
-		dialog.styles.Body.Render("The resumed Session saved a different scope."),
+		dialog.styles.Body.Render("The resumed Session saved a different, unverified scope candidate."),
 		dialog.styles.Muted.Render("Current: " + dialog.current),
 		dialog.styles.Muted.Render("Saved:   " + dialog.saved),
 		keepStyle.Render(keepMarker + "Keep current scope"),
-		savedStyle.Render(savedMarker + "Use saved scope"),
+		savedStyle.Render(savedMarker + "Verify saved scope, then resume"),
 		dialog.styles.Muted.Render("Enter confirms. Esc or Ctrl+C cancels resume."),
 	}
 	return dialog.styles.Frame.Width(max(1, min(width-6, 72))).Render(strings.Join(content, "\n"))

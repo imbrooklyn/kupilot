@@ -1,12 +1,15 @@
 # Development and CI Gates
 
 - Status: Accepted `v0.5` development contract
-- Date: 2026-09-03
+- Date: 2026-09-04
 
-The commands below describe the currently implemented repository gates. The
-additional `v0.5` capability, permission, model-role, ADK Session, process, and
-ActionEnvelope matrices are required targets; this document does not claim
-that those tests or implementations already exist.
+The commands below describe the currently implemented repository gates. Named
+model profiles, the stable Eino ADK Session-context/summarization slice, the
+deterministic permission matrix, and the common ActionEnvelope/approval
+foundation now have deterministic tests. Only the existing typed Deployment
+restart is composed through that action lifecycle. Additional catalog entries,
+permission delivery interactions, data sources, processes, and execution paths
+remain required targets; this document does not claim they are reachable.
 
 Kupilot's local and hosted gates use the repository `Makefile` as their single
 command source. The hosted workflow invokes the same targets contributors run

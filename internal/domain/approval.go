@@ -11,22 +11,17 @@ import (
 )
 
 const (
-	maxApprovalParametersBytes = 4096
-	maxApprovalSummaryBytes    = 4096
-
-	// ApprovalExecutionTTL is the fixed non-extendable lifetime of one request.
-	ApprovalExecutionTTL = 60 * time.Second
+	// ApprovalExecutionTTL is retained as the approval-lifecycle spelling of
+	// the ActionEnvelope lifetime.
+	ApprovalExecutionTTL = ActionApprovalTTL
 	// ApprovalNonceBytes is the exact entropy-bearing nonce size.
 	ApprovalNonceBytes = 32
 	// MaxApprovalReasonSummaryBytes bounds the canonical user-visible reason.
 	MaxApprovalReasonSummaryBytes = 512
 
-	// RestartDeploymentApprovalPolicyVersion fixes the only admitted policy.
-	RestartDeploymentApprovalPolicyVersion = "restart-deployment-approval/v1"
-	// RestartDeploymentOperationSchemaVersion fixes the canonical operation shape.
-	RestartDeploymentOperationSchemaVersion = "restart_deployment/v1"
-	// ApprovalOperationDigestVersion fixes the canonical byte representation.
-	ApprovalOperationDigestVersion = "kupilot.approval.operation-digest.v1"
+	// RestartDeploymentApprovalPolicyVersion is the operation-specific spelling
+	// of the single current action policy version.
+	RestartDeploymentApprovalPolicyVersion = ActionPolicyVersion
 	// RestartDeploymentTargetAPIVersion is implicit and cannot be supplied by a model.
 	RestartDeploymentTargetAPIVersion = "apps/v1"
 	// RestartDeploymentTargetKind is implicit and cannot be supplied by a model.
@@ -36,10 +31,6 @@ const (
 )
 
 var (
-	// ErrInvalidApprovalSchemaRecord reports an invalid dormant schema DTO.
-	ErrInvalidApprovalSchemaRecord = errors.New("Approval schema record is invalid")
-	// ErrInvalidOperationIntent reports a malformed or out-of-policy operation.
-	ErrInvalidOperationIntent = errors.New("Approval operation intent is invalid")
 	// ErrInvalidApprovalRequest reports an invalid immutable request snapshot.
 	ErrInvalidApprovalRequest = errors.New("ApprovalRequest data is invalid")
 	// ErrInvalidApprovalDecision reports an invalid local decision record.
@@ -58,51 +49,13 @@ func (id ApprovalID) Valid() bool {
 	return validUUIDv7(string(id))
 }
 
-// ApprovalOperation is a closed operation enum, not a command or write payload.
-type ApprovalOperation string
+// ApprovalOperation and OperationIntent are compatibility spellings for the
+// one generalized action catalog and intent. They do not define a second enum
+// or an approval-specific payload.
+type ApprovalOperation = ActionOperation
+type OperationIntent = ActionIntent
 
-const (
-	// ApprovalOperationRestartDeployment is the sole currently admitted operation.
-	ApprovalOperationRestartDeployment ApprovalOperation = "restart_deployment"
-)
-
-// Valid reports whether the operation is in the fixed catalog.
-func (operation ApprovalOperation) Valid() bool {
-	return operation == ApprovalOperationRestartDeployment
-}
-
-// OperationIntent contains every mutable safety-critical restart parameter.
-// API version, Kind, operation schema, policy, and execution mechanics are fixed
-// by code; there is no arbitrary payload, patch, annotation, or timestamp field.
-type OperationIntent struct {
-	Operation            ApprovalOperation
-	Scope                ScopeSnapshot
-	DeploymentName       string
-	DeploymentUID        string
-	TemplateFingerprint  string
-	DeploymentGeneration int64
-	PolicyVersion        string
-	ReasonSummary        string
-}
-
-// Validate checks the complete canonical restart intent without external I/O.
-func (intent OperationIntent) Validate() error {
-	if intent.Operation != ApprovalOperationRestartDeployment ||
-		intent.Scope.Validate() != nil ||
-		!ValidContextName(intent.Scope.Context) ||
-		!ValidNamespaceName(intent.Scope.Namespace) ||
-		intent.Scope.Generation < 1 ||
-		!ValidResourceName(intent.DeploymentName) ||
-		intent.DeploymentUID == "" ||
-		!validSafeOptionalText(intent.DeploymentUID, maxResourceUIDBytes) ||
-		!validSHA256Hex(intent.TemplateFingerprint) ||
-		intent.DeploymentGeneration < 1 ||
-		intent.PolicyVersion != RestartDeploymentApprovalPolicyVersion ||
-		!ValidApprovalReasonSummary(intent.ReasonSummary) {
-		return ErrInvalidOperationIntent
-	}
-	return nil
-}
+const ApprovalOperationRestartDeployment = ActionOperationRestartDeployment
 
 // ValidApprovalReasonSummary reports whether model-visible proposal text is
 // safe and bounded for the local approval contract.
@@ -111,21 +64,8 @@ func ValidApprovalReasonSummary(value string) bool {
 		strings.TrimSpace(value) == value && validSafeOptionalText(value, MaxApprovalReasonSummaryBytes)
 }
 
-// ApprovalDigest is a lowercase SHA-256 operation digest.
-type ApprovalDigest string
-
-// Valid reports whether the digest has the fixed lowercase representation.
-func (digest ApprovalDigest) Valid() bool {
-	return validSHA256Hex(string(digest))
-}
-
-// Equal compares two valid displayed digests without data-dependent byte exits.
-func (digest ApprovalDigest) Equal(other ApprovalDigest) bool {
-	if !digest.Valid() || !other.Valid() {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(digest), []byte(other)) == 1
-}
+// ApprovalDigest is the lifecycle spelling of the canonical ActionDigest.
+type ApprovalDigest = ActionDigest
 
 // ApprovalNonceHash is the durable-safe lowercase SHA-256 hash of a nonce.
 type ApprovalNonceHash string
@@ -287,18 +227,24 @@ func (state ApprovalState) AuditEventType() ApprovalAuditEventType {
 type ApprovalStateReason string
 
 const (
-	ApprovalReasonUserApproved     ApprovalStateReason = "user_approved"
-	ApprovalReasonUserRejected     ApprovalStateReason = "user_rejected"
-	ApprovalReasonTTLExpired       ApprovalStateReason = "ttl_expired"
-	ApprovalReasonUserCancelled    ApprovalStateReason = "user_cancelled"
-	ApprovalReasonRunCancelled     ApprovalStateReason = "run_cancelled"
-	ApprovalReasonProcessRestarted ApprovalStateReason = "process_restarted"
-	ApprovalReasonContextCancelled ApprovalStateReason = "context_cancelled"
-	ApprovalReasonScopeChanged     ApprovalStateReason = "scope_changed"
-	ApprovalReasonDigestMismatch   ApprovalStateReason = "digest_mismatch"
-	ApprovalReasonNonceMismatch    ApprovalStateReason = "nonce_mismatch"
-	ApprovalReasonDecisionReplayed ApprovalStateReason = "decision_replayed"
-	ApprovalReasonConsumed         ApprovalStateReason = "approval_consumed"
+	ApprovalReasonUserApproved        ApprovalStateReason = "user_approved"
+	ApprovalReasonUserRejected        ApprovalStateReason = "user_rejected"
+	ApprovalReasonPolicyApproved      ApprovalStateReason = "policy_approved"
+	ApprovalReasonReviewerApproved    ApprovalStateReason = "reviewer_approved"
+	ApprovalReasonReviewerRejected    ApprovalStateReason = "reviewer_rejected"
+	ApprovalReasonSessionRuleApproved ApprovalStateReason = "session_rule_approved"
+	ApprovalReasonTTLExpired          ApprovalStateReason = "ttl_expired"
+	ApprovalReasonUserCancelled       ApprovalStateReason = "user_cancelled"
+	ApprovalReasonRunCancelled        ApprovalStateReason = "run_cancelled"
+	ApprovalReasonProcessRestarted    ApprovalStateReason = "process_restarted"
+	ApprovalReasonContextCancelled    ApprovalStateReason = "context_cancelled"
+	ApprovalReasonScopeChanged        ApprovalStateReason = "scope_changed"
+	ApprovalReasonPolicyChanged       ApprovalStateReason = "policy_changed"
+	ApprovalReasonTargetChanged       ApprovalStateReason = "target_changed"
+	ApprovalReasonDigestMismatch      ApprovalStateReason = "digest_mismatch"
+	ApprovalReasonNonceMismatch       ApprovalStateReason = "nonce_mismatch"
+	ApprovalReasonDecisionReplayed    ApprovalStateReason = "decision_replayed"
+	ApprovalReasonConsumed            ApprovalStateReason = "approval_consumed"
 )
 
 // ValidCancellation reports whether the reason can explicitly cancel a request.
@@ -319,15 +265,18 @@ func (reason ApprovalStateReason) validForState(state ApprovalState) bool {
 	case ApprovalStatePending:
 		return reason == ""
 	case ApprovalStateApproved:
-		return reason == ApprovalReasonUserApproved
+		return reason == ApprovalReasonUserApproved || reason == ApprovalReasonPolicyApproved ||
+			reason == ApprovalReasonReviewerApproved || reason == ApprovalReasonSessionRuleApproved
 	case ApprovalStateRejected:
-		return reason == ApprovalReasonUserRejected
+		return reason == ApprovalReasonUserRejected || reason == ApprovalReasonReviewerRejected
 	case ApprovalStateExpired:
 		return reason == ApprovalReasonTTLExpired
 	case ApprovalStateCancelled:
 		return reason.ValidCancellation()
 	case ApprovalStateInvalidated:
 		return reason == ApprovalReasonScopeChanged ||
+			reason == ApprovalReasonPolicyChanged ||
+			reason == ApprovalReasonTargetChanged ||
 			reason == ApprovalReasonDigestMismatch ||
 			reason == ApprovalReasonNonceMismatch ||
 			reason == ApprovalReasonDecisionReplayed
@@ -336,6 +285,11 @@ func (reason ApprovalStateReason) validForState(state ApprovalState) bool {
 	default:
 		return false
 	}
+}
+
+// ValidForState reports whether a durable lifecycle reason matches its state.
+func (reason ApprovalStateReason) ValidForState(state ApprovalState) bool {
+	return reason.validForState(state)
 }
 
 // ApprovalRequest is an immutable operation proposal plus its current state.
@@ -373,7 +327,26 @@ func (request ApprovalRequest) Validate() error {
 	} else if !request.StateChangedAt.Before(request.ExpiresAt) {
 		return ErrInvalidApprovalRequest
 	}
+	envelope := request.ActionEnvelope()
+	if envelope.Validate() != nil {
+		return ErrInvalidApprovalRequest
+	}
 	return nil
+}
+
+// ActionEnvelope returns the immutable generic authority represented by this
+// lifecycle record. State and nonce are deliberately excluded.
+func (request ApprovalRequest) ActionEnvelope() ActionEnvelope {
+	return ActionEnvelope{
+		SchemaVersion: ActionEnvelopeSchemaVersion,
+		RequestID:     request.ID,
+		SessionID:     request.SessionID,
+		RunID:         request.RunID,
+		Intent:        request.Intent,
+		RequestedAt:   request.RequestedAt,
+		ExpiresAt:     request.ExpiresAt,
+		Digest:        request.Digest,
+	}
 }
 
 // ShownDigest returns the complete digest that a decision must return.
@@ -406,29 +379,59 @@ func (choice ApprovalDecisionChoice) String() string {
 	}
 }
 
-// ApprovalActor is the only admitted local decision actor.
+// ApprovalActor identifies the deterministic source of one durable decision.
 type ApprovalActor string
 
-const ApprovalActorLocalUser ApprovalActor = "local_user"
+const (
+	ApprovalActorLocalUser        ApprovalActor = "local_user"
+	ApprovalActorPermissionPolicy ApprovalActor = "permission_policy"
+	ApprovalActorReviewer         ApprovalActor = "approval_reviewer"
+	ApprovalActorSessionRule      ApprovalActor = "session_rule"
+)
 
 // ApprovalDecision is the authoritative local decision record.
 type ApprovalDecision struct {
-	RequestID   ApprovalID
-	Choice      ApprovalDecisionChoice
-	ShownDigest ApprovalDigest
-	Nonce       ApprovalNonce
-	Actor       ApprovalActor
-	DecidedAt   time.Time
+	RequestID          ApprovalID
+	Choice             ApprovalDecisionChoice
+	ShownDigest        ApprovalDigest
+	Nonce              ApprovalNonce
+	Actor              ApprovalActor
+	Disposition        ReviewDisposition
+	RuleID             PermissionRuleID
+	ReviewerProfile    string
+	ReviewerOriginHash string
+	RationaleSummary   string
+	DecidedAt          time.Time
 }
 
 // Validate checks the fixed actor, displayed proof, choice, and UTC time.
 func (decision ApprovalDecision) Validate() error {
 	if !decision.RequestID.Valid() || !decision.Choice.Valid() ||
-		!decision.ShownDigest.Valid() || !decision.Nonce.Valid() ||
-		decision.Actor != ApprovalActorLocalUser || !validPersistenceTime(decision.DecidedAt) {
+		!decision.ShownDigest.Valid() || !decision.Nonce.Valid() || !decision.Disposition.Valid() ||
+		!validPersistenceTime(decision.DecidedAt) || !decision.validActorMetadata() {
 		return ErrInvalidApprovalDecision
 	}
 	return nil
+}
+
+func (decision ApprovalDecision) validActorMetadata() bool {
+	switch decision.Actor {
+	case ApprovalActorLocalUser:
+		return decision.Disposition == ReviewDispositionHuman && decision.RuleID == "" &&
+			decision.ReviewerProfile == "" && decision.ReviewerOriginHash == "" && decision.RationaleSummary == ""
+	case ApprovalActorPermissionPolicy:
+		return decision.Choice == ApprovalDecisionApprove && decision.Disposition == ReviewDispositionAutomatic && decision.RuleID == "" &&
+			decision.ReviewerProfile == "" && decision.ReviewerOriginHash == "" && decision.RationaleSummary == ""
+	case ApprovalActorSessionRule:
+		return decision.Choice == ApprovalDecisionApprove && decision.Disposition == ReviewDispositionAutomatic && decision.RuleID.Valid() &&
+			decision.ReviewerProfile == "" && decision.ReviewerOriginHash == "" && decision.RationaleSummary == ""
+	case ApprovalActorReviewer:
+		return decision.Disposition == ReviewDispositionReviewer && decision.RuleID == "" &&
+			ValidModelToken(decision.ReviewerProfile, 128) && validSHA256Hex(decision.ReviewerOriginHash) &&
+			validBoundedText(decision.RationaleSummary, 1, 2048)
+	default:
+		return false
+	}
 }
 
 // ApprovalErrorCode is a stable safe failure identifier.
@@ -564,83 +567,4 @@ func approvalErrorDefinition(code ApprovalErrorCode) (SafeErrorClass, string, bo
 	default:
 		return "", "", false
 	}
-}
-
-// ApprovalSchemaStatus mirrors the dormant initial schema without authority.
-type ApprovalSchemaStatus string
-
-const (
-	ApprovalSchemaStatusPending   ApprovalSchemaStatus = "pending"
-	ApprovalSchemaStatusApproved  ApprovalSchemaStatus = "approved"
-	ApprovalSchemaStatusRejected  ApprovalSchemaStatus = "rejected"
-	ApprovalSchemaStatusExpired   ApprovalSchemaStatus = "expired"
-	ApprovalSchemaStatusCancelled ApprovalSchemaStatus = "cancelled"
-	ApprovalSchemaStatusExecuted  ApprovalSchemaStatus = "executed"
-	ApprovalSchemaStatusFailed    ApprovalSchemaStatus = "failed"
-)
-
-func (status ApprovalSchemaStatus) valid() bool {
-	switch status {
-	case ApprovalSchemaStatusPending,
-		ApprovalSchemaStatusApproved,
-		ApprovalSchemaStatusRejected,
-		ApprovalSchemaStatusExpired,
-		ApprovalSchemaStatusCancelled,
-		ApprovalSchemaStatusExecuted,
-		ApprovalSchemaStatusFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-// ApprovalSchemaRecord is an inert migration-compatible DTO. It grants no authority.
-type ApprovalSchemaRecord struct {
-	ID                      ApprovalID
-	RunID                   AgentRunID
-	SessionID               SessionID
-	Operation               ApprovalOperation
-	Scope                   ScopeSnapshot
-	Target                  ResourceRef
-	CanonicalParametersJSON string
-	OperationDigest         string
-	HumanSummary            string
-	RiskSummary             string
-	Status                  ApprovalSchemaStatus
-	PolicyVersion           string
-	RequestedAt             time.Time
-	ExpiresAt               time.Time
-	ResolvedAt              *time.Time
-	ExecutionOutcome        *string
-	VerificationSummary     *string
-}
-
-// ValidateSchemaShape checks dormant schema compatibility without defining authority.
-func (record ApprovalSchemaRecord) ValidateSchemaShape() error {
-	if !record.ID.Valid() || !record.RunID.Valid() || !record.SessionID.Valid() ||
-		record.Operation != ApprovalOperationRestartDeployment || record.Scope.Validate() != nil ||
-		record.Target.Validate() != nil || record.Target.APIVersion != RestartDeploymentTargetAPIVersion ||
-		record.Target.Kind != RestartDeploymentTargetKind || record.Target.Namespace != record.Scope.Namespace ||
-		record.Target.UID == "" || record.CanonicalParametersJSON != "{}" ||
-		len(record.CanonicalParametersJSON) > maxApprovalParametersBytes ||
-		!validSHA256Hex(record.OperationDigest) ||
-		!validBoundedText(record.HumanSummary, 1, maxApprovalSummaryBytes) ||
-		!validBoundedText(record.RiskSummary, 1, maxApprovalSummaryBytes) ||
-		!record.Status.valid() || !validBoundedText(record.PolicyVersion, 1, maxPromptVersionBytes) ||
-		!validPersistenceTime(record.RequestedAt) || !validPersistenceTime(record.ExpiresAt) ||
-		!record.ExpiresAt.Equal(record.RequestedAt.Add(ApprovalExecutionTTL)) {
-		return ErrInvalidApprovalSchemaRecord
-	}
-	if record.Status == ApprovalSchemaStatusPending {
-		if record.ResolvedAt != nil {
-			return ErrInvalidApprovalSchemaRecord
-		}
-	} else if record.ResolvedAt == nil || !validPersistenceTime(*record.ResolvedAt) || record.ResolvedAt.Before(record.RequestedAt) {
-		return ErrInvalidApprovalSchemaRecord
-	}
-	if record.ExecutionOutcome != nil && !validBoundedText(*record.ExecutionOutcome, 1, 1024) ||
-		record.VerificationSummary != nil && !validBoundedText(*record.VerificationSummary, 1, maxApprovalSummaryBytes) {
-		return ErrInvalidApprovalSchemaRecord
-	}
-	return nil
 }

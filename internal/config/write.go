@@ -16,65 +16,113 @@ type ModelProfile struct {
 }
 
 type writableConfig struct {
-	Version    int                 `yaml:"version"`
-	Context    string              `yaml:"context,omitempty"`
-	Namespace  string              `yaml:"namespace,omitempty"`
-	NoColor    bool                `yaml:"no_color"`
-	Runtime    RuntimeConfig       `yaml:"runtime"`
-	Model      writableModelConfig `yaml:"model"`
-	Kubernetes KubernetesConfig    `yaml:"kubernetes"`
-	Logging    LoggingConfig       `yaml:"logging"`
+	Version    int                   `yaml:"version"`
+	Context    string                `yaml:"context,omitempty"`
+	Namespace  string                `yaml:"namespace,omitempty"`
+	NoColor    bool                  `yaml:"no_color"`
+	Runtime    RuntimeConfig         `yaml:"runtime"`
+	Models     writableModelProfiles `yaml:"models"`
+	Kubernetes KubernetesConfig      `yaml:"kubernetes"`
+	Logging    LoggingConfig         `yaml:"logging"`
 }
 
-type writableModelConfig struct {
-	ProviderKind          string  `yaml:"provider_kind"`
-	Endpoint              string  `yaml:"endpoint"`
-	Model                 string  `yaml:"model"`
-	ReasoningEffort       string  `yaml:"reasoning_effort,omitempty"`
-	APIKey                string  `yaml:"api_key"`
-	Temperature           float64 `yaml:"temperature"`
-	MaxOutputTokens       int     `yaml:"max_output_tokens"`
-	RequestTimeoutSeconds int     `yaml:"request_timeout_seconds"`
-	Streaming             bool    `yaml:"streaming"`
-	ToolCallingRequired   bool    `yaml:"tool_calling_required"`
+type writableModelProfiles struct {
+	Agent            writableModelProfile  `yaml:"agent"`
+	ApprovalReviewer *writableModelProfile `yaml:"approval_reviewer,omitempty"`
+}
+
+type writableModelProfile struct {
+	Name                  string                   `yaml:"name"`
+	Role                  ModelRole                `yaml:"role"`
+	InheritAgent          bool                     `yaml:"inherit_agent"`
+	CredentialReference   ModelCredentialReference `yaml:"credential_ref"`
+	ProviderKind          string                   `yaml:"provider_kind"`
+	Endpoint              string                   `yaml:"endpoint"`
+	Model                 string                   `yaml:"model"`
+	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty"`
+	APIKey                string                   `yaml:"api_key,omitempty"`
+	Temperature           float64                  `yaml:"temperature"`
+	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty"`
+	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds"`
+	Streaming             bool                     `yaml:"streaming"`
+	ToolCallingRequired   bool                     `yaml:"tool_calling_required"`
 }
 
 // SaveModelProfile atomically publishes the current typed settings and one
 // plaintext credential to the fixed Home configuration file.
 func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile ModelProfile, secret *SecretValue) error {
+	return SaveModelProfiles(ctx, paths, base, profile, secret, nil)
+}
+
+// SaveModelProfiles writes an explicit Agent replacement and, when supplied,
+// preserves one already file-sourced reviewer key. Environment credentials are
+// never written implicitly.
+func SaveModelProfiles(
+	ctx context.Context,
+	paths Paths,
+	base Config,
+	profile ModelProfile,
+	agentSecret *SecretValue,
+	reviewerFileSecret *SecretValue,
+) error {
 	if ctx == nil || ctx.Err() != nil {
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
 	}
-	if pathsForHome(paths.HomeDir).ConfigFile != paths.ConfigFile || !validHomePath(paths.HomeDir) || secret == nil || !secret.IsSet() {
+	if pathsForHome(paths.HomeDir).ConfigFile != paths.ConfigFile || !validHomePath(paths.HomeDir) || agentSecret == nil || !agentSecret.IsSet() {
 		return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not prepare the local configuration update.")
 	}
-	base.Model.Endpoint = profile.Endpoint
-	base.Model.Model = profile.Model
+	base.Version = CurrentVersion
+	base.Models.Agent.Endpoint = profile.Endpoint
+	base.Models.Agent.Origin = ""
+	base.Models.Agent.Model = profile.Model
 	if err := Validate(&base); err != nil {
 		return err
 	}
 	document := writableConfig{
 		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor, Runtime: base.Runtime,
-		Model: writableModelConfig{
-			ProviderKind: base.Model.ProviderKind, Endpoint: base.Model.Endpoint, Model: base.Model.Model,
-			ReasoningEffort: base.Model.ReasoningEffort,
-			Temperature:     base.Model.Temperature, MaxOutputTokens: base.Model.MaxOutputTokens,
-			RequestTimeoutSeconds: base.Model.RequestTimeoutSeconds,
-			Streaming:             base.Model.Streaming, ToolCallingRequired: base.Model.ToolCallingRequired,
-		},
+		Models:     writableModelProfiles{Agent: writableProfile(base.Models.Agent)},
 		Kubernetes: base.Kubernetes, Logging: base.Logging,
 	}
-	if err := secret.Use(func(value string) { document.Model.APIKey = value }); err != nil {
+	if base.Models.ApprovalReviewer != nil {
+		reviewer := writableProfile(*base.Models.ApprovalReviewer)
+		document.Models.ApprovalReviewer = &reviewer
+	}
+	if err := agentSecret.Use(func(value string) { document.Models.Agent.APIKey = value }); err != nil {
 		return err
 	}
+	if reviewerFileSecret != nil && reviewerFileSecret.IsSet() {
+		if document.Models.ApprovalReviewer == nil ||
+			document.Models.ApprovalReviewer.CredentialReference != ModelCredentialApprovalReviewer {
+			document.Models.Agent.APIKey = ""
+			return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not bind the reviewer credential to the local configuration update.")
+		}
+		if err := reviewerFileSecret.Use(func(value string) { document.Models.ApprovalReviewer.APIKey = value }); err != nil {
+			document.Models.Agent.APIKey = ""
+			return err
+		}
+	}
 	content, err := yaml.Marshal(document)
-	document.Model.APIKey = ""
+	document.Models.Agent.APIKey = ""
+	if document.Models.ApprovalReviewer != nil {
+		document.Models.ApprovalReviewer.APIKey = ""
+	}
 	if err != nil || len(content) > MaxConfigFileBytes {
 		zeroBytes(content)
 		return newSafeError(ClassInternal, "config_write_failed", "write_configuration", "Kupilot could not encode the local configuration safely.")
 	}
 	defer zeroBytes(content)
 	return publishConfiguration(ctx, paths, content)
+}
+
+func writableProfile(profile ModelProfileConfig) writableModelProfile {
+	return writableModelProfile{
+		Name: profile.Name, Role: profile.Role, InheritAgent: profile.InheritAgent,
+		CredentialReference: profile.CredentialReference,
+		ProviderKind:        profile.ProviderKind, Endpoint: profile.Endpoint, Model: profile.Model,
+		ReasoningEffort: profile.ReasoningEffort, Temperature: profile.Temperature,
+		MaxOutputTokens: profile.MaxOutputTokens, RequestTimeoutSeconds: profile.RequestTimeoutSeconds,
+		Streaming: profile.Streaming, ToolCallingRequired: profile.ToolCallingRequired,
+	}
 }
 
 func publishConfiguration(ctx context.Context, paths Paths, content []byte) error {

@@ -64,6 +64,7 @@ func (body *countingBody) Close() error {
 func fixtureConfiguration(endpoint string, timeout time.Duration) domain.ModelConfiguration {
 	parsed, _ := url.Parse(endpoint)
 	return domain.ModelConfiguration{
+		ProfileName: "agent", Role: domain.ModelRoleAgent,
 		ProviderKind:        domain.ModelProviderOpenAICompatible,
 		Endpoint:            endpoint,
 		Origin:              parsed.Scheme + "://" + parsed.Host,
@@ -315,6 +316,34 @@ func TestModelClientUsesEinoRequestAndStreamOnceForGPT5CompatibleIdentifier(t *t
 	}
 }
 
+func TestModelClientOmitsOutputTokenParameterWithoutEndpointEvidence(t *testing.T) {
+	t.Parallel()
+
+	server := newFixtureServer(t, "")
+	configuration := fixtureConfiguration(server.endpoint("normal"), time.Second)
+	configuration.MaxOutputTokens = 0
+	client, model := newFixtureModelClient(
+		t,
+		configuration,
+		strings.Repeat("e", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+	)
+	if message, modelError := streamFixture(client, model, context.Background()); modelError != nil || message == nil {
+		t.Fatalf("stream without token evidence = %#v / %#v", message, modelError)
+	}
+	requests := server.capturedRequests()
+	if len(requests) != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", len(requests))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(requests[0].Body, &payload); err != nil {
+		t.Fatalf("decode Eino request: %v", err)
+	}
+	if _, exists := payload["max_tokens"]; exists {
+		t.Fatalf("request invented an output-token value without endpoint evidence: %#v", payload)
+	}
+}
+
 func TestModelClientAcceptsOptionalUsageAndTerminalEOF(t *testing.T) {
 	t.Parallel()
 
@@ -333,27 +362,28 @@ func TestModelClientAcceptsOptionalUsageAndTerminalEOF(t *testing.T) {
 	}
 }
 
-func TestModelClientAcceptsOutputCeilingSizedFragmentedStream(t *testing.T) {
+func TestModelClientAcceptsBoundedFragmentedStreamWithoutTokenAssumption(t *testing.T) {
 	t.Parallel()
 
 	const (
 		formerWireLimit  = 256 * 1024
 		formerEventLimit = 1024
+		fragmentCount    = 2048
 	)
 	firstChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","content":"x"},"finish_reason":null}]}` + "\n\n"
 	contentChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}` + "\n\n"
 	finishChunk := `data: {"id":"response-long","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"
-	streamBody := firstChunk + strings.Repeat(contentChunk, domain.MaxModelOutputTokens-1) + finishChunk + "data: [DONE]\n\n"
-	if len(streamBody) <= formerWireLimit || domain.MaxModelOutputTokens <= formerEventLimit {
+	streamBody := firstChunk + strings.Repeat(contentChunk, fragmentCount-1) + finishChunk + "data: [DONE]\n\n"
+	if len(streamBody) <= formerWireLimit || fragmentCount <= formerEventLimit {
 		t.Fatal("long-stream fixture does not cross both former transport ceilings")
 	}
-	if len(streamBody) > domain.MaxModelStreamBytes || domain.MaxModelOutputTokens+2 > domain.MaxModelStreamChunks {
+	if len(streamBody) > domain.MaxModelStreamBytes || fragmentCount+2 > domain.MaxModelStreamChunks {
 		t.Fatal("long-stream fixture exceeds the current bounded transport contract")
 	}
 
 	body := &trackingBody{Reader: strings.NewReader(streamBody)}
 	configuration := fixtureConfiguration("https://model.example.test/v1", time.Second)
-	configuration.MaxOutputTokens = domain.MaxModelOutputTokens
+	configuration.MaxOutputTokens = 0
 	client, model := newFixtureModelClientWithTransport(
 		t,
 		configuration,
@@ -368,7 +398,7 @@ func TestModelClientAcceptsOutputCeilingSizedFragmentedStream(t *testing.T) {
 		}),
 	)
 	message, modelError := streamFixture(client, model, context.Background())
-	if modelError != nil || message == nil || message.Content != strings.Repeat("x", domain.MaxModelOutputTokens) ||
+	if modelError != nil || message == nil || message.Content != strings.Repeat("x", fragmentCount) ||
 		message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "stop" {
 		t.Fatalf("long fragmented message/error = %#v / %#v", message, modelError)
 	}

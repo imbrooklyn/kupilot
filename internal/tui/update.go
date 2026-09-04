@@ -95,8 +95,13 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case CommandResultMsg:
+		resumeScopeActivation := message.Result.Command == application.UICommandActivateScope &&
+			model.pendingResumed != nil && model.pendingResumed.ResumeRequestID == message.Result.RequestID
 		model.acceptCommandOutcome(message.Result)
 		model.reflow()
+		if resumeScopeActivation {
+			return model, model.finishResumeScopeActivation(message.Result)
+		}
 		return model, nil
 	case ModelSetupResultMsg:
 		model.acceptModelSetupResult(message.Result)
@@ -1086,7 +1091,6 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 			return model, nil
 		}
 		resumed := *model.pendingResumed
-		topLevel := model.resumeOrigin == resumeOriginTopLevel
 		useSaved := model.scopeConflict.UseSavedScope()
 		requestID := resumed.ResumeRequestID
 		command := application.UICommand{
@@ -1095,9 +1099,7 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 		}
 		if useSaved && resumed.SavedScope != nil {
 			scope := *resumed.SavedScope
-			command.Scope = &scope
-		} else if topLevel && !model.scope.ReadOnly && model.scope.Context != "" && model.scope.Namespace != "" {
-			scope := domain.ScopeCandidate{Context: model.scope.Context, Namespace: model.scope.Namespace}
+			command.Kind = application.UICommandActivateScope
 			command.Scope = &scope
 		}
 		if command.Validate() != nil {
@@ -1145,16 +1147,43 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 		Kind: application.UICommandAcceptResume, RequestID: resumed.ResumeRequestID,
 		ExpectedScopeGeneration: model.scope.Generation,
 	}
-	if resumed.SavedScope != nil && !explicitTopLevelScope {
-		scope := *resumed.SavedScope
-		command.Scope = &scope
-	}
 	if command.Validate() != nil {
 		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 		return nil
 	}
 	model.closeEvidenceInteraction()
 	model.pendingScopeID = command.RequestID
+	model.scope.Switching = true
+	return applicationCommand(command)
+}
+
+func (model *Model) finishResumeScopeActivation(result application.UICommandOutcome) tea.Cmd {
+	if result.Scope == nil || model.pendingResumed == nil ||
+		model.pendingResumed.ResumeRequestID != result.RequestID {
+		return nil
+	}
+	requestID := result.RequestID
+	if result.Scope.Failure != "" {
+		if model.resumeOrigin == resumeOriginTopLevel {
+			model.startup.Failed = true
+		} else {
+			model.startup.Ready = true
+		}
+		model.pendingResumed = nil
+		model.resumeOrigin = resumeOriginNone
+		return applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
+	}
+	command := application.UICommand{
+		Kind: application.UICommandAcceptResume, RequestID: requestID,
+		ExpectedScopeGeneration: model.scope.Generation,
+	}
+	if command.Validate() != nil {
+		model.pendingResumed = nil
+		model.resumeOrigin = resumeOriginNone
+		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
+		return applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
+	}
+	model.pendingScopeID = requestID
 	model.scope.Switching = true
 	return applicationCommand(command)
 }
@@ -1177,10 +1206,16 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			return
 		}
 		model.applyAcceptedResume(*result.Resumed)
-		model.applyScopeResult(*result.Scope)
-		if result.Scope.Failure == "" && result.Resource != nil {
-			model.pendingResourceID = result.Resource.RequestID
-			model.acceptResourceSelectionResult(*result.Resource)
+		model.pendingScopeID = 0
+		model.scope.Switching = false
+		if result.Scope.Failure != "" {
+			model.scope = ScopeView{Generation: result.Scope.ScopeGeneration}
+			model.showDialog("Scope required", "The Session was resumed without restoring historic Kubernetes authority. Activate a current scope before asking a question.")
+		} else {
+			model.scope = ScopeView{
+				Context: sanitizeExternalText(result.Scope.Context, 253), Namespace: sanitizeExternalText(result.Scope.Namespace, 63),
+				Generation: result.Scope.ScopeGeneration, ReadOnly: result.Scope.ReadOnly,
+			}
 		}
 	case application.UICommandSelectContext, application.UICommandSelectNamespace, application.UICommandActivateScope:
 		model.applyScopeResult(*result.Scope)
@@ -1814,6 +1849,31 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		storage = "degraded"
 	}
 	budget := status.Budget
+	modelContext := status.ModelContext
+	compression := "not compressed"
+	if modelContext.Compressed {
+		compression = "covered through " + string(modelContext.CoveredThroughMessageID)
+	}
+	agentBinding := "unconfigured"
+	if status.AgentModel.Configured {
+		agentBinding = status.AgentModel.Profile + " · " + status.AgentModel.OriginHash
+		if status.AgentModel.Consented {
+			agentBinding += " · consented"
+		} else {
+			agentBinding += " · consent required"
+		}
+	}
+	reviewerBinding := "unconfigured"
+	if status.ReviewerModel.Configured {
+		reviewerBinding = status.ReviewerModel.Profile + " · " + status.ReviewerModel.OriginHash
+		if !status.ReviewerModel.Available {
+			reviewerBinding += " · unavailable"
+		} else if status.ReviewerModel.Consented {
+			reviewerBinding += " · consented"
+		} else {
+			reviewerBinding += " · consent required"
+		}
+	}
 	modelName = sanitizeExternalText(modelName, application.MaxModelSetupNameBytes)
 	if modelName == "" {
 		modelName = "unavailable"
@@ -1826,6 +1886,15 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		statusRow("Model", modelName),
 		statusRow("Privacy", privacy),
 		statusRow("Storage", storage),
+		statusRow("Agent role", agentBinding),
+		statusRow("Reviewer", reviewerBinding),
+		"",
+		"Model context",
+		statusRow("Mode", string(modelContext.Mode)),
+		statusRow("History", fmt.Sprintf("%d messages · %s", modelContext.EligibleMessages, statusBytes(modelContext.EligibleBytes))),
+		statusRow("Summary", compression),
+		statusRow("Recent tail", fmt.Sprintf("%d messages", modelContext.RecentTailMessages)),
+		statusRow("Summary calls", fmt.Sprintf("%d/%d", modelContext.SummaryCallsUsed, modelContext.SummaryCallsMaximum)),
 		"",
 		"Scope",
 		statusRow("Context", contextName),
@@ -1840,9 +1909,14 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"",
 		"Budget",
 		statusRow("Profile", string(budget.Profile)),
+		statusRow("Basis", budget.ModelEvidenceBasis),
 		statusRow("Time", statusDuration(budget.ElapsedMilliseconds)+" elapsed · "+statusDuration(budget.RemainingMilliseconds)+" remaining"),
-		statusRow("Calls", fmt.Sprintf("%d/%d steps · %d/%d tools · %d/%d model", budget.StepsUsed, budget.StepsMaximum,
-			budget.ToolCallsUsed, budget.ToolCallsMaximum, budget.ModelCallsUsed, budget.ModelCallsMaximum)),
+		statusRow("Calls", fmt.Sprintf("%d/%d steps · %d/%d tools · %d/%d model · %d/%d summary · %d/%d reviewer", budget.StepsUsed, budget.StepsMaximum,
+			budget.ToolCallsUsed, budget.ToolCallsMaximum, budget.ModelCallsUsed, budget.ModelCallsMaximum,
+			budget.SummaryCallsUsed, budget.SummaryCallsMaximum, budget.ReviewerCallsUsed, budget.ReviewerCallsMaximum)),
+		statusRow("Cost units", fmt.Sprintf("%d/%d model · %d/%d summary · %d/%d reviewer", budget.ModelCostUnitsUsed,
+			budget.ModelCostUnitsMaximum, budget.SummaryCostUnitsUsed, budget.SummaryCostUnitsMaximum,
+			budget.ReviewerCostUnitsUsed, budget.ReviewerCostUnitsMaximum)),
 		statusRow("Data", fmt.Sprintf("%s/%s · %d/%d log calls", statusBytes(budget.ToolResultBytesUsed),
 			statusBytes(budget.ToolResultBytesMaximum), budget.LogCallsUsed, budget.LogCallsMaximum)),
 	}, "\n")

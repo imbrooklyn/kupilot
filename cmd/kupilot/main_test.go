@@ -30,7 +30,7 @@ func TestConfiguredBudgetLimitsSelectsProfileAndHonorsTighterModelTimeout(t *tes
 		limits.ModelRequestTimeout != 300*time.Second {
 		t.Fatalf("configuredBudgetLimits(extended) = %#v, %v", limits, err)
 	}
-	value.Model.RequestTimeoutSeconds = 30
+	value.Models.Agent.RequestTimeoutSeconds = 30
 	limits, err = configuredBudgetLimits(value)
 	if err != nil || limits.ModelRequestTimeout != 30*time.Second || limits.Profile != agent.BudgetProfileExtended {
 		t.Fatalf("configuredBudgetLimits(tightened) = %#v, %v", limits, err)

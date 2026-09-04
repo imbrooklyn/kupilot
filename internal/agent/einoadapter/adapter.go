@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/eino/adk"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -33,6 +33,7 @@ type Config struct {
 }
 
 type runtimeConfig struct {
+	profileName string
 	tools       agent.ToolHandlers
 	scopeGuard  agent.RunScopeGuard
 	identifiers agent.RunIdentifierSource
@@ -43,6 +44,7 @@ type runtimeConfig struct {
 // state is created per Run call and never stored in Eino framework state.
 type Adapter struct {
 	client      *modelClient
+	profileName string
 	tools       agent.ToolHandlers
 	scopeGuard  agent.RunScopeGuard
 	identifiers agent.RunIdentifierSource
@@ -71,7 +73,12 @@ func New(config Config) (*Adapter, error) {
 	if modelError != nil {
 		return nil, modelError
 	}
+	if config.ModelConfiguration.Role != domain.ModelRoleAgent {
+		client.close()
+		return nil, ErrInvalidConfiguration
+	}
 	adapter, err := newAdapter(runtimeConfig{
+		profileName: config.ModelConfiguration.ProfileName,
 		tools:       config.Tools,
 		scopeGuard:  config.ScopeGuard,
 		identifiers: config.Identifiers,
@@ -85,12 +92,16 @@ func New(config Config) (*Adapter, error) {
 }
 
 func newAdapter(config runtimeConfig, client *modelClient) (*Adapter, error) {
+	if config.profileName == "" {
+		config.profileName = string(domain.ModelRoleAgent)
+	}
 	if client == nil || client.model == nil || config.scopeGuard == nil || config.identifiers == nil || config.now == nil ||
-		config.tools.Validate() != nil || !validRuntimeTime(config.now()) {
+		!domain.ValidModelToken(config.profileName, 128) || config.tools.Validate() != nil || !validRuntimeTime(config.now()) {
 		return nil, ErrInvalidConfiguration
 	}
 	return &Adapter{
 		client:      client,
+		profileName: config.profileName,
 		tools:       config.tools,
 		scopeGuard:  config.scopeGuard,
 		identifiers: config.identifiers,
@@ -99,7 +110,7 @@ func newAdapter(config runtimeConfig, client *modelClient) (*Adapter, error) {
 }
 
 // Run executes one immutable single-Agent composition and returns exactly one
-// neutral terminal outcome.
+// project-owned terminal outcome.
 func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
 	if adapter == nil || ctx == nil || sink == nil || input.Validate() != nil {
 		return invalidInputOutcome()
@@ -142,6 +153,8 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 		budget:            budget,
 		registry:          registry,
 		publisher:         publisher,
+		profileName:       adapter.profileName,
+		originHash:        domain.SHA256Hex(adapter.client.configuration.Origin),
 		boundCalls:        make(map[string]*boundExecution),
 		modelRequestIDs:   make(map[domain.ModelRequestID]struct{}),
 		toolInvocationIDs: make(map[domain.ToolInvocationID]struct{}),
@@ -167,24 +180,57 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if err != nil {
 		return state.finishFailure(runCtx, err)
 	}
-	productionAgent, err := react.NewAgent(runCtx, &react.AgentConfig{
-		ToolCallingModel: &guardedChatModel{state: state},
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools:               tools,
-			ExecuteSequentially: true,
-		},
-		MaxStep: input.BudgetLimits().Steps*2 + 1,
+	summaryHandler, err := state.newSummarizationMiddleware(runCtx)
+	if err != nil {
+		return state.finishFailure(runCtx, err)
+	}
+	productionAgent, err := adk.NewChatModelAgent(runCtx, &adk.ChatModelAgentConfig{
+		Name:        "kupilot-agent",
+		Instruction: initialMessages[0].Content,
+		Model:       &guardedChatModel{state: state},
+		ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{
+			Tools: tools, ExecuteSequentially: true,
+		}},
+		MaxIterations: input.BudgetLimits().ModelCalls,
+		Handlers:      []adk.ChatModelAgentMiddleware{summaryHandler},
 	})
 	if err != nil {
 		return state.finishFailure(runCtx, normalizeFrameworkError(err))
 	}
-	output, err := productionAgent.Stream(runCtx, initialMessages)
-	if err != nil {
-		return state.finishFailure(runCtx, normalizeFrameworkError(err))
+	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: productionAgent, EnableStreaming: true})
+	iterator := runner.Run(runCtx, initialMessages[1:])
+	var finalMessage *schema.Message
+	for {
+		event, available := iterator.Next()
+		if !available {
+			break
+		}
+		if event == nil || event.Err != nil {
+			if event == nil {
+				err = errors.New("Eino Runner returned an empty event")
+			} else {
+				err = event.Err
+			}
+			return state.finishFailure(runCtx, normalizeFrameworkError(err))
+		}
+		if event.Action != nil || event.Output == nil || event.Output.MessageOutput == nil || event.Output.CustomizedOutput != nil {
+			return state.finishFailure(runCtx, normalizeFrameworkError(errors.New("Eino Runner returned an unsupported event")))
+		}
+		message, messageErr := event.Output.MessageOutput.GetMessage()
+		if messageErr != nil {
+			return state.finishFailure(runCtx, normalizeFrameworkError(messageErr))
+		}
+		if event.Output.MessageOutput.Role == schema.Assistant {
+			// Runner assigns its private message identity after the guarded model
+			// has rejected provider metadata. It is execution state, not durable
+			// or project authority, so it does not cross this boundary.
+			value := *message
+			value.Extra = nil
+			finalMessage = &value
+		}
 	}
-	finalMessage, err := schema.ConcatMessageStream(output)
-	if err != nil {
-		return state.finishFailure(runCtx, normalizeFrameworkError(err))
+	if finalMessage == nil {
+		return state.finishFailure(runCtx, normalizeFrameworkError(errors.New("Eino Runner returned no final assistant message")))
 	}
 	if err := state.finishStep(runCtx); err != nil {
 		var failure *runtimeFailure

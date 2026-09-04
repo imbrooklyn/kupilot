@@ -1,8 +1,9 @@
 # Privacy and Local Data
 
-This page includes the Accepted `v0.5` privacy target. The checked-in `v0.4`
-binary does not yet expose named model roles, new sensitive categories,
-Session summarization, optional data sources, or remote/local execution.
+This page distinguishes current behavior from the Accepted `v0.5` privacy
+target. The checked-in binary now exposes named model roles, role-scoped
+consent, safe Session context, and summarization. New sensitive data-source
+categories and remote/local execution remain unavailable.
 
 Kupilot orchestrates locally and connects directly to the selected Kubernetes
 API and configured model endpoint. Local orchestration does not mean all
@@ -23,9 +24,10 @@ context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
 
 1. `user_question`: the question after local normalization,
    sensitive-value handling, and byte limits.
-2. `safe_conversation_context`: bounded safe context for the current run. The
-   implemented `v0.4` loop may add current-run structured Tool results and
-   Evidence; persisted Tool calls/results are never replayed as Session history.
+2. `safe_conversation_context`: bounded committed same-Session user/final-
+   assistant context and, when required, one safe summary plus recent tail.
+   Current-run structured Tool results stay inside Eino's run state; persisted
+   Tool calls/results are never replayed as Session history.
 3. `resource_names_and_references`: Context, Namespace, and admitted resource
    names or references.
 4. `projected_kubernetes_status`: allowlisted status, conditions, counts,
@@ -35,8 +37,9 @@ context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
 6. `redacted_container_output`: bounded current or previous container-output
    facts after normalization and redaction.
 
-The implemented list above is the `v0.4` category baseline. `v0.5` must add
-separate versioned categories where needed for all-container/log-search output,
+The implemented list above includes safe resumed conversation context. Later
+`v0.5` work must add separate versioned categories where needed for
+all-container/log-search output,
 Pod/Node metrics, safe Secret metadata, exact ConfigMap-key or non-credential
 container-environment values, optional Prometheus or Loki results, container
 files, remote diagnostics, local-process output, and resumed safe history.
@@ -132,7 +135,7 @@ required lifecycle, consent, permission, action, and execution-audit records
 remain subject to their own retention rules. A minimal Session is unavailable
 to the resume picker, exact-ID resume, and `--last` across processes.
 
-Under `v0.5`, standard-mode resume itself performs zero model, Kubernetes,
+Standard-mode resume itself performs zero model, Kubernetes,
 Tool, Reviewer, approval, process, or executor I/O. On the next explicit
 question, when retained eligible safe history exists and current
 role/origin/category consent, scope, policy, coverage, and budget checks pass,

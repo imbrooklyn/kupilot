@@ -6,11 +6,14 @@ uses explicitly configured named model profiles and optional data sources.
 bounded content is sent only to the destination bound to its fixed consumer
 role after informed consent and local safety processing.
 
-This document defines the accepted `v0.5` privacy target. The checked-in
-implementation remains the `v0.4` baseline; no new profile, data source,
-Session-memory, or execution path is claimed reachable yet. Kupilot does not
-claim that redaction recognizes every sensitive value or that a model or data
-provider follows its local retention schedule.
+This document defines the accepted `v0.5` privacy target and distinguishes it
+from current reachability. The checked-in implementation now has typed named
+Agent and optional Reviewer profiles, role/origin/category consent, safe Session
+context and summarization, and deterministic permission/Reviewer routing for the
+existing supervised Deployment restart. Expanded data sources, public
+permission controls, and new execution paths remain targets and are not claimed
+reachable. Kupilot does not claim that redaction recognizes every sensitive
+value or that a model or data provider follows its local retention schedule.
 
 > [!IMPORTANT]
 > Context and Namespace names, resource names, Node and workload status,
@@ -102,10 +105,13 @@ Kupilot never includes:
 - arbitrary shell commands, unapproved kubectl/helm/argocd input or output,
   terminal control bytes, process environments, or generic executable payloads.
 
-The model key is used only to authenticate to the selected origin. It may come
-from masked TUI input, the one-shot environment override, or the optional
-plaintext `model.api_key`. Choosing to save it writes only the fixed Home
-configuration after an explicit not-encrypted disclosure. It never enters
+Each model key is used only to authenticate its selected role and origin. An
+Agent key may come from masked TUI input, a one-shot Agent environment alias,
+or optional plaintext `models.agent.api_key`. A Reviewer with its own
+credential may use its one-shot role variable or optional plaintext
+`models.approval_reviewer.api_key`; an inheriting Reviewer receives a distinct
+opaque clone. Choosing to save discloses exactly which file-sourced plaintext
+role keys will be written to the fixed Home configuration. No key enters
 SQLite, Session content, logs, audit, export, model content, or child
 environments.
 
@@ -269,8 +275,9 @@ A current standard Session may be exported only through `/privacy` as
 `kupilot.export-summary.v2`, with an
 explicit absolute Markdown destination and second confirmation. The versioned
 allowlist contains safe Session display metadata, bounded processed committed
-user and assistant text, free-form validated answer metadata, and referenced
-Evidence summaries or expired markers.
+user and assistant text, the bounded safe Session-context summary and its
+content-free coverage explanation, free-form validated answer metadata, and
+referenced Evidence summaries or expired markers.
 
 It excludes raw Tool input/output, raw logs or Events, Kubernetes objects, full
 prompts, model traffic, credentials, Secrets, kubeconfig data, approval nonce,

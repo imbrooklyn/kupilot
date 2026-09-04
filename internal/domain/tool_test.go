@@ -168,6 +168,10 @@ func TestModelRequestMetadataValidationExcludesBodiesAndBoundsFields(t *testing.
 		ID:                  "00000000-0000-7000-8000-000000001101",
 		RunID:               "00000000-0000-7000-8000-000000001102",
 		Sequence:            1,
+		ProfileName:         "agent",
+		ModelRole:           ModelRoleAgent,
+		Invocation:          ModelInvocationAgent,
+		ReservedCostUnits:   1,
 		ProviderKind:        ModelProviderOpenAICompatible,
 		EndpointOriginHash:  &endpointHash,
 		Model:               "test-model",
@@ -191,6 +195,10 @@ func TestModelRequestMetadataValidationExcludesBodiesAndBoundsFields(t *testing.
 		mutate func(*ModelRequestMetadata)
 	}{
 		{name: "provider", mutate: func(value *ModelRequestMetadata) { value.ProviderKind = "auto_detect" }},
+		{name: "profile", mutate: func(value *ModelRequestMetadata) { value.ProfileName = "" }},
+		{name: "role", mutate: func(value *ModelRequestMetadata) { value.ModelRole = "router" }},
+		{name: "invocation", mutate: func(value *ModelRequestMetadata) { value.Invocation = ModelInvocationReview }},
+		{name: "cost", mutate: func(value *ModelRequestMetadata) { value.ReservedCostUnits = 0 }},
 		{name: "sequence", mutate: func(value *ModelRequestMetadata) { value.Sequence = maxModelRequests + 1 }},
 		{name: "model", mutate: func(value *ModelRequestMetadata) { value.Model = strings.Repeat("m", maxModelIdentifierBytes+1) }},
 		{name: "request identifier", mutate: func(value *ModelRequestMetadata) {

@@ -56,25 +56,89 @@ type UIStatusResult struct {
 	CapabilityCatalogVersion string
 	PersistenceDegraded      bool
 	Budget                   UIBudgetStatus
+	ModelContext             UIModelContextStatus
+	AgentModel               UIModelRoleStatus
+	ReviewerModel            UIModelRoleStatus
+	Permission               UIPermissionStatus
+	Action                   *UIActionStatus
+}
+
+// UIPermissionStatus is a content-free local policy snapshot.
+type UIPermissionStatus struct {
+	Configured           bool
+	Profile              domain.PermissionProfile
+	PolicyGeneration     domain.PolicyGeneration
+	Healthy              bool
+	FullAccessAllowed    bool
+	HighRiskAcknowledged bool
+	SessionRuleCount     int
+}
+
+// UIActionStatus contains no target, parameter, rationale, or credential.
+type UIActionStatus struct {
+	RequestID        domain.ApprovalID
+	Operation        domain.ActionOperation
+	Risk             domain.RiskClass
+	Route            domain.ReviewDisposition
+	State            domain.ApprovalState
+	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
+	Reviewing        bool
+	ExpiresAtMillis  int64
+}
+
+// UIModelContextStatus contains counts and coverage only, never content.
+type UIModelContextStatus struct {
+	Mode                    domain.PrivacyMode
+	EligibleMessages        int
+	EligibleBytes           int
+	Compressed              bool
+	CompressedAtUnixMillis  int64
+	CoveredThroughMessageID domain.MessageID
+	RecentTailMessages      int
+	SummaryCallsUsed        int
+	SummaryCallsMaximum     int
+	StorageHealthy          bool
+}
+
+// UIModelRoleStatus is one role-bound, content-free model status.
+type UIModelRoleStatus struct {
+	Role       domain.ModelRole
+	Profile    string
+	OriginHash string
+	Configured bool
+	Available  bool
+	Consented  bool
 }
 
 // UIBudgetStatus is the safe local projection shown by /status. Durations are
 // integer milliseconds so delivery does not receive a clock or live budget.
 type UIBudgetStatus struct {
-	Profile                agent.BudgetProfile
-	RunMilliseconds        int64
-	ElapsedMilliseconds    int64
-	RemainingMilliseconds  int64
-	StepsUsed              int
-	StepsMaximum           int
-	ToolCallsUsed          int
-	ToolCallsMaximum       int
-	ModelCallsUsed         int
-	ModelCallsMaximum      int
-	ToolResultBytesUsed    int
-	ToolResultBytesMaximum int
-	LogCallsUsed           int
-	LogCallsMaximum        int
+	ModelEvidenceBasis       string
+	Profile                  agent.BudgetProfile
+	RunMilliseconds          int64
+	ElapsedMilliseconds      int64
+	RemainingMilliseconds    int64
+	StepsUsed                int
+	StepsMaximum             int
+	ToolCallsUsed            int
+	ToolCallsMaximum         int
+	ModelCallsUsed           int
+	ModelCallsMaximum        int
+	ModelCostUnitsUsed       int
+	ModelCostUnitsMaximum    int
+	SummaryCallsUsed         int
+	SummaryCallsMaximum      int
+	SummaryCostUnitsUsed     int
+	SummaryCostUnitsMaximum  int
+	ReviewerCallsUsed        int
+	ReviewerCallsMaximum     int
+	ReviewerCostUnitsUsed    int
+	ReviewerCostUnitsMaximum int
+	ToolResultBytesUsed      int
+	ToolResultBytesMaximum   int
+	LogCallsUsed             int
+	LogCallsMaximum          int
 }
 
 // UICommandOutcome contains only the typed result shapes used by delivery.
@@ -328,14 +392,61 @@ func (result UIStatusResult) valid() bool {
 		result.Context == "" && result.NamespaceAccess != "" || result.Context != "" && !result.NamespaceAccess.Valid() ||
 		result.Context != "" && (!domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace)) ||
 		result.RunActive != result.RunID.Valid() || result.CapabilityCatalogVersion != agent.ToolCatalogVersion ||
-		!result.Budget.valid() {
+		!result.Budget.valid() || !result.ModelContext.valid(result.Session != nil) ||
+		!result.AgentModel.valid(true) || !result.ReviewerModel.valid(false) ||
+		!result.Permission.valid(result.Session != nil) || result.Action != nil && !result.Action.valid() {
 		return false
 	}
 	return true
 }
 
+func (status UIPermissionStatus) valid(_ bool) bool {
+	if !status.Configured {
+		return status == (UIPermissionStatus{})
+	}
+	return status.Profile.Valid() && status.PolicyGeneration.Valid() &&
+		status.SessionRuleCount >= 0 && status.SessionRuleCount <= MaxSessionPermissionRules &&
+		(status.Profile == domain.PermissionProfileFullAccess || !status.FullAccessAllowed) &&
+		(!status.FullAccessAllowed || status.HighRiskAcknowledged)
+}
+
+func (status UIActionStatus) valid() bool {
+	return status.RequestID.Valid() && status.Operation.Valid() && status.Risk.Valid() &&
+		status.Route.Valid() && status.Route != domain.ReviewDispositionDeny && status.State.Valid() &&
+		!status.State.Terminated() && status.ScopeGeneration > 0 && status.PolicyGeneration.Valid() &&
+		status.ExpiresAtMillis > 0
+}
+
+func (status UIModelContextStatus) valid(hasSession bool) bool {
+	if !hasSession {
+		return status == (UIModelContextStatus{})
+	}
+	if status.Mode != domain.PrivacyModeStandard && status.Mode != domain.PrivacyModeMinimal ||
+		status.EligibleMessages < 0 || status.EligibleMessages > domain.MaxSessionContextMessages ||
+		status.EligibleBytes < 0 || status.EligibleBytes > domain.MaxSessionHistoryBytes ||
+		status.RecentTailMessages < 0 || status.RecentTailMessages > status.EligibleMessages ||
+		!validBudgetCounter(status.SummaryCallsUsed, status.SummaryCallsMaximum) {
+		return false
+	}
+	return status.Compressed == status.CoveredThroughMessageID.Valid() &&
+		status.Compressed == (status.CompressedAtUnixMillis > 0)
+}
+
+func (status UIModelRoleStatus) valid(required bool) bool {
+	if !status.Configured {
+		if !required {
+			return status == (UIModelRoleStatus{})
+		}
+		return status.Role == domain.ModelRoleAgent && status.Profile == "" && status.OriginHash == "" &&
+			!status.Available && !status.Consented
+	}
+	return status.Role.Valid() && domain.ValidModelToken(status.Profile, 128) && validPrivacyDigest(status.OriginHash) &&
+		(!status.Consented || status.Available)
+}
+
 func (status UIBudgetStatus) valid() bool {
-	if !status.Profile.Valid() || status.RunMilliseconds <= 0 || status.ElapsedMilliseconds < 0 ||
+	if status.ModelEvidenceBasis != ModelBudgetEvidenceBasis || !status.Profile.Valid() ||
+		status.RunMilliseconds <= 0 || status.ElapsedMilliseconds < 0 ||
 		status.RemainingMilliseconds < 0 || status.ElapsedMilliseconds > status.RunMilliseconds ||
 		status.RemainingMilliseconds > status.RunMilliseconds ||
 		status.ElapsedMilliseconds+status.RemainingMilliseconds != status.RunMilliseconds {
@@ -344,9 +455,18 @@ func (status UIBudgetStatus) valid() bool {
 	return validBudgetCounter(status.StepsUsed, status.StepsMaximum) &&
 		validBudgetCounter(status.ToolCallsUsed, status.ToolCallsMaximum) &&
 		validBudgetCounter(status.ModelCallsUsed, status.ModelCallsMaximum) &&
+		validBudgetCounter(status.ModelCostUnitsUsed, status.ModelCostUnitsMaximum) &&
+		validBudgetCounter(status.SummaryCallsUsed, status.SummaryCallsMaximum) &&
+		validBudgetCounter(status.SummaryCostUnitsUsed, status.SummaryCostUnitsMaximum) &&
+		validBudgetCounter(status.ReviewerCallsUsed, status.ReviewerCallsMaximum) &&
+		validBudgetCounter(status.ReviewerCostUnitsUsed, status.ReviewerCostUnitsMaximum) &&
 		validBudgetCounter(status.ToolResultBytesUsed, status.ToolResultBytesMaximum) &&
 		validBudgetCounter(status.LogCallsUsed, status.LogCallsMaximum)
 }
+
+// ModelBudgetEvidenceBasis is the exact content-free status value used while
+// no selected-endpoint token or monetary-cost evidence is available.
+const ModelBudgetEvidenceBasis = "bytes_calls_time_cost_units_no_endpoint_token_claim"
 
 func validBudgetCounter(used, maximum int) bool {
 	return used >= 0 && maximum > 0 && used <= maximum
@@ -517,32 +637,52 @@ const approvalProposedSummary = "Update only the Kupilot-owned restart annotatio
 // UIApprovalRequest is the complete safe dialog projection. The opaque nonce
 // is memory-only decision authority whose type cannot render or marshal bytes.
 type UIApprovalRequest struct {
-	RequestID            domain.ApprovalID
-	RunID                domain.AgentRunID
-	SessionID            domain.SessionID
-	Sequence             int64
-	Operation            domain.ApprovalOperation
-	Scope                domain.ScopeSnapshot
-	Target               domain.ResourceRef
-	TemplateFingerprint  string
-	DeploymentGeneration int64
-	ReasonSummary        string
-	RiskSummary          string
-	CurrentSummary       string
-	ProposedSummary      string
-	Digest               domain.ApprovalDigest
-	Nonce                domain.ApprovalNonce
-	RequestedAt          time.Time
-	ExpiresAt            time.Time
+	RequestID              domain.ApprovalID
+	RunID                  domain.AgentRunID
+	SessionID              domain.SessionID
+	Sequence               int64
+	Operation              domain.ApprovalOperation
+	OperationSchema        string
+	PolicyVersion          string
+	PermissionProfile      domain.PermissionProfile
+	PolicyGeneration       domain.PolicyGeneration
+	Risk                   domain.RiskClass
+	Effect                 domain.CapabilityEffectClass
+	Scope                  domain.ScopeSnapshot
+	NamespaceAccess        domain.NamespaceAccessPolicy
+	Target                 domain.ResourceRef
+	TemplateFingerprint    string
+	DeploymentGeneration   int64
+	Parameters             domain.ActionParameters
+	DataCategories         domain.ActionDataCategories
+	AllowedSinks           domain.ActionSinks
+	NetworkEffects         domain.ActionNetworkEffects
+	NetworkDestinationHash domain.ActionDigest
+	Limits                 domain.ActionLimits
+	VerificationPlanID     string
+	ReasonSummary          string
+	RiskSummary            string
+	CurrentSummary         string
+	ProposedSummary        string
+	Digest                 domain.ApprovalDigest
+	Nonce                  domain.ApprovalNonce
+	RequestedAt            time.Time
+	ExpiresAt              time.Time
 }
 
 // Validate recomputes the operation digest from every displayed parameter.
 func (request UIApprovalRequest) Validate() error {
 	intent := domain.OperationIntent{
-		Operation: request.Operation, Scope: request.Scope,
-		DeploymentName: request.Target.Name, DeploymentUID: request.Target.UID,
-		TemplateFingerprint: request.TemplateFingerprint, DeploymentGeneration: request.DeploymentGeneration,
-		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion, ReasonSummary: request.ReasonSummary,
+		Operation: request.Operation, OperationSchemaVersion: request.OperationSchema,
+		PolicyVersion: request.PolicyVersion, PermissionProfile: request.PermissionProfile,
+		Risk: request.Risk, Effect: request.Effect, PolicyGeneration: request.PolicyGeneration,
+		Scope: request.Scope, NamespaceAccess: request.NamespaceAccess,
+		Target:     domain.ActionTarget{Resource: request.Target, Fingerprint: request.TemplateFingerprint, Generation: request.DeploymentGeneration},
+		Parameters: request.Parameters, DataCategories: request.DataCategories, AllowedSinks: request.AllowedSinks,
+		NetworkEffects: request.NetworkEffects, NetworkDestinationHash: request.NetworkDestinationHash,
+		Limits:             request.Limits,
+		VerificationPlanID: request.VerificationPlanID, ReasonSummary: request.ReasonSummary,
+		RiskSummary: request.RiskSummary,
 	}
 	domainRequest := domain.ApprovalRequest{
 		ID: request.RequestID, RunID: request.RunID, SessionID: request.SessionID,
@@ -559,7 +699,7 @@ func (request UIApprovalRequest) Validate() error {
 	if request.Sequence < 1 || request.Sequence > 4096 || request.Target.Validate() != nil ||
 		request.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
 		request.Target.Kind != domain.RestartDeploymentTargetKind || request.Target.Namespace != request.Scope.Namespace ||
-		request.RiskSummary != domain.RestartDeploymentRiskSummary || request.CurrentSummary != wantCurrent ||
+		intent.ValidateRestartDeployment() != nil || request.CurrentSummary != wantCurrent ||
 		request.ProposedSummary != approvalProposedSummary || domainRequest.Validate() != nil ||
 		err != nil || !request.Digest.Equal(digest) {
 		return ErrInvalidUIEvent
@@ -610,7 +750,9 @@ func validApprovalResultState(state domain.ApprovalState, reason domain.Approval
 	case domain.ApprovalStateCancelled:
 		return reason.ValidCancellation()
 	case domain.ApprovalStateInvalidated:
-		return reason == domain.ApprovalReasonScopeChanged || reason == domain.ApprovalReasonDigestMismatch ||
+		return reason == domain.ApprovalReasonScopeChanged || reason == domain.ApprovalReasonPolicyChanged ||
+			reason == domain.ApprovalReasonTargetChanged ||
+			reason == domain.ApprovalReasonDigestMismatch ||
 			reason == domain.ApprovalReasonNonceMismatch || reason == domain.ApprovalReasonDecisionReplayed
 	case domain.ApprovalStateConsumed:
 		return reason == domain.ApprovalReasonConsumed
@@ -622,14 +764,18 @@ func validApprovalResultState(state domain.ApprovalState, reason domain.Approval
 func projectUIApprovalRequest(request domain.ApprovalRequest, sequence int64) UIApprovalRequest {
 	return UIApprovalRequest{
 		RequestID: request.ID, RunID: request.RunID, SessionID: request.SessionID, Sequence: sequence,
-		Operation: request.Intent.Operation, Scope: request.Intent.Scope,
-		Target: domain.ResourceRef{
-			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
-			Namespace: request.Intent.Scope.Namespace, Name: request.Intent.DeploymentName, UID: request.Intent.DeploymentUID,
-		},
-		TemplateFingerprint: request.Intent.TemplateFingerprint, DeploymentGeneration: request.Intent.DeploymentGeneration,
-		ReasonSummary: request.Intent.ReasonSummary, RiskSummary: domain.RestartDeploymentRiskSummary,
-		CurrentSummary:  fmt.Sprintf("Deployment generation %d with Pod template fingerprint %s.", request.Intent.DeploymentGeneration, request.Intent.TemplateFingerprint),
+		Operation: request.Intent.Operation, OperationSchema: request.Intent.OperationSchemaVersion,
+		PolicyVersion: request.Intent.PolicyVersion, PermissionProfile: request.Intent.PermissionProfile,
+		PolicyGeneration: request.Intent.PolicyGeneration, Risk: request.Intent.Risk, Effect: request.Intent.Effect,
+		Scope: request.Intent.Scope, NamespaceAccess: request.Intent.NamespaceAccess,
+		Target:              request.Intent.Target.Resource,
+		TemplateFingerprint: request.Intent.Target.Fingerprint, DeploymentGeneration: request.Intent.Target.Generation,
+		Parameters: request.Intent.Parameters, DataCategories: request.Intent.DataCategories,
+		AllowedSinks: request.Intent.AllowedSinks, NetworkEffects: request.Intent.NetworkEffects,
+		NetworkDestinationHash: request.Intent.NetworkDestinationHash,
+		Limits:                 request.Intent.Limits, VerificationPlanID: request.Intent.VerificationPlanID,
+		ReasonSummary: request.Intent.ReasonSummary, RiskSummary: request.Intent.RiskSummary,
+		CurrentSummary:  fmt.Sprintf("Deployment generation %d with Pod template fingerprint %s.", request.Intent.Target.Generation, request.Intent.Target.Fingerprint),
 		ProposedSummary: approvalProposedSummary, Digest: request.Digest, Nonce: request.Nonce,
 		RequestedAt: request.RequestedAt, ExpiresAt: request.ExpiresAt,
 	}
@@ -748,7 +894,7 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		}
 		bridge.started = true
 		return bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted})
-	case agent.RunEventModelStreamStarted, agent.RunEventEvidenceCollected:
+	case agent.RunEventModelStreamStarted, agent.RunEventSummaryStarted, agent.RunEventSummaryReady, agent.RunEventEvidenceCollected:
 		return nil
 	case agent.RunEventDiagnosisReady:
 		diagnosis := cloneDiagnosis(*event.Diagnosis)

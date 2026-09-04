@@ -138,10 +138,13 @@ func TestApprovalCoordinatorScopeInvalidationDuringRevalidationPreventsWrite(t *
 	}
 	close(release)
 	outcome := <-completed
-	if !errors.Is(outcome.err, ErrApprovalInvalidated) || outcome.result.State != domain.ApprovalStateInvalidated ||
-		fixture.persistence.closes != 1 || fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
-		t.Fatalf("result/error/closes/consumes/writes = %#v/%v/%d/%d/%d, want invalidated/error/1/0/0",
-			outcome.result, outcome.err, fixture.persistence.closes, fixture.persistence.consumes, fixture.executor.calls)
+	if !errors.Is(outcome.err, ErrApprovalUnavailable) || outcome.result.RequestID != "" ||
+		fixture.persistence.closes != 1 || fixture.persistence.lastClosed.State != domain.ApprovalStateInvalidated ||
+		fixture.persistence.lastClosed.StateReason != domain.ApprovalReasonScopeChanged || len(fixture.ui.events) != 2 ||
+		fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("result/error/closes/closed/events/consumes/writes = %#v/%v/%d/%#v/%d/%d/%d, want unavailable/1/scope-invalidated/2/0/0",
+			outcome.result, outcome.err, fixture.persistence.closes, fixture.persistence.lastClosed,
+			len(fixture.ui.events), fixture.persistence.consumes, fixture.executor.calls)
 	}
 }
 
@@ -326,7 +329,7 @@ func TestCoordinatorTurnsTypedSuggestionIntoApprovalOnlyAfterTrustedPreparation(
 	) agent.RunOutcome {
 		return agent.RunOutcome{}
 	}))
-	preparer := &fakeRestartProposalPreparer{intent: fixture.intent}
+	preparer := &fakeRestartProposalPreparer{prepared: fixture.intent.Target}
 	outer.approvals = fixture.coordinator
 	outer.restartProposals = preparer
 	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.ui)
@@ -341,7 +344,7 @@ func TestCoordinatorTurnsTypedSuggestionIntoApprovalOnlyAfterTrustedPreparation(
 			APIVersion: domain.RestartDeploymentTargetAPIVersion,
 			Kind:       domain.RestartDeploymentTargetKind,
 			Namespace:  fixture.intent.Scope.Namespace,
-			Name:       fixture.intent.DeploymentName,
+			Name:       fixture.intent.Target.Resource.Name,
 		},
 		Action: fixture.intent.ReasonSummary,
 		Risk:   domain.RestartDeploymentRiskSummary,
@@ -380,6 +383,8 @@ func TestCoordinatorTerminalEventCancelsUnexecutedApproval(t *testing.T) {
 		}
 		intent := fixture.intent
 		intent.Scope = input.Scope().Snapshot()
+		intent.Target.Resource.Namespace = input.Scope().Namespace
+		intent.PolicyGeneration = fixture.coordinator.permissions.Status(fixture.clock.Now()).PolicyGeneration
 		if _, err := outer.SubmitRestartDeploymentProposal(
 			ctx, input.RunID(), input.SessionID(), 2, intent,
 		); err != nil {
@@ -604,12 +609,12 @@ type approvalCoordinatorFixture struct {
 }
 
 type fakeRestartProposalPreparer struct {
-	calls  int
-	scope  domain.ScopeSnapshot
-	target domain.ResourceRef
-	reason string
-	intent domain.OperationIntent
-	err    error
+	calls    int
+	scope    domain.ScopeSnapshot
+	target   domain.ResourceRef
+	reason   string
+	prepared domain.ActionTarget
+	err      error
 }
 
 func (preparer *fakeRestartProposalPreparer) PrepareRestartDeploymentProposal(
@@ -617,17 +622,19 @@ func (preparer *fakeRestartProposalPreparer) PrepareRestartDeploymentProposal(
 	scope domain.ScopeSnapshot,
 	target domain.ResourceRef,
 	reason string,
-) (domain.OperationIntent, error) {
+) (domain.ActionTarget, error) {
 	preparer.calls++
 	preparer.scope = scope
 	preparer.target = target
 	preparer.reason = reason
-	return preparer.intent, preparer.err
+	return preparer.prepared, preparer.err
 }
 
 func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	t.Helper()
 	clock := &approvalCoordinatorClock{now: time.UnixMilli(1_700_000_500_000).UTC()}
+	runID := domain.AgentRunID("00000000-0000-7000-8000-000000008101")
+	sessionID := domain.SessionID("00000000-0000-7000-8000-000000008102")
 	executor := &fakeApprovalExecutor{}
 	scope := &fakeApprovalCurrentScope{scope: domain.ClusterScope{
 		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7,
@@ -639,30 +646,44 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	ids := &approvalCoordinatorIDs{}
 	service, err := approval.NewService(approval.ServiceConfig{
 		Clock: clock, Nonces: approvalNonceSource{value: 0x71},
-		Store: persistence, Scope: scope, Revalidator: executor, Executor: executor, AuditIDs: ids,
+		Store: persistence, AuditIDs: ids,
 	})
 	if err != nil {
 		t.Fatalf("approval.NewService() error = %v", err)
 	}
+	policy := PermissionPolicy{Profile: domain.PermissionProfileAsk, Generation: 1}
+	permissions, err := NewPermissionManager(policy)
+	if err != nil {
+		t.Fatalf("NewPermissionManager() error = %v", err)
+	}
+	if err := permissions.BindSession(sessionID); err != nil {
+		t.Fatalf("BindSession() error = %v", err)
+	}
 	coordinator, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
 		Service: service, Persistence: persistence, ResultAudits: persistence, Scope: scope,
 		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Rollout: rollout, Now: clock.Now,
+		RestartRevalidator: executor, RestartExecutor: executor, Permissions: permissions, Reviews: persistence,
 	})
 	if err != nil {
 		t.Fatalf("NewApprovalCoordinator() error = %v", err)
 	}
-	intent := domain.OperationIntent{
-		Operation: domain.ApprovalOperationRestartDeployment, Scope: scope.scope.Snapshot(),
-		DeploymentName: "sample-deployment", DeploymentUID: "sample-deployment-uid",
-		TemplateFingerprint: fmt.Sprintf("%064d", 8), DeploymentGeneration: 8,
-		PolicyVersion: domain.RestartDeploymentApprovalPolicyVersion,
-		ReasonSummary: "Restart after the bounded diagnosis.",
+	intent, err := NewRestartDeploymentActionIntent(
+		policy,
+		scope.scope,
+		domain.ActionTarget{Resource: domain.ResourceRef{
+			APIVersion: domain.RestartDeploymentTargetAPIVersion, Kind: domain.RestartDeploymentTargetKind,
+			Namespace: scope.scope.Namespace, Name: "sample-deployment", UID: "sample-deployment-uid",
+			ResourceVersion: "fresh-resource-version",
+		}, Fingerprint: fmt.Sprintf("%064d", 8), Generation: 8},
+		"Restart after the bounded diagnosis.",
+	)
+	if err != nil {
+		t.Fatalf("NewRestartDeploymentActionIntent() error = %v", err)
 	}
 	return &approvalCoordinatorFixture{
 		coordinator: coordinator, service: service, persistence: persistence, ui: ui,
 		executor: executor, rollout: rollout, clock: clock, scope: scope,
-		runID:     "00000000-0000-7000-8000-000000008101",
-		sessionID: "00000000-0000-7000-8000-000000008102", intent: intent,
+		runID: runID, sessionID: sessionID, intent: intent,
 	}
 }
 
@@ -675,6 +696,15 @@ func (fixture *approvalCoordinatorFixture) submit(t *testing.T, sequence int64) 
 		t.Fatalf("SubmitRestartDeploymentProposal() error = %v", err)
 	}
 	return request
+}
+
+func (fixture *approvalCoordinatorFixture) bindSession(t *testing.T, sessionID domain.SessionID) {
+	t.Helper()
+	if err := fixture.coordinator.BindSessionAuthority(context.Background(), sessionID); err != nil {
+		t.Fatalf("BindSessionAuthority() error = %v", err)
+	}
+	fixture.sessionID = sessionID
+	fixture.intent.PolicyGeneration = fixture.coordinator.permissions.Status(fixture.clock.Now()).PolicyGeneration
 }
 
 func approvalDecisionCommand(kind UICommandKind, request domain.ApprovalRequest, sequence int64, requestID uint64) UICommand {
@@ -854,8 +884,8 @@ func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
 		resourceVersion = "fresh-resource-version"
 	}
 	return approval.RestartDeploymentObservation{
-		Scope: intent.Scope, DeploymentName: intent.DeploymentName, DeploymentUID: intent.DeploymentUID,
-		TemplateFingerprint: intent.TemplateFingerprint, DeploymentGeneration: intent.DeploymentGeneration,
+		Scope: intent.Scope, DeploymentName: intent.Target.Resource.Name, DeploymentUID: intent.Target.Resource.UID,
+		TemplateFingerprint: intent.Target.Fingerprint, DeploymentGeneration: intent.Target.Generation,
 		ResourceVersion: resourceVersion,
 	}, nil
 }
@@ -899,6 +929,10 @@ func (source *approvalCoordinatorIDs) NewAuditEventID() (domain.AuditEventID, er
 	return domain.AuditEventID(source.nextID()), nil
 }
 
+func (source *approvalCoordinatorIDs) NewModelRequestID() (domain.ModelRequestID, error) {
+	return domain.ModelRequestID(source.nextID()), nil
+}
+
 type fakeApprovalCurrentScope struct{ scope domain.ClusterScope }
 
 func (scope *fakeApprovalCurrentScope) CurrentScope() (domain.ClusterScope, bool) {
@@ -921,6 +955,7 @@ func (sink *fakeApprovalUIEvents) PublishUIEvent(_ context.Context, event UIEven
 type fakeApprovalPersistence struct {
 	creates, resolves, closes, consumes                      int
 	createErr, resolveErr, closeErr, consumeErr, recoveryErr error
+	actionReviewErr                                          error
 	lastCreated                                              domain.ApprovalRequest
 	lastClosed                                               domain.ApprovalRequest
 	lastCloseExpected                                        domain.ApprovalState
@@ -935,6 +970,20 @@ type fakeApprovalPersistence struct {
 	writeResultCalls                                         int
 	writeResultFailures                                      int
 	writeResultFailAfter                                     int
+	actionReviews                                            []ActionReviewRecord
+	actionReviewCalls                                        int
+}
+
+func (persistence *fakeApprovalPersistence) AppendActionReview(_ context.Context, record ActionReviewRecord) error {
+	persistence.actionReviewCalls++
+	if persistence.actionReviewErr != nil {
+		return persistence.actionReviewErr
+	}
+	if record.Validate() != nil {
+		return errors.New("synthetic invalid action review")
+	}
+	persistence.actionReviews = append(persistence.actionReviews, record)
+	return nil
 }
 
 func (persistence *fakeApprovalPersistence) AppendWriteResult(_ context.Context, event domain.AuditEvent) error {

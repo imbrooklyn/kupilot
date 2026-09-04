@@ -154,7 +154,7 @@ func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
 	}
 }
 
-func TestTopLevelResumeBindsUnverifiedLocalScopeChoice(t *testing.T) {
+func TestTopLevelResumeKeepsHistoricScopeOutOfAcceptance(t *testing.T) {
 	t.Parallel()
 
 	newModel := func() Model {
@@ -182,7 +182,7 @@ func TestTopLevelResumeBindsUnverifiedLocalScopeChoice(t *testing.T) {
 
 	same, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "current-context", Namespace: "default"})
 	accept := applicationCommandFromCmd(t, command)
-	if same.scopeConflict.Open() || accept.Scope == nil || accept.Scope.Context != "current-context" ||
+	if same.scopeConflict.Open() || accept.Scope != nil || accept.Kind != application.UICommandAcceptResume ||
 		accept.ExpectedScopeGeneration != 0 {
 		t.Fatalf("same-scope acceptance = conflict %v command %#v", same.scopeConflict.Open(), accept)
 	}
@@ -193,7 +193,7 @@ func TestTopLevelResumeBindsUnverifiedLocalScopeChoice(t *testing.T) {
 	}
 	different, command = updateModel(t, different, tea.KeyPressMsg{Code: tea.KeyEnter})
 	accept = applicationCommandFromCmd(t, command)
-	if accept.Scope == nil || accept.Scope.Context != "current-context" || accept.Scope.Namespace != "default" {
+	if accept.Kind != application.UICommandAcceptResume || accept.Scope != nil {
 		t.Fatalf("keep-current acceptance = %#v", accept)
 	}
 }

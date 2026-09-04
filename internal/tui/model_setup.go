@@ -18,6 +18,8 @@ const (
 	modelSetupApplying
 )
 
+const modelSetupStorageDisclosure = "Choosing save writes models.agent.api_key and any existing file-sourced models.approval_reviewer.api_key as plaintext (not encrypted) in KUPILOT_HOME/config.yaml. Choosing session keeps the new Agent key only in this process."
+
 type modelSetupState struct {
 	Stage      modelSetupStage
 	Endpoint   string
@@ -43,11 +45,16 @@ func (model *Model) beginModelSetup() {
 func (model *Model) beginMissingModelSetup() {
 	model.beginModelSetup()
 	if model.modelEndpoint != "" && model.modelName != "" {
-		model.modelSetup.Stage = modelSetupStorage
-		model.composer.Reset()
-		model.composer.SetMaxBytes(16)
-		model.composer.SetPlaceholder("save (default) or session")
+		model.enterModelSetupStorage()
 	}
+}
+
+func (model *Model) enterModelSetupStorage() {
+	model.modelSetup.Stage = modelSetupStorage
+	model.composer.Reset()
+	model.composer.SetMaxBytes(16)
+	model.composer.SetPlaceholder("save (plaintext) or session")
+	model.showDialog("Plaintext credential storage", modelSetupStorageDisclosure)
 }
 
 func (model *Model) interruptModelSetup() (tea.Cmd, bool) {
@@ -106,10 +113,7 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		model.modelSetup.Model = draft
-		model.modelSetup.Stage = modelSetupStorage
-		model.composer.Reset()
-		model.composer.SetMaxBytes(16)
-		model.composer.SetPlaceholder("save (default) or session")
+		model.enterModelSetupStorage()
 	case modelSetupStorage:
 		switch strings.ToLower(draft) {
 		case "", "save":
@@ -117,7 +121,7 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 		case "session":
 			model.modelSetup.Persist = false
 		default:
-			model.showDialog("Choose storage", "Type save to store the key as plaintext in KUPILOT_HOME, or session to keep it only for this run.")
+			model.showDialog("Choose storage", "Type save or session.\n\n"+modelSetupStorageDisclosure)
 			return model, nil
 		}
 		model.modelSetup.Stage = modelSetupCredential
@@ -171,7 +175,7 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
 	model.composer.ResetPlaceholder()
 	if result.Persisted {
-		model.transcript.AppendNotice("Model configured. The API key was saved as plaintext in KUPILOT_HOME/config.yaml.")
+		model.transcript.AppendNotice("Agent model configured. The agent API key, plus any existing file-sourced approval_reviewer key, was saved as plaintext in KUPILOT_HOME/config.yaml.")
 	} else {
 		model.transcript.AppendNotice("Model configured for this Kupilot process only.")
 	}

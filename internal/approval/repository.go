@@ -16,13 +16,88 @@ var (
 	ErrStoredApprovalConflict = errors.New("stored approval state conflicts with the requested transition")
 )
 
+// StoredActionIntent is the durable-safe authority projection. Exact typed
+// parameters remain bound by their digest; raw argv, paths, and command data
+// never cross the persistence port.
+type StoredActionIntent struct {
+	Operation              domain.ActionOperation
+	OperationSchemaVersion string
+	PolicyVersion          string
+	PermissionProfile      domain.PermissionProfile
+	Risk                   domain.RiskClass
+	Effect                 domain.CapabilityEffectClass
+	PolicyGeneration       domain.PolicyGeneration
+	Scope                  domain.ScopeSnapshot
+	NamespaceAccess        domain.NamespaceAccessPolicy
+	Target                 domain.ActionTarget
+	ParameterKind          domain.ActionParameterKind
+	ParameterDigest        domain.ActionDigest
+	Stdin                  bool
+	TTY                    bool
+	Shell                  bool
+	DataCategories         domain.ActionDataCategories
+	AllowedSinks           domain.ActionSinks
+	NetworkEffects         domain.ActionNetworkEffects
+	NetworkDestinationHash domain.ActionDigest
+	Limits                 domain.ActionLimits
+	VerificationPlanID     string
+	ReasonSummary          string
+	RiskSummary            string
+}
+
+func newStoredActionIntent(intent domain.ActionIntent) (StoredActionIntent, error) {
+	if intent.Validate() != nil {
+		return StoredActionIntent{}, ErrInvalidStoredApproval
+	}
+	stored := StoredActionIntent{
+		Operation: intent.Operation, OperationSchemaVersion: intent.OperationSchemaVersion,
+		PolicyVersion: intent.PolicyVersion, PermissionProfile: intent.PermissionProfile,
+		Risk: intent.Risk, Effect: intent.Effect, PolicyGeneration: intent.PolicyGeneration,
+		Scope: intent.Scope, NamespaceAccess: intent.NamespaceAccess, Target: intent.Target,
+		ParameterKind: intent.Parameters.Kind, ParameterDigest: intent.Parameters.Digest(),
+		Stdin: intent.Stdin, TTY: intent.TTY, Shell: intent.Shell,
+		DataCategories: intent.DataCategories, AllowedSinks: intent.AllowedSinks,
+		NetworkEffects: intent.NetworkEffects, NetworkDestinationHash: intent.NetworkDestinationHash,
+		Limits: intent.Limits, VerificationPlanID: intent.VerificationPlanID,
+		ReasonSummary: intent.ReasonSummary, RiskSummary: intent.RiskSummary,
+	}
+	if stored.Validate() != nil {
+		return StoredActionIntent{}, ErrInvalidStoredApproval
+	}
+	return stored, nil
+}
+
+// Validate checks the explicit projection without reconstructing prohibited
+// raw parameters. The exact in-memory request must match this value before use.
+func (intent StoredActionIntent) Validate() error {
+	projected := domain.ActionIntent{
+		Operation: intent.Operation, OperationSchemaVersion: intent.OperationSchemaVersion,
+		PolicyVersion: intent.PolicyVersion, PermissionProfile: intent.PermissionProfile,
+		Risk: intent.Risk, Effect: intent.Effect, PolicyGeneration: intent.PolicyGeneration,
+		Scope: intent.Scope, NamespaceAccess: intent.NamespaceAccess, Target: intent.Target,
+		Parameters: domain.ActionParameters{Kind: domain.ActionParametersNone},
+		Stdin:      intent.Stdin, TTY: intent.TTY, Shell: intent.Shell,
+		DataCategories: intent.DataCategories, AllowedSinks: intent.AllowedSinks,
+		NetworkEffects: intent.NetworkEffects, NetworkDestinationHash: intent.NetworkDestinationHash,
+		Limits: intent.Limits, VerificationPlanID: intent.VerificationPlanID,
+		ReasonSummary: intent.ReasonSummary, RiskSummary: intent.RiskSummary,
+	}
+	if projected.Validate() != nil || !intent.ParameterKind.Valid() || !intent.ParameterDigest.Valid() ||
+		intent.ParameterKind == domain.ActionParametersNone &&
+			intent.ParameterDigest != (domain.ActionParameters{Kind: domain.ActionParametersNone}).Digest() {
+		return ErrInvalidStoredApproval
+	}
+	return nil
+}
+
 // StoredRequest is the durable-safe approval request projection. It contains
-// only a nonce hash; the one-time nonce never crosses the persistence port.
+// only a nonce hash and parameter digest; neither one-time nor raw argv values
+// cross the persistence port.
 type StoredRequest struct {
 	ID             domain.ApprovalID
 	RunID          domain.AgentRunID
 	SessionID      domain.SessionID
-	Intent         domain.OperationIntent
+	Intent         StoredActionIntent
 	Digest         domain.ApprovalDigest
 	NonceHash      domain.ApprovalNonceHash
 	State          domain.ApprovalState
@@ -32,23 +107,20 @@ type StoredRequest struct {
 	StateChangedAt time.Time
 }
 
-// NewStoredRequest projects an in-memory request without persisting its nonce.
+// NewStoredRequest projects an in-memory request without its nonce or raw parameters.
 func NewStoredRequest(request domain.ApprovalRequest) (StoredRequest, error) {
 	if request.Validate() != nil {
 		return StoredRequest{}, ErrInvalidStoredApproval
 	}
+	intent, err := newStoredActionIntent(request.Intent)
+	if err != nil {
+		return StoredRequest{}, err
+	}
 	stored := StoredRequest{
-		ID:             request.ID,
-		RunID:          request.RunID,
-		SessionID:      request.SessionID,
-		Intent:         request.Intent,
-		Digest:         request.Digest,
-		NonceHash:      request.Nonce.Hash(),
-		State:          request.State,
-		StateReason:    request.StateReason,
-		RequestedAt:    request.RequestedAt,
-		ExpiresAt:      request.ExpiresAt,
-		StateChangedAt: request.StateChangedAt,
+		ID: request.ID, RunID: request.RunID, SessionID: request.SessionID,
+		Intent: intent, Digest: request.Digest, NonceHash: request.Nonce.Hash(),
+		State: request.State, StateReason: request.StateReason,
+		RequestedAt: request.RequestedAt, ExpiresAt: request.ExpiresAt, StateChangedAt: request.StateChangedAt,
 	}
 	if stored.Validate() != nil {
 		return StoredRequest{}, ErrInvalidStoredApproval
@@ -56,34 +128,32 @@ func NewStoredRequest(request domain.ApprovalRequest) (StoredRequest, error) {
 	return stored, nil
 }
 
-// Validate checks the complete canonical request, digest, hash, and lifecycle.
+// Validate checks the bounded authority projection and lifecycle. Persistence
+// cannot recreate raw parameters and therefore never restores execution authority.
 func (request StoredRequest) Validate() error {
-	domainRequest := request.withValidationNonce()
-	if !request.NonceHash.Valid() || domainRequest.Validate() != nil {
+	if !request.ID.Valid() || !request.RunID.Valid() || !request.SessionID.Valid() ||
+		request.Intent.Validate() != nil || !request.Digest.Valid() || !request.NonceHash.Valid() ||
+		!request.State.Valid() || !request.StateReason.ValidForState(request.State) ||
+		!validStoredApprovalTime(request.RequestedAt) || !validStoredApprovalTime(request.ExpiresAt) ||
+		!validStoredApprovalTime(request.StateChangedAt) ||
+		!request.ExpiresAt.Equal(request.RequestedAt.Add(domain.ApprovalExecutionTTL)) ||
+		request.StateChangedAt.Before(request.RequestedAt) ||
+		request.State == domain.ApprovalStatePending && !request.StateChangedAt.Equal(request.RequestedAt) {
 		return ErrInvalidStoredApproval
 	}
-	digest, err := OperationDigest(domainRequest)
-	if err != nil || !request.Digest.Equal(digest) {
+	if request.State == domain.ApprovalStateExpired {
+		if request.StateChangedAt.Before(request.ExpiresAt) {
+			return ErrInvalidStoredApproval
+		}
+	} else if !request.StateChangedAt.Before(request.ExpiresAt) {
 		return ErrInvalidStoredApproval
 	}
 	return nil
 }
 
-// RequestWithoutNonce returns the safe request fields for audit projection.
-// The returned zero nonce cannot be used as approval authority.
-func (request StoredRequest) RequestWithoutNonce() domain.ApprovalRequest {
-	return domain.ApprovalRequest{
-		ID:             request.ID,
-		RunID:          request.RunID,
-		SessionID:      request.SessionID,
-		Intent:         request.Intent,
-		Digest:         request.Digest,
-		State:          request.State,
-		StateReason:    request.StateReason,
-		RequestedAt:    request.RequestedAt,
-		ExpiresAt:      request.ExpiresAt,
-		StateChangedAt: request.StateChangedAt,
-	}
+func validStoredApprovalTime(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC && value.UnixMilli() >= 0 &&
+		value.Equal(time.UnixMilli(value.UnixMilli()).UTC())
 }
 
 // ValidateAudit checks the exact actor, outcome, subject, digest, and fixed
@@ -100,13 +170,7 @@ func (request StoredRequest) ValidateAudit(event domain.AuditEvent) error {
 	}
 	eventType, actor, outcome, detail := storedApprovalAuditProjection(request)
 	operation := string(request.Intent.Operation)
-	subject := domain.ResourceRef{
-		APIVersion: domain.RestartDeploymentTargetAPIVersion,
-		Kind:       domain.RestartDeploymentTargetKind,
-		Namespace:  request.Intent.Scope.Namespace,
-		Name:       request.Intent.DeploymentName,
-		UID:        request.Intent.DeploymentUID,
-	}
+	subject := request.Intent.Target.Resource
 	if event.Type != eventType || event.Actor != actor || event.Outcome != outcome ||
 		event.SessionID == nil || *event.SessionID != request.SessionID ||
 		event.RunID == nil || *event.RunID != request.RunID ||
@@ -124,22 +188,19 @@ func (request StoredRequest) ValidateAudit(event domain.AuditEvent) error {
 	return nil
 }
 
-func (request StoredRequest) withValidationNonce() domain.ApprovalRequest {
-	result := request.RequestWithoutNonce()
-	value := make([]byte, domain.ApprovalNonceBytes)
-	value[0] = 1
-	result.Nonce, _ = domain.NewApprovalNonce(value)
-	return result
-}
-
 // StoredDecision is the durable-safe local decision projection.
 type StoredDecision struct {
-	RequestID   domain.ApprovalID
-	Choice      domain.ApprovalDecisionChoice
-	ShownDigest domain.ApprovalDigest
-	NonceHash   domain.ApprovalNonceHash
-	Actor       domain.ApprovalActor
-	DecidedAt   time.Time
+	RequestID          domain.ApprovalID
+	Choice             domain.ApprovalDecisionChoice
+	ShownDigest        domain.ApprovalDigest
+	NonceHash          domain.ApprovalNonceHash
+	Actor              domain.ApprovalActor
+	Disposition        domain.ReviewDisposition
+	RuleID             domain.PermissionRuleID
+	ReviewerProfile    string
+	ReviewerOriginHash string
+	RationaleSummary   string
+	DecidedAt          time.Time
 }
 
 // NewStoredDecision projects an in-memory decision without persisting its nonce.
@@ -148,12 +209,17 @@ func NewStoredDecision(decision domain.ApprovalDecision) (StoredDecision, error)
 		return StoredDecision{}, ErrInvalidStoredApproval
 	}
 	stored := StoredDecision{
-		RequestID:   decision.RequestID,
-		Choice:      decision.Choice,
-		ShownDigest: decision.ShownDigest,
-		NonceHash:   decision.Nonce.Hash(),
-		Actor:       decision.Actor,
-		DecidedAt:   decision.DecidedAt,
+		RequestID:          decision.RequestID,
+		Choice:             decision.Choice,
+		ShownDigest:        decision.ShownDigest,
+		NonceHash:          decision.Nonce.Hash(),
+		Actor:              decision.Actor,
+		Disposition:        decision.Disposition,
+		RuleID:             decision.RuleID,
+		ReviewerProfile:    decision.ReviewerProfile,
+		ReviewerOriginHash: decision.ReviewerOriginHash,
+		RationaleSummary:   decision.RationaleSummary,
+		DecidedAt:          decision.DecidedAt,
 	}
 	if stored.Validate() != nil {
 		return StoredDecision{}, ErrInvalidStoredApproval
@@ -164,11 +230,21 @@ func NewStoredDecision(decision domain.ApprovalDecision) (StoredDecision, error)
 // Validate checks the bounded decision metadata and hashed proof.
 func (decision StoredDecision) Validate() error {
 	if !decision.RequestID.Valid() || !decision.Choice.Valid() ||
-		!decision.ShownDigest.Valid() || !decision.NonceHash.Valid() ||
-		decision.Actor != domain.ApprovalActorLocalUser ||
+		!decision.ShownDigest.Valid() || !decision.NonceHash.Valid() || !decision.Disposition.Valid() ||
 		decision.DecidedAt.IsZero() || decision.DecidedAt.Location() != time.UTC ||
 		decision.DecidedAt.UnixMilli() < 0 ||
 		!decision.DecidedAt.Equal(time.UnixMilli(decision.DecidedAt.UnixMilli()).UTC()) {
+		return ErrInvalidStoredApproval
+	}
+	nonceValue := make([]byte, domain.ApprovalNonceBytes)
+	nonceValue[0] = 1
+	nonce, _ := domain.NewApprovalNonce(nonceValue)
+	if (domain.ApprovalDecision{
+		RequestID: decision.RequestID, Choice: decision.Choice, ShownDigest: decision.ShownDigest,
+		Nonce: nonce, Actor: decision.Actor, Disposition: decision.Disposition, RuleID: decision.RuleID,
+		ReviewerProfile: decision.ReviewerProfile, ReviewerOriginHash: decision.ReviewerOriginHash,
+		RationaleSummary: decision.RationaleSummary, DecidedAt: decision.DecidedAt,
+	}).Validate() != nil {
 		return ErrInvalidStoredApproval
 	}
 	return nil
@@ -237,9 +313,17 @@ func storedApprovalAuditProjection(request StoredRequest) (domain.AuditEventType
 	case domain.ApprovalStatePending:
 		return domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested"
 	case domain.ApprovalStateApproved:
-		return domain.AuditEventApprovalApproved, domain.AuditActorUser, domain.AuditOutcomeSuccess, string(request.StateReason)
+		actor := domain.AuditActorSystem
+		if request.StateReason == domain.ApprovalReasonUserApproved {
+			actor = domain.AuditActorUser
+		}
+		return domain.AuditEventApprovalApproved, actor, domain.AuditOutcomeSuccess, string(request.StateReason)
 	case domain.ApprovalStateRejected:
-		return domain.AuditEventApprovalRejected, domain.AuditActorUser, domain.AuditOutcomeDenied, string(request.StateReason)
+		actor := domain.AuditActorSystem
+		if request.StateReason == domain.ApprovalReasonUserRejected {
+			actor = domain.AuditActorUser
+		}
+		return domain.AuditEventApprovalRejected, actor, domain.AuditOutcomeDenied, string(request.StateReason)
 	case domain.ApprovalStateExpired:
 		return domain.AuditEventApprovalExpired, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
 	case domain.ApprovalStateConsumed:

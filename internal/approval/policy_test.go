@@ -77,6 +77,7 @@ func TestApprovalDecisionValidationAndDefaultReject(t *testing.T) {
 		ShownDigest: digest,
 		Nonce:       request.Nonce,
 		Actor:       domain.ApprovalActorLocalUser,
+		Disposition: domain.ReviewDispositionHuman,
 		DecidedAt:   request.RequestedAt,
 	}
 	if err := decision.Validate(); err != nil {
@@ -145,14 +146,14 @@ func TestApprovalSnapshotCannotMutateAuthoritativeState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Request() error = %v", err)
 	}
-	request.Intent.DeploymentName = "changed-copy"
+	request.Intent.Target.Resource.Name = "changed-copy"
 	request.State = domain.ApprovalStateConsumed
 
 	snapshot, ok := service.Snapshot(request.ID)
 	if !ok {
 		t.Fatal("Snapshot() did not find request")
 	}
-	if snapshot.Intent.DeploymentName != "sample-deployment" || snapshot.State != domain.ApprovalStatePending {
+	if snapshot.Intent.Target.Resource.Name != "sample-deployment" || snapshot.State != domain.ApprovalStatePending {
 		t.Fatalf("authoritative snapshot was mutated: %#v", snapshot)
 	}
 }
@@ -166,7 +167,7 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 		executor := &fakeRestartExecutor{}
 		service, err := NewService(ServiceConfig{
 			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
-			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+			Store: executor, AuditIDs: executor,
 		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
@@ -185,7 +186,7 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 		executor := &fakeRestartExecutor{}
 		service, err := NewService(ServiceConfig{
 			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
-			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+			Store: executor, AuditIDs: executor,
 		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
@@ -204,7 +205,7 @@ func TestApprovalRequestFailurePathsDoNotCreateAuthority(t *testing.T) {
 		executor := &fakeRestartExecutor{}
 		service, err := NewService(ServiceConfig{
 			Clock: &fakeClock{now: baseTime}, Nonces: nonces,
-			Store: executor, Scope: executor, Revalidator: executor, Executor: executor, AuditIDs: executor,
+			Store: executor, AuditIDs: executor,
 		})
 		if err != nil {
 			t.Fatalf("NewService() error = %v", err)

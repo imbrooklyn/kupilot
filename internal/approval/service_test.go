@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,570 +10,171 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestApprovalServiceLegalLifecycleTransitions(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	tests := []struct {
-		name       string
-		apply      func(*testing.T, *Service, *fakeClock, domain.ApprovalRequest) domain.ApprovalRequest
-		wantState  domain.ApprovalState
-		writeCount int
-	}{
-		{
-			name: "approve",
-			apply: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				updated, decision, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide(approve) error = %v", err)
-				}
-				if decision.Choice != domain.ApprovalDecisionApprove || decision.Actor != domain.ApprovalActorLocalUser {
-					t.Fatalf("approved decision = %#v", decision)
-				}
-				return updated
-			},
-			wantState: domain.ApprovalStateApproved,
-		},
-		{
-			name: "reject by default",
-			apply: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				command := approveCommand(request)
-				command.Choice = domain.ApprovalDecisionChoice(0)
-				updated, decision, err := service.Decide(context.Background(), command)
-				if err != nil {
-					t.Fatalf("Decide(default) error = %v", err)
-				}
-				if decision.Choice != domain.ApprovalDecisionReject {
-					t.Fatalf("default ApprovalDecision choice = %q, want reject", decision.Choice)
-				}
-				return updated
-			},
-			wantState: domain.ApprovalStateRejected,
-		},
-		{
-			name: "expire",
-			apply: func(t *testing.T, service *Service, clock *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				clock.Set(request.ExpiresAt)
-				updated, err := service.Expire(context.Background(), request.ID)
-				if err != nil {
-					t.Fatalf("Expire() error = %v", err)
-				}
-				return updated
-			},
-			wantState: domain.ApprovalStateExpired,
-		},
-		{
-			name: "cancel",
-			apply: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				updated, err := service.Cancel(context.Background(), request.ID, domain.ApprovalReasonUserCancelled)
-				if err != nil {
-					t.Fatalf("Cancel() error = %v", err)
-				}
-				return updated
-			},
-			wantState: domain.ApprovalStateCancelled,
-		},
-		{
-			name: "consume",
-			apply: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide(approve) error = %v", err)
-				}
-				updated, err := service.Consume(context.Background(), consumeCommand(approved))
-				if err != nil {
-					t.Fatalf("Consume() error = %v", err)
-				}
-				return updated.ApprovalRequest
-			},
-			wantState:  domain.ApprovalStateConsumed,
-			writeCount: 1,
-		},
-	}
-	for index, current := range tests {
-		index, current := index, current
-		t.Run(current.name, func(t *testing.T) {
-			t.Parallel()
-			service, clock, executor := newTestService(t, baseTime, testNonce(t, byte(index+1)))
-			request, err := service.Request(context.Background(), testRequestCommand())
-			if err != nil {
-				t.Fatalf("Request() error = %v", err)
-			}
-			updated := current.apply(t, service, clock, request)
-			if err := updated.Validate(); err != nil {
-				t.Fatalf("updated ApprovalRequest.Validate() error = %v", err)
-			}
-			if updated.State != current.wantState || updated.State.AuditEventType() != current.wantState.AuditEventType() {
-				t.Fatalf("updated state/event = %q/%q, want %q/%q", updated.State, updated.State.AuditEventType(), current.wantState, current.wantState.AuditEventType())
-			}
-			if executor.WriteCount() != current.writeCount {
-				t.Fatalf("fake executor write count = %d, want %d", executor.WriteCount(), current.writeCount)
-			}
-			intents := executor.Intents()
-			if current.writeCount == 1 && (len(intents) != 1 || intents[0] != request.Intent) {
-				t.Fatalf("fake executor intents = %#v, want exact approved intent %#v", intents, request.Intent)
-			}
-		})
-	}
-}
-
-func TestApprovalTTLUsesExactSixtySecondBoundary(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	tests := []struct {
-		name      string
-		advance   time.Duration
-		wantState domain.ApprovalState
-		wantCode  domain.ApprovalErrorCode
-	}{
-		{name: "immediately before", advance: domain.ApprovalExecutionTTL - time.Millisecond, wantState: domain.ApprovalStateApproved},
-		{name: "at boundary", advance: domain.ApprovalExecutionTTL, wantState: domain.ApprovalStateExpired, wantCode: domain.ApprovalErrorCodeExpired},
-		{name: "after boundary", advance: domain.ApprovalExecutionTTL + time.Millisecond, wantState: domain.ApprovalStateExpired, wantCode: domain.ApprovalErrorCodeExpired},
-	}
-	for index, current := range tests {
-		index, current := index, current
-		t.Run(current.name, func(t *testing.T) {
-			t.Parallel()
-			service, clock, executor := newTestService(t, baseTime, testNonce(t, byte(index+11)))
-			request, err := service.Request(context.Background(), testRequestCommand())
-			if err != nil {
-				t.Fatalf("Request() error = %v", err)
-			}
-			if !request.ExpiresAt.Equal(request.RequestedAt.Add(60 * time.Second)) {
-				t.Fatalf("expiry = %s, requested = %s", request.ExpiresAt, request.RequestedAt)
-			}
-			clock.Set(baseTime.Add(current.advance))
-			updated, _, err := service.Decide(context.Background(), approveCommand(request))
-			if current.wantCode == "" {
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-			} else {
-				requireApprovalErrorCode(t, err, current.wantCode)
-			}
-			if updated.State != current.wantState {
-				t.Fatalf("state = %q, want %q", updated.State, current.wantState)
-			}
-			if executor.WriteCount() != 0 {
-				t.Fatalf("fake executor write count = %d, want 0", executor.WriteCount())
-			}
-		})
-	}
-}
-
-func TestApprovalTTLBoundaryPrecedesCancelReplayAndConsume(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	tests := []struct {
-		name    string
-		prepare func(*testing.T, *Service, domain.ApprovalRequest) domain.ApprovalRequest
-		apply   func(*Service, domain.ApprovalRequest) (domain.ApprovalRequest, error)
-	}{
-		{
-			name: "cancel pending",
-			prepare: func(_ *testing.T, _ *Service, request domain.ApprovalRequest) domain.ApprovalRequest {
-				return request
-			},
-			apply: func(service *Service, request domain.ApprovalRequest) (domain.ApprovalRequest, error) {
-				return service.Cancel(context.Background(), request.ID, domain.ApprovalReasonUserCancelled)
-			},
-		},
-		{
-			name: "consume pending",
-			prepare: func(_ *testing.T, _ *Service, request domain.ApprovalRequest) domain.ApprovalRequest {
-				return request
-			},
-			apply: func(service *Service, request domain.ApprovalRequest) (domain.ApprovalRequest, error) {
-				result, err := service.Consume(context.Background(), consumeCommand(request))
-				return result.ApprovalRequest, err
-			},
-		},
-		{
-			name: "duplicate approved decision",
-			prepare: func(t *testing.T, service *Service, request domain.ApprovalRequest) domain.ApprovalRequest {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-				return approved
-			},
-			apply: func(service *Service, request domain.ApprovalRequest) (domain.ApprovalRequest, error) {
-				updated, _, err := service.Decide(context.Background(), approveCommand(request))
-				return updated, err
-			},
-		},
-	}
-	for index, current := range tests {
-		index, current := index, current
-		t.Run(current.name, func(t *testing.T) {
-			t.Parallel()
-			service, clock, executor := newTestService(t, baseTime, testNonce(t, byte(index+21)))
-			request, err := service.Request(context.Background(), testRequestCommand())
-			if err != nil {
-				t.Fatalf("Request() error = %v", err)
-			}
-			request = current.prepare(t, service, request)
-			clock.Set(request.ExpiresAt)
-			updated, err := current.apply(service, request)
-			requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExpired)
-			if updated.State != domain.ApprovalStateExpired || executor.WriteCount() != 0 {
-				t.Fatalf("boundary state/write count = %q/%d, want expired/0", updated.State, executor.WriteCount())
-			}
-		})
-	}
-}
-
-func TestApprovalDenialsInvalidateAuthorityAndNeverInvokeExecutor(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	tests := []struct {
-		name      string
-		attempt   func(*testing.T, *Service, *fakeClock, domain.ApprovalRequest) error
-		wantState domain.ApprovalState
-		wantCode  domain.ApprovalErrorCode
-	}{
-		{
-			name: "not approved",
-			attempt: func(_ *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				_, err := service.Consume(context.Background(), consumeCommand(request))
-				return err
-			},
-			wantState: domain.ApprovalStatePending,
-			wantCode:  domain.ApprovalErrorCodeInvalidTransition,
-		},
-		{
-			name: "expired approval",
-			attempt: func(t *testing.T, service *Service, clock *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-				clock.Set(request.ExpiresAt)
-				_, err = service.Consume(context.Background(), consumeCommand(approved))
-				return err
-			},
-			wantState: domain.ApprovalStateExpired,
-			wantCode:  domain.ApprovalErrorCodeExpired,
-		},
-		{
-			name: "nonce mismatch",
-			attempt: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				command := approveCommand(request)
-				command.Nonce = testNonce(t, 90)
-				_, _, err := service.Decide(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeNonceMismatch,
-		},
-		{
-			name: "nonce mismatch before consume",
-			attempt: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-				command := consumeCommand(approved)
-				command.Nonce = testNonce(t, 89)
-				_, err = service.Consume(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeNonceMismatch,
-		},
-		{
-			name: "shown digest mismatch",
-			attempt: func(_ *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				command := approveCommand(request)
-				command.ShownDigest = domain.ApprovalDigest(domain.SHA256Hex("different-visible-operation"))
-				_, _, err := service.Decide(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeDigestMismatch,
-		},
-		{
-			name: "shown digest mismatch before consume",
-			attempt: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-				command := consumeCommand(approved)
-				command.ShownDigest = domain.ApprovalDigest(domain.SHA256Hex("different-consumed-operation"))
-				_, err = service.Consume(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeDigestMismatch,
-		},
-		{
-			name: "scope changed before decision",
-			attempt: func(_ *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				command := approveCommand(request)
-				command.CurrentScope.Generation++
-				_, _, err := service.Decide(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeStaleScope,
-		},
-		{
-			name: "scope changed before consume",
-			attempt: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				approved, _, err := service.Decide(context.Background(), approveCommand(request))
-				if err != nil {
-					t.Fatalf("Decide() error = %v", err)
-				}
-				command := consumeCommand(approved)
-				command.CurrentScope.Namespace = "other-namespace"
-				_, err = service.Consume(context.Background(), command)
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeStaleScope,
-		},
-		{
-			name: "duplicate decision",
-			attempt: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) error {
-				t.Helper()
-				if _, _, err := service.Decide(context.Background(), approveCommand(request)); err != nil {
-					t.Fatalf("first Decide() error = %v", err)
-				}
-				_, _, err := service.Decide(context.Background(), approveCommand(request))
-				return err
-			},
-			wantState: domain.ApprovalStateInvalidated,
-			wantCode:  domain.ApprovalErrorCodeDecisionReplayed,
-		},
-	}
-	for index, current := range tests {
-		index, current := index, current
-		t.Run(current.name, func(t *testing.T) {
-			t.Parallel()
-			service, clock, executor := newTestService(t, baseTime, testNonce(t, byte(index+31)))
-			request, err := service.Request(context.Background(), testRequestCommand())
-			if err != nil {
-				t.Fatalf("Request() error = %v", err)
-			}
-			err = current.attempt(t, service, clock, request)
-			requireApprovalErrorCode(t, err, current.wantCode)
-			snapshot, ok := service.Snapshot(request.ID)
-			if !ok || snapshot.State != current.wantState {
-				t.Fatalf("snapshot = %#v/%t, want state %q", snapshot, ok, current.wantState)
-			}
-			if err := snapshot.Validate(); err != nil {
-				t.Fatalf("denied ApprovalRequest.Validate() error = %v", err)
-			}
-			if executor.WriteCount() != 0 {
-				t.Fatalf("fake executor write count = %d, want 0", executor.WriteCount())
-			}
-		})
-	}
-}
-
-func TestOldNonceCannotAuthorizeAnotherRequest(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	oldNonce := testNonce(t, 61)
-	newNonce := testNonce(t, 62)
-	service, _, executor := newTestService(t, baseTime, oldNonce, newNonce)
-	first, err := service.Request(context.Background(), testRequestCommand())
-	if err != nil {
-		t.Fatalf("Request(first) error = %v", err)
-	}
-	secondCommand := testRequestCommand()
-	secondCommand.ID = "00000000-0000-7000-8000-000000003021"
-	second, err := service.Request(context.Background(), secondCommand)
-	if err != nil {
-		t.Fatalf("Request(second) error = %v", err)
-	}
-	command := approveCommand(second)
-	command.Nonce = first.Nonce
-	updated, _, err := service.Decide(context.Background(), command)
-	requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeNonceMismatch)
-	if updated.State != domain.ApprovalStateInvalidated || executor.WriteCount() != 0 {
-		t.Fatalf("old nonce result/write count = %q/%d", updated.State, executor.WriteCount())
-	}
-}
-
-func TestProcessRestartDoesNotRestoreApprovalAuthority(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	oldService, _, oldExecutor := newTestService(t, baseTime, testNonce(t, 66))
-	request, err := oldService.Request(context.Background(), testRequestCommand())
-	if err != nil {
-		t.Fatalf("Request() error = %v", err)
-	}
-	approved, _, err := oldService.Decide(context.Background(), approveCommand(request))
-	if err != nil {
-		t.Fatalf("Decide() error = %v", err)
-	}
-
-	restartedService, _, restartedExecutor := newTestService(t, baseTime, testNonce(t, 67))
-	_, err = restartedService.Consume(context.Background(), consumeCommand(approved))
-	requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeRequestNotFound)
-	if oldExecutor.WriteCount() != 0 || restartedExecutor.WriteCount() != 0 {
-		t.Fatalf("old/restarted fake executor write count = %d/%d, want 0/0", oldExecutor.WriteCount(), restartedExecutor.WriteCount())
-	}
-}
-
-func TestApprovalConsumeIsSingleUseUnderConcurrency(t *testing.T) {
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	service, _, executor := newTestService(t, baseTime, testNonce(t, 71))
+func TestApprovalLifecycleClaimsAndConsumesWithoutExecutor(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	service, clock, store := newTestService(t, now, testNonce(t, 1))
 	request, err := service.Request(context.Background(), testRequestCommand())
-	if err != nil {
-		t.Fatalf("Request() error = %v", err)
+	if err != nil || request.State != domain.ApprovalStatePending || request.ActionEnvelope().Validate() != nil {
+		t.Fatalf("Request() = %#v/%v", request, err)
 	}
-	approved, _, err := service.Decide(context.Background(), approveCommand(request))
-	if err != nil {
-		t.Fatalf("Decide() error = %v", err)
+	clock.Set(now.Add(time.Millisecond))
+	approved, decision, err := service.Decide(context.Background(), approveCommand(request))
+	if err != nil || approved.State != domain.ApprovalStateApproved || decision.Validate() != nil {
+		t.Fatalf("Decide() = %#v/%#v/%v", approved, decision, err)
 	}
+	claim, err := service.Claim(context.Background(), consumeCommand(approved))
+	if err != nil || claim.Validate() != nil || store.WriteCount() != 0 {
+		t.Fatalf("Claim() = %#v/%v, executor calls = %d", claim, err, store.WriteCount())
+	}
+	clock.Set(now.Add(2 * time.Millisecond))
+	consumed, err := service.CommitConsume(context.Background(), claim)
+	if err != nil || consumed.State != domain.ApprovalStateConsumed || store.auditCommits != 1 || store.WriteCount() != 0 {
+		t.Fatalf("CommitConsume() = %#v/%v commits/writes=%d/%d", consumed, err, store.auditCommits, store.WriteCount())
+	}
+	if _, err := service.CommitConsume(context.Background(), claim); err == nil {
+		t.Fatal("replayed claim was accepted")
+	}
+}
 
-	const attempts = 16
+func TestApprovalTTLIsHalfOpenAcrossDecisionClaimAndCommit(t *testing.T) {
+	base := time.UnixMilli(1_700_000_000_000).UTC()
+	t.Run("decision at boundary", func(t *testing.T) {
+		service, clock, _ := newTestService(t, base, testNonce(t, 2))
+		request, _ := service.Request(context.Background(), testRequestCommand())
+		clock.Set(request.ExpiresAt)
+		updated, _, err := service.Decide(context.Background(), approveCommand(request))
+		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExpired)
+		if updated.State != domain.ApprovalStateExpired {
+			t.Fatalf("state = %q", updated.State)
+		}
+	})
+	t.Run("claim at boundary", func(t *testing.T) {
+		service, clock, _ := newTestService(t, base, testNonce(t, 3))
+		request, _ := service.Request(context.Background(), testRequestCommand())
+		clock.Set(base.Add(time.Millisecond))
+		approved, _, _ := service.Decide(context.Background(), approveCommand(request))
+		clock.Set(request.ExpiresAt)
+		claim, err := service.Claim(context.Background(), consumeCommand(approved))
+		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExpired)
+		if claim.Request.State != domain.ApprovalStateExpired {
+			t.Fatalf("claim state = %q", claim.Request.State)
+		}
+	})
+	t.Run("commit at boundary", func(t *testing.T) {
+		service, clock, store := newTestService(t, base, testNonce(t, 4))
+		request, _ := service.Request(context.Background(), testRequestCommand())
+		clock.Set(base.Add(time.Millisecond))
+		approved, _, _ := service.Decide(context.Background(), approveCommand(request))
+		claim, _ := service.Claim(context.Background(), consumeCommand(approved))
+		clock.Set(request.ExpiresAt)
+		updated, err := service.CommitConsume(context.Background(), claim)
+		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExpired)
+		if updated.State != domain.ApprovalStateExpired || store.auditCommits != 0 {
+			t.Fatalf("commit state/audits = %q/%d", updated.State, store.auditCommits)
+		}
+	})
+}
+
+func TestApprovalProofFailuresInvalidateAndPerformNoPreWrite(t *testing.T) {
+	base := time.UnixMilli(1_700_000_000_000).UTC()
+	tests := []struct {
+		name   string
+		mutate func(*ConsumeCommand)
+		code   domain.ApprovalErrorCode
+	}{
+		{"digest", func(command *ConsumeCommand) {
+			command.ShownDigest = domain.ActionDigest(domain.SHA256Hex("different"))
+		}, domain.ApprovalErrorCodeDigestMismatch},
+		{"nonce", func(command *ConsumeCommand) { command.Nonce = testNonce(t, 90) }, domain.ApprovalErrorCodeNonceMismatch},
+		{"scope", func(command *ConsumeCommand) { command.CurrentScope.Generation++ }, domain.ApprovalErrorCodeStaleScope},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, clock, store := newTestService(t, base, testNonce(t, 5))
+			request, _ := service.Request(context.Background(), testRequestCommand())
+			clock.Set(base.Add(time.Millisecond))
+			approved, _, _ := service.Decide(context.Background(), approveCommand(request))
+			command := consumeCommand(approved)
+			test.mutate(&command)
+			claim, err := service.Claim(context.Background(), command)
+			requireApprovalErrorCode(t, err, test.code)
+			if claim.Request.State != domain.ApprovalStateInvalidated || store.auditCommits != 0 || store.WriteCount() != 0 {
+				t.Fatalf("claim/store = %#v/%d/%d", claim, store.auditCommits, store.WriteCount())
+			}
+		})
+	}
+}
+
+func TestApprovalClaimIsSingleOwnerUnderConcurrency(t *testing.T) {
+	base := time.UnixMilli(1_700_000_000_000).UTC()
+	service, clock, _ := newTestService(t, base, testNonce(t, 6))
+	request, _ := service.Request(context.Background(), testRequestCommand())
+	clock.Set(base.Add(time.Millisecond))
+	approved, _, _ := service.Decide(context.Background(), approveCommand(request))
+	const callers = 16
 	start := make(chan struct{})
-	results := make(chan error, attempts)
-	var group sync.WaitGroup
-	for range attempts {
-		group.Add(1)
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	claims := make(chan ExecutionClaim, callers)
+	for range callers {
 		go func() {
-			defer group.Done()
+			defer wait.Done()
 			<-start
-			_, consumeErr := service.Consume(context.Background(), consumeCommand(approved))
-			results <- consumeErr
+			claim, err := service.Claim(context.Background(), consumeCommand(approved))
+			if err == nil {
+				claims <- claim
+			}
 		}()
 	}
 	close(start)
-	group.Wait()
-	close(results)
-
-	successes := 0
-	for consumeErr := range results {
-		if consumeErr == nil {
-			successes++
-			continue
-		}
-		requireApprovalErrorCode(t, consumeErr, domain.ApprovalErrorCodeInvalidTransition)
-	}
-	if successes != 1 || executor.WriteCount() != 1 {
-		t.Fatalf("consume successes/write count = %d/%d, want 1/1", successes, executor.WriteCount())
-	}
-	snapshot, ok := service.Snapshot(request.ID)
-	if !ok || snapshot.State != domain.ApprovalStateConsumed {
-		t.Fatalf("final snapshot = %#v/%t", snapshot, ok)
+	wait.Wait()
+	close(claims)
+	if len(claims) != 1 {
+		t.Fatalf("successful claims = %d, want 1", len(claims))
 	}
 }
 
-func TestApprovalCancellationAndExecutorFailureFailClosedWithoutRetry(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-
-	t.Run("cancelled context before consume", func(t *testing.T) {
-		service, _, executor := newTestService(t, baseTime, testNonce(t, 81))
-		request, err := service.Request(context.Background(), testRequestCommand())
-		if err != nil {
-			t.Fatalf("Request() error = %v", err)
-		}
-		approved, _, err := service.Decide(context.Background(), approveCommand(request))
-		if err != nil {
-			t.Fatalf("Decide() error = %v", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		updated, err := service.Consume(ctx, consumeCommand(approved))
-		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeCancelled)
-		if updated.State != domain.ApprovalStateCancelled || executor.WriteCount() != 0 {
-			t.Fatalf("cancelled consume state/write count = %q/%d", updated.State, executor.WriteCount())
-		}
+func TestApprovalCommitStorageFailureClosesAuthorityWithoutRetry(t *testing.T) {
+	base := time.UnixMilli(1_700_000_000_000).UTC()
+	store := &failingPreWriteStore{}
+	clock := &fakeClock{now: base}
+	service, err := NewService(ServiceConfig{
+		Clock: clock, Nonces: &sequenceNonceSource{values: []domain.ApprovalNonce{testNonce(t, 7)}},
+		Store: store, AuditIDs: fixedApprovalAuditIDs{},
 	})
-
-	t.Run("executor failure is consumed and not retried", func(t *testing.T) {
-		service, _, executor := newTestService(t, baseTime, testNonce(t, 82))
-		executor.err = errSyntheticExecution
-		request, err := service.Request(context.Background(), testRequestCommand())
-		if err != nil {
-			t.Fatalf("Request() error = %v", err)
-		}
-		approved, _, err := service.Decide(context.Background(), approveCommand(request))
-		if err != nil {
-			t.Fatalf("Decide() error = %v", err)
-		}
-		updated, err := service.Consume(context.Background(), consumeCommand(approved))
-		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeExecutorFailed)
-		if updated.State != domain.ApprovalStateConsumed || executor.WriteCount() != 1 {
-			t.Fatalf("failed executor state/write count = %q/%d", updated.State, executor.WriteCount())
-		}
-		_, err = service.Consume(context.Background(), consumeCommand(approved))
-		requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeInvalidTransition)
-		if executor.WriteCount() != 1 {
-			t.Fatalf("fake executor was retried: write count = %d", executor.WriteCount())
-		}
-	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := service.Request(context.Background(), testRequestCommand())
+	clock.Set(base.Add(time.Millisecond))
+	approved, _, _ := service.Decide(context.Background(), approveCommand(request))
+	claim, err := service.Claim(context.Background(), consumeCommand(approved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(base.Add(2 * time.Millisecond))
+	updated, err := service.CommitConsume(context.Background(), claim)
+	if !errors.Is(err, ErrPreWritePersistenceUnavailable) || updated.State != domain.ApprovalStateInvalidated || store.consumeCalls != 1 {
+		t.Fatalf("CommitConsume() = %#v/%v calls=%d", updated, err, store.consumeCalls)
+	}
+	if _, err := service.CommitConsume(context.Background(), claim); err == nil || store.consumeCalls != 1 {
+		t.Fatalf("replay error/calls = %v/%d", err, store.consumeCalls)
+	}
 }
 
-func TestApprovalTerminatedStateMethodsNeverReverseStateOrInvokeExecutor(t *testing.T) {
-	t.Parallel()
-	baseTime := time.UnixMilli(1_700_000_000_000).UTC()
-	tests := []struct {
-		name      string
-		terminate func(*testing.T, *Service, *fakeClock, domain.ApprovalRequest) domain.ApprovalRequest
-	}{
-		{name: "rejected", terminate: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-			command := approveCommand(request)
-			command.Choice = domain.ApprovalDecisionReject
-			updated, _, err := service.Decide(context.Background(), command)
-			if err != nil {
-				t.Fatalf("Decide(reject) error = %v", err)
-			}
-			return updated
-		}},
-		{name: "expired", terminate: func(t *testing.T, service *Service, clock *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-			clock.Set(request.ExpiresAt)
-			updated, err := service.Expire(context.Background(), request.ID)
-			if err != nil {
-				t.Fatalf("Expire() error = %v", err)
-			}
-			return updated
-		}},
-		{name: "cancelled", terminate: func(t *testing.T, service *Service, _ *fakeClock, request domain.ApprovalRequest) domain.ApprovalRequest {
-			updated, err := service.Cancel(context.Background(), request.ID, domain.ApprovalReasonProcessRestarted)
-			if err != nil {
-				t.Fatalf("Cancel() error = %v", err)
-			}
-			return updated
-		}},
-	}
-	for index, current := range tests {
-		index, current := index, current
-		t.Run(current.name, func(t *testing.T) {
-			t.Parallel()
-			service, clock, executor := newTestService(t, baseTime, testNonce(t, byte(index+91)))
-			request, err := service.Request(context.Background(), testRequestCommand())
-			if err != nil {
-				t.Fatalf("Request() error = %v", err)
-			}
-			terminated := current.terminate(t, service, clock, request)
-			originalState := terminated.State
-			if _, _, err := service.Decide(context.Background(), approveCommand(request)); err == nil {
-				t.Fatal("Decide() on terminated request error = nil")
-			}
-			if _, err := service.Consume(context.Background(), consumeCommand(request)); err == nil {
-				t.Fatal("Consume() on terminated request error = nil")
-			}
-			snapshot, ok := service.Snapshot(request.ID)
-			if !ok || snapshot.State != originalState || executor.WriteCount() != 0 {
-				t.Fatalf("terminated snapshot/write count = %#v/%t/%d", snapshot, ok, executor.WriteCount())
-			}
-		})
-	}
+type failingPreWriteStore struct{ consumeCalls int }
+
+func (*failingPreWriteStore) VerifyApproved(context.Context, StoredRequest, StoredDecision) error {
+	return nil
+}
+
+func (store *failingPreWriteStore) ConsumeWithAudit(context.Context, StoredRequest, StoredDecision, StoredRequest, domain.AuditEvent) error {
+	store.consumeCalls++
+	return errors.New("synthetic storage failure")
+}
+
+type fixedApprovalAuditIDs struct{}
+
+func (fixedApprovalAuditIDs) NewAuditEventID() (domain.AuditEventID, error) {
+	return "00000000-0000-7000-8000-000000003091", nil
 }

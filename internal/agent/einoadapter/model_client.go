@@ -17,6 +17,7 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 	"github.com/imbrooklyn/kupilot/internal/security"
@@ -138,13 +139,17 @@ func newModelClientWithTransport(
 		},
 		CheckRedirect: redirectPolicy(origin),
 	}
-	maximum := configuration.MaxOutputTokens
+	var maximum *int
+	if configuration.MaxOutputTokens > 0 {
+		configuredMaximum := configuration.MaxOutputTokens
+		maximum = &configuredMaximum
+	}
 	chatModel, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
 		APIKey:     einoCredentialPlaceholder,
 		HTTPClient: client,
 		BaseURL:    strings.TrimRight(configuration.Endpoint, "/"),
 		Model:      configuration.Model,
-		MaxTokens:  &maximum,
+		MaxTokens:  maximum,
 		// The pinned OpenAI client rejects temperature before transport for
 		// identifiers beginning with gpt-5, even for compatible endpoints that
 		// admit the configured field. Eino's fixed ExtraFields path keeps Eino
@@ -253,7 +258,23 @@ func (client *modelClient) stream(
 	messages []*schema.Message,
 	observeContent func(string) error,
 ) (*schema.Message, *domain.ModelError) {
+	return client.streamBounded(ctx, requestID, model, messages, agent.CallReservation{
+		RequestBytes: domain.MaxModelRequestBytes,
+		StreamBytes:  domain.MaxModelStreamBytes,
+	}, observeContent)
+}
+
+func (client *modelClient) streamBounded(
+	ctx context.Context,
+	requestID domain.ModelRequestID,
+	model einomodel.ToolCallingChatModel,
+	messages []*schema.Message,
+	reservation agent.CallReservation,
+	observeContent func(string) error,
+) (*schema.Message, *domain.ModelError) {
 	if client == nil || ctx == nil || model == nil || !requestID.Valid() || len(messages) == 0 ||
+		reservation.RequestBytes < 1 || reservation.RequestBytes > domain.MaxModelRequestBytes ||
+		reservation.StreamBytes < 1 || reservation.StreamBytes > domain.MaxModelStreamBytes ||
 		einoMessagesContainCredential(client.credential, messages) {
 		return nil, domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(requestID))
 	}
@@ -261,7 +282,12 @@ func (client *modelClient) stream(
 		return nil, domain.NewModelError(code, domain.ModelOperationRequest, string(requestID))
 	}
 
-	state := &transportRequestState{sensitiveDiagnostics: client.diagnostics.Sensitive}
+	state := &transportRequestState{
+		sensitiveDiagnostics: client.diagnostics.Sensitive,
+		responseMode:         transportResponseStream,
+		requestLimit:         reservation.RequestBytes,
+		responseLimit:        reservation.StreamBytes,
+	}
 	requestContext := context.WithValue(ctx, transportRequestStateKey{}, state)
 	// Kupilot does not install Eino global callbacks. Reinitializing the local
 	// callback context prevents caller-owned handlers from observing model data.
@@ -277,7 +303,7 @@ func (client *modelClient) stream(
 	stream, err := model.Stream(
 		requestContext,
 		messages,
-		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload()),
+		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
 		einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
 	)
 	if err != nil {
@@ -304,9 +330,75 @@ func (client *modelClient) stream(
 	return message, nil
 }
 
-func (client *modelClient) observeRequestPayload() einoopenai.RequestPayloadModifier {
+// generate performs the middleware-owned non-streaming Agent-profile summary
+// request through the same Eino component and guarded origin transport.
+func (client *modelClient) generate(
+	ctx context.Context,
+	requestID domain.ModelRequestID,
+	messages []*schema.Message,
+	reservation agent.CallReservation,
+) (*schema.Message, *domain.ModelError) {
+	return client.generateNonStreaming(ctx, requestID, messages, reservation, domain.MaxSessionSummaryBytes, domain.ModelInvocationAgentSummary)
+}
+
+func (client *modelClient) generateNonStreaming(
+	ctx context.Context,
+	requestID domain.ModelRequestID,
+	messages []*schema.Message,
+	reservation agent.CallReservation,
+	maximumOutput int,
+	invocation domain.ModelInvocation,
+) (*schema.Message, *domain.ModelError) {
+	if client == nil || ctx == nil || client.model == nil || !requestID.Valid() || len(messages) == 0 ||
+		reservation.RequestBytes < 1 || reservation.RequestBytes > domain.MaxModelRequestBytes ||
+		maximumOutput < 1 || maximumOutput > domain.MaxModelMessageBytes ||
+		reservation.OutputBytes < 1 || reservation.OutputBytes > maximumOutput || !invocation.Valid() ||
+		client.configuration.Role == domain.ModelRoleAgent && invocation != domain.ModelInvocationAgentSummary ||
+		client.configuration.Role == domain.ModelRoleApprovalReviewer && invocation != domain.ModelInvocationReview ||
+		einoMessagesContainCredential(client.credential, messages) {
+		return nil, domain.NewModelError(domain.ModelErrorCodeInvalidRequest, domain.ModelOperationRequest, string(requestID))
+	}
+	if code, cancelled := contextModelErrorCode(ctx); cancelled {
+		return nil, domain.NewModelError(code, domain.ModelOperationRequest, string(requestID))
+	}
+	state := &transportRequestState{
+		sensitiveDiagnostics: client.diagnostics.Sensitive,
+		responseMode:         transportResponseJSON,
+		requestLimit:         reservation.RequestBytes,
+		responseLimit:        maxSummaryResponseBytes,
+	}
+	requestContext := context.WithValue(ctx, transportRequestStateKey{}, state)
+	requestContext = einocallbacks.InitCallbacks(requestContext, nil)
+	client.logger.Info(modelRequestLogEvent,
+		"component", "model", "operation", string(domain.ModelOperationRequest),
+		"phase", "started", "request_id", string(requestID), "invocation", string(invocation),
+	)
+	message, err := client.model.Generate(
+		requestContext,
+		messages,
+		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
+		einoopenai.WithResponseMessageModifier(validateResponseMessage),
+	)
+	defer state.closeResponseBody()
+	if err != nil {
+		return nil, client.finishWithError(requestID, mapModelRequestError(requestContext, err, state), domain.ModelOperationRequest, err, state)
+	}
+	if err := admitAndClearNonStreamingMetadata(message, client.credential); err != nil {
+		return nil, client.finishWithError(
+			requestID,
+			mapModelRequestError(requestContext, err, state),
+			domain.ModelOperationRequest,
+			err,
+			state,
+		)
+	}
+	client.logFinished(requestID, nil, modelFailure{httpStatus: state.status()}, nil, state)
+	return message, nil
+}
+
+func (client *modelClient) observeRequestPayload(maximum int) einoopenai.RequestPayloadModifier {
 	return func(_ context.Context, _ []*schema.Message, body []byte) ([]byte, error) {
-		if len(body) > domain.MaxModelRequestBytes {
+		if maximum < 1 || maximum > domain.MaxModelRequestBytes || len(body) > maximum {
 			return nil, errModelRequestLimitReached
 		}
 		if credentialAppearsInBytes(client.credential, body) {

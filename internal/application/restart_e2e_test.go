@@ -71,15 +71,26 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 		restartedIDs := &approvalCoordinatorIDs{}
 		restartedService, err := approval.NewService(approval.ServiceConfig{
 			Clock: old.clock, Nonces: approvalNonceSource{value: 0x73}, Store: old.persistence,
-			Scope: old.scope, Revalidator: restartedExecutor, Executor: restartedExecutor, AuditIDs: restartedIDs,
+			AuditIDs: restartedIDs,
 		})
 		if err != nil {
 			t.Fatalf("approval.NewService(restarted) error = %v", err)
+		}
+		restartedPermissions, err := NewPermissionManager(PermissionPolicy{
+			Profile: domain.PermissionProfileAsk, Generation: 1,
+		})
+		if err != nil {
+			t.Fatalf("NewPermissionManager(restarted) error = %v", err)
+		}
+		if err := restartedPermissions.BindSession(old.sessionID); err != nil {
+			t.Fatalf("BindSession(restarted) error = %v", err)
 		}
 		restarted, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
 			Service: restartedService, Persistence: old.persistence, ResultAudits: old.persistence,
 			Scope: old.scope, ApprovalIDs: restartedIDs, AuditIDs: restartedIDs,
 			UIEvents: &fakeApprovalUIEvents{}, Rollout: restartedRollout, Now: old.clock.Now,
+			RestartRevalidator: restartedExecutor, RestartExecutor: restartedExecutor,
+			Permissions: restartedPermissions, Reviews: old.persistence,
 		})
 		if err != nil {
 			t.Fatalf("NewApprovalCoordinator(restarted) error = %v", err)
@@ -370,6 +381,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 		fixture := newApprovalCoordinatorFixture(t)
 		const freshCanary = "fresh-resource-version-canary-41dd"
 		const resultCanary = "result-resource-version-canary-61ab"
+		fixture.intent.Target.Resource.ResourceVersion = freshCanary
 		fixture.executor.revalidateRV = freshCanary
 		fixture.executor.resultRV = resultCanary
 		result, err := approveAndConsumeRestart(t, fixture, 121)
@@ -377,13 +389,18 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 			fixture.executor.calls != 1 || fixture.rollout.calls != 1 {
 			t.Fatalf("metadata canary result/error/write/rollout = %#v/%v/%d/%d", result, err, fixture.executor.calls, fixture.rollout.calls)
 		}
-		for _, sink := range []any{
-			result, fixture.persistence.lastConsumed, fixture.persistence.lastConsumeAudit,
-			fixture.persistence.writeResultAudits, fixture.ui.events, err,
-		} {
+		for _, sink := range []any{result, fixture.ui.events, err} {
 			formatted := fmt.Sprintf("%v", sink)
 			if strings.Contains(formatted, freshCanary) || strings.Contains(formatted, resultCanary) {
-				t.Fatalf("resource-version canary reached a result, audit, UI, or returned error sink: %T", sink)
+				t.Fatalf("resource-version canary reached a result, UI, or returned error sink: %T", sink)
+			}
+		}
+		if !strings.Contains(fmt.Sprintf("%v", fixture.persistence.lastConsumed), freshCanary) {
+			t.Fatal("the exact approved target resource version was not retained in durable authority metadata")
+		}
+		for _, sink := range []any{fixture.persistence.lastConsumed, fixture.persistence.lastConsumeAudit, fixture.persistence.writeResultAudits} {
+			if strings.Contains(fmt.Sprintf("%v", sink), resultCanary) {
+				t.Fatalf("unvalidated PATCH response resource version reached durable metadata: %T", sink)
 			}
 		}
 	})

@@ -196,6 +196,96 @@ func TestAdapterCompletesGeneralAnswerWithoutToolCall(t *testing.T) {
 	}
 }
 
+func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	turns := []agent.ConversationTurn{
+		{
+			MessageID: "00000000-0000-7000-8000-000000008101", Role: domain.MessageRoleUser,
+			Content: "What was checked previously?", ContentHash: domain.MessageContentHash("What was checked previously?"),
+		},
+		{
+			MessageID: "00000000-0000-7000-8000-000000008102", Role: domain.MessageRoleAssistant,
+			Content: "Only the final validated answer is retained.", ContentHash: domain.MessageContentHash("Only the final validated answer is retained."),
+		},
+	}
+	conversation, err := agent.NewConversationContext(testSessionID, turns, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
+	input := testInputWithConversation(t, clock, conversation)
+	model := &recordingModel{scripts: []modelScript{func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
+		if len(request.Messages) != 4 {
+			t.Fatalf("model input messages = %d, want 4", len(request.Messages))
+		}
+		wantRoles := []schema.RoleType{schema.System, schema.User, schema.Assistant, schema.User}
+		wantContent := []string{"", turns[0].Content, turns[1].Content, input.Question()}
+		currentCount := 0
+		for index, message := range request.Messages {
+			if message.Role != wantRoles[index] || index > 0 && message.Content != wantContent[index] {
+				t.Fatalf("model input[%d] = %#v", index, message)
+			}
+			if message.Content == input.Question() {
+				currentCount++
+			}
+		}
+		if currentCount != 1 {
+			t.Fatalf("current question count = %d, want 1", currentCount)
+		}
+		return scriptedChunks(diagnosisChunks(`{"answer_markdown":"The ordered Session context was supplied once.","evidence_citations":[],"proposed_actions":[]}`)...)(ctx, request)
+	}}}
+	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, newEventRecorder())
+	if outcome.Status != domain.AgentRunStatusCompleted || len(model.Requests()) != 1 {
+		t.Fatalf("outcome/requests = %#v/%d", outcome, len(model.Requests()))
+	}
+}
+
+func TestAdapterReplaysVerifiedSummaryAndTailWithoutResummarizingCoveredPrefix(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	full := testConversation(t, 6)
+	coverage := full.Coverage()
+	digest, coveredBytes, err := domain.SessionContextCoverageDigestItems(coverage[:4])
+	if err != nil {
+		t.Fatalf("SessionContextCoverageDigestItems() error = %v", err)
+	}
+	summary := domain.SessionContextSummary{
+		SessionID: testSessionID, Text: "Verified safe summary of the first two completed turns.",
+		SummaryHash:   domain.SHA256Hex("Verified safe summary of the first two completed turns."),
+		SchemaVersion: domain.SessionContextSummarySchemaVersion, PolicyVersion: domain.SafeConversationContextPolicyVersion,
+		CoveredFirstID: coverage[0].MessageID, CoveredThroughID: coverage[3].MessageID,
+		CoveredCount: 4, CoveredBytes: coveredBytes, CoverageDigest: digest, GeneratedAt: clock.Now(),
+		AgentProfile: "agent", AgentOriginHash: domain.SHA256Hex("https://model.example"),
+	}
+	conversation, err := agent.NewConversationContextWithCoverage(testSessionID, full.Turns()[4:], &summary, coverage)
+	if err != nil {
+		t.Fatalf("NewConversationContextWithCoverage() error = %v", err)
+	}
+	input := testInputWithConversation(t, clock, conversation)
+	model := &recordingModel{scripts: []modelScript{func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
+		if len(request.Messages) != 5 || request.Messages[1].Role != schema.User ||
+			request.Messages[1].Content != summaryContextPreamble+summary.Text ||
+			request.Messages[2].Content != full.Turns()[4].Content ||
+			request.Messages[3].Content != full.Turns()[5].Content ||
+			request.Messages[4].Content != input.Question() {
+			t.Fatalf("replayed model input = %#v", request.Messages)
+		}
+		return scriptedChunks(diagnosisChunks(`{"answer_markdown":"The stored summary and exact tail were replayed.","evidence_citations":[],"proposed_actions":[]}`)...)(ctx, request)
+	}}}
+	recorder := newEventRecorder()
+	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, recorder)
+	if outcome.Status != domain.AgentRunStatusCompleted || len(model.Requests()) != 1 {
+		t.Fatalf("outcome/requests = %#v/%d", outcome, len(model.Requests()))
+	}
+	for _, event := range recorder.Events() {
+		if event.Kind == agent.RunEventSummaryStarted || event.Kind == agent.RunEventSummaryReady {
+			t.Fatalf("covered prefix was summarized again: %#v", event)
+		}
+	}
+}
+
 func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 	blockedCanary := strings.Join([]string{"synthetic", "blocked", "adapter", "canary", "4601"}, "-")
 	blockedText := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +

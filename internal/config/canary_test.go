@@ -33,8 +33,8 @@ func TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	secret := &loaded.Credential
-	defer secret.Destroy()
+	secret := &loaded.Credentials.Agent.Value
+	defer loaded.Credentials.Destroy()
 	if _, found := environment[ModelAPIKeyEnvironmentVariable]; found {
 		t.Fatal("model API key remains in the source environment")
 	}
@@ -121,12 +121,12 @@ func TestFileModelAPIKeyCanaryIsExtractedFromOrdinaryConfiguration(t *testing.T)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	defer loaded.Credential.Destroy()
-	if loaded.CredentialSource != CredentialSourceFile {
-		t.Fatalf("credential source = %q, want file", loaded.CredentialSource)
+	defer loaded.Credentials.Destroy()
+	if loaded.Credentials.Agent.Source != CredentialSourceFile {
+		t.Fatalf("credential source = %q, want file", loaded.Credentials.Agent.Source)
 	}
 	matched := false
-	if err := loaded.Credential.Use(func(value string) { matched = value == canary }); err != nil || !matched {
+	if err := loaded.Credentials.Agent.Value.Use(func(value string) { matched = value == canary }); err != nil || !matched {
 		t.Fatalf("extracted credential unavailable: %v", err)
 	}
 	jsonValue, jsonErr := json.Marshal(loaded.Config)

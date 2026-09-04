@@ -24,8 +24,9 @@ cancellation, or persistence safety.
 Exact model context windows, input/output tokens, request and stream ceilings,
 summary triggers, latency, concurrency, and cost values are accepted only from
 the exact pinned Eino/OpenAI source and tests plus selected-endpoint evidence.
-The current global `8192` output value and middleware example defaults are not
-universal `v0.5` performance contracts.
+The historical global `8192` output value and middleware example defaults are
+not universal `v0.5` performance contracts; schema version 2 omits an output-
+token parameter until selected-endpoint evidence supports one.
 
 ## Evidence levels for `v0.5`
 
