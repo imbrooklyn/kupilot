@@ -62,7 +62,7 @@ func TestPrivacyConsentLifecycleBindsOriginCategoriesAndPolicy(t *testing.T) {
 	if allowed, _ := changedOrigin.AuthorizeModel(context.Background()); allowed {
 		t.Fatal("changed origin reused consent")
 	}
-	changedPolicy := newPrivacyTestManager(t, store, "https://model.example", "2026-08-10.v2", now)
+	changedPolicy := newPrivacyTestManager(t, store, "https://model.example", "2026-09-05.v3", now)
 	if allowed, _ := changedPolicy.AuthorizeModel(context.Background()); allowed {
 		t.Fatal("changed policy version reused consent")
 	}

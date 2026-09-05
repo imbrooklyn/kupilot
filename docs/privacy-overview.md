@@ -12,12 +12,17 @@ Agent and optional Reviewer profiles, role/origin/category consent, safe Session
 context and summarization, and deterministic permission/Reviewer routing for the
 existing supervised Deployment restart. It also implements broad, bounded
 built-in and exact configured CRD resource projections plus deterministic
-Events, logs, metrics, Prometheus, and Loki safety pipelines. Review-class log
-and optional-source calls remain fail-closed under the default `ask`
-composition until the public permission flow can create and consume their
-ActionEnvelopes. New execution paths remain targets. Kupilot does not claim
-that redaction recognizes every sensitive value or that a model or data
-provider follows its local retention schedule.
+Events, logs, metrics, Prometheus, and Loki safety pipelines, plus the
+default-off Pod Exec, container-file, and diagnostic-Pod output pipeline.
+Human-routed remote diagnostics, review-class logs, and optional-source calls
+remain fail-closed under the default `ask` composition until the public
+permission flow can own their ActionEnvelopes. Exact local direct argv, the
+separate default-off shell operation, and the typed remediation catalog now use
+the shared action dispatcher. Their raw process or Kubernetes response bytes
+remain ephemeral and only bounded safe output, digests, state, and verification
+metadata cross their adapters. Kupilot does not claim that redaction recognizes
+every sensitive value or that a model or data provider follows its local
+retention schedule.
 
 > [!IMPORTANT]
 > Context and Namespace names, resource names, Node and workload status,
@@ -43,10 +48,17 @@ reused for a Reviewer at another origin.
 
 Container output, metrics detail, an exact ConfigMap key or non-credential
 container environment value, container-file content, optional Prometheus or
-Loki results, remote diagnostic output, and local process output use separate
-categories as applicable and remain disabled until their exact capability and
-policy enable them. Changing a category returns the affected consent to pending
-and cancels old work before another transfer.
+Loki results, and remote diagnostic output use separate categories as
+applicable and remain disabled until their exact capability and policy enable
+them. The three current remote diagnostics share the existing
+`redacted_container_output` transfer category while their ActionEnvelopes keep
+container and file data effects distinct. This expanded meaning advances the
+privacy policy to `2026-09-05.v4`, so a consent created under the preceding
+meaning cannot authorize any transfer. Local process output has no model-
+transfer category in the current implementation: even bounded sanitized output
+is terminal-only and cannot become model content or Evidence. Changing a
+category returns the affected consent to pending and cancels old work before
+another transfer.
 
 Consent permits content transfer only. It does not authorize Kubernetes RBAC,
 cross-Namespace policy, a new capability, raw persistence, approval, or a write.
@@ -72,7 +84,7 @@ categories, including:
 - separately versioned exact ConfigMap-key or non-credential container-
   environment values only under `review`, category consent, and sink policy;
 - separately versioned projected metrics, explicitly configured Prometheus or
-  Loki results, container-file content, and remote/local diagnostic output only
+  Loki results, container-file content, and remote diagnostic output only
   when the exact capability, sink, and consent category are enabled; and
 - the minimum normalized `ActionEnvelope` and policy facts sent to an optional
   `approval_reviewer`, without raw cluster data or general Session history by
@@ -107,8 +119,8 @@ Kupilot never includes:
   values, or raw capacity/allocatable maps;
 - EndpointSlice addresses, raw volume sources, storage credentials, or CSI
   attributes;
-- raw or unbounded Events, logs, metrics, files, query results, remote output,
-  or local process output;
+- raw or unbounded Events, logs, metrics, files, query results, or remote
+  output, plus all local process output even after bounded sanitation;
 - raw local database, configuration, log, prompt, model request/response,
   header, stream, ToolResult, or provider-error content; or
 - arbitrary shell commands, unapproved kubectl/helm/argocd input or output,

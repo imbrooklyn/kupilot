@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/security"
 )
 
 // Validate checks and canonicalizes a non-sensitive configuration.
@@ -53,6 +54,12 @@ func Validate(config *Config) error {
 	if err := validateResourcePolicies(config.Kubernetes.ResourcePolicies); err != nil {
 		return err
 	}
+	if _, err := config.remoteDiagnosticsPolicyCatalogUnchecked(); err != nil {
+		return newSafeError(ClassConfigurationInvalid, "config_remote_diagnostics_invalid", "validate_configuration", "Remote diagnostics must use exact no-shell argv, normalized file roots, digest-pinned images, same-Namespace Services, finite limits, and an explicit NetworkPolicy prerequisite.")
+	}
+	if _, _, err := config.localExecutionPolicyCatalogsUnchecked(); err != nil {
+		return newSafeError(ClassConfigurationInvalid, "config_local_execution_invalid", "validate_configuration", "Local execution must use exact structured argv or a separate exact shell entry, absolute non-symlink paths, a minimal environment, explicit network identity, and finite limits.")
+	}
 	if err := validateDataSource(&config.Observability.Prometheus, domain.DataSourcePrometheus); err != nil {
 		return err
 	}
@@ -65,6 +72,38 @@ func Validate(config *Config) error {
 		return newSafeError(ClassConfigurationInvalid, "config_log_level_invalid", "validate_configuration", "logging.level must be info, warn, or error.")
 	}
 	return nil
+}
+
+func remoteDiagnosticArgumentsAreNonSensitive(values []string) bool {
+	if len(values) == 0 || len(values) > domain.MaxActionArguments {
+		return false
+	}
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimLeft(value, "-"))
+		if separator := strings.IndexAny(key, "=:"); separator >= 0 {
+			key = key[:separator]
+		}
+		key = strings.ReplaceAll(key, "_", "-")
+		if sensitiveRemoteDiagnosticArgumentKey(key) {
+			return false
+		}
+	}
+	joined := strings.Join(values, "\n")
+	processed, err := security.NewRedactor().ProcessLines(joined, domain.MaxActionArgumentBytes+domain.MaxActionArguments-1)
+	return err == nil && !processed.Truncated && processed.RedactionCount == 0 && processed.Value == joined
+}
+
+func sensitiveRemoteDiagnosticArgumentKey(key string) bool {
+	switch key {
+	case "api-key", "apikey", "access-token", "authorization", "bearer", "client-key", "client-secret", "credential", "credentials", "kubeconfig", "password", "passwd", "private-key", "refresh-token", "secret", "service-account-token", "token":
+		return true
+	}
+	for _, suffix := range []string{"-credential", "-credentials", "-key-file", "-password", "-password-file", "-secret", "-secret-file", "-token", "-token-file"} {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDataSource(slot **DataSourceConfig, kind domain.DataSourceKind) error {

@@ -92,12 +92,27 @@ const (
 		ORDER BY a.occurred_at_ms DESC, a.id DESC
 		LIMIT ?
 	`
+	validateCrossNamespaceDrainAuditSQL = `
+		SELECT COUNT(*)
+		FROM approvals
+		WHERE id = ?
+			AND run_id = ?
+			AND session_id = ?
+			AND operation = 'drain_node'
+			AND namespace_access = 'all'
+			AND scope_context = ?
+			AND scope_namespace = ?
+			AND scope_generation = ?
+			AND operation_digest = ?
+			AND status = 'consumed'
+	`
 )
 
 var (
-	_ application.ApprovalResultAudits = (*AuditRepository)(nil)
-	_ auditcontract.EventAppender      = (*AuditRepository)(nil)
-	_ auditcontract.EventReader        = (*AuditRepository)(nil)
+	_ application.ApprovalResultAudits         = (*AuditRepository)(nil)
+	_ application.RemoteDiagnosticResultAudits = (*AuditRepository)(nil)
+	_ auditcontract.EventAppender              = (*AuditRepository)(nil)
+	_ auditcontract.EventReader                = (*AuditRepository)(nil)
 )
 
 type auditEventRow struct {
@@ -150,24 +165,38 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 // AppendWriteResult idempotently inserts one fixed post-attempt write audit.
 // Retrying the same immutable ID is safe; a mismatched duplicate fails closed.
 func (repository *AuditRepository) AppendWriteResult(ctx context.Context, event domain.AuditEvent) error {
-	if err := repositoryContext(ctx, repository.db, "append_write_result_audit"); err != nil {
+	return repository.appendWriteResults(ctx, []domain.AuditEvent{event}, "append_write_result_audit")
+}
+
+// AppendWriteResults atomically and idempotently inserts one fixed result set.
+// A diagnostic Pod contributes exactly five phase events; partial persistence
+// is prohibited even when a duplicate or relationship mismatch is found.
+func (repository *AuditRepository) AppendWriteResults(ctx context.Context, events []domain.AuditEvent) error {
+	return repository.appendWriteResults(ctx, events, "append_write_result_audits")
+}
+
+func (repository *AuditRepository) appendWriteResults(ctx context.Context, events []domain.AuditEvent, operation string) error {
+	if err := repositoryContext(ctx, repository.db, operation); err != nil {
 		return err
 	}
-	if event.Validate() != nil || !writeResultAuditType(event.Type) {
+	if len(events) < 1 || len(events) > remoteDiagnosticResultAuditLimit {
 		return auditcontract.ErrInvalidRepositoryRequest
 	}
-	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		inserted, err := insertAuditEventUsing(ctx, tx, event, insertWriteResultAuditEventSQL)
-		if err != nil || inserted {
-			return err
-		}
-		var row auditEventRow
-		if err := tx.GetContext(ctx, &row, getAuditEventByIDSQL, event.ID); err != nil {
-			return err
-		}
-		stored, err := row.domainAuditEvent()
-		if err != nil || !reflect.DeepEqual(stored, event) {
+	seen := make(map[domain.AuditEventID]struct{}, len(events))
+	for _, event := range events {
+		if event.Validate() != nil || !writeResultAuditType(event.Type) {
 			return auditcontract.ErrInvalidRepositoryRequest
+		}
+		if _, exists := seen[event.ID]; exists {
+			return auditcontract.ErrInvalidRepositoryRequest
+		}
+		seen[event.ID] = struct{}{}
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		for _, event := range events {
+			if err := appendWriteResultUsing(ctx, tx, event); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -175,7 +204,25 @@ func (repository *AuditRepository) AppendWriteResult(ctx context.Context, event 
 		return err
 	}
 	if err != nil {
-		return repositoryFailure(repository.db, "write_result_audit_append_failed", "append_write_result_audit", "Kupilot could not store the write result AuditEvent.", err)
+		return repositoryFailure(repository.db, "write_result_audit_append_failed", operation, "Kupilot could not store the write result AuditEvent.", err)
+	}
+	return nil
+}
+
+const remoteDiagnosticResultAuditLimit = 5
+
+func appendWriteResultUsing(ctx context.Context, tx *sqlx.Tx, event domain.AuditEvent) error {
+	inserted, err := insertAuditEventUsing(ctx, tx, event, insertWriteResultAuditEventSQL)
+	if err != nil || inserted {
+		return err
+	}
+	var row auditEventRow
+	if err := tx.GetContext(ctx, &row, getAuditEventByIDSQL, event.ID); err != nil {
+		return err
+	}
+	stored, err := row.domainAuditEvent()
+	if err != nil || !reflect.DeepEqual(stored, event) {
+		return auditcontract.ErrInvalidRepositoryRequest
 	}
 	return nil
 }
@@ -403,7 +450,28 @@ func validateAuditRelationships(ctx context.Context, getter strictGetter, event 
 	if state.PrivacyMode != string(domain.PrivacyModeStandard) && state.PrivacyMode != string(domain.PrivacyModeMinimal) {
 		return auditcontract.ErrInvalidRepositoryRequest
 	}
+	if crossNamespaceDrainAuditSubject(event) {
+		var count int
+		if err := getter.GetContext(ctx, &count, validateCrossNamespaceDrainAuditSQL,
+			event.CorrelationID, *event.RunID, *event.SessionID,
+			event.Scope.Context, event.Scope.Namespace, event.Scope.Generation,
+			event.IntegrityHash,
+		); err != nil {
+			return err
+		}
+		if count != 1 {
+			return auditcontract.ErrInvalidRepositoryRequest
+		}
+	}
 	return nil
+}
+
+func crossNamespaceDrainAuditSubject(event domain.AuditEvent) bool {
+	if event.Subject == nil || event.Scope == nil {
+		return false
+	}
+	kind, known := domain.ResourceKindForReference(*event.Subject)
+	return known && kind.Namespaced() && event.Subject.Namespace != event.Scope.Namespace
 }
 
 func nullableSessionID(value *domain.SessionID) any {

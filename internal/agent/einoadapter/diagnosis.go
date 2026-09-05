@@ -36,6 +36,7 @@ type proposedActionWire struct {
 	Risk          string                   `json:"risk"`
 	Prerequisites []string                 `json:"prerequisites"`
 	Target        proposedActionTargetWire `json:"target"`
+	Parameters    json.RawMessage          `json:"parameters"`
 }
 
 func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
@@ -70,6 +71,10 @@ func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
 	}
 	actions := make([]domain.RecommendedAction, len(*wire.ProposedActions))
 	for index, action := range *wire.ProposedActions {
+		parameters, err := decodeProposedActionParameters(action.Parameters)
+		if err != nil {
+			return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
+		}
 		target := &domain.ResourceRef{
 			APIVersion: action.Target.APIVersion,
 			Kind:       action.Target.Kind,
@@ -79,6 +84,7 @@ func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
 		actions[index] = domain.RecommendedAction{
 			Operation:     action.Operation,
 			Target:        target,
+			Parameters:    parameters,
 			Action:        action.Reason,
 			Risk:          action.Risk,
 			Prerequisites: append([]string(nil), action.Prerequisites...),
@@ -89,6 +95,26 @@ func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
 		ConfirmedFacts:     citations,
 		RecommendedActions: actions,
 	}, nil
+}
+
+func decodeProposedActionParameters(raw json.RawMessage) (*domain.ProposedActionParameters, error) {
+	if len(raw) == 0 {
+		return nil, agent.ErrInvalidDiagnosisDraft
+	}
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	var parameters domain.ProposedActionParameters
+	if err := decoder.Decode(&parameters); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, agent.ErrInvalidDiagnosisDraft
+	}
+	return &parameters, nil
 }
 
 func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agent.DiagnosisDraft) bool {
@@ -111,6 +137,9 @@ func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agen
 				action.Target.UID,
 				action.Target.ResourceVersion,
 			)
+		}
+		if action.Parameters != nil {
+			values = append(values, string(action.Parameters.Kind), action.Parameters.Value)
 		}
 	}
 	return credentialAppearsInStrings(credential, values...)

@@ -723,10 +723,8 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 	actionLimit := min(len(record.RecommendedActions), maxExportDiagnosisItems)
 	truncated = truncated || len(record.RecommendedActions) > actionLimit
 	for _, action := range record.RecommendedActions[:actionLimit] {
-		if action.Executed || action.Operation == "" && action.Target != nil || action.Operation != "" &&
-			(action.Operation != domain.ApprovalOperationRestartDeployment || action.Target == nil ||
-				action.Target.Validate() != nil || action.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
-				action.Target.Kind != domain.RestartDeploymentTargetKind || action.Target.UID != "" || action.Target.ResourceVersion != "") {
+		if action.Executed || action.Operation == "" && (action.Target != nil || action.Parameters != nil) || action.Operation != "" &&
+			(action.Target == nil || action.Target.Validate() != nil || action.Target.UID != "" || action.Target.ResourceVersion != "") {
 			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
 		}
 		actionText, err := processExportSingleLine(processor, action.Action, maxExportDiagnosisTextBytes)
@@ -755,6 +753,10 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 		if action.Target != nil {
 			target := *action.Target
 			projectedAction.Target = &target
+		}
+		if action.Parameters != nil {
+			parameters := *action.Parameters
+			projectedAction.Parameters = &parameters
 		}
 		result.RecommendedActions = append(result.RecommendedActions, projectedAction)
 		truncated = truncated || actionText.Truncated || risk.Truncated || prerequisitesChanged

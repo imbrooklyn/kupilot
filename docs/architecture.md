@@ -5,10 +5,14 @@ Status: Accepted architecture target for Kupilot `v0.5`.
 The checked-in implementation now includes the named-model, stable Eino ADK,
 role-scoped consent, safe Session-memory/summarization, deterministic
 permission routing, common ActionEnvelope/approval lifecycle, and related
-budget and status foundations. Only the existing typed Deployment restart is
-composed through that lifecycle. The expanded catalog, permission delivery
-interactions, optional data sources, and new execution or remediation paths
-remain targets; this document does not claim they are reachable.
+budget and status foundations. The broad read/observability catalog, existing
+typed Deployment restart, and default-off Pod Exec, container-file, and
+diagnostic-Pod handlers are composed. The shared Application dispatcher also
+composes typed scale, rollback, controller-owned Pod delete, cordon, uncordon,
+drain, exact local direct argv, and the separate shell operation. Remote-
+diagnostic human/Reviewer delivery remains fail-closed in this slice; this
+document does not claim live cluster or local-tool execution or release
+readiness.
 
 This document is normative for package ownership, dependency direction, scope
 and run isolation, capability dispatch, action approval, data ownership, and
@@ -248,10 +252,11 @@ partial stream is promoted to a final assistant Message, Evidence, action,
 persistence record, log, audit event, export, or terminal scrollback entry.
 
 An accepted proposed action enters a separate permission and execution flow.
-Application creates an `ActionEnvelope`, classifies risk, routes it under the
-frozen profile, obtains any human or Reviewer decision, revalidates, durably
-consumes authority and pre-audits, and only then calls an executor at most once.
-The Agent and Reviewer never receive the executor.
+Application proves the normalized action belongs to the frozen exact catalog,
+creates an `ActionEnvelope`, classifies risk, routes it under the frozen
+profile, obtains any human or Reviewer decision, revalidates, durably consumes
+authority and pre-audits, and only then calls an executor at most once. The
+Agent and Reviewer never receive the executor.
 
 If persistence fails before durable run start, model and Kubernetes call counts
 remain zero. A later read-side persistence failure may let the in-memory answer
@@ -321,7 +326,8 @@ executable, image, network destination, YAML, deadline, or hard ceiling. The
 separate default-off shell schema is the only capability that may carry one
 exact bounded command string as a typed proposal field. Runtime injects
 authority into a bound capability or immutable `ActionEnvelope` only after
-strict decoding and canonicalization.
+strict decoding and canonicalization. The current model proposal is narrower:
+it selects only a configured local policy ID, including for shell.
 
 Built-in and exact CRD mappings remain narrow task-specific Kubernetes ports.
 A policy-admitted CRD entry names exact group, version, resource, Kind, scope,
@@ -354,14 +360,60 @@ objects, raw external output, and unlisted APIs never become generic Tool,
 model, history, log, audit, or SQLite content. Redaction never turns an unlisted
 source into an allowed source.
 
+The remote-diagnostic boundary uses four narrow consumer-owned ports: exact Pod
+or Service resolution, Application-owned pre-consumption target revalidation,
+one no-shell Pod command, and one fixed diagnostic-Pod lifecycle. Client-go
+remotecommand, SPDY upgrade streams, Pod objects, log
+streams, and create/delete transports remain inside `internal/kube`. Pod Exec
+uses one redirect-denying SPDY attempt with no WebSocket or kubectl fallback.
+Across the boundary, stdout/stderr are opaque project-owned ordered chunks and
+only a content-free result summary is audit eligible. Each ActionEnvelope binds
+an exact digest of the live Pod/container or Service DNS/port destination. The
+client bundle owns stream cancellation and join during scope replacement or
+shutdown. It cancels remote owners first, keeps the typed transport available
+for their bounded exact cleanup, joins them, and only then closes transport.
+
+Container-file reads reuse the exact Pod command port with a fixed USTAR argv,
+reserve framing inside the immutable transport-byte limit, and locally validate
+ordered parent/file headers; diagnostic Pods use a policy-
+fixed Namespace, Service, port, pinned image and argv plus a runtime-built
+restricted Pod spec with Service links disabled. The create response and every
+wait projection must preserve that exact spec before output is accepted. Their
+create, wait, log, delete, and cleanup states are persisted as one atomic five-
+event outcome set. A definite API rejection performs no cleanup delete; an
+ambiguous create cleans only the invocation-bound identity. Sensitive root
+mounts and volume devices, duplicate volume identities, unknown mount/device
+references, ExternalName or selectorless Services, and obvious metadata/link-
+local/address-confusion targets fail closed. A NetworkPolicy-required flag is
+an operator assertion and never substitutes for evidence of CNI enforcement.
+Scope, policy, and category consent are checked again after projection and
+durable outcome audit before prepared output is accepted.
+
+The local-process boundary uses an Application-owned intent/preparation port
+and one adapter in `internal/executor`; only that adapter imports production
+`os/exec` outside the distinct kubeconfig credential-plugin exception. Runtime
+resolves the model-selected policy ID to an absolute executable, exact
+structurally classified argv or separate shell string, cwd, ordered minimal
+environment, credential-reference identity, origin/effects, and finite limits.
+The adapter rechecks non-symlink executable content and cwd identities before
+one start, rejects script executables, supplies no stdin or TTY, owns a process
+group and bounded cancellation/drain/join, and projects combined ordered output
+through terminal, Unicode, sensitive, line, and byte controls. It deliberately
+provides no OS filesystem or network sandbox; the approval UI says so.
+
 ## 7. Runtime budgets, permissions, and status
 
 The current RunInput contains immutable Agent and Agent-summary limits, while
 the optional Reviewer has a separate role budget owned by Application.
 Reservations are atomic and occur before model I/O, and child deadlines are no
-later than the owning operation or run. The accepted later permission and
-capability work adds independent data-source, remote/local execution, item,
-line, sample, and idle limits.
+later than the owning operation or run. Each Run freezes a finite
+`LocalProcessCalls` ceiling; Application atomically reserves one opportunity
+before Namespace or filesystem preparation, and the current profiles admit at
+most one local-process proposal per Run. Local-process policies additionally
+supply finite per-operation time, line, byte, and output ceilings; typed
+remediation supplies finite operation time and target-count ceilings. Remote
+diagnostics intersect exact per-policy timeout/line/byte ceilings with the
+immutable Tool request, log, result, aggregate, call, and run deadlines.
 
 All budgets remain finite. Exact context windows, input/output tokens, request
 and stream limits, summary thresholds, latency, concurrency, and cost ceilings
@@ -373,12 +425,14 @@ still fail closed.
 The current `/status` combines an Application-owned read-only query over bounded
 safe state with TUI display data. It includes Session memory/coverage, named
 model roles and origin hashes, consent, scope generation, capability catalog,
-Agent/summary/Reviewer budgets, run state, and storage health. Application also
+Agent/summary/Reviewer budgets, remote-diagnostic policy version/counts, local-
+execution policy version/counts, run state, and storage health. Application also
 provides content-free local permission-policy, Session-rule, and active-action
 status queries. These queries perform no model, Kubernetes, Tool, Reviewer,
 process, or executor I/O and expose no credentials or content. The complete
-`/permissions` interaction and operation-specific outcome or verification
-display remain later delivery work.
+`/permissions` management interaction remains later delivery work; the one
+conversation already renders bounded generic approval, attempt, ambiguity,
+and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
@@ -444,10 +498,16 @@ The checked-in foundation implements the closed project-owned action types,
 canonical digest, all five deterministic permission profiles, process-local
 Session-rule creation/list/revocation APIs, strict Reviewer routing, durable
 decision and single-use consumption, final generation checks, and content-free
-status. The composition root still enables only the existing typed Deployment
-restart executor under the default `ask` profile. Merely naming another
-admitted operation in the closed catalog does not enable it, grant RBAC, or
-make an executor reachable.
+status. The composition root enables restart and the six additional typed
+remediation operations, plus exact local direct argv and the separate shell,
+through one dispatcher. That dispatcher requires a fresh operation-specific
+plan, routes human/Reviewer/automatic decisions, consumes authority only with a
+durable pre-operation audit, and reaches only the matching executor. The
+default-off Pod Exec, container-file, and diagnostic-Pod handlers retain their
+independent catalog-matching gate; its automatic and Session-rule routes are
+implemented, while its human/Reviewer delivery remains fail-closed pending the
+next integration slice. Merely naming or configuring any operation does not
+grant RBAC, process authority, or approval.
 
 `ask` is the default permission profile. Reviewer delegation applies only to
 `review`; `critical` remains human-routed under `ask` and `auto-review`.

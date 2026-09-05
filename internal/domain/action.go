@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ const (
 	MaxActionRiskSummaryBytes   = 1024
 	MaxActionArguments          = 16
 	MaxActionArgumentBytes      = 4096
+	MaxActionEnvironment        = 8
+	MaxActionEnvironmentBytes   = 2048
+	MaxActionShellCommandBytes  = 4096
 	MaxActionTimeout            = 30 * time.Minute
 	MaxActionItems              = 4096
 	MaxActionLines              = 100000
@@ -212,10 +216,11 @@ const (
 	ActionNetworkModelOrigin
 	ActionNetworkDataSource
 	ActionNetworkRemotePod
+	ActionNetworkExternalCommand
 )
 
 const allActionNetworkEffects = ActionNetworkNone | ActionNetworkKubernetesAPI |
-	ActionNetworkModelOrigin | ActionNetworkDataSource | ActionNetworkRemotePod
+	ActionNetworkModelOrigin | ActionNetworkDataSource | ActionNetworkRemotePod | ActionNetworkExternalCommand
 
 func (effects ActionNetworkEffects) Valid() bool {
 	return effects != 0 && effects&^allActionNetworkEffects == 0 &&
@@ -233,6 +238,7 @@ func (effects ActionNetworkEffects) canonical() string {
 		{ActionNetworkModelOrigin, "model_origin"},
 		{ActionNetworkDataSource, "data_source"},
 		{ActionNetworkRemotePod, "remote_pod"},
+		{ActionNetworkExternalCommand, "external_command"},
 	} {
 		if effects&item.flag != 0 {
 			values = append(values, item.name)
@@ -297,10 +303,12 @@ const (
 	ActionParametersReplicaTarget  ActionParameterKind = "replica_target"
 	ActionParametersRevision       ActionParameterKind = "revision"
 	ActionParametersNodeScheduling ActionParameterKind = "node_scheduling"
+	ActionParametersPodDelete      ActionParameterKind = "pod_delete"
 	ActionParametersDrainPlan      ActionParameterKind = "drain_plan"
 	ActionParametersContainerFile  ActionParameterKind = "container_file"
 	ActionParametersRemoteArgv     ActionParameterKind = "remote_argv"
 	ActionParametersLocalArgv      ActionParameterKind = "local_argv"
+	ActionParametersShellCommand   ActionParameterKind = "shell_command"
 )
 
 // Valid reports whether the parameter discriminator is code-owned.
@@ -310,10 +318,12 @@ func (kind ActionParameterKind) Valid() bool {
 		ActionParametersReplicaTarget,
 		ActionParametersRevision,
 		ActionParametersNodeScheduling,
+		ActionParametersPodDelete,
 		ActionParametersDrainPlan,
 		ActionParametersContainerFile,
 		ActionParametersRemoteArgv,
-		ActionParametersLocalArgv:
+		ActionParametersLocalArgv,
+		ActionParametersShellCommand:
 		return true
 	default:
 		return false
@@ -324,6 +334,87 @@ func (kind ActionParameterKind) Valid() bool {
 type ActionArguments struct {
 	values [MaxActionArguments]string
 	count  uint8
+}
+
+// ActionEnvironment is one immutable, ordered, minimal child environment.
+// Construction accepts only the code-owned non-sensitive keys and values used
+// by the restricted process adapter. It never inherits the parent process.
+type ActionEnvironment struct {
+	values [MaxActionEnvironment]string
+	count  uint8
+}
+
+// NewActionEnvironment copies an exact KEY=VALUE vector after enforcing the
+// fixed allowlist. Ordering is canonicalized by key so configuration order
+// cannot change action identity.
+func NewActionEnvironment(values []string) (ActionEnvironment, error) {
+	var result ActionEnvironment
+	if len(values) > MaxActionEnvironment {
+		return result, ErrInvalidActionParameters
+	}
+	ordered := append([]string(nil), values...)
+	sort.Strings(ordered)
+	total := 0
+	previous := ""
+	for index, value := range ordered {
+		key, item, found := strings.Cut(value, "=")
+		if !found || key == previous || !validLocalEnvironmentValue(key, item) ||
+			!validSafeOptionalText(value, MaxActionEnvironmentBytes) {
+			return ActionEnvironment{}, ErrInvalidActionParameters
+		}
+		total += len(value)
+		if total > MaxActionEnvironmentBytes {
+			return ActionEnvironment{}, ErrInvalidActionParameters
+		}
+		result.values[index] = value
+		result.count++
+		previous = key
+	}
+	return result, nil
+}
+
+func validLocalEnvironmentValue(key, value string) bool {
+	switch key {
+	case "LANG", "LC_ALL":
+		return value == "C" || value == "POSIX" || value == "C.UTF-8"
+	case "NO_COLOR":
+		return value == "1"
+	default:
+		return false
+	}
+}
+
+func (environment ActionEnvironment) Valid() bool {
+	if int(environment.count) > len(environment.values) {
+		return false
+	}
+	values := environment.Values()
+	if values == nil && environment.count != 0 {
+		return false
+	}
+	rebuilt, err := NewActionEnvironment(values)
+	return err == nil && rebuilt == environment
+}
+
+// Values returns an independent ordered environment copy.
+func (environment ActionEnvironment) Values() []string {
+	if int(environment.count) > len(environment.values) {
+		return nil
+	}
+	return append([]string(nil), environment.values[:environment.count]...)
+}
+
+func (environment ActionEnvironment) canonical() string {
+	if !environment.Valid() {
+		return ""
+	}
+	var builder strings.Builder
+	for _, value := range environment.Values() {
+		builder.WriteString(strconv.Itoa(len(value)))
+		builder.WriteByte(':')
+		builder.WriteString(value)
+	}
+	return builder.String()
 }
 
 // NewActionArguments copies one bounded argv vector. It never accepts a shell command.
@@ -390,16 +481,25 @@ func (arguments ActionArguments) canonical() string {
 // ActionParameters is a closed tagged union. Fields not selected by Kind must
 // remain zero so one operation cannot smuggle parameters for another.
 type ActionParameters struct {
-	Kind            ActionParameterKind
-	ReplicaTarget   int64
-	Revision        int64
-	Unschedulable   bool
-	Container       string
-	NormalizedPath  string
-	Executable      string
-	Arguments       ActionArguments
-	PlanDigest      ActionDigest
-	PlanTargetCount int
+	Kind                ActionParameterKind
+	ReplicaCurrent      int64
+	ReplicaTarget       int64
+	Revision            int64
+	Unschedulable       bool
+	GracePeriodSeconds  int64
+	Container           string
+	NormalizedPath      string
+	Executable          string
+	Arguments           ActionArguments
+	PolicyID            string
+	ExecutableID        ActionDigest
+	WorkingDirectory    string
+	WorkingDirectoryID  ActionDigest
+	Environment         ActionEnvironment
+	CredentialReference LocalCredentialReference
+	ShellCommand        string
+	PlanDigest          ActionDigest
+	PlanTargetCount     int
 }
 
 func (parameters ActionParameters) Validate() error {
@@ -409,13 +509,15 @@ func (parameters ActionParameters) Validate() error {
 	zeroArguments := ActionArguments{}
 	switch parameters.Kind {
 	case ActionParametersNone:
-		if parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable ||
+		if parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
 			parameters.Container != "" || parameters.NormalizedPath != "" || parameters.Executable != "" ||
-			parameters.Arguments != zeroArguments || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
+			parameters.Arguments != zeroArguments || parameters.hasLocalExecutionFields() ||
+			parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
 			return ErrInvalidActionParameters
 		}
 	case ActionParametersReplicaTarget:
-		if parameters.ReplicaTarget < 0 || parameters.ReplicaTarget > int64(^uint32(0)>>1) ||
+		if parameters.ReplicaCurrent < 0 || parameters.ReplicaCurrent > int64(^uint32(0)>>1) ||
+			parameters.ReplicaTarget < 0 || parameters.ReplicaTarget > int64(^uint32(0)>>1) ||
 			parameters.hasFieldsExceptReplicaTarget() {
 			return ErrInvalidActionParameters
 		}
@@ -424,51 +526,103 @@ func (parameters ActionParameters) Validate() error {
 			return ErrInvalidActionParameters
 		}
 	case ActionParametersNodeScheduling:
-		if parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Container != "" ||
+		if parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.GracePeriodSeconds != 0 || parameters.Container != "" ||
 			parameters.NormalizedPath != "" || parameters.Executable != "" || parameters.Arguments != zeroArguments ||
+			parameters.hasLocalExecutionFields() ||
 			parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
+			return ErrInvalidActionParameters
+		}
+	case ActionParametersPodDelete:
+		if parameters.GracePeriodSeconds < 1 || parameters.GracePeriodSeconds > 3600 ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable ||
+			parameters.Container != "" || parameters.NormalizedPath != "" || parameters.Executable != "" ||
+			parameters.Arguments != zeroArguments || parameters.hasLocalExecutionFields() || parameters.PlanDigest != "" ||
+			parameters.PlanTargetCount != 0 {
 			return ErrInvalidActionParameters
 		}
 	case ActionParametersDrainPlan:
 		if !parameters.PlanDigest.Valid() || parameters.PlanTargetCount < 1 || parameters.PlanTargetCount > MaxActionItems ||
-			parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable ||
+			parameters.GracePeriodSeconds < 1 || parameters.GracePeriodSeconds > 3600 ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable ||
 			parameters.Container != "" || parameters.NormalizedPath != "" || parameters.Executable != "" ||
-			parameters.Arguments != zeroArguments {
+			parameters.Arguments != zeroArguments || parameters.hasLocalExecutionFields() {
 			return ErrInvalidActionParameters
 		}
 	case ActionParametersContainerFile:
-		if !validActionToken(parameters.Container, 253) || !validBoundedText(parameters.NormalizedPath, 1, 4096) ||
-			parameters.NormalizedPath[0] != '/' || parameters.ReplicaTarget != 0 || parameters.Revision != 0 ||
-			parameters.Unschedulable || parameters.Executable != "" || parameters.Arguments != zeroArguments ||
-			parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
+		normalized, pathErr := NormalizeContainerFilePath(parameters.NormalizedPath)
+		readerArguments, argumentsErr := ContainerFileReaderArguments(normalized)
+		if !ValidResourceName(parameters.Container) || pathErr != nil || normalized != parameters.NormalizedPath ||
+			!ValidContainerFileReaderExecutable(parameters.Executable) || argumentsErr != nil || parameters.Arguments != readerArguments ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
+			parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 || parameters.hasLocalExecutionFields() {
 			return ErrInvalidActionParameters
 		}
-	case ActionParametersRemoteArgv, ActionParametersLocalArgv:
+	case ActionParametersRemoteArgv:
 		if !validActionToken(parameters.Executable, 1024) || !parameters.Arguments.Valid() ||
-			parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
 			parameters.NormalizedPath != "" || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 ||
-			(parameters.Kind == ActionParametersLocalArgv && parameters.Container != "") ||
-			(parameters.Kind == ActionParametersRemoteArgv && !validActionToken(parameters.Container, 253)) {
+			!validActionToken(parameters.Container, 253) || parameters.hasLocalExecutionFields() {
+			return ErrInvalidActionParameters
+		}
+	case ActionParametersLocalArgv:
+		if !validAbsoluteActionPath(parameters.Executable) || !parameters.Arguments.Valid() ||
+			!validLocalPolicyID(parameters.PolicyID) || !parameters.ExecutableID.Valid() ||
+			!validAbsoluteActionPath(parameters.WorkingDirectory) || !parameters.WorkingDirectoryID.Valid() ||
+			!parameters.Environment.Valid() ||
+			(parameters.CredentialReference != LocalCredentialNone && parameters.CredentialReference != LocalCredentialArgoCDCLIProfile) ||
+			parameters.ShellCommand != "" || parameters.Container != "" ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
+			parameters.NormalizedPath != "" || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
+			return ErrInvalidActionParameters
+		}
+	case ActionParametersShellCommand:
+		if !validAbsoluteActionPath(parameters.Executable) || parameters.Arguments != zeroArguments ||
+			!validLocalPolicyID(parameters.PolicyID) || !parameters.ExecutableID.Valid() ||
+			!validAbsoluteActionPath(parameters.WorkingDirectory) || !parameters.WorkingDirectoryID.Valid() ||
+			!parameters.Environment.Valid() || parameters.CredentialReference != "" ||
+			!validSafeOptionalText(parameters.ShellCommand, MaxActionShellCommandBytes) ||
+			strings.TrimSpace(parameters.ShellCommand) != parameters.ShellCommand || parameters.Container != "" ||
+			parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
+			parameters.NormalizedPath != "" || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
 			return ErrInvalidActionParameters
 		}
 	}
 	return nil
 }
 
+func (parameters ActionParameters) hasLocalExecutionFields() bool {
+	return parameters.PolicyID != "" || parameters.ExecutableID != "" || parameters.WorkingDirectory != "" ||
+		parameters.WorkingDirectoryID != "" || parameters.Environment != (ActionEnvironment{}) ||
+		parameters.CredentialReference != "" || parameters.ShellCommand != ""
+}
+
+func validAbsoluteActionPath(value string) bool {
+	return len(value) > 1 && len(value) <= 4096 && value[0] == '/' && strings.TrimSpace(value) == value &&
+		!strings.Contains(value, "//") && !strings.Contains(value, "/./") && !strings.Contains(value, "/../") &&
+		!strings.HasSuffix(value, "/.") && !strings.HasSuffix(value, "/..") && validSafeOptionalText(value, 4096)
+}
+
+// ValidLocalExecutionPath exposes only the pure lexical portion of the local
+// process path contract. The executor separately proves filesystem identity,
+// regular-file/directory type, permissions, and absence of symlinks.
+func ValidLocalExecutionPath(value string) bool {
+	return validAbsoluteActionPath(value)
+}
+
 func (parameters ActionParameters) hasFieldsExceptReplicaTarget() bool {
-	return parameters.Revision != 0 || parameters.Unschedulable || parameters.Container != "" ||
+	return parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 || parameters.Container != "" ||
 		parameters.NormalizedPath != "" || parameters.Executable != "" || parameters.Arguments != (ActionArguments{}) ||
-		parameters.PlanDigest != "" || parameters.PlanTargetCount != 0
+		parameters.hasLocalExecutionFields() || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0
 }
 
 func (parameters ActionParameters) hasFieldsExceptRevision() bool {
-	return parameters.ReplicaTarget != 0 || parameters.Unschedulable || parameters.Container != "" ||
+	return parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 || parameters.Container != "" ||
 		parameters.NormalizedPath != "" || parameters.Executable != "" || parameters.Arguments != (ActionArguments{}) ||
-		parameters.PlanDigest != "" || parameters.PlanTargetCount != 0
+		parameters.hasLocalExecutionFields() || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0
 }
 
 func (parameters ActionParameters) canonical() string {
-	return strings.Join([]string{
+	fields := []string{
 		string(parameters.Kind),
 		strconv.FormatInt(parameters.ReplicaTarget, 10),
 		strconv.FormatInt(parameters.Revision, 10),
@@ -479,7 +633,28 @@ func (parameters ActionParameters) canonical() string {
 		parameters.Arguments.canonical(),
 		string(parameters.PlanDigest),
 		strconv.Itoa(parameters.PlanTargetCount),
-	}, "\n")
+	}
+	if parameters.Kind == ActionParametersReplicaTarget {
+		fields = append(fields, strconv.FormatInt(parameters.ReplicaCurrent, 10))
+	}
+	if parameters.Kind == ActionParametersPodDelete || parameters.Kind == ActionParametersDrainPlan {
+		fields = append(fields, strconv.FormatInt(parameters.GracePeriodSeconds, 10))
+	}
+	// The v1 branches that were already enabled retain byte-for-byte canonical
+	// encoding. These fields extend only the previously uncomposed local branch
+	// and the newly tagged shell branch.
+	if parameters.Kind == ActionParametersLocalArgv || parameters.Kind == ActionParametersShellCommand {
+		fields = append(fields,
+			parameters.PolicyID,
+			string(parameters.ExecutableID),
+			parameters.WorkingDirectory,
+			string(parameters.WorkingDirectoryID),
+			parameters.Environment.canonical(),
+			string(parameters.CredentialReference),
+			parameters.ShellCommand,
+		)
+	}
+	return strings.Join(fields, "\n")
 }
 
 // Digest returns the safe derivative eligible for durable parameter binding.
@@ -549,7 +724,8 @@ func (intent ActionIntent) Validate() error {
 		!intent.Risk.CompatibleWithEffect(intent.Effect) || !intent.PolicyGeneration.Valid() || intent.Scope.Validate() != nil ||
 		!ValidContextName(intent.Scope.Context) || !ValidNamespaceName(intent.Scope.Namespace) ||
 		intent.Scope.Generation < 1 || !intent.NamespaceAccess.Valid() || intent.Target.Validate() != nil ||
-		intent.Parameters.Validate() != nil || intent.TTY && !intent.Stdin || intent.Shell ||
+		intent.Parameters.Validate() != nil || intent.TTY && !intent.Stdin ||
+		intent.Shell != (intent.Operation == ActionOperationShell) || intent.Shell && (intent.Stdin || intent.TTY) ||
 		!intent.DataCategories.Valid() || !intent.AllowedSinks.Valid() || !intent.NetworkEffects.Valid() ||
 		!intent.validNetworkDestination() ||
 		intent.Limits.Validate() != nil || !validActionToken(intent.VerificationPlanID, 128) ||
@@ -561,7 +737,7 @@ func (intent ActionIntent) Validate() error {
 }
 
 func (intent ActionIntent) validNetworkDestination() bool {
-	requiresHash := intent.NetworkEffects&(ActionNetworkModelOrigin|ActionNetworkDataSource) != 0
+	requiresHash := intent.NetworkEffects&(ActionNetworkModelOrigin|ActionNetworkDataSource|ActionNetworkRemotePod|ActionNetworkExternalCommand) != 0
 	if requiresHash {
 		return intent.NetworkDestinationHash.Valid()
 	}

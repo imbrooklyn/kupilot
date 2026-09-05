@@ -392,6 +392,24 @@ func allowedUIEvidenceSourcePath(
 	policyVersion string,
 	source string,
 ) bool {
+	if policyVersion == domain.RemoteDiagnosticsPolicyVersion {
+		switch category {
+		case domain.EvidenceCategoryRemoteCommand:
+			return resource.APIVersion == "v1" && resource.Kind == "Pod" && resource.Namespace != "" &&
+				source == "api/v1/namespaces/"+resource.Namespace+"/pods/"+resource.Name+"/exec"
+		case domain.EvidenceCategoryContainerFile:
+			if resource.APIVersion != "v1" || resource.Kind != "Pod" || resource.Namespace == "" {
+				return false
+			}
+			_, err := domain.ContainerFilePathComponents(source)
+			return err == nil
+		case domain.EvidenceCategoryDiagnosticPod:
+			return resource.APIVersion == "v1" && resource.Kind == "Service" && resource.Namespace != "" &&
+				source == "api/v1/namespaces/"+resource.Namespace+"/services/"+resource.Name+"#diagnostic_pod"
+		default:
+			return false
+		}
+	}
 	if policyVersion == domain.ObservabilityPolicyVersion {
 		switch category {
 		case domain.EvidenceCategoryEvent:
@@ -468,7 +486,7 @@ func validEvidencePolicyBinding(version string, generation domain.PolicyGenerati
 	if version == "" {
 		return generation == 0
 	}
-	return generation.Valid() && (version == domain.ResourcePolicyVersion || version == domain.ObservabilityPolicyVersion)
+	return generation.Valid() && (version == domain.ResourcePolicyVersion || version == domain.ObservabilityPolicyVersion || version == domain.RemoteDiagnosticsPolicyVersion)
 }
 
 func uiEvidenceState(state domain.EvidenceDetailState) UIEvidenceDetailState {

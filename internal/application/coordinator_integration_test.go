@@ -74,7 +74,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	kubernetes := &integrationKube{canary: canary}
 	resourcePolicies := integrationResourcePolicies{}
 	redactor := security.NewRedactor()
-	toolHandlers, err := tools.NewReadOnlyToolCatalog(tools.ReadOnlyToolCatalogDependencies{
+	toolHandlers, err := tools.NewToolCatalog(tools.ToolCatalogDependencies{
 		Resources: tools.ResourceToolDependencies{
 			Reader: kubernetes, QueryReader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies,
 			EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
@@ -98,7 +98,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("NewReadOnlyToolCatalog() error = %v", err)
+		t.Fatalf("NewToolCatalog() error = %v", err)
 	}
 	model := &integrationModel{diagnosis: integrationDiagnosisJSON(integrationEvidenceID1)}
 	modelServer := httptest.NewServer(model)

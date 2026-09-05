@@ -425,6 +425,9 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 		domain.ToolNameQueryLoki,
 		domain.ToolNameGetRelatedResources,
 		domain.ToolNameGetClusterOverview,
+		domain.ToolNamePodExec,
+		domain.ToolNameReadContainerFile,
+		domain.ToolNameRunDiagnosticPod,
 	}
 	if len(specifications) != len(wantNames) {
 		t.Fatalf("Tool specification count = %d, want %d", len(specifications), len(wantNames))
@@ -457,12 +460,12 @@ func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal(Tool snapshot) error = %v", err)
 	}
-	const expectedSnapshotSHA256 = "77b267db3fa6733829145afa02c708350a1fff351d8bd29ddf5d9d3e3321b056"
+	const expectedSnapshotSHA256 = "5ce9acdabe996c9c99f0afcfb9999ef42cb79018f4079d9708b0e31f5074ad64"
 	if got := domain.SHA256Hex(string(encodedSnapshot)); got != expectedSnapshotSHA256 {
 		t.Fatalf("Eino Tool catalog snapshot digest = %q, want %q", got, expectedSnapshotSHA256)
 	}
 	lowerSnapshot := strings.ToLower(string(encodedSnapshot))
-	for _, prohibited := range []string{"run_shell", "kubectl", "secret", "write", "patch", "delete", "exec", `\"context\"`, `\"scope\"`, `\"gvr\"`, `\"raw_selector\"`} {
+	for _, prohibited := range []string{"run_shell", "kubectl", "secret", "write", "patch", "delete", `\"context\"`, `\"scope\"`, `\"gvr\"`, `\"raw_selector\"`} {
 		if strings.Contains(lowerSnapshot, prohibited) {
 			t.Fatalf("Eino Tool catalog snapshot contains prohibited authority %q", prohibited)
 		}

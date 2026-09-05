@@ -60,7 +60,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 9 {
+	if err != nil || len(migrations) != 11 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -152,12 +152,65 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := applyMigration(context.Background(), db, migrations[8], "0.5.0", false); err != nil {
 		t.Fatalf("apply v0.5 observability provenance migration error = %v", err)
 	}
+	currentApprovalID := "00000000-0000-7000-8000-000000009910"
+	currentReviewID := "00000000-0000-7000-8000-000000009911"
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO approvals (
+			id, run_id, session_id, envelope_schema_version, digest_version,
+			operation, operation_schema_version, policy_version, permission_profile,
+			policy_generation, risk, effect, scope_context, scope_namespace,
+			namespace_access, scope_generation, target_api_version, target_kind,
+			target_namespace, target_name, target_uid, target_resource_version,
+			target_subresource, target_fingerprint, target_generation, target_revision,
+			target_set_digest, target_count, parameter_kind, parameter_digest,
+			stdin, tty, shell, data_categories, allowed_sinks, network_effects,
+			network_destination_hash, timeout_ms, maximum_items, maximum_lines,
+			maximum_bytes, maximum_output, verification_plan_id, reason_summary,
+			risk_summary, operation_digest, nonce_hash, status, state_reason,
+			requested_at_ms, expires_at_ms, state_changed_at_ms
+		) VALUES (
+			?, ?, ?, 'kupilot.action-envelope/v1', 'kupilot.action-digest/v1',
+			'restart_deployment', 'restart_deployment/v1', 'kupilot.action-policy/2026-09-04', 'ask',
+			7, 'review', 'cluster_mutation', 'selected', 'team-a',
+			'current', 7, 'apps/v1', 'Deployment',
+			'team-a', 'sample-deployment', 'deployment-uid', '20', '',
+			?, 1, 0, '', 0, 'none', ?,
+			0, 0, 0, 1, 5, 2, '', 120000, 1, 0, 0, 0,
+			'restart-rollout/v1', 'Preserve one exact request.', ?,
+			?, ?, 'rejected', 'user_rejected', 1200, 61200, 1300
+		)
+	`, currentApprovalID, runID, sessionID, strings.Repeat("7", 64), strings.Repeat("8", 64),
+		domain.RestartDeploymentRiskSummary, strings.Repeat("9", 64), strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("v0.5 approval fixture error = %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO approval_decisions (
+			approval_id, shown_digest, nonce_hash, decision, actor,
+			permission_disposition, decided_at_ms
+		) VALUES (?, ?, ?, 'reject', 'local_user', 'human', 1250)
+	`, currentApprovalID, strings.Repeat("9", 64), strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("v0.5 approval decision fixture error = %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO action_reviews (
+			approval_id, model_request_id, profile_name, origin_hash,
+			policy_generation, disposition, rationale_summary, occurred_at_ms
+		) VALUES (?, ?, 'approval_reviewer', ?, 7, 'deny', 'Preserved safe rationale.', 1240)
+	`, currentApprovalID, currentReviewID, strings.Repeat("b", 64)); err != nil {
+		t.Fatalf("v0.5 action review fixture error = %v", err)
+	}
+	if err := applyMigration(context.Background(), db, migrations[9], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 remote diagnostic Evidence migration error = %v", err)
+	}
+	if err := applyMigration(context.Background(), db, migrations[10], "0.5.0", false); err != nil {
+		t.Fatalf("apply v0.5 local execution and remediation migration error = %v", err)
+	}
 	wantRows := map[string]int{
 		"sessions": 1, "messages": 1, "agent_runs": 1, "model_requests": 1,
 		"tool_invocations": 1, "evidence_items": 1, "diagnoses": 1, "audit_events": 1,
-		"settings": 1, "privacy_consents": 1, "approvals": 0, "approval_decisions": 0,
+		"settings": 1, "privacy_consents": 1, "approvals": 1, "approval_decisions": 1,
 		"legacy_restart_approvals": 1, "legacy_restart_approval_decisions": 0,
-		"action_reviews": 0, "schema_migrations": 9, "session_context_summaries": 0,
+		"action_reviews": 1, "schema_migrations": 11, "session_context_summaries": 0,
 	}
 	for table, want := range wantRows {
 		var got int
@@ -191,6 +244,15 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := db.GetContext(context.Background(), &approvalState, `SELECT status FROM legacy_restart_approvals WHERE id = ?`, approvalID); err != nil || approvalState != "cancelled" {
 		t.Fatalf("migrated approval state = %q/%v", approvalState, err)
 	}
+	var currentGraphRows int
+	if err := db.GetContext(context.Background(), &currentGraphRows, `
+		SELECT
+			(SELECT count(id) FROM approvals WHERE id = ?)
+			+ (SELECT count(approval_id) FROM approval_decisions WHERE approval_id = ?)
+			+ (SELECT count(model_request_id) FROM action_reviews WHERE approval_id = ?)
+	`, currentApprovalID, currentApprovalID, currentApprovalID); err != nil || currentGraphRows != 3 {
+		t.Fatalf("migration 10 approval graph rows = %d/%v", currentGraphRows, err)
+	}
 	var migratedConsent struct {
 		Role                 string `db:"role"`
 		PolicyVersion        string `db:"policy_version"`
@@ -223,7 +285,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		migratedModelRequest.ReservedCostUnit != 1 {
 		t.Fatalf("migrated model request = %#v/%v", migratedModelRequest, err)
 	}
-	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0"}
+	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0"}
 	assertMigrationApplicationVersions(t, db, wantVersions)
 	assertNoMigrationForeignKeyViolation(t, db)
 
@@ -296,7 +358,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 9 {
+	if err != nil || len(migrations) != 11 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -351,7 +413,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 9 {
+	if err != nil || len(migrations) != 11 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -437,7 +499,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 9 {
+	if err != nil || len(migrations) != 11 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -502,7 +564,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 9 {
+		if err != nil || len(migrations) != 11 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -583,7 +645,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 9 {
+		if err != nil || len(migrations) != 11 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -686,7 +748,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 10, "000010_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 12, "000012_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -937,6 +999,8 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000007_action_permission_foundation.sql",
 		"000008_resource_evidence_provenance.sql",
 		"000009_observability_provenance_and_consent.sql",
+		"000010_remote_diagnostic_evidence.sql",
+		"000011_local_execution_and_remediation.sql",
 	}
 	count := 0
 	for rows.Next() {

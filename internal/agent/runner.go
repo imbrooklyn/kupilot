@@ -20,19 +20,22 @@ var (
 // RunInput is the immutable project-owned input for one AgentRun. Its fields
 // are private so collection and pointer aliases cannot mutate active authority.
 type RunInput struct {
-	runID            domain.AgentRunID
-	sessionID        domain.SessionID
-	requestMessageID domain.MessageID
-	question         string
-	scope            domain.ClusterScope
-	resource         *domain.ResourceRef
-	resourcePolicies domain.ResourcePolicyCatalog
-	observability    domain.ObservabilityPolicyCatalog
-	policyGeneration domain.PolicyGeneration
-	budgetLimits     RunBudgetLimits
-	promptVersion    string
-	catalogVersion   string
-	conversation     ConversationContext
+	runID             domain.AgentRunID
+	sessionID         domain.SessionID
+	requestMessageID  domain.MessageID
+	question          string
+	scope             domain.ClusterScope
+	resource          *domain.ResourceRef
+	resourcePolicies  domain.ResourcePolicyCatalog
+	observability     domain.ObservabilityPolicyCatalog
+	remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog
+	localCommands     domain.LocalCommandPolicyCatalog
+	localShells       domain.LocalShellPolicyCatalog
+	policyGeneration  domain.PolicyGeneration
+	budgetLimits      RunBudgetLimits
+	promptVersion     string
+	catalogVersion    string
+	conversation      ConversationContext
 }
 
 // ConversationTurn is the minimal safe prior-turn projection supplied to
@@ -238,19 +241,72 @@ func NewRunInputWithOperationalPolicyContext(
 	observability domain.ObservabilityPolicyCatalog,
 	policyGeneration domain.PolicyGeneration,
 ) (RunInput, error) {
+	return NewRunInputWithCompletePolicyContext(
+		runID, sessionID, requestMessageID, question, scope, resource, budgetLimits, conversation,
+		resourcePolicies, observability, domain.DisabledRemoteDiagnosticsPolicyCatalog(), policyGeneration,
+	)
+}
+
+// NewRunInputWithCompletePolicyContext freezes every catalog that can grant a
+// model-visible operation. Remote diagnostics are disabled unless Application
+// supplies one exact process policy here.
+func NewRunInputWithCompletePolicyContext(
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	requestMessageID domain.MessageID,
+	question string,
+	scope domain.ClusterScope,
+	resource *domain.ResourceRef,
+	budgetLimits RunBudgetLimits,
+	conversation ConversationContext,
+	resourcePolicies domain.ResourcePolicyCatalog,
+	observability domain.ObservabilityPolicyCatalog,
+	remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog,
+	policyGeneration domain.PolicyGeneration,
+) (RunInput, error) {
+	return NewRunInputWithExecutionPolicyContext(
+		runID, sessionID, requestMessageID, question, scope, resource, budgetLimits, conversation,
+		resourcePolicies, observability, remoteDiagnostics,
+		domain.DisabledLocalCommandPolicyCatalog(), domain.DisabledLocalShellPolicyCatalog(), policyGeneration,
+	)
+}
+
+// NewRunInputWithExecutionPolicyContext additionally freezes the identifiers
+// and risk metadata of exact local policies. Executable paths, argv,
+// environment, cwd, shell text, and credentials are deliberately not exposed
+// as model-selectable fields.
+func NewRunInputWithExecutionPolicyContext(
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	requestMessageID domain.MessageID,
+	question string,
+	scope domain.ClusterScope,
+	resource *domain.ResourceRef,
+	budgetLimits RunBudgetLimits,
+	conversation ConversationContext,
+	resourcePolicies domain.ResourcePolicyCatalog,
+	observability domain.ObservabilityPolicyCatalog,
+	remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog,
+	localCommands domain.LocalCommandPolicyCatalog,
+	localShells domain.LocalShellPolicyCatalog,
+	policyGeneration domain.PolicyGeneration,
+) (RunInput, error) {
 	input := RunInput{
-		runID:            runID,
-		sessionID:        sessionID,
-		requestMessageID: requestMessageID,
-		question:         question,
-		scope:            scope,
-		resourcePolicies: resourcePolicies,
-		observability:    observability,
-		policyGeneration: policyGeneration,
-		budgetLimits:     budgetLimits,
-		promptVersion:    SystemPromptVersion,
-		catalogVersion:   ToolCatalogVersion,
-		conversation:     conversation,
+		runID:             runID,
+		sessionID:         sessionID,
+		requestMessageID:  requestMessageID,
+		question:          question,
+		scope:             scope,
+		resourcePolicies:  resourcePolicies,
+		observability:     observability,
+		remoteDiagnostics: remoteDiagnostics,
+		localCommands:     localCommands,
+		localShells:       localShells,
+		policyGeneration:  policyGeneration,
+		budgetLimits:      budgetLimits,
+		promptVersion:     SystemPromptVersion,
+		catalogVersion:    ToolCatalogVersion,
+		conversation:      conversation,
 	}
 	if resource != nil {
 		copied := *resource
@@ -266,7 +322,9 @@ func NewRunInputWithOperationalPolicyContext(
 func (input RunInput) Validate() error {
 	if !input.runID.Valid() || !input.sessionID.Valid() || !input.requestMessageID.Valid() ||
 		input.scope.Validate() != nil || !domain.ValidModelText(input.question, domain.MaxModelInputMessageBytes, false) ||
-		input.resourcePolicies.Validate() != nil || input.observability.Validate() != nil || !input.policyGeneration.Valid() || input.budgetLimits.Validate() != nil ||
+		input.resourcePolicies.Validate() != nil || input.observability.Validate() != nil || input.remoteDiagnostics.Validate() != nil ||
+		input.localCommands.Validate() != nil || input.localShells.Validate() != nil ||
+		!input.policyGeneration.Valid() || input.budgetLimits.Validate() != nil ||
 		input.promptVersion != SystemPromptVersion || input.catalogVersion != ToolCatalogVersion {
 		return ErrInvalidRunInput
 	}
@@ -278,6 +336,16 @@ func (input RunInput) Validate() error {
 		return ErrInvalidRunInput
 	}
 	return nil
+}
+
+func (input RunInput) LocalCommandPolicies() domain.LocalCommandPolicyCatalog {
+	catalog, _ := domain.NewLocalCommandPolicyCatalog(input.localCommands.Policies())
+	return catalog
+}
+
+func (input RunInput) LocalShellPolicies() domain.LocalShellPolicyCatalog {
+	catalog, _ := domain.NewLocalShellPolicyCatalog(input.localShells.Policies())
+	return catalog
 }
 
 // RunID returns the frozen AgentRun identity.
@@ -317,6 +385,22 @@ func (input RunInput) ObservabilityPolicies() domain.ObservabilityPolicyCatalog 
 	catalog, _ := domain.NewObservabilityPolicyCatalog(
 		policyOrEmpty(input.observability, domain.DataSourcePrometheus),
 		policyOrEmpty(input.observability, domain.DataSourceLoki),
+	)
+	return catalog
+}
+
+// RemoteDiagnosticsPolicies returns an independent copy of the exact
+// Pod-exec, file-read, and diagnostic-Pod policy frozen for this run.
+func (input RunInput) RemoteDiagnosticsPolicies() domain.RemoteDiagnosticsPolicyCatalog {
+	file, found := input.remoteDiagnostics.ContainerFile()
+	if !found {
+		catalog, _ := domain.NewRemoteDiagnosticsPolicyCatalog(
+			input.remoteDiagnostics.PodExecPolicies(), nil, input.remoteDiagnostics.DiagnosticPodPolicies(),
+		)
+		return catalog
+	}
+	catalog, _ := domain.NewRemoteDiagnosticsPolicyCatalog(
+		input.remoteDiagnostics.PodExecPolicies(), &file, input.remoteDiagnostics.DiagnosticPodPolicies(),
 	)
 	return catalog
 }

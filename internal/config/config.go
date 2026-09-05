@@ -65,15 +65,51 @@ func (reference ModelCredentialReference) valid() bool {
 // Config is the complete serializable, non-sensitive startup configuration.
 // Paths and transport credentials are intentionally absent.
 type Config struct {
-	Version       int                 `yaml:"version" json:"version"`
-	Context       string              `yaml:"context,omitempty" json:"context,omitempty"`
-	Namespace     string              `yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	NoColor       bool                `yaml:"no_color" json:"no_color"`
-	Runtime       RuntimeConfig       `yaml:"runtime" json:"runtime"`
-	Models        ModelProfilesConfig `yaml:"models" json:"models"`
-	Kubernetes    KubernetesConfig    `yaml:"kubernetes" json:"kubernetes"`
-	Observability ObservabilityConfig `yaml:"observability" json:"observability"`
-	Logging       LoggingConfig       `yaml:"logging" json:"logging"`
+	Version        int                  `yaml:"version" json:"version"`
+	Context        string               `yaml:"context,omitempty" json:"context,omitempty"`
+	Namespace      string               `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	NoColor        bool                 `yaml:"no_color" json:"no_color"`
+	Runtime        RuntimeConfig        `yaml:"runtime" json:"runtime"`
+	Models         ModelProfilesConfig  `yaml:"models" json:"models"`
+	Kubernetes     KubernetesConfig     `yaml:"kubernetes" json:"kubernetes"`
+	LocalExecution LocalExecutionConfig `yaml:"local_execution,omitempty" json:"local_execution,omitempty"`
+	Observability  ObservabilityConfig  `yaml:"observability" json:"observability"`
+	Logging        LoggingConfig        `yaml:"logging" json:"logging"`
+}
+
+// LocalExecutionConfig contains exact default-off direct-argv and separate
+// shell entries. Empty slices disable both local process capabilities.
+type LocalExecutionConfig struct {
+	Commands []LocalCommandPolicyConfig `yaml:"commands,omitempty" json:"commands,omitempty"`
+	Shells   []LocalShellPolicyConfig   `yaml:"shells,omitempty" json:"shells,omitempty"`
+}
+
+type LocalCommandPolicyConfig struct {
+	ID                  string   `yaml:"id" json:"id"`
+	Kind                string   `yaml:"kind" json:"kind"`
+	Executable          string   `yaml:"executable" json:"executable"`
+	Arguments           []string `yaml:"arguments" json:"arguments"`
+	WorkingDirectory    string   `yaml:"working_directory" json:"working_directory"`
+	Environment         []string `yaml:"environment" json:"environment"`
+	CredentialReference string   `yaml:"credential_ref" json:"credential_ref"`
+	ServerOrigin        string   `yaml:"server_origin,omitempty" json:"server_origin,omitempty"`
+	DiagnosticEffect    string   `yaml:"diagnostic_effect,omitempty" json:"diagnostic_effect,omitempty"`
+	TimeoutSeconds      int      `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxLines            int      `yaml:"max_lines" json:"max_lines"`
+	MaxBytes            int      `yaml:"max_bytes" json:"max_bytes"`
+}
+
+type LocalShellPolicyConfig struct {
+	ID               string   `yaml:"id" json:"id"`
+	Executable       string   `yaml:"executable" json:"executable"`
+	Command          string   `yaml:"command" json:"command"`
+	WorkingDirectory string   `yaml:"working_directory" json:"working_directory"`
+	Environment      []string `yaml:"environment" json:"environment"`
+	Network          string   `yaml:"network" json:"network"`
+	NetworkOrigin    string   `yaml:"network_origin,omitempty" json:"network_origin,omitempty"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxLines         int      `yaml:"max_lines" json:"max_lines"`
+	MaxBytes         int      `yaml:"max_bytes" json:"max_bytes"`
 }
 
 // DataSourceCredentialReference selects one fixed optional-source credential
@@ -202,9 +238,50 @@ type Loaded struct {
 
 // KubernetesConfig contains the non-sensitive kubeconfig execution policy.
 type KubernetesConfig struct {
-	ExecCredentials  string                           `yaml:"exec_credentials" json:"exec_credentials"`
-	NamespaceAccess  string                           `yaml:"namespace_access" json:"namespace_access"`
-	ResourcePolicies []KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty" json:"resource_policies,omitempty"`
+	ExecCredentials   string                           `yaml:"exec_credentials" json:"exec_credentials"`
+	NamespaceAccess   string                           `yaml:"namespace_access" json:"namespace_access"`
+	ResourcePolicies  []KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty" json:"resource_policies,omitempty"`
+	RemoteDiagnostics *RemoteDiagnosticsConfig         `yaml:"remote_diagnostics,omitempty" json:"remote_diagnostics,omitempty"`
+}
+
+// RemoteDiagnosticsConfig contains only exact, default-off policy entries.
+// It is deliberately not a generic command or image registry.
+type RemoteDiagnosticsConfig struct {
+	PodExec        []PodExecPolicyConfig       `yaml:"pod_exec,omitempty" json:"pod_exec,omitempty"`
+	ContainerFile  *ContainerFilePolicyConfig  `yaml:"container_file,omitempty" json:"container_file,omitempty"`
+	DiagnosticPods []DiagnosticPodPolicyConfig `yaml:"diagnostic_pods,omitempty" json:"diagnostic_pods,omitempty"`
+}
+
+type PodExecPolicyConfig struct {
+	ID             string   `yaml:"id" json:"id"`
+	Class          string   `yaml:"class" json:"class"`
+	Executable     string   `yaml:"executable" json:"executable"`
+	Arguments      []string `yaml:"arguments" json:"arguments"`
+	TimeoutSeconds int      `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxLines       int      `yaml:"max_lines" json:"max_lines"`
+	MaxBytes       int      `yaml:"max_bytes" json:"max_bytes"`
+}
+
+type ContainerFilePolicyConfig struct {
+	ReaderExecutable string   `yaml:"reader_executable" json:"reader_executable"`
+	AllowedRoots     []string `yaml:"allowed_roots" json:"allowed_roots"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxLines         int      `yaml:"max_lines" json:"max_lines"`
+	MaxBytes         int      `yaml:"max_bytes" json:"max_bytes"`
+}
+
+type DiagnosticPodPolicyConfig struct {
+	ID                    string   `yaml:"id" json:"id"`
+	Namespace             string   `yaml:"namespace" json:"namespace"`
+	Image                 string   `yaml:"image" json:"image"`
+	Executable            string   `yaml:"executable" json:"executable"`
+	ArgumentPrefix        []string `yaml:"argument_prefix" json:"argument_prefix"`
+	ServiceName           string   `yaml:"service_name" json:"service_name"`
+	Port                  uint16   `yaml:"port" json:"port"`
+	NetworkPolicyRequired bool     `yaml:"network_policy_required" json:"network_policy_required"`
+	TimeoutSeconds        int      `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxLines              int      `yaml:"max_lines" json:"max_lines"`
+	MaxBytes              int      `yaml:"max_bytes" json:"max_bytes"`
 }
 
 // KubernetesResourcePolicyConfig is one explicit CRD read policy. Built-in
@@ -310,6 +387,126 @@ func (config Config) ObservabilityPolicyCatalog() (domain.ObservabilityPolicyCat
 		return domain.ObservabilityPolicyCatalog{}, err
 	}
 	return domain.NewObservabilityPolicyCatalog(prometheus, loki)
+}
+
+// RemoteDiagnosticsPolicyCatalog constructs the credential-free exact policy
+// snapshot supplied to each run. Absence disables all remote execution.
+func (config Config) RemoteDiagnosticsPolicyCatalog() (domain.RemoteDiagnosticsPolicyCatalog, error) {
+	copy := config
+	if err := Validate(&copy); err != nil {
+		return domain.RemoteDiagnosticsPolicyCatalog{}, err
+	}
+	return copy.remoteDiagnosticsPolicyCatalogUnchecked()
+}
+
+func (config Config) remoteDiagnosticsPolicyCatalogUnchecked() (domain.RemoteDiagnosticsPolicyCatalog, error) {
+	configured := config.Kubernetes.RemoteDiagnostics
+	if configured == nil {
+		return domain.DisabledRemoteDiagnosticsPolicyCatalog(), nil
+	}
+	execPolicies := make([]domain.PodExecPolicy, len(configured.PodExec))
+	for index, value := range configured.PodExec {
+		arguments, err := domain.NewActionArguments(value.Arguments)
+		if err != nil || !remoteDiagnosticArgumentsAreNonSensitive(value.Arguments) {
+			return domain.RemoteDiagnosticsPolicyCatalog{}, domain.ErrInvalidRemoteDiagnosticsPolicy
+		}
+		execPolicies[index] = domain.PodExecPolicy{ID: value.ID, Class: domain.PodExecPolicyClass(value.Class), Executable: value.Executable, Arguments: arguments, Timeout: time.Duration(value.TimeoutSeconds) * time.Second, MaxLines: value.MaxLines, MaxBytes: value.MaxBytes}
+	}
+	var filePolicy *domain.ContainerFilePolicy
+	if value := configured.ContainerFile; value != nil {
+		roots, err := domain.NewContainerFileRoots(value.AllowedRoots)
+		if err != nil {
+			return domain.RemoteDiagnosticsPolicyCatalog{}, domain.ErrInvalidRemoteDiagnosticsPolicy
+		}
+		filePolicy = &domain.ContainerFilePolicy{Enabled: true, ReaderExecutable: value.ReaderExecutable, AllowedRoots: roots, Timeout: time.Duration(value.TimeoutSeconds) * time.Second, MaxLines: value.MaxLines, MaxBytes: value.MaxBytes}
+	}
+	diagnosticPolicies := make([]domain.DiagnosticPodPolicy, len(configured.DiagnosticPods))
+	for index, value := range configured.DiagnosticPods {
+		arguments, err := domain.NewActionArguments(value.ArgumentPrefix)
+		if err != nil || !remoteDiagnosticArgumentsAreNonSensitive(value.ArgumentPrefix) {
+			return domain.RemoteDiagnosticsPolicyCatalog{}, domain.ErrInvalidRemoteDiagnosticsPolicy
+		}
+		diagnosticPolicies[index] = domain.DiagnosticPodPolicy{ID: value.ID, Namespace: value.Namespace, Image: value.Image, Executable: value.Executable, ArgumentPrefix: arguments, ServiceName: value.ServiceName, Port: value.Port, NetworkPolicyRequired: value.NetworkPolicyRequired, Timeout: time.Duration(value.TimeoutSeconds) * time.Second, MaxLines: value.MaxLines, MaxBytes: value.MaxBytes}
+	}
+	return domain.NewRemoteDiagnosticsPolicyCatalog(execPolicies, filePolicy, diagnosticPolicies)
+}
+
+// LocalExecutionPolicyCatalogs constructs the exact credential-free policy
+// snapshots used for proposal preparation. No entry means disabled.
+func (config Config) LocalExecutionPolicyCatalogs() (domain.LocalCommandPolicyCatalog, domain.LocalShellPolicyCatalog, error) {
+	copy := config
+	if err := Validate(&copy); err != nil {
+		return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, err
+	}
+	return copy.localExecutionPolicyCatalogsUnchecked()
+}
+
+func (config Config) localExecutionPolicyCatalogsUnchecked() (domain.LocalCommandPolicyCatalog, domain.LocalShellPolicyCatalog, error) {
+	commands := make([]domain.LocalCommandPolicy, len(config.LocalExecution.Commands))
+	for index, value := range config.LocalExecution.Commands {
+		arguments, err := domain.NewActionArguments(value.Arguments)
+		if err != nil || !remoteDiagnosticArgumentsAreNonSensitive(value.Arguments) {
+			return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+		}
+		environment, err := domain.NewActionEnvironment(value.Environment)
+		if err != nil {
+			return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+		}
+		operation, ok := domain.ClassifyLocalCommand(domain.LocalCommandKind(value.Kind), arguments)
+		if !ok {
+			return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+		}
+		origin := value.ServerOrigin
+		originHash := domain.ActionDigest("")
+		if origin != "" {
+			var canonicalErr error
+			origin, canonicalErr = domain.CanonicalLocalCommandOrigin(origin)
+			if canonicalErr != nil {
+				return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+			}
+			originHash = domain.LocalCommandOriginHash(origin)
+		}
+		commands[index] = domain.LocalCommandPolicy{
+			ID: value.ID, Kind: domain.LocalCommandKind(value.Kind), Operation: operation,
+			Executable: value.Executable, Arguments: arguments, WorkingDirectory: value.WorkingDirectory,
+			Environment: environment, CredentialReference: domain.LocalCredentialReference(value.CredentialReference),
+			ServerOrigin: origin, ServerOriginHash: originHash,
+			DiagnosticEffect: domain.LocalDiagnosticEffect(value.DiagnosticEffect),
+			Timeout:          time.Duration(value.TimeoutSeconds) * time.Second, MaxLines: value.MaxLines, MaxBytes: value.MaxBytes,
+		}
+	}
+	shells := make([]domain.LocalShellPolicy, len(config.LocalExecution.Shells))
+	for index, value := range config.LocalExecution.Shells {
+		environment, err := domain.NewActionEnvironment(value.Environment)
+		if err != nil {
+			return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+		}
+		origin := value.NetworkOrigin
+		originHash := domain.ActionDigest("")
+		if origin != "" {
+			var canonicalErr error
+			origin, canonicalErr = domain.CanonicalLocalCommandOrigin(origin)
+			if canonicalErr != nil {
+				return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, domain.ErrInvalidLocalExecutionPolicy
+			}
+			originHash = domain.LocalCommandOriginHash(origin)
+		}
+		shells[index] = domain.LocalShellPolicy{
+			ID: value.ID, Executable: value.Executable, Command: value.Command,
+			WorkingDirectory: value.WorkingDirectory, Environment: environment,
+			Network: domain.LocalShellNetwork(value.Network), NetworkOrigin: origin, NetworkOriginHash: originHash,
+			Timeout: time.Duration(value.TimeoutSeconds) * time.Second, MaxLines: value.MaxLines, MaxBytes: value.MaxBytes,
+		}
+	}
+	commandCatalog, err := domain.NewLocalCommandPolicyCatalog(commands)
+	if err != nil {
+		return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, err
+	}
+	shellCatalog, err := domain.NewLocalShellPolicyCatalog(shells)
+	if err != nil {
+		return domain.LocalCommandPolicyCatalog{}, domain.LocalShellPolicyCatalog{}, err
+	}
+	return commandCatalog, shellCatalog, nil
 }
 
 func (configured KubernetesResourcePolicyConfig) domainPolicy() (domain.ResourcePolicy, error) {

@@ -64,6 +64,21 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 		ObservedFrom: &observedFrom, ObservedThrough: &observedThrough,
 		Fingerprint: domain.SHA256Hex("observability-evidence"), ObservedAt: observedThrough,
 	})
+	remoteSourcePath := "/var/app/data/report.txt"
+	evidence = append(evidence, domain.Evidence{
+		ID:           "00000000-0000-7000-8000-000000003010",
+		RunID:        invocation.RunID,
+		InvocationID: invocation.ID,
+		Category:     domain.EvidenceCategoryContainerFile,
+		Scope:        invocation.Scope,
+		Resource: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: invocation.Scope.Namespace,
+			Name: "sample-pod", UID: "pod-uid", ResourceVersion: "20",
+		},
+		PolicyVersion: domain.RemoteDiagnosticsPolicyVersion, PolicyGeneration: 9,
+		Fact: "The bounded container file projection was collected.", SourcePath: &remoteSourcePath,
+		Fingerprint: domain.SHA256Hex("remote-diagnostic-evidence"), ObservedAt: time.UnixMilli(206).UTC(),
+	})
 	invocation.EvidenceCount = len(evidence)
 	if err := tools.Save(context.Background(), invocation, evidence); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -114,8 +129,24 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 		listedEvidence[2].ResourceType != evidence[2].ResourceType || listedEvidence[2].PolicyGeneration != 9 ||
 		listedEvidence[3].SourceOriginHash != evidence[3].SourceOriginHash || listedEvidence[3].Series != "container=app" ||
 		listedEvidence[3].ObservedFrom == nil || !listedEvidence[3].ObservedFrom.Equal(observedFrom) ||
-		listedEvidence[3].ObservedThrough == nil || !listedEvidence[3].ObservedThrough.Equal(observedThrough) {
+		listedEvidence[3].ObservedThrough == nil || !listedEvidence[3].ObservedThrough.Equal(observedThrough) ||
+		listedEvidence[4].Category != domain.EvidenceCategoryContainerFile ||
+		listedEvidence[4].PolicyVersion != domain.RemoteDiagnosticsPolicyVersion ||
+		listedEvidence[4].PolicyGeneration != 9 || listedEvidence[4].SourcePath == nil ||
+		*listedEvidence[4].SourcePath != remoteSourcePath {
 		t.Fatalf("resource Evidence provenance = %#v", listedEvidence)
+	}
+	if _, err := db.handle.ExecContext(context.Background(), `
+		INSERT INTO evidence_items (
+			id, run_id, invocation_id, category, resource_ref_json, fact,
+			fingerprint, observed_at_ms, resource_policy_version, policy_generation
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "00000000-0000-7000-8000-000000003011", run.ID, invocation.ID,
+		domain.EvidenceCategoryContainerFile,
+		`{"api_version":"v1","kind":"Pod","namespace":"test-namespace","name":"sample-pod","uid":"pod-uid","resource_version":"20"}`,
+		"Synthetic safe remote diagnostic fact.", domain.SHA256Hex("unknown-remote-policy"), 207,
+		"kupilot.remote-diagnostics-policy/unknown", 9); err == nil {
+		t.Fatal("unknown remote diagnostic Evidence policy version was persisted")
 	}
 
 	if _, err := tools.GetByID(context.Background(), "00000000-0000-7000-8000-000000003099"); !errors.Is(err, ErrToolInvocationNotFound) {
@@ -123,6 +154,54 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	}
 	if _, err := evidenceRepository.GetByID(context.Background(), "00000000-0000-7000-8000-000000003098"); !errors.Is(err, ErrEvidenceNotFound) {
 		t.Fatalf("Evidence GetByID(missing) error = %v", err)
+	}
+}
+
+func TestMigrationTenAdmitsCompleteToolCatalog(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "complete-tool-catalog")
+	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000003101", "00000000-0000-7000-8000-000000003102", "00000000-0000-7000-8000-000000003103", time.UnixMilli(300).UTC())
+	repository := NewToolInvocationRepository(db)
+	names := []domain.ToolName{
+		domain.ToolNameGetResource,
+		domain.ToolNameListResources,
+		domain.ToolNameGetEvents,
+		domain.ToolNameGetPodLogs,
+		domain.ToolNameGetPreviousPodLogs,
+		domain.ToolNameGetPodMetrics,
+		domain.ToolNameGetNodeMetrics,
+		domain.ToolNameQueryPrometheus,
+		domain.ToolNameQueryLoki,
+		domain.ToolNameGetRelatedResources,
+		domain.ToolNameGetClusterOverview,
+		domain.ToolNamePodExec,
+		domain.ToolNameReadContainerFile,
+		domain.ToolNameRunDiagnosticPod,
+	}
+	for index, name := range names {
+		invocation := testToolInvocation(
+			domain.ToolInvocationID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 31_100+index)),
+			run,
+			index+1,
+			time.UnixMilli(int64(301+index)).UTC(),
+		)
+		invocation.Name = name
+		invocation.ArgumentsJSON = `{}`
+		invocation.ArgumentsDigest = domain.SHA256Hex(invocation.ArgumentsJSON)
+		if err := repository.Save(context.Background(), invocation, nil); err != nil {
+			t.Fatalf("Save(%s) error = %v", name, err)
+		}
+	}
+	listed, err := repository.ListByRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("ListByRun() error = %v", err)
+	}
+	if len(listed) != len(names) {
+		t.Fatalf("ListByRun() count = %d, want %d", len(listed), len(names))
+	}
+	for index, name := range names {
+		if listed[index].Name != name {
+			t.Fatalf("ListByRun()[%d].Name = %q, want %q", index, listed[index].Name, name)
+		}
 	}
 }
 

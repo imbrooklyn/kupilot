@@ -203,7 +203,7 @@ func TestAdapterBlocksJSONEscapedCredentialFromEveryDiagnosisSink(t *testing.T) 
 				`"proposed_actions":[{"operation":"restart_deployment","reason":"Restart the workload.",` +
 				`"risk":"Pods will be replaced.","prerequisites":["` + escaped + `"],` +
 				`"target":{"api_version":"apps/v1","kind":"Deployment",` +
-				`"namespace":"test-namespace","name":"sample-deployment"}}]}`,
+				`"namespace":"test-namespace","name":"sample-deployment"},"parameters":null}]}`,
 		},
 	}
 	for _, current := range tests {

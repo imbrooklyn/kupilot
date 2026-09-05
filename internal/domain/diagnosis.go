@@ -4,9 +4,57 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 	"unicode"
 )
+
+// ProposedActionParameterKind is the sole model-visible typed parameter for a
+// proposed action. It never carries argv, object bodies, shell text, or
+// execution identity.
+type ProposedActionParameterKind string
+
+const (
+	ProposedActionParameterReplicas ProposedActionParameterKind = "replicas"
+	ProposedActionParameterRevision ProposedActionParameterKind = "revision"
+	ProposedActionParameterPolicyID ProposedActionParameterKind = "policy_id"
+)
+
+// ProposedActionParameters binds one canonical string value. Runtime parses
+// it only after the operation-specific schema has selected its meaning.
+type ProposedActionParameters struct {
+	Kind  ProposedActionParameterKind `json:"kind"`
+	Value string                      `json:"value"`
+}
+
+func (parameters ProposedActionParameters) validate(operation ActionOperation) bool {
+	if parameters.Value == "" || strings.TrimSpace(parameters.Value) != parameters.Value {
+		return false
+	}
+	switch operation {
+	case ActionOperationScaleWorkload:
+		value, err := strconv.ParseInt(parameters.Value, 10, 32)
+		return parameters.Kind == ProposedActionParameterReplicas && err == nil && value >= 0 && strconv.FormatInt(value, 10) == parameters.Value
+	case ActionOperationRollbackDeployment:
+		value, err := strconv.ParseInt(parameters.Value, 10, 64)
+		return parameters.Kind == ProposedActionParameterRevision && err == nil && value > 0 && strconv.FormatInt(value, 10) == parameters.Value
+	case ActionOperationRestrictedLocalArgv, ActionOperationShell:
+		return parameters.Kind == ProposedActionParameterPolicyID && validLocalPolicyID(parameters.Value)
+	default:
+		return false
+	}
+}
+
+// Int64 returns the exact canonical integer carried by a replicas or revision
+// proposal. Validation must precede use.
+func (parameters ProposedActionParameters) Int64() (int64, bool) {
+	if parameters.Kind != ProposedActionParameterReplicas && parameters.Kind != ProposedActionParameterRevision {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(parameters.Value, 10, 64)
+	return value, err == nil && strconv.FormatInt(value, 10) == parameters.Value
+}
 
 const (
 	maxDiagnosisBytes        = 131072
@@ -92,12 +140,13 @@ type MissingInformation struct {
 // bounded proposed action. Operation and Target are populated by the v0.4
 // protocol; legacy rows may contain only explanatory text.
 type RecommendedAction struct {
-	Operation     ApprovalOperation `json:"operation,omitempty"`
-	Target        *ResourceRef      `json:"target,omitempty"`
-	Action        string            `json:"action"`
-	Risk          string            `json:"risk"`
-	Prerequisites []string          `json:"prerequisites,omitempty"`
-	Executed      bool              `json:"executed"`
+	Operation     ApprovalOperation         `json:"operation,omitempty"`
+	Target        *ResourceRef              `json:"target,omitempty"`
+	Parameters    *ProposedActionParameters `json:"parameters,omitempty"`
+	Action        string                    `json:"action"`
+	Risk          string                    `json:"risk"`
+	Prerequisites []string                  `json:"prerequisites,omitempty"`
+	Executed      bool                      `json:"executed"`
 }
 
 // Diagnosis is the locally validated terminal answer. The four legacy
@@ -164,18 +213,13 @@ func (diagnosis Diagnosis) Validate() error {
 			return ErrInvalidDiagnosis
 		}
 		if action.Operation == "" {
-			if action.Target != nil {
+			if action.Target != nil || action.Parameters != nil {
 				return ErrInvalidDiagnosis
 			}
 		} else {
 			typedActionCount++
-			if !action.Operation.Valid() || action.Target == nil || action.Target.Validate() != nil ||
-				action.Operation != ApprovalOperationRestartDeployment ||
-				!ValidApprovalReasonSummary(action.Action) ||
-				action.Target.APIVersion != RestartDeploymentTargetAPIVersion ||
-				action.Target.Kind != RestartDeploymentTargetKind ||
-				action.Target.Namespace != diagnosis.Scope.Namespace ||
-				action.Target.UID != "" || action.Target.ResourceVersion != "" {
+			if !action.Operation.Valid() || !ValidApprovalReasonSummary(action.Action) ||
+				!validProposedAction(action, diagnosis.Scope) {
 				return ErrInvalidDiagnosis
 			}
 		}
@@ -201,6 +245,33 @@ func (diagnosis Diagnosis) Validate() error {
 		return ErrInvalidDiagnosis
 	}
 	return nil
+}
+
+func validProposedAction(action RecommendedAction, scope ScopeSnapshot) bool {
+	if action.Target == nil || action.Target.Validate() != nil || action.Target.UID != "" || action.Target.ResourceVersion != "" {
+		return false
+	}
+	target := action.Target
+	switch action.Operation {
+	case ActionOperationRestartDeployment:
+		return action.Parameters == nil && target.APIVersion == RestartDeploymentTargetAPIVersion &&
+			target.Kind == RestartDeploymentTargetKind && target.Namespace == scope.Namespace
+	case ActionOperationScaleWorkload:
+		return action.Parameters != nil && action.Parameters.validate(action.Operation) && target.APIVersion == "apps/v1" &&
+			(target.Kind == "Deployment" || target.Kind == "StatefulSet") && target.Namespace == scope.Namespace
+	case ActionOperationRollbackDeployment:
+		return action.Parameters != nil && action.Parameters.validate(action.Operation) && target.APIVersion == "apps/v1" &&
+			target.Kind == "Deployment" && target.Namespace == scope.Namespace
+	case ActionOperationDeleteOwnedPod:
+		return action.Parameters == nil && target.APIVersion == "v1" && target.Kind == "Pod" && target.Namespace == scope.Namespace
+	case ActionOperationCordonNode, ActionOperationUncordonNode, ActionOperationDrainNode:
+		return action.Parameters == nil && target.APIVersion == "v1" && target.Kind == "Node" && target.Namespace == ""
+	case ActionOperationRestrictedLocalArgv, ActionOperationShell:
+		return action.Parameters != nil && action.Parameters.validate(action.Operation) && target.APIVersion == "v1" &&
+			target.Kind == "Namespace" && target.Namespace == "" && target.Name == scope.Namespace
+	default:
+		return false
+	}
 }
 
 // ReferencedEvidenceIDs returns a sorted unique copy for repository validation.

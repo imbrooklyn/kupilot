@@ -7,12 +7,14 @@ The checked-in implementation now includes named model roles, role-scoped
 consent, safe Session context/summarization, deterministic permission routing,
 the common ActionEnvelope/approval foundation, broad policy-bound built-in and
 exact CRD resource reads, and deterministic read-only observability adapters.
-Only the existing typed Deployment restart is composed through the action
-foundation. Review-class log and optional data-source operations remain
-fail-closed in the default `ask` composition until permission delivery can bind
-and consume their ActionEnvelopes. Remote diagnostics, local processes, and
-expanded typed remediation remain accepted targets, not claims of current
-reachability or completed live integration testing.
+The typed Deployment restart and the default-off Pod Exec, container-file, and
+diagnostic-Pod handlers are composed through the action foundation. Review-
+class log, optional data-source, and remote-diagnostic operations remain fail-
+closed in the default `ask` composition until permission delivery can own their
+human decision; no live cluster execution has been claimed. Exact default-off
+local direct argv and shell plus typed scale/rollback/controller-owned-Pod
+delete/cordon/uncordon/drain now use the shared Application dispatcher. No live
+host-tool execution or operating-system sandbox claim is made.
 
 ## 1. Scope and security posture
 
@@ -358,16 +360,33 @@ can create authority.
 equivalent to a local operating-system sandbox, follows unsafe paths, inherits
 a ServiceAccount token, or contacts a model-selected destination.
 
-**Controls.** File access binds exact Pod UID/container/path and rechecks
-in-container symlink resolution, device, pseudo-filesystem, credential, size,
-and sink policy. Pod Exec binds one Pod, container, UID, executable, argv,
-stdin/TTY/shell flags, network/data effects, timeout, and output limit.
+**Controls.** File access binds exact Pod UID/container/path and uses one no-
+shell USTAR request with framing reserved inside the transport ceiling. Its
+ordered headers must prove every parent is a
+directory and the final entry is a regular file. It rejects links, devices,
+pseudo-filesystems, Secret/ConfigMap/projected/credential mounts, stderr, size
+violations, and sink-policy failures. Sensitive mounts at `/`, sensitive volume
+devices, duplicate volume identities, and unknown mount/device references fail
+closed. This cooperative tar check is not an atomic kernel `openat2` guarantee
+against a malicious filesystem race. Pod Exec binds one Pod,
+container, UID, resource version, executable, argv, stdin/TTY/shell flags,
+network/data effects, exact live Pod/container destination digest, timeout, and
+output limit. General exact argv can still implement in-container side effects
+or network access; this is conservatively approval-visible as a remote-Pod
+effect and is not an in-container sandbox or an admission of credential data.
 Diagnostic Pods use policy-selected pinned images, non-root/non-privileged
-settings, a read-only root filesystem, no host mounts or host network, finite
-resources, disabled token automount, exact in-cluster destinations, and
-separately audited create, observation, delete, and ambiguous-cleanup states.
-An image allowlist is not a network sandbox; actual NetworkPolicy and CNI
-behavior remain separate evidence.
+settings, a read-only root filesystem, no volumes or host namespaces, finite
+resources, disabled token automount and Service links, non-preempting scheduling,
+only a zero API-default priority with no PriorityClass, one policy-fixed
+Namespace and exact same-Namespace Service destination digest, a required
+non-empty Service selector, strict admission response revalidation, and
+separately audited create, wait, log, delete, and ambiguous-cleanup states. ExternalName,
+selectorless, obvious metadata/link-local/address-confusion, and policy-
+external targets are denied. Definite create rejection cannot trigger deletion
+of a pre-existing Pod. Bundle shutdown preserves the transport until bounded
+exact cleanup joins. An image allowlist is not a network
+sandbox; actual NetworkPolicy and CNI behavior remain operator-provided
+deployment evidence that Kupilot does not verify.
 
 ## 7. Kubernetes access matrix
 
@@ -399,9 +418,11 @@ and verbs needed for their chosen namespace policy and action catalog. A broad
 ClusterRole is not required when `current` mode and namespaced Roles suffice.
 The checked-in paths implement the built-in and exact configured CRD rows, safe
 Secret metadata, bounded Events and logs, typed Pod/Node metrics, and explicit
-Prometheus/Loki source adapters. Review-class operations still require the
-separate permission, consent, sink, and ActionEnvelope path described below.
-Remote diagnostics, local processes, and new write rows remain later work.
+Prometheus/Loki source adapters, plus the exact remote-diagnostic rows behind
+default-off configuration. Review-class operations still require the separate
+permission, consent, sink, and ActionEnvelope path described below. Exact local
+process policies and typed remediation use that path; remote-diagnostic human
+and Reviewer delivery remains fail-closed in this slice.
 
 ## 8. Permission and execution safety
 
@@ -419,26 +440,35 @@ Restart still changes only Kupilot's Pod-template annotation. Generic patch,
 apply, edit, YAML, arbitrary delete, and model-generated command surfaces are
 denied.
 
-Predefined read-only Pod diagnostics, other Pod Exec, diagnostic Pods,
-restricted local argv, and shell remain separate schemas and risk classes.
-Typed operations are preferred. No decision for one envelope authorizes a
-different target, parameter, command, attempt, or cleanup.
+Predefined read-only Pod diagnostics (`review`), other Pod Exec (`critical`),
+and diagnostic Pods (`critical`) now use separate exact schemas and the common
+action lifecycle. Restricted local argv and shell use separate default-off
+policy catalogs and risk classes. Direct argv is structurally classified,
+scripts and known wrappers/interpreters are denied, and the shell command string
+is accepted only by the shell-tagged `critical` operation. No decision for one
+envelope authorizes a different target, parameter, command, attempt, or cleanup.
 
 The current deterministic evaluator covers every profile/effect/risk
 combination and rejects disabled, unadmitted, incompatible, and hard-deny
 inputs before Reviewer or executor access. Its process-local Session-rule APIs
 and generalized durable approval state do not make a new capability reachable.
-The composition root retains the default `ask` profile and the sole existing
-typed Deployment restart executor; full permission interaction and every new
-executor remain later work.
+The composition root retains the default `ask` profile and wires the three
+remote-diagnostic handlers. Their automatic and matching Session-rule gate is
+deterministic, but a human or Reviewer route fails closed before remote
+execution until its delivery integration is complete. The shared dispatcher
+does own human, Reviewer, Session-rule, and automatic routes for typed
+remediation and local execution, always after operation-specific preparation
+and before the matching executor. Full `/permissions` management remains later
+work.
 
 ## 9. Privacy and retention interactions
 
 Broader resource access does not automatically enable broader model transfer.
 Consent categories still govern conversation, resource references and status,
-Events, logs, metrics, files, optional data sources, process output, and resumed
-context. Sensitive categories and high-risk capabilities remain separately
-disabled by default.
+Events, logs, metrics, files, optional data sources, remote-diagnostic output,
+and resumed context. Local-process output has no model-transfer category and
+remains terminal-only. Sensitive categories and high-risk capabilities remain
+separately disabled by default.
 
 Standard persistence retains only bounded validated answers and safe metadata
 for the durations in [Data Retention](data-retention.md). Minimal persistence

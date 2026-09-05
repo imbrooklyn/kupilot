@@ -20,12 +20,17 @@ type RunObservabilityPolicySource interface {
 	ObservabilityPolicySnapshot(context.Context) (domain.ObservabilityPolicyCatalog, domain.PolicyGeneration, bool)
 }
 
+type RunRemoteDiagnosticsPolicySource interface {
+	RemoteDiagnosticsPolicySnapshot(context.Context) (domain.RemoteDiagnosticsPolicyCatalog, domain.PolicyGeneration, bool)
+}
+
 // ResourceReadAuthority combines the process-fixed resource catalog with the
 // Application-owned live permission generation. It owns no client or I/O.
 type ResourceReadAuthority struct {
-	catalog       domain.ResourcePolicyCatalog
-	observability domain.ObservabilityPolicyCatalog
-	permissions   *PermissionManager
+	catalog           domain.ResourcePolicyCatalog
+	observability     domain.ObservabilityPolicyCatalog
+	remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog
+	permissions       *PermissionManager
 }
 
 func NewResourceReadAuthority(catalog domain.ResourcePolicyCatalog, permissions *PermissionManager) (*ResourceReadAuthority, error) {
@@ -33,13 +38,39 @@ func NewResourceReadAuthority(catalog domain.ResourcePolicyCatalog, permissions 
 }
 
 func NewOperationalReadAuthority(catalog domain.ResourcePolicyCatalog, observability domain.ObservabilityPolicyCatalog, permissions *PermissionManager) (*ResourceReadAuthority, error) {
-	if catalog.Validate() != nil || observability.Validate() != nil || permissions == nil {
+	return NewCompleteOperationalAuthority(catalog, observability, domain.DisabledRemoteDiagnosticsPolicyCatalog(), permissions)
+}
+
+// NewCompleteOperationalAuthority binds all model-visible catalog snapshots to
+// one Application-owned policy generation.
+func NewCompleteOperationalAuthority(catalog domain.ResourcePolicyCatalog, observability domain.ObservabilityPolicyCatalog, remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog, permissions *PermissionManager) (*ResourceReadAuthority, error) {
+	if catalog.Validate() != nil || observability.Validate() != nil || remoteDiagnostics.Validate() != nil || permissions == nil {
 		return nil, ErrResourceReadAuthorityInvalid
 	}
 	if _, healthy := permissions.Policy(); !healthy {
 		return nil, ErrResourceReadAuthorityInvalid
 	}
-	return &ResourceReadAuthority{catalog: catalog, observability: observability, permissions: permissions}, nil
+	return &ResourceReadAuthority{catalog: catalog, observability: observability, remoteDiagnostics: remoteDiagnostics, permissions: permissions}, nil
+}
+
+func (authority *ResourceReadAuthority) RemoteDiagnosticsPolicySnapshot(ctx context.Context) (domain.RemoteDiagnosticsPolicyCatalog, domain.PolicyGeneration, bool) {
+	if ctx == nil || ctx.Err() != nil || authority == nil || authority.remoteDiagnostics.Validate() != nil || authority.permissions == nil {
+		return domain.RemoteDiagnosticsPolicyCatalog{}, 0, false
+	}
+	policy, healthy := authority.permissions.Policy()
+	if !policy.Generation.Valid() {
+		return domain.RemoteDiagnosticsPolicyCatalog{}, 0, false
+	}
+	file, found := authority.remoteDiagnostics.ContainerFile()
+	var filePointer *domain.ContainerFilePolicy
+	if found {
+		filePointer = &file
+	}
+	copy, err := domain.NewRemoteDiagnosticsPolicyCatalog(authority.remoteDiagnostics.PodExecPolicies(), filePointer, authority.remoteDiagnostics.DiagnosticPodPolicies())
+	if err != nil {
+		return domain.RemoteDiagnosticsPolicyCatalog{}, 0, false
+	}
+	return copy, policy.Generation, healthy
 }
 
 func (authority *ResourceReadAuthority) ResourcePolicySnapshot(ctx context.Context) (domain.ResourcePolicyCatalog, domain.PolicyGeneration, bool) {

@@ -122,6 +122,66 @@ func TestQueryEvidenceDetailSupportsExactObservabilityProvenance(t *testing.T) {
 	}
 }
 
+func TestQueryEvidenceDetailSupportsOnlyExactRemoteDiagnosticProvenance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		category   domain.EvidenceCategory
+		resource   domain.ResourceRef
+		sourcePath string
+		unsafePath string
+	}{
+		{
+			name: "Pod Exec", category: domain.EvidenceCategoryRemoteCommand,
+			resource:   domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod", UID: "sample-uid", ResourceVersion: "sample-version"},
+			sourcePath: "api/v1/namespaces/team-a/pods/sample-pod/exec",
+			unsafePath: "api/v1/namespaces/team-a/pods/another-pod/exec",
+		},
+		{
+			name: "container file", category: domain.EvidenceCategoryContainerFile,
+			resource:   domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod", UID: "sample-uid", ResourceVersion: "sample-version"},
+			sourcePath: "/var/app/data/report.txt",
+			unsafePath: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+		},
+		{
+			name: "diagnostic Pod", category: domain.EvidenceCategoryDiagnosticPod,
+			resource:   domain.ResourceRef{APIVersion: "v1", Kind: "Service", Namespace: "team-a", Name: "api", UID: "service-uid", ResourceVersion: "sample-version"},
+			sourcePath: "api/v1/namespaces/team-a/services/api#diagnostic_pod",
+			unsafePath: "api/v1/namespaces/team-a/services/another#diagnostic_pod",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diagnosis, evidence, reference := evidenceDetailFixture()
+			evidence.Category = test.category
+			evidence.Resource = test.resource
+			evidence.PolicyVersion = domain.RemoteDiagnosticsPolicyVersion
+			evidence.PolicyGeneration = 12
+			evidence.SourcePath = &test.sourcePath
+			evidence.Fact = "The bounded remote diagnostic projection is available."
+			evidence.Fingerprint = domain.SHA256Hex(evidence.Fact)
+			reader := &recordingEvidenceDetailReader{
+				diagnosis: diagnosis, diagnosisFound: true, evidence: evidence, evidenceFound: true,
+			}
+			coordinator := &Coordinator{questions: security.NewRedactor(), evidenceDetails: reader}
+			result, err := coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 21, Reference: reference})
+			if err != nil || result.Validate() != nil || result.Reference.State != UIEvidenceDetailAvailable || result.Detail == nil ||
+				result.Detail.Category != test.category || result.Detail.SourcePath != test.sourcePath ||
+				result.Detail.PolicyVersion != domain.RemoteDiagnosticsPolicyVersion || result.Detail.PolicyGeneration != 12 {
+				t.Fatalf("remote diagnostic detail = %#v/%v", result, err)
+			}
+
+			evidence.SourcePath = &test.unsafePath
+			reader.evidence = evidence
+			result, err = coordinator.QueryEvidenceDetail(context.Background(), UIEvidenceDetailQuery{RequestID: 22, Reference: reference})
+			if err != nil || result.Reference.State != UIEvidenceDetailUnavailable || result.Detail != nil {
+				t.Fatalf("unsafe remote diagnostic source = %#v/%v", result, err)
+			}
+		})
+	}
+}
+
 func TestQueryEvidenceDetailMarksProjectionAndSourceTruncationPartial(t *testing.T) {
 	t.Parallel()
 

@@ -678,7 +678,7 @@ func TestCoordinatorDeleteSessionInvalidatesPendingAndApprovedApprovalBeforeDele
 			if state == domain.ApprovalStateApproved {
 				approved, err := approvalFixture.coordinator.Decide(
 					context.Background(),
-					approvalDecisionCommand(UICommandApproveRestart, request, 36, 106),
+					approvalDecisionCommand(UICommandApproveAction, request, 36, 106),
 				)
 				if err != nil || approved.State != domain.ApprovalStateApproved {
 					t.Fatalf("Decide(approve) = %#v, %v", approved, err)
@@ -778,7 +778,7 @@ func TestApprovalCoordinatorPreparesSessionDeletionWithoutExecuting(t *testing.T
 			if state == domain.ApprovalStateApproved {
 				approved, err := fixture.coordinator.Decide(
 					context.Background(),
-					approvalDecisionCommand(UICommandApproveRestart, request, 33, 103),
+					approvalDecisionCommand(UICommandApproveAction, request, 33, 103),
 				)
 				if err != nil || approved.State != domain.ApprovalStateApproved {
 					t.Fatalf("Decide(approve) = %#v, %v", approved, err)
@@ -805,7 +805,7 @@ func TestApprovalCoordinatorPreparesHistoryDeletionWithoutExecuting(t *testing.T
 			if state == domain.ApprovalStateApproved {
 				approved, err := fixture.coordinator.Decide(
 					context.Background(),
-					approvalDecisionCommand(UICommandApproveRestart, request, 39, 109),
+					approvalDecisionCommand(UICommandApproveAction, request, 39, 109),
 				)
 				if err != nil || approved.State != domain.ApprovalStateApproved {
 					t.Fatalf("Decide(approve) = %#v, %v", approved, err)

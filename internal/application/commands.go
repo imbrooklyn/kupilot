@@ -85,9 +85,9 @@ const (
 	UICommandCancelResume    UICommandKind = "cancel_resume"
 	UICommandShowStatus      UICommandKind = "show_status"
 	UICommandExportSession   UICommandKind = "export_session"
-	UICommandApproveRestart  UICommandKind = "approve_restart"
-	UICommandRejectRestart   UICommandKind = "reject_restart"
-	UICommandExpireRestart   UICommandKind = "expire_restart"
+	UICommandApproveAction   UICommandKind = "approve_action"
+	UICommandRejectAction    UICommandKind = "reject_action"
+	UICommandExpireAction    UICommandKind = "expire_action"
 )
 
 // UICommand contains only the typed intent data needed by the current TUI.
@@ -115,8 +115,8 @@ func (command UICommand) Validate() error {
 	if command.ExpectedScopeGeneration < 0 {
 		return ErrInvalidUICommand
 	}
-	approvalCommand := command.Kind == UICommandApproveRestart || command.Kind == UICommandRejectRestart ||
-		command.Kind == UICommandExpireRestart
+	approvalCommand := command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
+		command.Kind == UICommandExpireAction
 	if !approvalCommand && command.hasApprovalPayload() {
 		return ErrInvalidUICommand
 	}
@@ -224,7 +224,7 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
-	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
 		if command.RequestID == 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
 			!command.ApprovalID.Valid() || !command.ApprovalDigest.Valid() || !command.ApprovalNonce.Valid() ||

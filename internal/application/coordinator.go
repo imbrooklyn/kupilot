@@ -66,16 +66,18 @@ type CoordinatorConfig struct {
 // needed by CLI/TUI composition. Core run tests may omit it when no delivery
 // use case is exercised.
 type CoordinatorUIConfig struct {
-	Sessions         SessionResumeStore
-	Search           SessionSearchReader
-	Titles           SessionTitleStore
-	Startup          StartupMaintenance
-	Scopes           *ScopeManager
-	ScopePreferences ScopePreferenceStore
-	Approvals        *ApprovalCoordinator
-	RestartProposals RestartDeploymentProposalPreparer
-	EvidenceDetail   EvidenceDetailReader
-	LocalState       LocalStateDeleter
+	Sessions             SessionResumeStore
+	Search               SessionSearchReader
+	Titles               SessionTitleStore
+	Startup              StartupMaintenance
+	Scopes               *ScopeManager
+	ScopePreferences     ScopePreferenceStore
+	Approvals            *ApprovalCoordinator
+	RestartProposals     RestartDeploymentProposalPreparer
+	RemediationProposals RemediationProposalPreparer
+	LocalProposals       LocalActionProposalPreparer
+	EvidenceDetail       EvidenceDetailReader
+	LocalState           LocalStateDeleter
 }
 
 // RunResult is the bounded in-memory terminal result used by shutdown and
@@ -92,47 +94,49 @@ type Coordinator struct {
 	mu        sync.Mutex
 	startupMu sync.Mutex
 
-	sessions            SessionPersistence
-	runs                RunPersistence
-	tools               ToolEvidencePersistence
-	audits              AuditPersistence
-	scope               ActiveScope
-	runner              agent.AgentRunner
-	modelRuntime        ModelRuntime
-	modelFactory        ModelRuntimeFactory
-	modelProfiles       ModelProfileWriter
-	reviewerModel       *ReviewerModelBinding
-	identifiers         ApplicationIdentifierSource
-	auditIdentifiers    AuditIdentifierSource
-	questions           QuestionProcessor
-	privacy             *PrivacyManager
-	runResourcePolicies RunResourcePolicySource
-	modelContextStore   ModelContextPersistence
-	uiEvents            UIEventSink
-	observer            RunObserver
-	now                 func() time.Time
-	budgetLimits        agent.RunBudgetLimits
-	persistenceLimit    time.Duration
-	resumeSessions      SessionResumeStore
-	sessionSearch       SessionSearchReader
-	titles              SessionTitleStore
-	startup             StartupMaintenance
-	uiScopes            *ScopeManager
-	scopePreferences    ScopePreferenceStore
-	approvals           *ApprovalCoordinator
-	restartProposals    RestartDeploymentProposalPreparer
-	evidenceDetails     EvidenceDetailReader
-	localState          LocalStateDeleter
-	exports             SessionExportReader
-	exportFiles         ExportFileWriter
-	exportText          ExportTextProcessor
-	startupPrepared     bool
-	currentSession      *domain.Session
-	currentResumed      bool
-	pendingResume       *pendingResume
-	startupResume       *startupResumeState
-	privacyChallenge    *privacyChallenge
-	modelContext        sessionModelContext
+	sessions             SessionPersistence
+	runs                 RunPersistence
+	tools                ToolEvidencePersistence
+	audits               AuditPersistence
+	scope                ActiveScope
+	runner               agent.AgentRunner
+	modelRuntime         ModelRuntime
+	modelFactory         ModelRuntimeFactory
+	modelProfiles        ModelProfileWriter
+	reviewerModel        *ReviewerModelBinding
+	identifiers          ApplicationIdentifierSource
+	auditIdentifiers     AuditIdentifierSource
+	questions            QuestionProcessor
+	privacy              *PrivacyManager
+	runResourcePolicies  RunResourcePolicySource
+	modelContextStore    ModelContextPersistence
+	uiEvents             UIEventSink
+	observer             RunObserver
+	now                  func() time.Time
+	budgetLimits         agent.RunBudgetLimits
+	persistenceLimit     time.Duration
+	resumeSessions       SessionResumeStore
+	sessionSearch        SessionSearchReader
+	titles               SessionTitleStore
+	startup              StartupMaintenance
+	uiScopes             *ScopeManager
+	scopePreferences     ScopePreferenceStore
+	approvals            *ApprovalCoordinator
+	restartProposals     RestartDeploymentProposalPreparer
+	remediationProposals RemediationProposalPreparer
+	localProposals       LocalActionProposalPreparer
+	evidenceDetails      EvidenceDetailReader
+	localState           LocalStateDeleter
+	exports              SessionExportReader
+	exportFiles          ExportFileWriter
+	exportText           ExportTextProcessor
+	startupPrepared      bool
+	currentSession       *domain.Session
+	currentResumed       bool
+	pendingResume        *pendingResume
+	startupResume        *startupResumeState
+	privacyChallenge     *privacyChallenge
+	modelContext         sessionModelContext
 
 	closed                  bool
 	persistenceDegraded     bool
@@ -164,6 +168,8 @@ type activeRun struct {
 	logCalls                 int
 	metricCalls              int
 	dataSourceCalls          int
+	remoteExecCalls          int
+	localProcessCalls        int
 	summaryCalls             int
 
 	lastAgentSequence int64
@@ -269,6 +275,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.UI != nil && (config.UI.Approvals == nil) != (config.UI.RestartProposals == nil) {
 		return nil, ErrCoordinatorDependency
 	}
+	if config.UI != nil && config.UI.Approvals == nil &&
+		(config.UI.RemediationProposals != nil || config.UI.LocalProposals != nil) {
+		return nil, ErrCoordinatorDependency
+	}
 	exportDependencies := 0
 	if config.Exports != nil {
 		exportDependencies++
@@ -290,6 +300,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	var scopePreferences ScopePreferenceStore
 	var approvals *ApprovalCoordinator
 	var restartProposals RestartDeploymentProposalPreparer
+	var remediationProposals RemediationProposalPreparer
+	var localProposals LocalActionProposalPreparer
 	var evidenceDetails EvidenceDetailReader
 	var localState LocalStateDeleter
 	if config.UI != nil {
@@ -301,6 +313,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		scopePreferences = config.UI.ScopePreferences
 		approvals = config.UI.Approvals
 		restartProposals = config.UI.RestartProposals
+		remediationProposals = config.UI.RemediationProposals
+		localProposals = config.UI.LocalProposals
 		evidenceDetails = config.UI.EvidenceDetail
 		localState = config.UI.LocalState
 		if approvals != nil && uiScopes.BindApprovalInvalidationHook(approvals) != nil {
@@ -318,15 +332,17 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
-		uiScopes:         uiScopes,
-		scopePreferences: scopePreferences,
-		approvals:        approvals,
-		restartProposals: restartProposals,
-		evidenceDetails:  evidenceDetails,
-		localState:       localState,
-		exports:          config.Exports,
-		exportFiles:      config.ExportFiles,
-		exportText:       config.ExportText,
+		uiScopes:             uiScopes,
+		scopePreferences:     scopePreferences,
+		approvals:            approvals,
+		restartProposals:     restartProposals,
+		remediationProposals: remediationProposals,
+		localProposals:       localProposals,
+		evidenceDetails:      evidenceDetails,
+		localState:           localState,
+		exports:              config.Exports,
+		exportFiles:          config.ExportFiles,
+		exportText:           config.ExportText,
 	}, nil
 }
 
@@ -922,7 +938,7 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return coordinator.executeHistoryDeletionCommand(ctx, command)
 	case UICommandExportSession:
 		return coordinator.executeExportSessionCommand(ctx, command)
-	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
 		if coordinator.approvals == nil {
 			return UICommandOutcome{}, ErrApprovalUnavailable
 		}
@@ -930,18 +946,20 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 			result UIApprovalResult
 			err    error
 		)
-		if command.Kind == UICommandExpireRestart {
+		if command.Kind == UICommandExpireAction {
 			result, err = coordinator.approvals.ExpireCommand(ctx, command)
 		} else {
 			result, err = coordinator.approvals.Decide(ctx, command)
-			if err == nil && command.Kind == UICommandApproveRestart && result.State == domain.ApprovalStateApproved {
-				result, err = coordinator.approvals.ConsumeApprovedRestart(ctx, command)
+			if err == nil && command.Kind == UICommandApproveAction && result.State == domain.ApprovalStateApproved {
+				result, err = coordinator.approvals.ConsumeApprovedAction(ctx, command)
 			}
 		}
 		if err != nil && !errors.Is(err, ErrApprovalExpired) && !errors.Is(err, ErrApprovalInvalidated) &&
 			!errors.Is(err, ErrApprovalExecutionFailed) && !errors.Is(err, ErrApprovalPatchOutcomeUnknown) &&
 			!errors.Is(err, ErrApprovalRolloutTimedOut) && !errors.Is(err, ErrApprovalRolloutFailed) &&
-			!errors.Is(err, ErrApprovalRolloutUnavailable) && !errors.Is(err, ErrApprovalResultAuditUnavailable) {
+			!errors.Is(err, ErrApprovalRolloutUnavailable) && !errors.Is(err, ErrApprovalResultAuditUnavailable) &&
+			!errors.Is(err, ErrApprovalActionFailed) && !errors.Is(err, ErrApprovalActionOutcomeUnknown) &&
+			!errors.Is(err, ErrApprovalActionVerificationFailed) {
 			return UICommandOutcome{}, err
 		}
 		return UICommandOutcome{
@@ -1450,10 +1468,25 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	}
 	_, prometheusEnabled := observabilityPolicies.Resolve(domain.DataSourcePrometheus)
 	_, lokiEnabled := observabilityPolicies.Resolve(domain.DataSourceLoki)
+	remoteDiagnostics := domain.DisabledRemoteDiagnosticsPolicyCatalog()
+	if source, ok := coordinator.runResourcePolicies.(RunRemoteDiagnosticsPolicySource); ok {
+		if snapshot, _, current := source.RemoteDiagnosticsPolicySnapshot(context.Background()); current {
+			remoteDiagnostics = snapshot
+		}
+	}
+	_, containerFileEnabled := remoteDiagnostics.ContainerFile()
+	localCommands := domain.DisabledLocalCommandPolicyCatalog()
+	localShells := domain.DisabledLocalShellPolicyCatalog()
+	if coordinator.localProposals != nil {
+		localCommands = coordinator.localProposals.CommandCatalog()
+		localShells = coordinator.localProposals.ShellCatalog()
+	}
 	result := UIStatusResult{
 		Session: coordinator.CurrentUISession(), CapabilityCatalogVersion: agent.ToolCatalogVersion,
 		ResourcePolicyVersion: resourcePolicies.Version(), ResourceTypeCount: len(resourcePolicies.Entries()),
 		ObservabilityPolicyVersion: observabilityPolicies.Version(), PrometheusEnabled: prometheusEnabled, LokiEnabled: lokiEnabled,
+		RemoteDiagnosticsPolicyVersion: remoteDiagnostics.Version(), PodExecPolicyCount: len(remoteDiagnostics.PodExecPolicies()), DiagnosticPodPolicyCount: len(remoteDiagnostics.DiagnosticPodPolicies()), ContainerFileReadEnabled: containerFileEnabled,
+		LocalExecutionPolicyVersion: localCommands.Version(), LocalCommandPolicyCount: len(localCommands.Policies()), LocalShellPolicyCount: len(localShells.Policies()),
 		Budget: UIBudgetStatus{
 			ModelEvidenceBasis: ModelBudgetEvidenceBasis,
 			Profile:            limits.Profile, RunMilliseconds: limits.RunDuration.Milliseconds(),
@@ -1468,7 +1501,9 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 			EventPageBytesMaximum: limits.EventPageBytes, EventBytesMaximum: limits.EventBytes,
 			MetricCallsMaximum: limits.MetricCalls, MetricContainersMaximum: limits.MetricContainers, MetricBytesMaximum: limits.MetricBytes,
 			DataSourceCallsMaximum: limits.DataSourceCalls, DataSourcePagesMaximum: limits.DataSourcePages,
-			DataSourceSeriesMaximum: limits.DataSourceSeries, DataSourceSamplesMaximum: limits.DataSourceSamples,
+			RemoteExecCallsMaximum:   limits.RemoteExecCalls,
+			LocalProcessCallsMaximum: limits.LocalProcessCalls,
+			DataSourceSeriesMaximum:  limits.DataSourceSeries, DataSourceSamplesMaximum: limits.DataSourceSamples,
 			DataSourceLinesMaximum: limits.DataSourceLines, DataSourceBytesMaximum: limits.DataSourceBytes,
 			DataSourceWindowMillis: limits.DataSourceWindow.Milliseconds(), DataSourceStepMillis: limits.DataSourceStep.Milliseconds(),
 			ResourcePagesMaximum: limits.ResourcePages, ResourcePageItemsMaximum: limits.ResourcePageItems,
@@ -1513,6 +1548,8 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 		result.Budget.LogCallsUsed = state.logCalls
 		result.Budget.MetricCallsUsed = state.metricCalls
 		result.Budget.DataSourceCallsUsed = state.dataSourceCalls
+		result.Budget.RemoteExecCallsUsed = state.remoteExecCalls
+		result.Budget.LocalProcessCallsUsed = state.localProcessCalls
 		if state.run.StartedAt != nil {
 			elapsed := coordinator.now().Sub(*state.run.StartedAt)
 			if elapsed < 0 {
@@ -1915,15 +1952,32 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 			return "", ErrCoordinatorDependency
 		}
 	}
+	remoteDiagnosticsPolicies := domain.DisabledRemoteDiagnosticsPolicyCatalog()
+	if source, ok := coordinator.runResourcePolicies.(RunRemoteDiagnosticsPolicySource); ok {
+		var remoteGeneration domain.PolicyGeneration
+		remoteDiagnosticsPolicies, remoteGeneration, policyCurrent = source.RemoteDiagnosticsPolicySnapshot(runContext)
+		if !policyCurrent || remoteDiagnosticsPolicies.Validate() != nil || remoteGeneration != policyGeneration {
+			return "", ErrCoordinatorDependency
+		}
+	}
+	localCommands := domain.DisabledLocalCommandPolicyCatalog()
+	localShells := domain.DisabledLocalShellPolicyCatalog()
+	if coordinator.localProposals != nil {
+		localCommands = coordinator.localProposals.CommandCatalog()
+		localShells = coordinator.localProposals.ShellCatalog()
+		if localCommands.Validate() != nil || localShells.Validate() != nil {
+			return "", ErrCoordinatorDependency
+		}
+	}
 	runID, runErr := coordinator.identifiers.NewAgentRunID()
 	messageID, messageErr := coordinator.identifiers.NewMessageID()
 	startedAt := coordinator.now()
 	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
 		return "", ErrCoordinatorDependency
 	}
-	input, err := agent.NewRunInputWithOperationalPolicyContext(
+	input, err := agent.NewRunInputWithExecutionPolicyContext(
 		runID, command.SessionID, messageID, processed.Value, scope, command.Resource, coordinator.budgetLimits, conversation,
-		resourcePolicies, observabilityPolicies, policyGeneration,
+		resourcePolicies, observabilityPolicies, remoteDiagnosticsPolicies, localCommands, localShells, policyGeneration,
 	)
 	if err != nil {
 		return "", ErrCoordinatorDependency
@@ -2091,7 +2145,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		// re-reads the exact Deployment and derives every digest-bound identity
 		// field locally; inability to prepare an action does not invalidate the
 		// otherwise valid answer.
-		_ = coordinator.prepareRestartProposal(ctx, state)
+		_ = coordinator.prepareActionProposal(ctx, state)
 	}
 	if event.Terminal() {
 		coordinator.observe(ctx, RunObservation{
@@ -2185,6 +2239,171 @@ func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, stat
 	}
 	if request.Validate() != nil || request.RunID != state.run.ID || request.SessionID != state.run.SessionID ||
 		request.Intent != intent || request.State != domain.ApprovalStatePending {
+		return ErrApprovalUnavailable
+	}
+	state.bridge.sequence = sequence
+	return nil
+}
+
+func (coordinator *Coordinator) prepareActionProposal(ctx context.Context, state *activeRun) error {
+	if coordinator == nil || state == nil || state.diagnosis == nil {
+		return nil
+	}
+	var proposed *domain.RecommendedAction
+	for index := range state.diagnosis.RecommendedActions {
+		action := &state.diagnosis.RecommendedActions[index]
+		if action.Operation == "" {
+			continue
+		}
+		if proposed != nil {
+			return ErrApprovalUnavailable
+		}
+		proposed = action
+	}
+	if proposed == nil {
+		return nil
+	}
+	switch proposed.Operation {
+	case domain.ActionOperationRestartDeployment:
+		return coordinator.prepareRestartProposal(ctx, state)
+	case domain.ActionOperationScaleWorkload,
+		domain.ActionOperationRollbackDeployment,
+		domain.ActionOperationDeleteOwnedPod,
+		domain.ActionOperationCordonNode,
+		domain.ActionOperationUncordonNode,
+		domain.ActionOperationDrainNode:
+		return coordinator.prepareRemediationProposal(ctx, state, *proposed)
+	case domain.ActionOperationRestrictedLocalArgv, domain.ActionOperationShell:
+		if err := coordinator.reserveLocalProcessProposal(state); err != nil {
+			return err
+		}
+		return coordinator.prepareLocalProposal(ctx, state, *proposed)
+	default:
+		return ErrApprovalUnavailable
+	}
+}
+
+// reserveLocalProcessProposal atomically consumes the run's sole local-process
+// opportunity before Namespace or filesystem inspection. The approved request
+// is one-time, so one reservation can result in at most one process attempt.
+func (coordinator *Coordinator) reserveLocalProcessProposal(state *activeRun) error {
+	if coordinator == nil || state == nil {
+		return ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.budgetLimits.LocalProcessCalls < 1 || state.localProcessCalls >= coordinator.budgetLimits.LocalProcessCalls {
+		return ErrApprovalUnavailable
+	}
+	state.localProcessCalls++
+	return nil
+}
+
+func (coordinator *Coordinator) prepareRemediationProposal(
+	ctx context.Context,
+	state *activeRun,
+	proposed domain.RecommendedAction,
+) error {
+	if coordinator.approvals == nil || coordinator.remediationProposals == nil || state.bridge == nil || proposed.Target == nil {
+		return ErrApprovalUnavailable
+	}
+	risk := domain.RiskReview
+	if proposed.Operation == domain.ActionOperationRollbackDeployment || proposed.Operation == domain.ActionOperationDrainNode {
+		risk = domain.RiskCritical
+	}
+	policy, liveScope, err := coordinator.approvals.PrepareActionPolicy(
+		state.run.SessionID, state.run.Scope, proposed.Operation,
+		domain.CapabilityEffectClusterMutation, risk, true,
+	)
+	if err != nil {
+		return err
+	}
+	replicaTarget, revision := int64(0), int64(0)
+	if proposed.Parameters != nil {
+		value, ok := proposed.Parameters.Int64()
+		if !ok {
+			return ErrApprovalUnavailable
+		}
+		if proposed.Operation == domain.ActionOperationScaleWorkload {
+			replicaTarget = value
+		} else {
+			revision = value
+		}
+	}
+	plan, err := coordinator.remediationProposals.PrepareRemediationAction(ctx, RemediationProposalRequest{
+		RunID: state.run.ID, SessionID: state.run.SessionID, Scope: liveScope,
+		PolicyGeneration: policy.Generation, Operation: proposed.Operation,
+		Target: *proposed.Target, ReplicaTarget: replicaTarget, Revision: revision,
+		ReasonSummary: proposed.Action,
+	})
+	if err != nil || plan.Validate() != nil || plan.RunID != state.run.ID || plan.SessionID != state.run.SessionID ||
+		plan.Scope.Snapshot() != state.run.Scope || plan.Target.Resource.Name != proposed.Target.Name {
+		return ErrApprovalUnavailable
+	}
+	sequence := state.bridge.sequence + 1
+	request, err := coordinator.approvals.SubmitRemediationAction(ctx, sequence, policy, plan)
+	if err != nil {
+		return err
+	}
+	if request.Validate() != nil || request.RunID != state.run.ID || request.SessionID != state.run.SessionID ||
+		request.State != domain.ApprovalStatePending || !plan.MatchesIntent(request.Intent) {
+		return ErrApprovalUnavailable
+	}
+	state.bridge.sequence = sequence
+	return nil
+}
+
+func (coordinator *Coordinator) prepareLocalProposal(
+	ctx context.Context,
+	state *activeRun,
+	proposed domain.RecommendedAction,
+) error {
+	if coordinator.approvals == nil || coordinator.localProposals == nil || state.bridge == nil || proposed.Target == nil ||
+		proposed.Parameters == nil || proposed.Target.Name != state.run.Scope.Namespace {
+		return ErrApprovalUnavailable
+	}
+	policyID := proposed.Parameters.Value
+	risk := domain.RiskCritical
+	if proposed.Operation == domain.ActionOperationRestrictedLocalArgv {
+		policy, found := coordinator.localProposals.CommandPolicy(policyID)
+		if !found || policy.Validate() != nil {
+			return ErrPermissionDenied
+		}
+		risk = policy.Risk()
+	} else if policy, found := coordinator.localProposals.ShellPolicy(policyID); !found || policy.Validate() != nil {
+		return ErrPermissionDenied
+	}
+	permission, liveScope, err := coordinator.approvals.PrepareActionPolicy(
+		state.run.SessionID, state.run.Scope, proposed.Operation,
+		domain.CapabilityEffectLocalExecute, risk, true,
+	)
+	if err != nil {
+		return err
+	}
+	sequence := state.bridge.sequence + 1
+	var request domain.ApprovalRequest
+	if proposed.Operation == domain.ActionOperationRestrictedLocalArgv {
+		plan, prepareErr := coordinator.localProposals.PrepareCommand(
+			ctx, state.run.ID, state.run.SessionID, liveScope, permission.Generation, policyID, proposed.Action,
+		)
+		if prepareErr != nil || plan.Validate() != nil {
+			return ErrApprovalUnavailable
+		}
+		request, err = coordinator.approvals.SubmitLocalCommandAction(ctx, sequence, permission, plan)
+	} else {
+		plan, prepareErr := coordinator.localProposals.PrepareShell(
+			ctx, state.run.ID, state.run.SessionID, liveScope, permission.Generation, policyID, proposed.Action,
+		)
+		if prepareErr != nil || plan.Validate() != nil {
+			return ErrApprovalUnavailable
+		}
+		request, err = coordinator.approvals.SubmitLocalShellAction(ctx, sequence, permission, plan)
+	}
+	if err != nil {
+		return err
+	}
+	if request.Validate() != nil || request.RunID != state.run.ID || request.SessionID != state.run.SessionID ||
+		request.State != domain.ApprovalStatePending || request.Intent.Parameters.PolicyID != policyID {
 		return ErrApprovalUnavailable
 	}
 	state.bridge.sequence = sequence
@@ -2395,6 +2614,12 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 		if event.ToolInvocation.Name == domain.ToolNameQueryPrometheus || event.ToolInvocation.Name == domain.ToolNameQueryLoki {
 			state.dataSourceCalls += event.ExternalCallCost
 			if state.dataSourceCalls > state.input.BudgetLimits().DataSourceCalls {
+				return persistenceAction{}, ErrInvalidAgentEvent
+			}
+		}
+		if event.ToolInvocation.Name == domain.ToolNamePodExec || event.ToolInvocation.Name == domain.ToolNameReadContainerFile || event.ToolInvocation.Name == domain.ToolNameRunDiagnosticPod {
+			state.remoteExecCalls += event.ExternalCallCost
+			if state.remoteExecCalls > state.input.BudgetLimits().RemoteExecCalls {
 				return persistenceAction{}, ErrInvalidAgentEvent
 			}
 		}
@@ -3018,6 +3243,10 @@ func cloneDiagnosis(value domain.Diagnosis) domain.Diagnosis {
 		if value.RecommendedActions[index].Target != nil {
 			target := *value.RecommendedActions[index].Target
 			copy.RecommendedActions[index].Target = &target
+		}
+		if value.RecommendedActions[index].Parameters != nil {
+			parameters := *value.RecommendedActions[index].Parameters
+			copy.RecommendedActions[index].Parameters = &parameters
 		}
 	}
 	copy.ValidationWarnings = append([]string(nil), value.ValidationWarnings...)

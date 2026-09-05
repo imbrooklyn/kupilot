@@ -20,6 +20,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/cli"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	"github.com/imbrooklyn/kupilot/internal/executor"
 	"github.com/imbrooklyn/kupilot/internal/kube"
 	"github.com/imbrooklyn/kupilot/internal/observability"
 	"github.com/imbrooklyn/kupilot/internal/persistence/filesystem"
@@ -190,6 +191,10 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
+	remediator, err := kube.NewRemediator(runtimeGateway, now)
+	if err != nil {
+		return err
+	}
 	approvalService, err := approval.NewService(approval.ServiceConfig{
 		Clock: compositionApprovalClock{now: now}, Nonces: identifiers,
 		Store: approvalRepository, AuditIDs: identifiers,
@@ -211,7 +216,15 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
-	resourceAuthority, err := application.NewOperationalReadAuthority(resourcePolicies, observabilityPolicies, permissionManager)
+	remoteDiagnosticsPolicies, err := loaded.Config.RemoteDiagnosticsPolicyCatalog()
+	if err != nil {
+		return err
+	}
+	localCommandPolicies, localShellPolicies, err := loaded.Config.LocalExecutionPolicyCatalogs()
+	if err != nil {
+		return err
+	}
+	resourceAuthority, err := application.NewCompleteOperationalAuthority(resourcePolicies, observabilityPolicies, remoteDiagnosticsPolicies, permissionManager)
 	if err != nil {
 		return err
 	}
@@ -238,8 +251,27 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		lokiReader = client
 	}
 	redactor := security.NewRedactor()
+	localExecutor, err := executor.NewAdapter(redactor, now)
+	if err != nil {
+		return err
+	}
+	localPreparer, err := application.NewLocalActionPreparer(
+		localCommandPolicies, localShellPolicies, remediator, localExecutor,
+	)
+	if err != nil {
+		return err
+	}
 	readPolicy := compositionObservationPolicy{privacy: privacyManager, permissions: permissionManager}
-	toolHandlers, err := tools.NewReadOnlyToolCatalog(tools.ReadOnlyToolCatalogDependencies{
+	remoteActionGate, err := application.NewRemoteDiagnosticActionGate(application.RemoteDiagnosticActionGateConfig{
+		Service: approvalService, Persistence: approvalRepository, ResultAudits: auditRepository,
+		Revalidator: runtimeGateway, Scope: scopeManager, Identifiers: identifiers, Permissions: permissionManager,
+		PolicyCatalog: remoteDiagnosticsPolicies, Now: now,
+		PersistenceTimeout: application.DefaultPersistenceTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	toolHandlers, err := tools.NewToolCatalog(tools.ToolCatalogDependencies{
 		Resources: tools.ResourceToolDependencies{
 			Reader: runtimeGateway, QueryReader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
 			EvidenceIDs: identifiers, Text: redactor, Now: now,
@@ -263,6 +295,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Related: tools.RelatedToolDependencies{
 			Reader: runtimeGateway, ScopeGuard: scopeManager,
 			EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+		Remote: &tools.RemoteDiagnosticToolDependencies{
+			Resolver: runtimeGateway, Commands: runtimeGateway, DiagnosticPods: runtimeGateway,
+			ScopeGuard: scopeManager, PolicyGuard: resourceAuthority, Actions: remoteActionGate,
+			OutputPolicy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
 		},
 	})
 	if err != nil {
@@ -387,6 +424,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Rollout:            rolloutObserver,
 		RestartRevalidator: restarter,
 		RestartExecutor:    restarter,
+		Remediation:        remediator,
+		LocalProcesses:     localExecutor,
 		Permissions:        permissionManager,
 		Reviewer:           reviewerBinding,
 		Reviews:            approvalRepository,
@@ -409,6 +448,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
 			ScopePreferences: scopePreferenceRepository,
 			Approvals:        approvalCoordinator, RestartProposals: restarter,
+			RemediationProposals: remediator, LocalProposals: localPreparer,
 			EvidenceDetail: evidenceApplication, LocalState: database,
 		},
 	})
@@ -1169,6 +1209,20 @@ func (policy compositionObservationPolicy) AuthorizeLogRead(ctx context.Context,
 	switch evaluation.Disposition {
 	case domain.ReviewDispositionAutomatic, domain.ReviewDispositionHuman, domain.ReviewDispositionReviewer:
 		return tools.LogPolicyPermissionRequired
+	default:
+		return tools.LogPolicyDenied
+	}
+}
+
+func (policy compositionObservationPolicy) AuthorizeRemoteOutput(ctx context.Context, _ tools.RemoteOutputPolicyRequest) tools.LogPolicyDecision {
+	if policy.privacy == nil {
+		return tools.LogPolicyDenied
+	}
+	switch policy.privacy.AuthorizeContainerOutput(ctx) {
+	case application.PrivacyLogAllowed:
+		return tools.LogPolicyAllowed
+	case application.PrivacyLogConsentRequired:
+		return tools.LogPolicyConsentRequired
 	default:
 		return tools.LogPolicyDenied
 	}

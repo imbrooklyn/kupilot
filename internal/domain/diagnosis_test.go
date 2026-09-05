@@ -86,6 +86,57 @@ func TestDiagnosisValidationKeepsFourCollectionsAndUnexecutedActions(t *testing.
 	}
 }
 
+func TestDiagnosisValidatesEveryAdmittedTypedProposalWithoutExecutionAuthority(t *testing.T) {
+	scope := ScopeSnapshot{Context: "test-context", Namespace: "team-a", Generation: 4}
+	tests := []struct {
+		operation  ActionOperation
+		target     ResourceRef
+		parameters *ProposedActionParameters
+	}{
+		{ActionOperationRestartDeployment, ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "api"}, nil},
+		{ActionOperationScaleWorkload, ResourceRef{APIVersion: "apps/v1", Kind: "StatefulSet", Namespace: "team-a", Name: "db"}, &ProposedActionParameters{Kind: ProposedActionParameterReplicas, Value: "3"}},
+		{ActionOperationRollbackDeployment, ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "api"}, &ProposedActionParameters{Kind: ProposedActionParameterRevision, Value: "2"}},
+		{ActionOperationDeleteOwnedPod, ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "api-123"}, nil},
+		{ActionOperationCordonNode, ResourceRef{APIVersion: "v1", Kind: "Node", Name: "worker-a"}, nil},
+		{ActionOperationUncordonNode, ResourceRef{APIVersion: "v1", Kind: "Node", Name: "worker-a"}, nil},
+		{ActionOperationDrainNode, ResourceRef{APIVersion: "v1", Kind: "Node", Name: "worker-a"}, nil},
+		{ActionOperationRestrictedLocalArgv, ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: "team-a"}, &ProposedActionParameters{Kind: ProposedActionParameterPolicyID, Value: "helm-history"}},
+		{ActionOperationShell, ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: "team-a"}, &ProposedActionParameters{Kind: ProposedActionParameterPolicyID, Value: "maintenance-shell"}},
+	}
+	for index, test := range tests {
+		diagnosis := Diagnosis{
+			ID:    DiagnosisID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 3000+index)),
+			RunID: AgentRunID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 3100+index)),
+			Scope: scope, AnswerMarkdown: "The action is available for explicit supervision.",
+			RecommendedActions: []RecommendedAction{{
+				Operation: test.operation, Target: &test.target, Parameters: test.parameters,
+				Action: "Propose one exact supervised action.", Risk: "Runtime policy determines the authoritative risk.",
+			}},
+			CreatedAt: time.UnixMilli(42).UTC(),
+		}
+		if err := diagnosis.Validate(); err != nil {
+			t.Errorf("Validate(%s) error = %v", test.operation, err)
+		}
+	}
+
+	invalid := []RecommendedAction{
+		{Operation: ActionOperationScaleWorkload, Target: &ResourceRef{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "api"}, Parameters: &ProposedActionParameters{Kind: ProposedActionParameterReplicas, Value: "03"}, Action: "Invalid replicas.", Risk: "Invalid."},
+		{Operation: ActionOperationRestrictedLocalArgv, Target: &ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: "team-a"}, Parameters: &ProposedActionParameters{Kind: ProposedActionParameterPolicyID, Value: "kubectl --token=x"}, Action: "Invalid policy.", Risk: "Invalid."},
+		{Operation: ActionOperationShell, Target: &ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: "other"}, Parameters: &ProposedActionParameters{Kind: ProposedActionParameterPolicyID, Value: "shell"}, Action: "Invalid target.", Risk: "Invalid."},
+	}
+	for index, action := range invalid {
+		diagnosis := Diagnosis{
+			ID:    DiagnosisID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 3200+index)),
+			RunID: AgentRunID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 3300+index)),
+			Scope: scope, RecommendedActions: []RecommendedAction{action}, AnswerMarkdown: "Invalid proposal.",
+			CreatedAt: time.UnixMilli(42).UTC(),
+		}
+		if diagnosis.Validate() == nil {
+			t.Errorf("invalid proposal %d was accepted", index)
+		}
+	}
+}
+
 func cloneDiagnosis(value Diagnosis) Diagnosis {
 	result := value
 	result.ConfirmedFacts = append([]ConfirmedFact(nil), value.ConfirmedFacts...)

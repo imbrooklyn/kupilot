@@ -131,7 +131,7 @@ func TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors(t *testing.T) {
 	}
 }
 
-func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *testing.T) {
+func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *testing.T) {
 	t.Parallel()
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -144,16 +144,18 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *te
 	}
 	mainSource := string(mainContent)
 	if strings.Count(mainSource, "openaicompat.New(") != 0 || strings.Count(mainSource, "einoadapter.New(") != 1 ||
-		strings.Count(mainSource, "tools.NewReadOnlyToolCatalog(") != 1 ||
+		strings.Count(mainSource, "tools.NewToolCatalog(") != 1 ||
 		strings.Count(mainSource, "sqlite.NewScopePreferenceRepository(") != 1 ||
 		strings.Count(mainSource, "ScopePreferences: scopePreferenceRepository") != 1 ||
 		strings.Count(mainSource, "approval.NewService(") != 1 ||
 		strings.Count(mainSource, "application.NewApprovalCoordinator(") != 1 ||
+		strings.Count(mainSource, "application.NewRemoteDiagnosticActionGate(") != 1 ||
+		strings.Count(mainSource, "Remote: &tools.RemoteDiagnosticToolDependencies{") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRestarter(") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRolloutObserver(") != 1 {
 		t.Fatalf("composition constructor counts are model=%d agent=%d catalog=%d scope-preference=%d",
 			strings.Count(mainSource, "openaicompat.New("), strings.Count(mainSource, "einoadapter.New("),
-			strings.Count(mainSource, "tools.NewReadOnlyToolCatalog("),
+			strings.Count(mainSource, "tools.NewToolCatalog("),
 			strings.Count(mainSource, "sqlite.NewScopePreferenceRepository("))
 	}
 	for _, forbidden := range []string{"einoopenai", "net/http", "kubectl", "os/exec", "dynamic.Interface", "WriteExecutor"} {
@@ -161,7 +163,13 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedRestartPath(t *te
 			t.Fatalf("composition contains forbidden capability %q", forbidden)
 		}
 	}
-	for _, forbiddenAuthority := range []string{"return tools.LogPolicyAllowed", "return tools.ObservationPolicyAllowed"} {
+	remotePolicyStart := strings.Index(mainSource, "func (policy compositionObservationPolicy) AuthorizeRemoteOutput")
+	observationPolicyStart := strings.Index(mainSource, "func (policy compositionObservationPolicy) AuthorizeObservation")
+	logAllowed := strings.Index(mainSource, "return tools.LogPolicyAllowed")
+	if strings.Count(mainSource, "return tools.LogPolicyAllowed") != 1 || remotePolicyStart < 0 || observationPolicyStart < 0 || logAllowed < remotePolicyStart || logAllowed > observationPolicyStart {
+		t.Fatal("composition may allow sanitized container output only inside the separately ActionEnvelope-gated remote-output policy")
+	}
+	for _, forbiddenAuthority := range []string{"return tools.ObservationPolicyAllowed"} {
 		if strings.Contains(mainSource, forbiddenAuthority) {
 			t.Fatalf("composition grants review-class read authority without an ActionEnvelope: %q", forbiddenAuthority)
 		}

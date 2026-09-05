@@ -718,7 +718,7 @@ func (model *scriptedConversationModel) ServeHTTP(writer http.ResponseWriter, re
 	switch callIndex {
 	case 0:
 		if len(captured.Messages) < 2 || captured.Messages[0].Role != "system" ||
-			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 11 {
+			!strings.Contains(captured.Messages[0].Content, agentcore.SystemPromptVersion) || len(captured.Tools) != 14 {
 			model.t.Errorf("initial model request does not contain the fixed policy and eleven Tools")
 			writer.WriteHeader(http.StatusBadRequest)
 			return

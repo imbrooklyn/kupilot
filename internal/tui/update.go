@@ -176,8 +176,8 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
-	if message.Command == application.UICommandApproveRestart || message.Command == application.UICommandRejectRestart ||
-		message.Command == application.UICommandExpireRestart {
+	if message.Command == application.UICommandApproveAction || message.Command == application.UICommandRejectAction ||
+		message.Command == application.UICommandExpireAction {
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || message.RequestID != model.pendingApprovalID ||
 			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
 			message.ApprovalID != model.pendingApproval.RequestID ||
@@ -628,9 +628,9 @@ func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd)
 		return model, nil
 	}
 	request := *model.pendingApproval
-	kind := application.UICommandRejectRestart
+	kind := application.UICommandRejectAction
 	if !forceReject && model.approvalDialog.ApproveSelected() {
-		kind = application.UICommandApproveRestart
+		kind = application.UICommandApproveAction
 	}
 	requestID := model.nextUIRequestID()
 	command := application.UICommand{
@@ -1379,7 +1379,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active diagnostic run was cancelled.")
 	case application.UICommandCancelPrivacy:
 		model.finishPrivacyAction(result.RequestID)
-	case application.UICommandApproveRestart, application.UICommandRejectRestart, application.UICommandExpireRestart:
+	case application.UICommandApproveAction, application.UICommandRejectAction, application.UICommandExpireAction:
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || result.RequestID != model.pendingApprovalID ||
 			result.Approval.RequestID != model.pendingApproval.RequestID ||
 			result.Approval.RunID != model.pendingApproval.RunID ||
@@ -1398,15 +1398,15 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 				_ = model.composer.Focus()
 				model.focus = FocusComposer
 			}
-			model.transcript.AppendNotice("The restart request was approved but not executed.")
+			model.transcript.AppendNotice("The action was approved but not executed.")
 		case domain.ApprovalStateRejected:
 			model.clearApproval()
-			model.transcript.AppendNotice("The restart request was rejected. No operation was executed.")
+			model.transcript.AppendNotice("The action was rejected. No operation was executed.")
 		case domain.ApprovalStateExpired:
 			model.clearApproval()
-			model.transcript.AppendNotice("The restart approval expired. No operation was executed.")
+			model.transcript.AppendNotice("The action approval expired. No operation was executed.")
 		case domain.ApprovalStateConsumed:
-			status := restartExecutionStatus(*result.Approval.Execution)
+			status := approvalExecutionStatus(*result.Approval)
 			if model.approvalDialog.Open() {
 				model.approvalDialog.SetStatus(status, true)
 			}
@@ -1414,9 +1414,12 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.pendingApprovalID = 0
 			model.approvalState = ""
 			model.transcript.AppendNotice(status)
+			if result.Approval.ActionExecution != nil && result.Approval.ActionExecution.SafeOutput != "" {
+				model.transcript.AppendNotice("Sanitized command output:\n" + result.Approval.ActionExecution.SafeOutput)
+			}
 		default:
 			model.clearApproval()
-			model.transcript.AppendNotice("The restart approval was invalidated. No operation was executed.")
+			model.transcript.AppendNotice("The action approval was invalidated. No operation was executed.")
 		}
 	case application.UICommandResumeSession:
 		model.showDialog("Command unavailable", "The command is not available in the current flow.")
@@ -1444,7 +1447,7 @@ func (model *Model) expirePendingApproval() tea.Cmd {
 	request := *model.pendingApproval
 	requestID := model.nextUIRequestID()
 	command := application.UICommand{
-		Kind: application.UICommandExpireRestart, RequestID: requestID, RunID: request.RunID,
+		Kind: application.UICommandExpireAction, RequestID: requestID, RunID: request.RunID,
 		ExpectedScopeGeneration: request.Scope.Generation,
 		ApprovalID:              request.RequestID, ApprovalDigest: request.Digest,
 		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
@@ -1837,7 +1840,7 @@ func statusText(status application.UIStatusResult, modelName string) string {
 	actions := "unavailable until scope verification"
 	if status.ReadOnly {
 		access = "namespace policy " + string(status.NamespaceAccess)
-		actions = "restart_deployment · local approval and Kubernetes RBAC required"
+		actions = "typed remediation and exact local policies · permission route and fresh RBAC required"
 	}
 	run := "idle"
 	if status.RunActive {
@@ -1914,6 +1917,10 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		statusRow("Resources", fmt.Sprintf("%s · %d types", status.ResourcePolicyVersion, status.ResourceTypeCount)),
 		statusRow("Observability", fmt.Sprintf("%s · Prometheus %s · Loki %s", status.ObservabilityPolicyVersion,
 			statusEnabled(status.PrometheusEnabled), statusEnabled(status.LokiEnabled))),
+		statusRow("Remote diagnostics", fmt.Sprintf("%s · Pod exec policies %d · container files %s · diagnostic Pod policies %d", status.RemoteDiagnosticsPolicyVersion,
+			status.PodExecPolicyCount, statusEnabled(status.ContainerFileReadEnabled), status.DiagnosticPodPolicyCount)),
+		statusRow("Local execution", fmt.Sprintf("%s · direct argv policies %d · shell policies %d · OS sandbox not provided", status.LocalExecutionPolicyVersion,
+			status.LocalCommandPolicyCount, status.LocalShellPolicyCount)),
 		"",
 		"Budget",
 		statusRow("Profile", string(budget.Profile)),
@@ -1927,6 +1934,8 @@ func statusText(status application.UIStatusResult, modelName string) string {
 			budget.ReviewerCostUnitsUsed, budget.ReviewerCostUnitsMaximum)),
 		statusRow("Data", fmt.Sprintf("%s/%s · %d/%d log calls", statusBytes(budget.ToolResultBytesUsed),
 			statusBytes(budget.ToolResultBytesMaximum), budget.LogCallsUsed, budget.LogCallsMaximum)),
+		statusRow("Remote exec", fmt.Sprintf("%d/%d calls", budget.RemoteExecCallsUsed, budget.RemoteExecCallsMaximum)),
+		statusRow("Local process", fmt.Sprintf("%d/%d reserved proposals", budget.LocalProcessCallsUsed, budget.LocalProcessCallsMaximum)),
 		statusRow("Events", fmt.Sprintf("%d pages · %d items/page · %s/page · %s total",
 			budget.EventPagesMaximum, budget.EventPageItemsMaximum, statusBytes(budget.EventPageBytesMaximum), statusBytes(budget.EventBytesMaximum))),
 		statusRow("Logs", fmt.Sprintf("%d containers · %s/read", budget.LogContainersMaximum, statusBytes(budget.LogBytesMaximum))),
@@ -1987,17 +1996,39 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		return nil
 	}
 	if event.Kind == application.UIEventApprovalClosed {
-		if model.pendingApproval == nil || event.ApprovalResult.RequestID != model.pendingApproval.RequestID ||
-			event.RunID != model.pendingApproval.RunID || event.Sequence != model.pendingApproval.Sequence ||
-			!event.ApprovalResult.Digest.Equal(model.pendingApproval.Digest) {
+		state := event.ApprovalResult.State
+		if model.pendingApproval == nil {
+			if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
+				event.Sequence != model.run.LastSequence+1 {
+				return nil
+			}
+			model.run.LastSequence = event.Sequence
+			if state == domain.ApprovalStateConsumed {
+				model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
+				if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
+					model.transcript.AppendNotice("Sanitized command output:\n" + event.ApprovalResult.ActionExecution.SafeOutput)
+				}
+			} else if state == domain.ApprovalStateRejected {
+				model.transcript.AppendNotice("The action was denied before execution.")
+			} else {
+				model.transcript.AppendNotice("The action closed without execution.")
+			}
 			return nil
 		}
-		state := event.ApprovalResult.State
+		if event.ApprovalResult.RequestID != model.pendingApproval.RequestID || event.RunID != model.pendingApproval.RunID ||
+			event.Sequence != model.pendingApproval.Sequence || !event.ApprovalResult.Digest.Equal(model.pendingApproval.Digest) {
+			return nil
+		}
 		model.clearApproval()
-		if state == domain.ApprovalStateExpired {
-			model.transcript.AppendNotice("The restart approval expired. No operation was executed.")
+		if state == domain.ApprovalStateConsumed {
+			model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
+			if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
+				model.transcript.AppendNotice("Sanitized command output:\n" + event.ApprovalResult.ActionExecution.SafeOutput)
+			}
+		} else if state == domain.ApprovalStateExpired {
+			model.transcript.AppendNotice("The action approval expired. No operation was executed.")
 		} else {
-			model.transcript.AppendNotice("The restart approval was cancelled or invalidated. No operation was executed.")
+			model.transcript.AppendNotice("The action approval was cancelled, denied, or invalidated. No operation was executed.")
 		}
 		return nil
 	}
@@ -2037,8 +2068,8 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 				sanitizeExternalText(request.Target.Name, 253),
 				sanitizeExternalText(request.Target.APIVersion, 253),
 				sanitizeExternalText(request.Target.UID, 1024)),
-			Current:  sanitizeExternalText(request.CurrentSummary, 4096),
-			Proposed: sanitizeExternalText(request.ProposedSummary, 4096),
+			Current:  sanitizeExternalText(request.CurrentSummary, application.MaxApprovalDisplaySummaryBytes),
+			Proposed: sanitizeExternalText(request.ProposedSummary, application.MaxApprovalDisplaySummaryBytes),
 			Reason:   sanitizeExternalText(request.ReasonSummary, domain.MaxApprovalReasonSummaryBytes),
 			Risk:     sanitizeExternalText(request.RiskSummary, 4096),
 			Digest:   string(request.Digest), ExpiresAt: request.ExpiresAt,
@@ -2161,10 +2192,74 @@ func (model *Model) acceptWorkingTick(message WorkingTickMsg) tea.Cmd {
 }
 
 func approvalOperationLabel(operation domain.ApprovalOperation) string {
-	if operation == domain.ApprovalOperationRestartDeployment {
+	switch operation {
+	case domain.ActionOperationRestartDeployment:
 		return "Restart Deployment"
+	case domain.ActionOperationScaleWorkload:
+		return "Scale Workload"
+	case domain.ActionOperationRollbackDeployment:
+		return "Rollback Deployment"
+	case domain.ActionOperationDeleteOwnedPod:
+		return "Delete Owned Pod"
+	case domain.ActionOperationCordonNode:
+		return "Cordon Node"
+	case domain.ActionOperationUncordonNode:
+		return "Uncordon Node"
+	case domain.ActionOperationDrainNode:
+		return "Drain Node"
+	case domain.ActionOperationRestrictedLocalArgv:
+		return "Run Restricted Command"
+	case domain.ActionOperationShell:
+		return "Run Restricted Shell"
+	default:
+		return "Unavailable operation"
 	}
-	return "Unavailable operation"
+}
+
+func approvalExecutionStatus(result application.UIApprovalResult) string {
+	if result.Execution != nil {
+		return restartExecutionStatus(*result.Execution)
+	}
+	if result.ActionExecution == nil {
+		return "The action result is unavailable."
+	}
+	execution := result.ActionExecution
+	if execution.LocalProcess != nil {
+		switch execution.LocalProcess.State {
+		case domain.LocalProcessExited:
+			if execution.LocalProcess.ExitCode == 0 {
+				return "The exact local process exited successfully. This does not verify any remote state change."
+			}
+			return "The exact local process exited non-zero and will not be retried."
+		case domain.LocalProcessOutputBlocked:
+			return "The exact local process exited, but its sensitive output was blocked and the action is reported as failed."
+		case domain.LocalProcessFailed:
+			return "The local process failed definitively and will not be retried."
+		case domain.LocalProcessUnknown:
+			return "The local process outcome is unknown and will not be retried automatically."
+		default:
+			return "The approved local process was not started and the approval cannot be reused."
+		}
+	}
+	resultValue := execution.Remediation
+	if resultValue == nil {
+		return "The action result is unavailable."
+	}
+	switch resultValue.Attempt.State {
+	case domain.RemediationUnknown:
+		return "The Kubernetes request outcome is unknown and will not be retried automatically."
+	case domain.RemediationFailed:
+		return "The Kubernetes request failed definitively and will not be retried."
+	case domain.RemediationNotAttempted:
+		return "The approved Kubernetes action was not attempted and the approval cannot be reused."
+	}
+	if resultValue.Verification == domain.RemediationVerified {
+		return "Kubernetes accepted the exact request and bounded verification succeeded."
+	}
+	if resultValue.Verification == domain.RemediationVerificationUnavailable {
+		return "Kubernetes accepted the request, but verification became unavailable. No retry was attempted."
+	}
+	return "Kubernetes accepted the request, but bounded verification failed. No retry was attempted."
 }
 
 func restartExecutionStatus(execution application.UIRestartExecution) string {

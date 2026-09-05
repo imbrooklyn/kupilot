@@ -1,9 +1,11 @@
 # Permissions and Controlled Actions
 
-This page defines the Accepted `v0.5` interaction target. The checked-in
-`v0.4` binary still exposes only one supervised `restart_deployment` action;
-the broader permission profiles, Reviewer, remote/local execution, and typed
-remediation are not yet available.
+This page defines the Accepted `v0.5` interaction and its current deterministic
+implementation. The checked-in composition dispatches supervised restart,
+scale, rollback, controller-owned Pod delete, cordon, uncordon, drain, exact
+local direct argv, and the separate shell operation. The default-off remote-
+diagnostic gate is also present, but its human/Reviewer delivery remains fail-
+closed in this slice. No live execution or release readiness is implied.
 
 ## Choose a permission profile
 
@@ -34,7 +36,8 @@ A human may create a narrow Session rule only for `review`. The rule binds an
 exact operation, scope, target/parameter or argv template, data/sink/network
 effects, ceilings, and expiry. It is revocable, valid only in the current
 process and Session, never created by a model or Reviewer, and never restored by
-resume.
+resume. For a restricted local command, the template is the complete exact
+argv vector; a partial prefix cannot authorize a longer local command.
 
 The inline auto-review states are `Reviewing`, `Approved`, `Denied`,
 `Escalated`, and `Timed out`; they are never styled as human decisions. A
@@ -50,6 +53,12 @@ risk, permission profile, exact Context/Namespace and generations, target
 identity, typed parameters or fixed executable plus argv, stdin/TTY/shell
 flags, data categories, sinks, network destinations, time/output limits,
 expiry, verification plan, and digest.
+
+For local execution the review also states that no operating-system sandbox is
+provided. Direct argv shows the exact executable, argv, executable/cwd identity,
+minimal environment, false stdin/TTY/shell flags, data/network effects, opaque
+credential-reference identity, and ceilings. Shell is a distinct `critical`
+envelope; it is never inferred from direct argv.
 
 The digest uses a versioned fixed-order length-prefixed canonical encoding and
 SHA-256. A human summary, model phrase, Reviewer rationale, JSON key order,
@@ -73,6 +82,7 @@ makes at most one external attempt.
 | Denied or rejected | No external attempt occurred. A hard denial cannot be overridden by another profile. |
 | Accepted | The external system accepted the single request; remediation success is not yet known. |
 | Failed | The external system definitively rejected or failed the attempt. Kupilot does not retry it automatically. |
+| Output blocked | A local process started, but sensitive-output handling rejected its output before display. The original bytes are not forwarded to the model, Evidence, history, audit, logs, SQLite, or export, and the action is reported as failed. |
 | Ambiguous or unknown | The request may have reached the external system, but timeout, cancellation, transport loss, or cleanup uncertainty prevents a definitive result. It is never retried automatically. |
 | Progress | A bounded verifier observed an intermediate state. It does not rewrite the attempt result. |
 | Verified | The operation-specific verification plan observed its success condition. |
@@ -112,16 +122,20 @@ and other optional permissions. Do not grant `cluster-admin` or wildcard
 resources/verbs. RBAC cannot enforce Kupilot's field projection, exact command,
 digest, one-attempt, or verification rules.
 
-The current YAML fixtures remain the `v0.4` read and exact Deployment-restart
-examples. They deliberately do not pre-grant future capabilities. See
+Current YAML fixtures remain capability-split and opt-in: remote diagnostics,
+scale, rollback, owned-Pod delete, Node scheduling, and drain each have a narrow
+example in addition to reads and restart. They grant no local process authority
+and deliberately avoid wildcard verbs/resources. See
 [Least-Privilege RBAC](../rbac/README.md).
 
-## Current `v0.4` restart interaction
+## Current shared action interaction
 
-The current binary prepares one exact `apps/v1` Deployment by reading its UID,
-Pod-template fingerprint, generation, and fresh resource version. The dialog
-defaults to Reject and binds the fixed restart operation for 60 seconds.
-Execution makes at most one annotation-only merge PATCH. PATCH accepted,
-failed, or unknown and rollout progress, success, failure, timeout, or
-unavailable remain separate. This is retained as the operation-specific
-foundation that the future common ActionEnvelope must generalize.
+Application prepares each Kubernetes target or local filesystem identity before
+review, defaults the dialog to Reject, and binds the envelope for exactly 60
+seconds. After a valid human, Reviewer, automatic, or Session-rule decision it
+revalidates the complete plan, durably consumes authority and pre-audits, then
+calls only the matching executor at most once. Restart retains its annotation-
+only PATCH. Other Kubernetes actions use their exact scale/update/delete/Node-
+patch/eviction contracts, while local direct argv and shell use distinct
+process contracts. Attempt, partial acceptance, ambiguous outcome, and bounded
+verification remain separate; retry always requires a fresh envelope.

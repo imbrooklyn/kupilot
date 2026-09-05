@@ -402,10 +402,19 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 		}
 		result.RecommendedActions[index] = domain.RecommendedAction{
 			Operation: action.Operation, Target: cloneResourceRef(action.Target),
-			Action: actionText, Risk: risk, Prerequisites: prerequisites, Executed: action.Executed,
+			Parameters: cloneProposedParameters(action.Parameters),
+			Action:     actionText, Risk: risk, Prerequisites: prerequisites, Executed: action.Executed,
 		}
 	}
 	return result, nil
+}
+
+func cloneProposedParameters(parameters *domain.ProposedActionParameters) *domain.ProposedActionParameters {
+	if parameters == nil {
+		return nil
+	}
+	copy := *parameters
+	return &copy
 }
 
 func processModelMarkdown(value string, maximumBytes int) (string, error) {

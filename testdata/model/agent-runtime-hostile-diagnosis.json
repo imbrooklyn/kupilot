@@ -19,7 +19,8 @@
         "kind": "Deployment",
         "namespace": "test-namespace",
         "name": "sample-deployment"
-      }
+      },
+      "parameters": null
     }
   ]
 }

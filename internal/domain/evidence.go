@@ -37,6 +37,9 @@ const (
 	EvidenceCategoryMetricSnapshot  EvidenceCategory = "metric_snapshot"
 	EvidenceCategoryPrometheus      EvidenceCategory = "prometheus_sample"
 	EvidenceCategoryLoki            EvidenceCategory = "loki_excerpt"
+	EvidenceCategoryRemoteCommand   EvidenceCategory = "remote_command"
+	EvidenceCategoryContainerFile   EvidenceCategory = "container_file"
+	EvidenceCategoryDiagnosticPod   EvidenceCategory = "diagnostic_pod"
 )
 
 // Valid reports whether the category is admitted by the safe Evidence contract.
@@ -53,7 +56,10 @@ func (category EvidenceCategory) Valid() bool {
 		return true
 	case EvidenceCategoryMetricSnapshot,
 		EvidenceCategoryPrometheus,
-		EvidenceCategoryLoki:
+		EvidenceCategoryLoki,
+		EvidenceCategoryRemoteCommand,
+		EvidenceCategoryContainerFile,
+		EvidenceCategoryDiagnosticPod:
 		return true
 	default:
 		return false
@@ -133,7 +139,7 @@ func (evidence Evidence) Validate() error {
 		return ErrInvalidEvidence
 	}
 	if evidence.PolicyVersion == "" && evidence.PolicyGeneration != 0 ||
-		evidence.PolicyVersion != "" && (evidence.PolicyVersion != ResourcePolicyVersion && evidence.PolicyVersion != ObservabilityPolicyVersion || !evidence.PolicyGeneration.Valid()) {
+		evidence.PolicyVersion != "" && (evidence.PolicyVersion != ResourcePolicyVersion && evidence.PolicyVersion != ObservabilityPolicyVersion && evidence.PolicyVersion != RemoteDiagnosticsPolicyVersion || !evidence.PolicyGeneration.Valid()) {
 		return ErrInvalidEvidence
 	}
 	if evidence.SourcePath != nil && !ValidModelText(*evidence.SourcePath, maxEvidenceSourcePathBytes, false) ||

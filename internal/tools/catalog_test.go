@@ -28,6 +28,9 @@ func TestReadOnlyToolSchemasRemainExactStrictPolicyBoundAndPurposeBound(t *testi
 		domain.ToolNameQueryLoki:           false,
 		domain.ToolNameGetRelatedResources: false,
 		domain.ToolNameGetClusterOverview:  false,
+		domain.ToolNamePodExec:             false,
+		domain.ToolNameReadContainerFile:   false,
+		domain.ToolNameRunDiagnosticPod:    false,
 	}
 	if len(specifications) != len(wanted) {
 		t.Fatalf("fixed Tool specification count = %d, want %d", len(specifications), len(wanted))
@@ -62,7 +65,7 @@ func TestReadOnlyToolSchemasRemainExactStrictPolicyBoundAndPurposeBound(t *testi
 	}
 }
 
-func TestReadOnlyToolCatalogBuildsExactlyElevenConcreteHandlers(t *testing.T) {
+func TestToolCatalogBuildsExactlyElevenReadOnlyHandlersWhenRemoteDiagnosticsAreDisabled(t *testing.T) {
 	t.Parallel()
 
 	resourceReader := &fakeResourceReader{}
@@ -73,7 +76,7 @@ func TestReadOnlyToolCatalogBuildsExactlyElevenConcreteHandlers(t *testing.T) {
 	lokiReader := &fakeLokiReader{}
 	relatedReader := &fakeRelatedResourceReader{}
 	guard := &sequenceScopeGuard{}
-	handlers, err := NewReadOnlyToolCatalog(ReadOnlyToolCatalogDependencies{
+	handlers, err := NewToolCatalog(ToolCatalogDependencies{
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs:      logDependencies(logReader, guard, LogPolicyAllowed),
@@ -82,7 +85,7 @@ func TestReadOnlyToolCatalogBuildsExactlyElevenConcreteHandlers(t *testing.T) {
 		Related:   relatedDependencies(relatedReader, guard),
 	})
 	if err != nil || handlers.Validate() != nil {
-		t.Fatalf("NewReadOnlyToolCatalog() handlers/error = %#v/%v", handlers, err)
+		t.Fatalf("NewToolCatalog() handlers/error = %#v/%v", handlers, err)
 	}
 	want := []domain.ToolName{
 		domain.ToolNameGetResource,
@@ -105,12 +108,12 @@ func TestReadOnlyToolCatalogBuildsExactlyElevenConcreteHandlers(t *testing.T) {
 	if _, err := handlers.Resolve(domain.ToolName("run_shell")); err == nil {
 		t.Fatal("fixed handlers resolved an unknown Tool")
 	}
-	invalid := ReadOnlyToolCatalogDependencies{
+	invalid := ToolCatalogDependencies{
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs:      logDependencies(logReader, guard, LogPolicyAllowed),
 	}
-	if _, err := NewReadOnlyToolCatalog(invalid); err == nil {
+	if _, err := NewToolCatalog(invalid); err == nil {
 		t.Fatal("catalog accepted a missing related handler dependency")
 	}
 }
@@ -125,7 +128,7 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 	relatedReader := &fakeRelatedResourceReader{}
 	guard := &sequenceScopeGuard{}
 	logPolicy := &staticLogPolicy{decision: LogPolicyAllowed}
-	_, err := NewReadOnlyToolCatalog(ReadOnlyToolCatalogDependencies{
+	_, err := NewToolCatalog(ToolCatalogDependencies{
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs: LogToolDependencies{
@@ -137,7 +140,7 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 		Related: relatedDependencies(relatedReader, guard),
 	})
 	if err != nil {
-		t.Fatalf("NewReadOnlyToolCatalog() error = %v", err)
+		t.Fatalf("NewToolCatalog() error = %v", err)
 	}
 	input := testRunInput(t, 0)
 	tests := []agent.ToolSelection{

@@ -24,6 +24,9 @@ func TestToolCatalogIsExactStrictAndPolicyBound(t *testing.T) {
 		domain.ToolNameQueryLoki,
 		domain.ToolNameGetRelatedResources,
 		domain.ToolNameGetClusterOverview,
+		domain.ToolNamePodExec,
+		domain.ToolNameReadContainerFile,
+		domain.ToolNameRunDiagnosticPod,
 	}
 	if len(specifications) != len(want) {
 		t.Fatalf("Tool specification count = %d, want %d", len(specifications), len(want))

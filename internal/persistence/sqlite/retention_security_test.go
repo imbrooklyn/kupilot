@@ -3,7 +3,6 @@ package sqlite
 import (
 	"bytes"
 	"context"
-	"errors"
 	"go/parser"
 	"go/token"
 	"os"
@@ -84,6 +83,7 @@ func TestDatabaseAndWALExcludeProhibitedContentCanaries(t *testing.T) {
 	action.Intent.DataCategories = domain.ActionDataContainerOutput
 	action.Intent.AllowedSinks = domain.ActionSinkTerminal
 	action.Intent.NetworkEffects = domain.ActionNetworkKubernetesAPI | domain.ActionNetworkRemotePod
+	action.Intent.NetworkDestinationHash = domain.RemotePodNetworkDestinationHash(action.Intent.Target.Resource, "app")
 	action.Intent.Limits = domain.ActionLimits{Timeout: 30 * time.Second, MaximumItems: 1, MaximumOutput: 4096}
 	action.Intent.VerificationPlanID = "pod-diagnostic/v1"
 	action.Intent.ReasonSummary = "Run one exact predefined diagnostic."
@@ -200,13 +200,8 @@ func TestSQLXImportRemainsInsideSQLiteAdapter(t *testing.T) {
 	}
 }
 
-func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
+func TestProductionHasClosedSupervisedKubernetesExecutors(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join(currentSQLiteDirectory(t), "..", "..", ".."))
-	for _, relative := range []string{filepath.Join("internal", "executor")} {
-		if _, err := os.Stat(filepath.Join(repositoryRoot, relative)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("prohibited generic executor directory exists: %s", relative)
-		}
-	}
 	approvalPrefix := filepath.Join(repositoryRoot, "internal", "approval") + string(filepath.Separator)
 	domainApproval := filepath.Join(repositoryRoot, "internal", "domain", "approval.go")
 	domainAction := filepath.Join(repositoryRoot, "internal", "domain", "action.go")
@@ -214,6 +209,12 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 	agentPrompt := filepath.Join(repositoryRoot, "internal", "agent", "prompt.go")
 	tuiStatus := filepath.Join(repositoryRoot, "internal", "tui", "update.go")
 	restartAdapter := filepath.Join(repositoryRoot, "internal", "kube", "restart_deployment.go")
+	remoteDiagnosticAdapter := filepath.Join(repositoryRoot, "internal", "kube", "remote_diagnostics.go")
+	remediationAdapter := filepath.Join(repositoryRoot, "internal", "kube", "remediation.go")
+	localExecutorAdapter := filepath.Join(repositoryRoot, "internal", "executor", "executor.go")
+	localExecutorUnix := filepath.Join(repositoryRoot, "internal", "executor", "process_unix.go")
+	localExecutorOther := filepath.Join(repositoryRoot, "internal", "executor", "process_other.go")
+	kubeCredentialAdapter := filepath.Join(repositoryRoot, "internal", "kube", "client_factory.go")
 	rolloutAdapter := filepath.Join(repositoryRoot, "internal", "kube", "rollout.go")
 	kubePrefix := filepath.Join(repositoryRoot, "internal", "kube") + string(filepath.Separator)
 	kubeGateway := filepath.Join(repositoryRoot, "internal", "kube", "gateway.go")
@@ -244,6 +245,12 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 				t.Errorf("%s contains prohibited generic write symbol %q", path, symbol)
 			}
 		}
+		if bytes.Contains(content, []byte(`"os/exec"`)) {
+			cleaned := filepath.Clean(path)
+			if cleaned != localExecutorAdapter && cleaned != localExecutorUnix && cleaned != localExecutorOther && cleaned != kubeCredentialAdapter {
+				t.Errorf("os/exec escaped the local executor or kubeconfig credential adapters: %s", path)
+			}
+		}
 		if !strings.HasPrefix(path, approvalPrefix) && !strings.HasPrefix(path, applicationPrefix) && filepath.Clean(path) != restartAdapter {
 			for _, symbol := range approvalOnly {
 				if bytes.Contains(content, []byte(symbol)) {
@@ -263,15 +270,15 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 		}
 		patchCount := bytes.Count(content, []byte(".Patch("))
 		patchCalls += patchCount
-		if patchCount != 0 && (filepath.Clean(path) != restartAdapter || patchCount != 1) {
-			t.Errorf("Kubernetes Patch escaped the sole one-call restart adapter: %s", path)
+		cleaned := filepath.Clean(path)
+		if patchCount != 0 && !((cleaned == restartAdapter || cleaned == remediationAdapter) && patchCount == 1) {
+			t.Errorf("Kubernetes Patch escaped an admitted exact adapter: %s", path)
 		}
 		if strings.HasPrefix(path, kubePrefix) {
 			createCount := bytes.Count(content, []byte(".Create("))
-			cleaned := filepath.Clean(path)
-			if cleaned == kubeGateway || cleaned == kubeRuntimeGateway {
+			if cleaned == kubeGateway || cleaned == kubeRuntimeGateway || cleaned == remoteDiagnosticAdapter || cleaned == remediationAdapter {
 				if createCount != 1 {
-					t.Errorf("opaque client creation count changed in %s: %d", path, createCount)
+					t.Errorf("admitted Kubernetes Create count changed in %s: %d", path, createCount)
 				}
 			} else if createCount != 0 {
 				t.Errorf("unexpected Create call entered Kubernetes production code: %s", path)
@@ -280,6 +287,21 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 				".Update(", ".UpdateStatus(", ".Delete(", ".DeleteCollection(",
 				".Apply(", ".ApplyStatus(", ".UpdateScale(", ".ApplyScale(", ".Evict(",
 			} {
+				if mutation == ".Delete(" && cleaned == remoteDiagnosticAdapter {
+					if count := bytes.Count(content, []byte(mutation)); count != 1 {
+						t.Errorf("diagnostic Pod Delete count changed in %s: %d", path, count)
+					}
+					continue
+				}
+				if cleaned == remediationAdapter {
+					want := map[string]int{
+						".Update(": 1, ".Delete(": 1, ".UpdateScale(": 2,
+					}[mutation]
+					if count := bytes.Count(content, []byte(mutation)); count != want {
+						t.Errorf("remediation mutation count %q in %s = %d, want %d", mutation, path, count, want)
+					}
+					continue
+				}
 				if bytes.Contains(content, []byte(mutation)) {
 					t.Errorf("additional Kubernetes mutation selector %q entered %s", mutation, path)
 				}
@@ -312,8 +334,8 @@ func TestProductionHasOneClosedSupervisedRestartExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WalkDir(internal) error = %v", err)
 	}
-	if patchCalls != 1 {
-		t.Fatalf("production Kubernetes Patch call count = %d, want exactly 1", patchCalls)
+	if patchCalls != 2 {
+		t.Fatalf("production Kubernetes Patch call count = %d, want exactly 2 admitted adapters", patchCalls)
 	}
 	if executeOccurrences != 3 {
 		t.Fatalf("production restart executor occurrences = %d, want contract, caller, and adapter only", executeOccurrences)

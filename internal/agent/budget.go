@@ -14,6 +14,8 @@ const (
 	maxLogCalls            = 32
 	maxMetricCalls         = 32
 	maxDataSourceCalls     = 64
+	maxRemoteExecCalls     = 16
+	maxLocalProcessCalls   = 1
 	maxSummaryCalls        = 4
 	maxSummaryRequestTime  = 60 * time.Second
 )
@@ -77,6 +79,8 @@ type RunBudgetLimits struct {
 	DataSourceBytes       int
 	DataSourceWindow      time.Duration
 	DataSourceStep        time.Duration
+	RemoteExecCalls       int
+	LocalProcessCalls     int
 	ResourcePages         int
 	ResourcePageItems     int
 	ResourcePageBytes     int
@@ -132,6 +136,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.DataSourceBytes = 128 * 1024
 		limits.DataSourceWindow = time.Hour
 		limits.DataSourceStep = time.Minute
+		limits.RemoteExecCalls = 2
+		limits.LocalProcessCalls = 1
 		limits.NoProgressSteps = 2
 		limits.ResourcePages = 2
 		limits.ResourcePageItems = 25
@@ -169,6 +175,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.DataSourceBytes = 512 * 1024
 		limits.DataSourceWindow = 6 * time.Hour
 		limits.DataSourceStep = 5 * time.Minute
+		limits.RemoteExecCalls = 4
+		limits.LocalProcessCalls = 1
 		limits.NoProgressSteps = 4
 		limits.ResourcePages = 4
 		limits.ResourcePageItems = 50
@@ -206,6 +214,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.DataSourceBytes = domain.MaxObservabilityBytes
 		limits.DataSourceWindow = domain.MaxObservabilityWindow
 		limits.DataSourceStep = domain.MaxObservabilityStep
+		limits.RemoteExecCalls = 8
+		limits.LocalProcessCalls = 1
 		limits.NoProgressSteps = 6
 		limits.ResourcePages = domain.MaxResourceQueryPages
 		limits.ResourcePageItems = domain.MaxResourcePageItems
@@ -259,6 +269,8 @@ func (limits RunBudgetLimits) Validate() error {
 		limits.DataSourceBytes <= 0 || limits.DataSourceBytes > profileLimits.DataSourceBytes || limits.DataSourceBytes > domain.MaxObservabilityBytes ||
 		limits.DataSourceWindow <= 0 || limits.DataSourceWindow > profileLimits.DataSourceWindow || limits.DataSourceWindow > domain.MaxObservabilityWindow ||
 		limits.DataSourceStep <= 0 || limits.DataSourceStep > profileLimits.DataSourceStep || limits.DataSourceStep > domain.MaxObservabilityStep ||
+		limits.RemoteExecCalls <= 0 || limits.RemoteExecCalls > profileLimits.RemoteExecCalls || limits.RemoteExecCalls > maxRemoteExecCalls ||
+		limits.LocalProcessCalls <= 0 || limits.LocalProcessCalls > profileLimits.LocalProcessCalls || limits.LocalProcessCalls > maxLocalProcessCalls ||
 		limits.ResourcePages <= 0 || limits.ResourcePages > profileLimits.ResourcePages || limits.ResourcePages > domain.MaxResourceQueryPages ||
 		limits.ResourcePageItems <= 0 || limits.ResourcePageItems > profileLimits.ResourcePageItems || limits.ResourcePageItems > domain.MaxResourcePageItems ||
 		limits.ResourcePageBytes <= 0 || limits.ResourcePageBytes > profileLimits.ResourcePageBytes || limits.ResourcePageBytes > domain.MaxResourcePageBytes ||
@@ -295,6 +307,7 @@ const (
 	RunStopLogCallLimit      RunStopReason = "log_call_limit"
 	RunStopMetricCallLimit   RunStopReason = "metric_call_limit"
 	RunStopDataSourceLimit   RunStopReason = "data_source_call_limit"
+	RunStopRemoteExecLimit   RunStopReason = "remote_exec_call_limit"
 	RunStopInvalidState      RunStopReason = "invalid_runtime_state"
 )
 
@@ -377,6 +390,7 @@ type RunBudgetSnapshot struct {
 	LogCalls              int
 	MetricCalls           int
 	DataSourceCalls       int
+	RemoteExecCalls       int
 	ConsecutiveNoProgress int
 	Stopped               bool
 	StopReason            RunStopReason
@@ -403,6 +417,7 @@ type RunBudget struct {
 	logCalls              int
 	metricCalls           int
 	dataSourceCalls       int
+	remoteExecCalls       int
 	consecutiveNoProgress int
 	repeats               map[ToolCallIdentity]repeatState
 	stopped               bool
@@ -573,6 +588,12 @@ func (budget *RunBudget) reserveToolCall(ctx context.Context, call BoundToolCall
 		}
 		budget.dataSourceCalls += call.ExternalCallCost()
 	}
+	if call.Name() == domain.ToolNamePodExec || call.Name() == domain.ToolNameReadContainerFile || call.Name() == domain.ToolNameRunDiagnosticPod {
+		if call.ExternalCallCost() < 1 || call.ExternalCallCost() > budget.limits.RemoteExecCalls-budget.remoteExecCalls {
+			return CallReservation{}, budget.stopLocked(RunStopRemoteExecLimit)
+		}
+		budget.remoteExecCalls += call.ExternalCallCost()
+	}
 	budget.toolCalls++
 	repeat.count++
 	repeat.lastRetryable = false
@@ -651,6 +672,7 @@ func (budget *RunBudget) Snapshot() RunBudgetSnapshot {
 		LogCalls:              budget.logCalls,
 		MetricCalls:           budget.metricCalls,
 		DataSourceCalls:       budget.dataSourceCalls,
+		RemoteExecCalls:       budget.remoteExecCalls,
 		ConsecutiveNoProgress: budget.consecutiveNoProgress,
 		Stopped:               budget.stopped,
 		StopReason:            budget.stopReason,
@@ -741,6 +763,8 @@ func newRunBudgetError(reason RunStopReason) *RunBudgetError {
 		budgetError.message = "The diagnostic run reached its Kubernetes metrics-read limit."
 	case RunStopDataSourceLimit:
 		budgetError.message = "The diagnostic run reached its observability data-source request limit."
+	case RunStopRemoteExecLimit:
+		budgetError.message = "The diagnostic run reached its remote-execution request limit."
 	case RunStopCompleted:
 		budgetError.class = domain.SafeErrorClassInternal
 		budgetError.message = "The diagnostic run is already complete."

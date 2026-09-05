@@ -255,10 +255,12 @@ func (fake *dispatchApplication) ExecuteUICommand(
 	return application.UICommandOutcome{
 		Command: application.UICommandShowStatus,
 		Status: &application.UIStatusResult{
-			CapabilityCatalogVersion:   agent.ToolCatalogVersion,
-			ResourcePolicyVersion:      domain.ResourcePolicyVersion,
-			ObservabilityPolicyVersion: domain.ObservabilityPolicyVersion,
-			ResourceTypeCount:          len(domain.BuiltInResourcePolicies()),
+			CapabilityCatalogVersion:       agent.ToolCatalogVersion,
+			ResourcePolicyVersion:          domain.ResourcePolicyVersion,
+			ObservabilityPolicyVersion:     domain.ObservabilityPolicyVersion,
+			RemoteDiagnosticsPolicyVersion: domain.RemoteDiagnosticsPolicyVersion,
+			LocalExecutionPolicyVersion:    domain.LocalExecutionPolicyVersion,
+			ResourceTypeCount:              len(domain.BuiltInResourcePolicies()),
 			AgentModel: application.UIModelRoleStatus{
 				Role: domain.ModelRoleAgent, Profile: "agent", OriginHash: strings.Repeat("a", 64),
 				Configured: true, Available: true, Consented: true,
@@ -274,6 +276,8 @@ func (fake *dispatchApplication) ExecuteUICommand(
 				EventPagesMaximum: 4, EventPageItemsMaximum: 50, EventPageBytesMaximum: 128 * 1024, EventBytesMaximum: 512 * 1024,
 				MetricCallsMaximum: 12, MetricContainersMaximum: 35, MetricBytesMaximum: 256 * 1024,
 				DataSourceCallsMaximum: 16, DataSourcePagesMaximum: 4, DataSourceSeriesMaximum: 25,
+				RemoteExecCallsMaximum:   4,
+				LocalProcessCallsMaximum: 1,
 				DataSourceSamplesMaximum: 400, DataSourceLinesMaximum: 400, DataSourceBytesMaximum: 512 * 1024,
 				DataSourceWindowMillis: 21_600_000, DataSourceStepMillis: 300_000,
 				ResourcePagesMaximum: 4, ResourcePageItemsMaximum: 50, ResourcePageBytesMaximum: 256 * 1024,

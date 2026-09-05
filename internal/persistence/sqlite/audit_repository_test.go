@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,6 +61,136 @@ func TestAuditRepositoryRoundTripsTypedEventsWithStablePaging(t *testing.T) {
 	}
 }
 
+func TestAuditRepositoryRoundTripsDigestBoundCrossNamespaceDrainPhase(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "audit-cross-namespace-drain")
+	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000005021", "00000000-0000-7000-8000-000000005022", "00000000-0000-7000-8000-000000005023", time.UnixMilli(404).UTC())
+	requestedAt := time.UnixMilli(1_700_000_030_000).UTC()
+	request := consumedDrainApproval(t, db, run, requestedAt)
+	repository := NewAuditRepository(db)
+	operation := string(domain.ActionOperationDrainNode)
+	event := testAuditEvent(
+		"00000000-0000-7000-8000-000000005024", run,
+		domain.AuditEventWriteAttempted, requestedAt.Add(3*time.Second),
+	)
+	event.Outcome = domain.AuditOutcomeSuccess
+	event.Subject = &domain.ResourceRef{
+		APIVersion: "v1", Kind: "Pod", Namespace: "team-b", Name: "sample-pod",
+		UID: "pod-uid", ResourceVersion: "9",
+	}
+	event.Details = domain.AuditDetails{Operation: &operation}
+	event.CorrelationID = string(request.ID)
+	event.IntegrityHash = string(request.Digest)
+
+	if err := repository.AppendWriteResult(context.Background(), event); err != nil {
+		t.Fatalf("AppendWriteResult() error = %v", err)
+	}
+	got, err := repository.GetByID(context.Background(), event.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, event) {
+		t.Fatalf("GetByID() = %#v, want %#v", got, event)
+	}
+
+	for index, test := range []struct {
+		name   string
+		mutate func(*domain.AuditEvent)
+	}{
+		{name: "approval", mutate: func(value *domain.AuditEvent) {
+			value.CorrelationID = "00000000-0000-7000-8000-000000005027"
+		}},
+		{name: "digest", mutate: func(value *domain.AuditEvent) {
+			value.IntegrityHash = strings.Repeat("c", 64)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			unbound := event
+			unbound.ID = domain.AuditEventID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 5_026+index))
+			test.mutate(&unbound)
+			if err := repository.AppendWriteResult(context.Background(), unbound); !errors.Is(err, auditcontract.ErrInvalidRepositoryRequest) {
+				t.Fatalf("AppendWriteResult(unbound cross-Namespace phase) error = %v", err)
+			}
+		})
+	}
+}
+
+func consumedDrainApproval(t *testing.T, db *DB, run domain.AgentRun, requestedAt time.Time) domain.ApprovalRequest {
+	t.Helper()
+	scope := domain.ClusterScope{
+		Context: run.Scope.Context, Namespace: run.Scope.Namespace, NamespaceAccess: domain.NamespaceAccessAll,
+		Generation: run.Scope.Generation, ActivatedAt: time.UnixMilli(404).UTC(),
+	}
+	podSet, err := domain.NewRemediationTargetSet([]domain.RemediationPlanMember{{
+		Role: domain.RemediationMemberDrainPod,
+		Resource: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "team-b", Name: "sample-pod",
+			UID: "pod-uid", ResourceVersion: "9",
+		},
+		Fingerprint: domain.ActionDigest(strings.Repeat("b", 64)), Order: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := domain.RemediationActionPlan{
+		RunID: run.ID, SessionID: run.SessionID, Scope: scope, PolicyGeneration: 1,
+		Operation: domain.ActionOperationDrainNode,
+		Target: domain.ActionTarget{
+			Resource: domain.ResourceRef{
+				APIVersion: "v1", Kind: "Node", Name: "worker-a", UID: "node-uid", ResourceVersion: "8",
+			},
+			TargetSetDigest: podSet.Digest(), TargetCount: 1,
+		},
+		Parameters: domain.ActionParameters{
+			Kind: domain.ActionParametersDrainPlan, PlanDigest: podSet.Digest(), PlanTargetCount: 1,
+			GracePeriodSeconds: domain.RemediationGracePeriodSeconds,
+		},
+		TargetSet: podSet, ReasonSummary: "Drain the exact approved Pod set.",
+		Limits:     domain.ActionLimits{Timeout: domain.TypedRemediationActionTimeout, MaximumItems: 2},
+		PreparedAt: requestedAt,
+	}
+	intent, err := plan.Intent(domain.PermissionProfileAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := pendingRequestForIntent(t, "00000000-0000-7000-8000-000000005025", run, intent, requestedAt, 0x25)
+	repository := NewApprovalRepository(db)
+	if err := repository.CreateWithAudit(context.Background(), request,
+		testApprovalAudit(t, request, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", requestedAt)); err != nil {
+		t.Fatal(err)
+	}
+	approved := request
+	approved.State = domain.ApprovalStateApproved
+	approved.StateReason = domain.ApprovalReasonUserApproved
+	approved.StateChangedAt = requestedAt.Add(time.Second)
+	decision := domain.ApprovalDecision{
+		RequestID: request.ID, Choice: domain.ApprovalDecisionApprove,
+		ShownDigest: request.Digest, Nonce: request.Nonce,
+		Actor: domain.ApprovalActorLocalUser, Disposition: domain.ReviewDispositionHuman,
+		DecidedAt: approved.StateChangedAt,
+	}
+	if err := repository.ResolveWithAudit(context.Background(), request.State, approved, decision,
+		testApprovalAudit(t, approved, domain.AuditEventApprovalApproved, domain.AuditActorUser, domain.AuditOutcomeSuccess, "user_approved", approved.StateChangedAt)); err != nil {
+		t.Fatal(err)
+	}
+	stored, storedDecision, err := repository.Get(context.Background(), request.ID)
+	if err != nil || storedDecision == nil {
+		t.Fatalf("Get(approved drain) = %#v/%#v/%v", stored, storedDecision, err)
+	}
+	consumed := approved
+	consumed.State = domain.ApprovalStateConsumed
+	consumed.StateReason = domain.ApprovalReasonConsumed
+	consumed.StateChangedAt = requestedAt.Add(2 * time.Second)
+	storedConsumed := stored
+	storedConsumed.State = consumed.State
+	storedConsumed.StateReason = consumed.StateReason
+	storedConsumed.StateChangedAt = consumed.StateChangedAt
+	if err := repository.ConsumeWithAudit(context.Background(), stored, *storedDecision, storedConsumed,
+		testApprovalAudit(t, consumed, domain.AuditEventWriteIntent, domain.AuditActorSystem, domain.AuditOutcomeSuccess, "approval_consumed", consumed.StateChangedAt)); err != nil {
+		t.Fatal(err)
+	}
+	return consumed
+}
+
 func TestAuditRepositoryAppendWriteResultIsIdempotentAndTypeRestricted(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "write-result-audit")
 	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000005051", "00000000-0000-7000-8000-000000005052", "00000000-0000-7000-8000-000000005053", time.UnixMilli(405).UTC())
@@ -91,6 +222,39 @@ func TestAuditRepositoryAppendWriteResultIsIdempotentAndTypeRestricted(t *testin
 	nonWrite.Type = domain.AuditEventRunCompleted
 	if err := repository.AppendWriteResult(context.Background(), nonWrite); !errors.Is(err, auditcontract.ErrInvalidRepositoryRequest) {
 		t.Fatalf("AppendWriteResult(non-write type) error = %v", err)
+	}
+
+	batch := make([]domain.AuditEvent, 5)
+	for index := range batch {
+		batch[index] = testAuditEvent(
+			domain.AuditEventID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 5_060+index)),
+			run, domain.AuditEventWriteVerified, time.UnixMilli(407).UTC(),
+		)
+	}
+	if err := repository.AppendWriteResults(context.Background(), batch); err != nil {
+		t.Fatalf("AppendWriteResults(first) error = %v", err)
+	}
+	if err := repository.AppendWriteResults(context.Background(), batch); err != nil {
+		t.Fatalf("AppendWriteResults(idempotent) error = %v", err)
+	}
+	if err := db.handle.GetContext(context.Background(), &count, `SELECT COUNT(*) FROM audit_events WHERE occurred_at_ms = ?`, time.UnixMilli(407).UTC().UnixMilli()); err != nil || count != 5 {
+		t.Fatalf("batch count/error = %d/%v", count, err)
+	}
+
+	conflict := testAuditEvent("00000000-0000-7000-8000-000000005071", run, domain.AuditEventWriteVerified, time.UnixMilli(408).UTC())
+	if err := repository.AppendWriteResult(context.Background(), conflict); err != nil {
+		t.Fatalf("AppendWriteResult(conflict setup) error = %v", err)
+	}
+	rollback := []domain.AuditEvent{
+		testAuditEvent("00000000-0000-7000-8000-000000005070", run, domain.AuditEventWriteVerified, time.UnixMilli(408).UTC()),
+		conflict,
+	}
+	rollback[1].Outcome = domain.AuditOutcomeSuccess
+	if err := repository.AppendWriteResults(context.Background(), rollback); !errors.Is(err, auditcontract.ErrInvalidRepositoryRequest) {
+		t.Fatalf("AppendWriteResults(mismatched duplicate) error = %v", err)
+	}
+	if err := db.handle.GetContext(context.Background(), &count, `SELECT COUNT(*) FROM audit_events WHERE id = ?`, rollback[0].ID); err != nil || count != 0 {
+		t.Fatalf("partial batch row count/error = %d/%v", count, err)
 	}
 }
 

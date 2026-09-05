@@ -44,7 +44,7 @@ func TestApprovalCoordinatorPersistsProposalBeforePublishingDialog(t *testing.T)
 func TestApprovalCoordinatorApprovalPersistsDecisionWithoutExecutionAndRejectsReplay(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 20)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, 20, 101)
+	command := approvalDecisionCommand(UICommandApproveAction, request, 20, 101)
 	result, err := fixture.coordinator.Decide(context.Background(), command)
 	if err != nil {
 		t.Fatalf("Decide(approve) error = %v", err)
@@ -72,7 +72,7 @@ func TestApprovalCoordinatorApprovalPersistsDecisionWithoutExecutionAndRejectsRe
 func TestApprovalCoordinatorConsumesApprovedRestartAfterDurableDecision(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 26)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, 26, 109)
+	command := approvalDecisionCommand(UICommandApproveAction, request, 26, 109)
 	approved, err := fixture.coordinator.Decide(context.Background(), command)
 	if err != nil || approved.State != domain.ApprovalStateApproved || fixture.executor.calls != 0 {
 		t.Fatalf("Decide() result/error/executor = %#v/%v/%d", approved, err, fixture.executor.calls)
@@ -99,7 +99,7 @@ func TestApprovalCoordinatorConsumesApprovedRestartAfterDurableDecision(t *testi
 func TestApprovalCoordinatorPreWriteAuditFailureClosesWithoutExecution(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 27)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, 27, 110)
+	command := approvalDecisionCommand(UICommandApproveAction, request, 27, 110)
 	if _, err := fixture.coordinator.Decide(context.Background(), command); err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestApprovalCoordinatorPreWriteAuditFailureClosesWithoutExecution(t *testin
 func TestApprovalCoordinatorScopeInvalidationDuringRevalidationPreventsWrite(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 28)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, 28, 111)
+	command := approvalDecisionCommand(UICommandApproveAction, request, 28, 111)
 	if _, err := fixture.coordinator.Decide(context.Background(), command); err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
@@ -161,7 +161,7 @@ func TestCoordinatorApprovalCommandReturnsTerminalRestartAttempt(t *testing.T) {
 			fixture := newApprovalCoordinatorFixture(t)
 			fixture.executor.err = test.executeErr
 			request := fixture.submit(t, 29)
-			command := approvalDecisionCommand(UICommandApproveRestart, request, 29, 112)
+			command := approvalDecisionCommand(UICommandApproveAction, request, 29, 112)
 			outer, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), runnerFunc(func(
 				context.Context,
 				agent.RunInput,
@@ -184,7 +184,7 @@ func TestApprovalCoordinatorRejectionPersistsTerminalDecisionWithoutExecution(t 
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 21)
 	result, err := fixture.coordinator.Decide(
-		context.Background(), approvalDecisionCommand(UICommandRejectRestart, request, 21, 107),
+		context.Background(), approvalDecisionCommand(UICommandRejectAction, request, 21, 107),
 	)
 	if err != nil || result.State != domain.ApprovalStateRejected ||
 		result.StateReason != domain.ApprovalReasonUserRejected || fixture.persistence.resolves != 1 ||
@@ -194,7 +194,7 @@ func TestApprovalCoordinatorRejectionPersistsTerminalDecisionWithoutExecution(t 
 		t.Fatalf("reject result/error/decision/audit/executor = %#v/%v/%#v/%#v/%d", result, err, fixture.persistence.lastDecision, fixture.persistence.lastResolveAudit, fixture.executor.calls)
 	}
 	if _, err := fixture.coordinator.Decide(
-		context.Background(), approvalDecisionCommand(UICommandRejectRestart, request, 21, 108),
+		context.Background(), approvalDecisionCommand(UICommandRejectAction, request, 21, 108),
 	); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Fatalf("Decide(rejected replay) error = %v", err)
 	}
@@ -241,7 +241,7 @@ func TestApprovalCoordinatorApprovedNotExecutedStillExpiresAndInvalidates(t *tes
 			fixture := newApprovalCoordinatorFixture(t)
 			request := fixture.submit(t, 25)
 			approved, err := fixture.coordinator.Decide(
-				context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 25, 106),
+				context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 25, 106),
 			)
 			if err != nil || approved.State != domain.ApprovalStateApproved {
 				t.Fatalf("Decide() result/error = %#v/%v", approved, err)
@@ -443,7 +443,7 @@ func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *tes
 		{name: "decision persistence failure", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
 			request := fixture.submit(t, 31)
 			fixture.persistence.resolveErr = errors.New("synthetic audit failure")
-			if _, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 31, 102)); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
+			if _, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 31, 102)); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
 				t.Fatalf("Decide() error = %v", err)
 			}
 			if snapshot, ok := fixture.service.Snapshot(request.ID); !ok || snapshot.State != domain.ApprovalStateCancelled {
@@ -453,7 +453,7 @@ func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *tes
 		{name: "expired", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
 			request := fixture.submit(t, 32)
 			fixture.clock.set(request.ExpiresAt)
-			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 32, 103))
+			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 32, 103))
 			if !errors.Is(err, ErrApprovalExpired) || result.State != domain.ApprovalStateExpired || fixture.persistence.closes != 1 {
 				t.Fatalf("expired result/error/closes = %#v/%v/%d", result, err, fixture.persistence.closes)
 			}
@@ -461,7 +461,7 @@ func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *tes
 		{name: "scope changed", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {
 			request := fixture.submit(t, 33)
 			fixture.scope.scope.Generation++
-			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 33, 104))
+			result, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 33, 104))
 			if !errors.Is(err, ErrApprovalInvalidated) || result.State != domain.ApprovalStateInvalidated ||
 				result.StateReason != domain.ApprovalReasonScopeChanged || fixture.persistence.closes != 1 {
 				t.Fatalf("stale result/error/closes = %#v/%v/%d", result, err, fixture.persistence.closes)
@@ -512,7 +512,7 @@ func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *tes
 func TestApprovalCoordinatorDecisionProofMismatchIsPersistedAndCleared(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 40)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, 40, 105)
+	command := approvalDecisionCommand(UICommandApproveAction, request, 40, 105)
 	command.ApprovalDigest = domain.ApprovalDigest(fmt.Sprintf("%064d", 7))
 	result, err := fixture.coordinator.Decide(context.Background(), command)
 	if !errors.Is(err, ErrApprovalInvalidated) || result.State != domain.ApprovalStateInvalidated ||
@@ -972,6 +972,8 @@ type fakeApprovalPersistence struct {
 	writeResultFailAfter                                     int
 	actionReviews                                            []ActionReviewRecord
 	actionReviewCalls                                        int
+	afterResolve                                             func()
+	afterConsume                                             func()
 }
 
 func (persistence *fakeApprovalPersistence) AppendActionReview(_ context.Context, record ActionReviewRecord) error {
@@ -999,6 +1001,27 @@ func (persistence *fakeApprovalPersistence) AppendWriteResult(_ context.Context,
 		return errors.New("synthetic invalid write result audit")
 	}
 	persistence.writeResultAudits = append(persistence.writeResultAudits, event)
+	return nil
+}
+
+func (persistence *fakeApprovalPersistence) AppendWriteResults(_ context.Context, events []domain.AuditEvent) error {
+	persistence.writeResultCalls++
+	if persistence.writeResultFailures > 0 {
+		persistence.writeResultFailures--
+		return errors.New("synthetic write result audit failure")
+	}
+	if persistence.writeResultFailAfter > 0 && persistence.writeResultCalls > persistence.writeResultFailAfter {
+		return errors.New("synthetic write result audit failure")
+	}
+	if len(events) < 1 || len(events) > 5 {
+		return errors.New("synthetic invalid write result audit set")
+	}
+	for _, event := range events {
+		if event.Validate() != nil {
+			return errors.New("synthetic invalid write result audit")
+		}
+	}
+	persistence.writeResultAudits = append(persistence.writeResultAudits, events...)
 	return nil
 }
 
@@ -1041,6 +1064,9 @@ func (persistence *fakeApprovalPersistence) ConsumeWithAudit(
 	persistence.consumes++
 	persistence.lastConsumed = consumed
 	persistence.lastConsumeAudit = audit
+	if persistence.afterConsume != nil {
+		persistence.afterConsume()
+	}
 	return nil
 }
 
@@ -1053,6 +1079,9 @@ func (persistence *fakeApprovalPersistence) CreateWithAudit(_ context.Context, r
 func (persistence *fakeApprovalPersistence) ResolveWithAudit(_ context.Context, _ domain.ApprovalState, request domain.ApprovalRequest, decision domain.ApprovalDecision, audit domain.AuditEvent) error {
 	persistence.resolves++
 	persistence.lastCreated, persistence.lastDecision, persistence.lastResolveAudit = request, decision, audit
+	if persistence.afterResolve != nil {
+		persistence.afterResolve()
+	}
 	return persistence.resolveErr
 }
 

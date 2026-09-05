@@ -45,27 +45,34 @@ func (result UIScopeResult) Validate() error {
 // UIStatusResult is the current safe in-memory status projection. Historic
 // scope metadata and pending resume candidates are intentionally excluded.
 type UIStatusResult struct {
-	Session                    *UISessionState
-	Context                    string
-	Namespace                  string
-	NamespaceAccess            domain.NamespaceAccessPolicy
-	ScopeGeneration            int64
-	ReadOnly                   bool
-	RunID                      domain.AgentRunID
-	RunActive                  bool
-	CapabilityCatalogVersion   string
-	ResourcePolicyVersion      string
-	ObservabilityPolicyVersion string
-	ResourceTypeCount          int
-	PrometheusEnabled          bool
-	LokiEnabled                bool
-	PersistenceDegraded        bool
-	Budget                     UIBudgetStatus
-	ModelContext               UIModelContextStatus
-	AgentModel                 UIModelRoleStatus
-	ReviewerModel              UIModelRoleStatus
-	Permission                 UIPermissionStatus
-	Action                     *UIActionStatus
+	Session                        *UISessionState
+	Context                        string
+	Namespace                      string
+	NamespaceAccess                domain.NamespaceAccessPolicy
+	ScopeGeneration                int64
+	ReadOnly                       bool
+	RunID                          domain.AgentRunID
+	RunActive                      bool
+	CapabilityCatalogVersion       string
+	ResourcePolicyVersion          string
+	ObservabilityPolicyVersion     string
+	RemoteDiagnosticsPolicyVersion string
+	LocalExecutionPolicyVersion    string
+	ResourceTypeCount              int
+	PodExecPolicyCount             int
+	DiagnosticPodPolicyCount       int
+	LocalCommandPolicyCount        int
+	LocalShellPolicyCount          int
+	ContainerFileReadEnabled       bool
+	PrometheusEnabled              bool
+	LokiEnabled                    bool
+	PersistenceDegraded            bool
+	Budget                         UIBudgetStatus
+	ModelContext                   UIModelContextStatus
+	AgentModel                     UIModelRoleStatus
+	ReviewerModel                  UIModelRoleStatus
+	Permission                     UIPermissionStatus
+	Action                         *UIActionStatus
 }
 
 // UIPermissionStatus is a content-free local policy snapshot.
@@ -156,6 +163,10 @@ type UIBudgetStatus struct {
 	MetricBytesMaximum       int
 	DataSourceCallsUsed      int
 	DataSourceCallsMaximum   int
+	RemoteExecCallsUsed      int
+	RemoteExecCallsMaximum   int
+	LocalProcessCallsUsed    int
+	LocalProcessCallsMaximum int
 	DataSourcePagesMaximum   int
 	DataSourceSeriesMaximum  int
 	DataSourceSamplesMaximum int
@@ -194,8 +205,8 @@ type UICommandOutcome struct {
 
 // Validate checks command/result correlation and exclusive payload shapes.
 func (result UICommandOutcome) Validate() error {
-	approvalCommand := result.Command == UICommandApproveRestart || result.Command == UICommandRejectRestart ||
-		result.Command == UICommandExpireRestart
+	approvalCommand := result.Command == UICommandApproveAction || result.Command == UICommandRejectAction ||
+		result.Command == UICommandExpireAction
 	if approvalCommand != (result.Approval != nil) || result.Approval != nil && result.Approval.Validate() != nil {
 		return ErrInvalidUIEvent
 	}
@@ -399,7 +410,7 @@ func (result UICommandOutcome) Validate() error {
 			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
-	case UICommandApproveRestart, UICommandRejectRestart, UICommandExpireRestart:
+	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
 		if result.RequestID == 0 || result.Failure != "" || result.Session != nil || result.Resumed != nil ||
 			result.Scope != nil || result.Resource != nil || result.Status != nil || result.Privacy != nil ||
 			result.RunID != result.Approval.RunID {
@@ -423,7 +434,13 @@ func (result UIStatusResult) valid() bool {
 		result.Context != "" && (!domain.ValidContextName(result.Context) || !domain.ValidNamespaceName(result.Namespace)) ||
 		result.RunActive != result.RunID.Valid() || result.CapabilityCatalogVersion != agent.ToolCatalogVersion ||
 		result.ResourcePolicyVersion != domain.ResourcePolicyVersion ||
-		result.ObservabilityPolicyVersion != domain.ObservabilityPolicyVersion ||
+		result.ObservabilityPolicyVersion != domain.ObservabilityPolicyVersion || result.RemoteDiagnosticsPolicyVersion != domain.RemoteDiagnosticsPolicyVersion ||
+		result.LocalExecutionPolicyVersion != domain.LocalExecutionPolicyVersion ||
+		result.PodExecPolicyCount < 0 || result.PodExecPolicyCount > domain.MaxRemoteDiagnosticPolicies ||
+		result.DiagnosticPodPolicyCount < 0 || result.DiagnosticPodPolicyCount > domain.MaxRemoteDiagnosticPolicies ||
+		result.PodExecPolicyCount+result.DiagnosticPodPolicyCount > domain.MaxRemoteDiagnosticPolicies ||
+		result.LocalCommandPolicyCount < 0 || result.LocalCommandPolicyCount > domain.MaxLocalCommandPolicies ||
+		result.LocalShellPolicyCount < 0 || result.LocalShellPolicyCount > domain.MaxLocalCommandPolicies ||
 		result.ResourceTypeCount < len(domain.BuiltInResourcePolicies()) || result.ResourceTypeCount > domain.MaxResourcePolicyEntries ||
 		!result.Budget.valid() || !result.ModelContext.valid(result.Session != nil) ||
 		!result.AgentModel.valid(true) || !result.ReviewerModel.valid(false) ||
@@ -505,6 +522,8 @@ func (status UIBudgetStatus) valid() bool {
 		status.MetricContainersMaximum > 0 && status.MetricContainersMaximum <= domain.MaxMetricContainers &&
 		status.MetricBytesMaximum > 0 && status.MetricBytesMaximum <= domain.MaxObservabilityBytes &&
 		validBudgetCounter(status.DataSourceCallsUsed, status.DataSourceCallsMaximum) &&
+		validBudgetCounter(status.RemoteExecCallsUsed, status.RemoteExecCallsMaximum) &&
+		validBudgetCounter(status.LocalProcessCallsUsed, status.LocalProcessCallsMaximum) &&
 		status.DataSourcePagesMaximum > 0 && status.DataSourcePagesMaximum <= domain.MaxObservabilityPages &&
 		status.DataSourceSeriesMaximum > 0 && status.DataSourceSeriesMaximum <= domain.MaxObservabilitySeries &&
 		status.DataSourceSamplesMaximum > 0 && status.DataSourceSamplesMaximum <= domain.MaxObservabilitySamples &&
@@ -691,7 +710,12 @@ func (event UIEvent) Validate() error {
 	return nil
 }
 
-const approvalProposedSummary = "Update only the Kupilot-owned restart annotation to create a new Pod template revision."
+const (
+	approvalProposedSummary = "Update only the Kupilot-owned restart annotation to create a new Pod template revision."
+	// MaxApprovalDisplaySummaryBytes covers the complete bounded executable,
+	// argv, cwd, environment, and shell fields without UI truncation.
+	MaxApprovalDisplaySummaryBytes = 32768
+)
 
 // UIApprovalRequest is the complete safe dialog projection. The opaque nonce
 // is memory-only decision authority whose type cannot render or marshal bytes.
@@ -710,9 +734,16 @@ type UIApprovalRequest struct {
 	Scope                  domain.ScopeSnapshot
 	NamespaceAccess        domain.NamespaceAccessPolicy
 	Target                 domain.ResourceRef
+	TargetSubresource      string
 	TemplateFingerprint    string
 	DeploymentGeneration   int64
+	TargetRevision         int64
+	TargetSetDigest        domain.ActionDigest
+	TargetCount            int
 	Parameters             domain.ActionParameters
+	Stdin                  bool
+	TTY                    bool
+	Shell                  bool
 	DataCategories         domain.ActionDataCategories
 	AllowedSinks           domain.ActionSinks
 	NetworkEffects         domain.ActionNetworkEffects
@@ -736,8 +767,13 @@ func (request UIApprovalRequest) Validate() error {
 		PolicyVersion: request.PolicyVersion, PermissionProfile: request.PermissionProfile,
 		Risk: request.Risk, Effect: request.Effect, PolicyGeneration: request.PolicyGeneration,
 		Scope: request.Scope, NamespaceAccess: request.NamespaceAccess,
-		Target:     domain.ActionTarget{Resource: request.Target, Fingerprint: request.TemplateFingerprint, Generation: request.DeploymentGeneration},
-		Parameters: request.Parameters, DataCategories: request.DataCategories, AllowedSinks: request.AllowedSinks,
+		Target: domain.ActionTarget{
+			Resource: request.Target, Subresource: request.TargetSubresource,
+			Fingerprint: request.TemplateFingerprint, Generation: request.DeploymentGeneration,
+			Revision: request.TargetRevision, TargetSetDigest: request.TargetSetDigest, TargetCount: request.TargetCount,
+		},
+		Parameters: request.Parameters, Stdin: request.Stdin, TTY: request.TTY, Shell: request.Shell,
+		DataCategories: request.DataCategories, AllowedSinks: request.AllowedSinks,
 		NetworkEffects: request.NetworkEffects, NetworkDestinationHash: request.NetworkDestinationHash,
 		Limits:             request.Limits,
 		VerificationPlanID: request.VerificationPlanID, ReasonSummary: request.ReasonSummary,
@@ -749,21 +785,91 @@ func (request UIApprovalRequest) Validate() error {
 		State: domain.ApprovalStatePending, RequestedAt: request.RequestedAt,
 		ExpiresAt: request.ExpiresAt, StateChangedAt: request.RequestedAt,
 	}
-	wantCurrent := fmt.Sprintf(
-		"Deployment generation %d with Pod template fingerprint %s.",
-		request.DeploymentGeneration,
-		request.TemplateFingerprint,
-	)
+	wantCurrent, wantProposed := actionApprovalSummaries(intent)
 	digest, err := approval.OperationDigest(domainRequest)
 	if request.Sequence < 1 || request.Sequence > 4096 || request.Target.Validate() != nil ||
-		request.Target.APIVersion != domain.RestartDeploymentTargetAPIVersion ||
-		request.Target.Kind != domain.RestartDeploymentTargetKind || request.Target.Namespace != request.Scope.Namespace ||
-		intent.ValidateRestartDeployment() != nil || request.CurrentSummary != wantCurrent ||
-		request.ProposedSummary != approvalProposedSummary || domainRequest.Validate() != nil ||
+		len(request.CurrentSummary) > MaxApprovalDisplaySummaryBytes || len(request.ProposedSummary) > MaxApprovalDisplaySummaryBytes ||
+		!validApprovalActionIntent(intent) || request.CurrentSummary != wantCurrent ||
+		request.ProposedSummary != wantProposed || domainRequest.Validate() != nil ||
 		err != nil || !request.Digest.Equal(digest) {
 		return ErrInvalidUIEvent
 	}
 	return nil
+}
+
+func validApprovalActionIntent(intent domain.ActionIntent) bool {
+	switch intent.Operation {
+	case domain.ActionOperationRestartDeployment:
+		return intent.ValidateRestartDeployment() == nil
+	case domain.ActionOperationScaleWorkload, domain.ActionOperationRollbackDeployment,
+		domain.ActionOperationDeleteOwnedPod, domain.ActionOperationCordonNode,
+		domain.ActionOperationUncordonNode, domain.ActionOperationDrainNode:
+		return domain.ValidateRemediationIntent(intent) == nil
+	case domain.ActionOperationRestrictedLocalArgv:
+		return intent.ValidateLocalCommand() == nil
+	case domain.ActionOperationShell:
+		return intent.ValidateShellCommand() == nil
+	case domain.ActionOperationPodExec, domain.ActionOperationContainerFileRead,
+		domain.ActionOperationDiagnosticPod, domain.ActionOperationPodDiagnostic:
+		return intent.Validate() == nil
+	default:
+		return false
+	}
+}
+
+func actionApprovalSummaries(intent domain.ActionIntent) (string, string) {
+	resource := intent.Target.Resource
+	identity := fmt.Sprintf("%s %s/%s with UID and resource version bound by digest.", resource.Kind, resource.Namespace, resource.Name)
+	if resource.Namespace == "" {
+		identity = fmt.Sprintf("%s %s with UID and resource version bound by digest.", resource.Kind, resource.Name)
+	}
+	switch intent.Operation {
+	case domain.ActionOperationRestartDeployment:
+		return fmt.Sprintf("Deployment generation %d with Pod template fingerprint %s.", intent.Target.Generation, intent.Target.Fingerprint), approvalProposedSummary
+	case domain.ActionOperationScaleWorkload:
+		return identity, fmt.Sprintf("Change replicas from %d to %d through the exact scale subresource.", intent.Parameters.ReplicaCurrent, intent.Parameters.ReplicaTarget)
+	case domain.ActionOperationRollbackDeployment:
+		return identity, fmt.Sprintf("Replace only the Deployment Pod template with bound prior revision %d.", intent.Parameters.Revision)
+	case domain.ActionOperationDeleteOwnedPod:
+		return identity, fmt.Sprintf("Delete only this controller-owned Pod with a %d-second grace period.", intent.Parameters.GracePeriodSeconds)
+	case domain.ActionOperationCordonNode:
+		return identity, "Set only spec.unschedulable=true on this Node."
+	case domain.ActionOperationUncordonNode:
+		return identity, "Set only spec.unschedulable=false on this Node."
+	case domain.ActionOperationDrainNode:
+		return identity, fmt.Sprintf("Cordon this Node and evict only the %d digest-bound plan members.", intent.Target.TargetCount)
+	case domain.ActionOperationRestrictedLocalArgv:
+		return fmt.Sprintf("Executable identity %s and working-directory identity %s are bound by digest.", intent.Parameters.ExecutableID, intent.Parameters.WorkingDirectoryID),
+			fmt.Sprintf("Direct executable=%q argv=%q cwd=%q environment=%q credential-reference=%q stdin=false tty=false shell=false network=%s. No OS filesystem or network sandbox is claimed.",
+				intent.Parameters.Executable, intent.Parameters.Arguments.Values(), intent.Parameters.WorkingDirectory,
+				intent.Parameters.Environment.Values(), intent.Parameters.CredentialReference, actionNetworkSummary(intent.NetworkEffects))
+	case domain.ActionOperationShell:
+		return fmt.Sprintf("Shell executable identity %s and working-directory identity %s are bound by digest.", intent.Parameters.ExecutableID, intent.Parameters.WorkingDirectoryID),
+			fmt.Sprintf("Shell executable=%q command=%q cwd=%q environment=%q stdin=false tty=false shell=true network=%s. No OS filesystem or network sandbox is claimed.",
+				intent.Parameters.Executable, intent.Parameters.ShellCommand, intent.Parameters.WorkingDirectory,
+				intent.Parameters.Environment.Values(), actionNetworkSummary(intent.NetworkEffects))
+	case domain.ActionOperationPodExec, domain.ActionOperationPodDiagnostic:
+		return identity, "Execute only the displayed no-shell argv in the exact Pod container."
+	case domain.ActionOperationContainerFileRead:
+		return identity, "Read only the displayed normalized container path through the fixed no-shell reader."
+	case domain.ActionOperationDiagnosticPod:
+		return identity, "Create, observe, and clean up only the displayed policy-bound diagnostic Pod."
+	default:
+		return "", ""
+	}
+}
+
+func actionNetworkSummary(effects domain.ActionNetworkEffects) string {
+	switch effects {
+	case domain.ActionNetworkNone:
+		return "none"
+	case domain.ActionNetworkKubernetesAPI:
+		return "frozen Kubernetes API Context"
+	case domain.ActionNetworkExternalCommand:
+		return "exact policy-bound external origin"
+	default:
+		return "invalid"
+	}
 }
 
 // UIApprovalResult closes one exact dialog request without carrying its nonce.
@@ -776,6 +882,7 @@ type UIApprovalResult struct {
 	State           domain.ApprovalState
 	StateReason     domain.ApprovalStateReason
 	Execution       *UIRestartExecution
+	ActionExecution *UIActionExecution
 }
 
 // Validate checks one bounded non-pending dialog outcome.
@@ -786,13 +893,22 @@ func (result UIApprovalResult) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	if result.State == domain.ApprovalStateConsumed {
-		if result.Execution == nil || result.Execution.Validate() != nil || !result.Execution.State.Terminal() ||
-			result.Execution.RequestID != result.RequestID || result.Execution.RunID != result.RunID ||
-			result.Execution.ScopeGeneration != result.ScopeGeneration || result.Execution.Sequence != result.Sequence ||
-			!result.Execution.Digest.Equal(result.Digest) {
+		if (result.Execution == nil) == (result.ActionExecution == nil) {
 			return ErrInvalidUIEvent
 		}
-	} else if result.Execution != nil {
+		if result.Execution != nil && (result.Execution.Validate() != nil || !result.Execution.State.Terminal() ||
+			result.Execution.RequestID != result.RequestID || result.Execution.RunID != result.RunID ||
+			result.Execution.ScopeGeneration != result.ScopeGeneration || result.Execution.Sequence != result.Sequence ||
+			!result.Execution.Digest.Equal(result.Digest)) {
+			return ErrInvalidUIEvent
+		}
+		if result.ActionExecution != nil && (result.ActionExecution.Validate() != nil ||
+			result.ActionExecution.RequestID != result.RequestID || result.ActionExecution.RunID != result.RunID ||
+			result.ActionExecution.ScopeGeneration != result.ScopeGeneration || result.ActionExecution.Sequence != result.Sequence ||
+			!result.ActionExecution.Digest.Equal(result.Digest)) {
+			return ErrInvalidUIEvent
+		}
+	} else if result.Execution != nil || result.ActionExecution != nil {
 		return ErrInvalidUIEvent
 	}
 	return nil
@@ -821,23 +937,29 @@ func validApprovalResultState(state domain.ApprovalState, reason domain.Approval
 }
 
 func projectUIApprovalRequest(request domain.ApprovalRequest, sequence int64) UIApprovalRequest {
-	return UIApprovalRequest{
+	projection := UIApprovalRequest{
 		RequestID: request.ID, RunID: request.RunID, SessionID: request.SessionID, Sequence: sequence,
 		Operation: request.Intent.Operation, OperationSchema: request.Intent.OperationSchemaVersion,
 		PolicyVersion: request.Intent.PolicyVersion, PermissionProfile: request.Intent.PermissionProfile,
 		PolicyGeneration: request.Intent.PolicyGeneration, Risk: request.Intent.Risk, Effect: request.Intent.Effect,
 		Scope: request.Intent.Scope, NamespaceAccess: request.Intent.NamespaceAccess,
 		Target:              request.Intent.Target.Resource,
+		TargetSubresource:   request.Intent.Target.Subresource,
 		TemplateFingerprint: request.Intent.Target.Fingerprint, DeploymentGeneration: request.Intent.Target.Generation,
-		Parameters: request.Intent.Parameters, DataCategories: request.Intent.DataCategories,
-		AllowedSinks: request.Intent.AllowedSinks, NetworkEffects: request.Intent.NetworkEffects,
+		TargetRevision:  request.Intent.Target.Revision,
+		TargetSetDigest: request.Intent.Target.TargetSetDigest,
+		TargetCount:     request.Intent.Target.TargetCount,
+		Parameters:      request.Intent.Parameters, Stdin: request.Intent.Stdin, TTY: request.Intent.TTY, Shell: request.Intent.Shell,
+		DataCategories: request.Intent.DataCategories,
+		AllowedSinks:   request.Intent.AllowedSinks, NetworkEffects: request.Intent.NetworkEffects,
 		NetworkDestinationHash: request.Intent.NetworkDestinationHash,
 		Limits:                 request.Intent.Limits, VerificationPlanID: request.Intent.VerificationPlanID,
 		ReasonSummary: request.Intent.ReasonSummary, RiskSummary: request.Intent.RiskSummary,
-		CurrentSummary:  fmt.Sprintf("Deployment generation %d with Pod template fingerprint %s.", request.Intent.Target.Generation, request.Intent.Target.Fingerprint),
-		ProposedSummary: approvalProposedSummary, Digest: request.Digest, Nonce: request.Nonce,
+		Digest: request.Digest, Nonce: request.Nonce,
 		RequestedAt: request.RequestedAt, ExpiresAt: request.ExpiresAt,
 	}
+	projection.CurrentSummary, projection.ProposedSummary = actionApprovalSummaries(request.Intent)
+	return projection
 }
 
 func projectUIApprovalResult(request domain.ApprovalRequest, sequence int64) UIApprovalResult {

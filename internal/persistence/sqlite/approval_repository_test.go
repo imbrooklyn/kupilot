@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -108,6 +109,110 @@ func TestApprovalRepositoryPersistsPendingDecisionExpiryAndSafeQuery(t *testing.
 	}
 	if rawNonceMatches != 0 {
 		t.Fatalf("raw nonce row count = %d, want 0", rawNonceMatches)
+	}
+}
+
+func TestApprovalRepositoryStoresOnlyDigestsForLocalArgvShellAndOutput(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "local-action-derivatives")
+	repository := NewApprovalRepository(db)
+	requestedAt := time.UnixMilli(1_700_000_025_000).UTC()
+	run := seedApprovalRun(t, db, requestedAt)
+	scope := domain.ClusterScope{
+		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation: run.Scope.Generation, ActivatedAt: requestedAt.Add(-time.Millisecond),
+	}
+	environment, err := domain.NewActionEnvironment([]string{"LC_ALL=C", "NO_COLOR=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := domain.LocalExecutionObservation{
+		ExecutableID: domain.ActionDigest(strings.Repeat("a", 64)), WorkingDirectoryID: domain.ActionDigest(strings.Repeat("b", 64)),
+	}
+	namespace := domain.ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: scope.Namespace, UID: "namespace-uid", ResourceVersion: "42"}
+	argvCanary := "raw-argv-canary-s04"
+	arguments, err := domain.NewActionArguments([]string{argvCanary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandPolicy := domain.LocalCommandPolicy{
+		ID: "safe-diagnostic", Kind: domain.LocalCommandDiagnostic, Operation: domain.LocalOperationDiagnostic,
+		Executable: "/opt/bin/diagnostic", Arguments: arguments, WorkingDirectory: "/var/empty", Environment: environment,
+		CredentialReference: domain.LocalCredentialNone, DiagnosticEffect: domain.LocalDiagnosticNoNetworkRead,
+		Timeout: 10 * time.Second, MaxLines: 10, MaxBytes: 1024,
+	}
+	commandPlan := domain.LocalCommandActionPlan{
+		RunID: run.ID, SessionID: run.SessionID, Scope: scope, PolicyGeneration: 1, NamespaceTarget: namespace,
+		Policy: commandPolicy, Arguments: arguments, Observation: observation,
+		Limits:  domain.ActionLimits{Timeout: 10 * time.Second, MaximumItems: 1, MaximumLines: 10, MaximumBytes: 1024, MaximumOutput: 1024},
+		Purpose: "Run one exact local diagnostic.",
+	}
+	commandIntent, err := commandPlan.Intent(domain.PermissionProfileAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellCanary := "raw-shell-canary-s04"
+	shellPolicy := domain.LocalShellPolicy{
+		ID: "safe-shell", Executable: "/bin/sh", Command: "printf " + shellCanary,
+		WorkingDirectory: "/var/empty", Environment: environment, Network: domain.LocalShellNetworkNone,
+		Timeout: 10 * time.Second, MaxLines: 10, MaxBytes: 1024,
+	}
+	shellPlan := domain.LocalShellActionPlan{
+		RunID: run.ID, SessionID: run.SessionID, Scope: scope, PolicyGeneration: 1, NamespaceTarget: namespace,
+		Policy: shellPolicy, Observation: observation,
+		Limits:  domain.ActionLimits{Timeout: 10 * time.Second, MaximumItems: 1, MaximumLines: 10, MaximumBytes: 1024, MaximumOutput: 1024},
+		Purpose: "Run one exact configured shell command.",
+	}
+	shellIntent, err := shellPlan.Intent(domain.PermissionProfileAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requests := []domain.ApprovalRequest{
+		pendingRequestForIntent(t, "00000000-0000-7000-8000-000000009021", run, commandIntent, requestedAt, 0x61),
+		pendingRequestForIntent(t, "00000000-0000-7000-8000-000000009022", run, shellIntent, requestedAt.Add(time.Millisecond), 0x62),
+	}
+	for index, request := range requests {
+		audit := testApprovalAudit(t, request, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", request.RequestedAt)
+		audit.ID = domain.AuditEventID(approvalTestUUID(9_220 + index))
+		if err := repository.CreateWithAudit(context.Background(), request, audit); err != nil {
+			t.Fatalf("CreateWithAudit(%s) error = %v", request.Intent.Operation, err)
+		}
+		stored, _, err := repository.Get(context.Background(), request.ID)
+		if err != nil || stored.Intent.ParameterDigest != request.Intent.Parameters.Digest() {
+			t.Fatalf("stored %s request = %#v/%v", request.Intent.Operation, stored, err)
+		}
+	}
+
+	outputCanary := "raw-output-canary-s04"
+	result := domain.LocalCommandResult{
+		State: domain.LocalProcessExited, SafeOutput: outputCanary, OutputDigest: domain.LocalSafeOutputDigest(outputCanary),
+		ExitCode: 0, Started: true, LineCount: 1, ByteCount: len(outputCanary),
+	}
+	resultAudit, err := application.LocalOutcomeAudit(
+		"00000000-0000-7000-8000-000000009223", requests[0].ActionEnvelope(), result, requestedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAuditRepository(db).AppendWriteResult(context.Background(), resultAudit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.handle.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range append([]string{db.databasePath}, db.databasePath+"-wal", db.databasePath+"-shm") {
+		content, readErr := os.ReadFile(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, canary := range []string{argvCanary, shellCanary, outputCanary, "/opt/bin/diagnostic", "/var/empty", "LC_ALL=C"} {
+			if bytes.Contains(content, []byte(canary)) {
+				t.Fatalf("raw local action value %q entered SQLite", canary)
+			}
+		}
 	}
 }
 
@@ -621,6 +726,31 @@ func testApprovalRequest(
 	request.Digest, err = approval.OperationDigest(request)
 	if err != nil || request.Validate() != nil {
 		t.Fatalf("test ApprovalRequest error/request = %v/%#v", err, request)
+	}
+	return request
+}
+
+func pendingRequestForIntent(
+	t *testing.T,
+	id domain.ApprovalID,
+	run domain.AgentRun,
+	intent domain.ActionIntent,
+	requestedAt time.Time,
+	nonceByte byte,
+) domain.ApprovalRequest {
+	t.Helper()
+	nonce, err := domain.NewApprovalNonce(bytes.Repeat([]byte{nonceByte}, domain.ApprovalNonceBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := domain.ApprovalRequest{
+		ID: id, RunID: run.ID, SessionID: run.SessionID, Intent: intent, Nonce: nonce,
+		State: domain.ApprovalStatePending, RequestedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+	}
+	request.Digest, err = approval.OperationDigest(request)
+	if err != nil || request.Validate() != nil {
+		t.Fatalf("pending local request = %#v/%v validation=%v", request, err, request.Validate())
 	}
 	return request
 }

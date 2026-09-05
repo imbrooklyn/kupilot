@@ -22,7 +22,10 @@ func (coordinator *ApprovalCoordinator) resolveAutomaticAction(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	_, err = coordinator.ConsumeApprovedRestart(ctx, approvalExecutionCommand(updated, tracked.sequence))
+	actionResult, err := coordinator.ConsumeApprovedAction(ctx, approvalExecutionCommand(updated, tracked.sequence))
+	if tracked.action.kind != trackedActionRestart && actionResult.Validate() == nil {
+		coordinator.publishClosed(ctx, actionResult)
+	}
 	return err
 }
 
@@ -126,8 +129,11 @@ func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracke
 	if choice == domain.ApprovalDecisionReject {
 		return nil
 	}
-	_, err = coordinator.ConsumeApprovedRestart(ctx, approvalExecutionCommand(updated, tracked.sequence))
-	return err
+	actionResult, consumeErr := coordinator.ConsumeApprovedAction(ctx, approvalExecutionCommand(updated, tracked.sequence))
+	if tracked.action.kind != trackedActionRestart && actionResult.Validate() == nil {
+		coordinator.publishClosed(ctx, actionResult)
+	}
+	return consumeErr
 }
 
 func (coordinator *ApprovalCoordinator) recordReviewFailureAndEscalate(
@@ -235,7 +241,7 @@ func (coordinator *ApprovalCoordinator) resolveProgrammatic(
 
 func approvalExecutionCommand(request domain.ApprovalRequest, sequence int64) UICommand {
 	return UICommand{
-		Kind: UICommandApproveRestart, RequestID: uint64(sequence), RunID: request.RunID,
+		Kind: UICommandApproveAction, RequestID: uint64(sequence), RunID: request.RunID,
 		ExpectedScopeGeneration: request.Intent.Scope.Generation, ApprovalID: request.ID,
 		ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce, ApprovalSequence: sequence,
 	}

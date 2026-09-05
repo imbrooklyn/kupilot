@@ -2,8 +2,11 @@
 
 This page distinguishes current behavior from the Accepted `v0.5` privacy
 target. The checked-in binary now exposes named model roles, role-scoped
-consent, safe Session context, and summarization. New sensitive data-source
-categories and remote/local execution remain unavailable.
+consent, safe Session context and summarization, bounded data-source and remote-
+diagnostic pipelines, and default-off local execution. Remote-diagnostic human/
+Reviewer delivery remains fail-closed in this slice. Local process output has
+no model-transfer category: bounded sanitized output may be shown only in the
+local terminal and cannot become model content or Evidence.
 
 Kupilot orchestrates locally and connects directly to the selected Kubernetes
 API and configured model endpoint. Local orchestration does not mean all
@@ -34,20 +37,23 @@ context`, `Resource references`, `Kubernetes status`, `Kubernetes events`, and
    timestamps, and relationships.
 5. `projected_kubernetes_events`: bounded Event reasons and messages after local
    safety processing.
-6. `redacted_container_output`: bounded current or previous container-output
-   facts after normalization and redaction.
+6. `redacted_container_output`: bounded current, previous, or all-container
+   log facts, bounded local log-search results, container-file content, Pod Exec
+   output, and diagnostic-Pod output after normalization and redaction.
+7. `projected_kubernetes_metrics`: bounded current Metrics API CPU and memory
+   projections.
+8. `projected_prometheus_results`: bounded samples from explicitly enabled,
+   code-owned Prometheus query templates.
+9. `redacted_loki_output`: bounded Loki lines from explicitly enabled,
+   code-owned queries after multiline, terminal, and sensitive-value handling.
 
-The implemented list above includes safe resumed conversation context. Later
-`v0.5` work must add separate versioned categories where needed for
-all-container/log-search output,
-Pod/Node metrics, safe Secret metadata, exact ConfigMap-key or non-credential
-container-environment values, optional Prometheus or Loki results, container
-files, remote diagnostics, local-process output, and resumed safe history.
-ConfigMap and environment values are at least `review` and require exact policy,
-category consent, and sink policy; generic or credential-bearing values remain
-denied. A Reviewer receives only the minimum normalized ActionEnvelope and
-policy facts by default, not raw cluster output or general Session history. No
-new category is implied by an existing broad label.
+Safe Secret metadata uses the resource-reference and projected-status
+categories. Exact ConfigMap-key and non-credential container-environment values
+do not have a current transfer category and therefore remain fail-closed.
+Local process output likewise remains terminal-only. A Reviewer receives only
+the minimum normalized ActionEnvelope and policy facts by default, not raw
+cluster output or general Session history. No new category is implied by an
+existing broad label.
 
 The container-output category is disabled by default. In the privacy dialog,
 `L` toggles it. A toggle returns consent to pending and cancels an active run;
@@ -75,7 +81,8 @@ The model-content contract excludes:
 - Raw Kubernetes objects, full YAML, managed fields, unrestricted annotations,
   EndpointSlice addresses, and arbitrary API types.
 - Raw or unbounded Events, logs, metrics, files, optional data-source results,
-  remote diagnostic output, and local process output.
+  and remote diagnostic output, plus all local process output even after
+  bounded sanitation.
 - Raw configuration, SQLite, local application-log, prompt, request, response,
   stream, header, and endpoint-error contents.
 

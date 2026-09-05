@@ -143,7 +143,7 @@ func (dialog ApprovalDialog) View(width int) string {
 		seconds = 0
 	}
 	content := []string{
-		dialog.styles.Title.Render("Restart approval"),
+		dialog.styles.Title.Render("Action approval"),
 		dialog.styles.Body.Render("Operation: " + dialog.content.Operation),
 		dialog.styles.Body.Render("Scope: " + dialog.content.Scope),
 		dialog.styles.Body.Render("Resource: " + dialog.content.Resource),
@@ -159,7 +159,7 @@ func (dialog ApprovalDialog) View(width int) string {
 		if dialog.terminal {
 			content = append(content, dialog.styles.Muted.Render("Enter, Esc, or Ctrl+C closes this result."))
 		} else {
-			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The restart request will not be retried."))
+			content = append(content, dialog.styles.Muted.Render("Verification stops if its owning operation is cancelled. The action will not be retried."))
 		}
 	} else {
 		content = append(content,

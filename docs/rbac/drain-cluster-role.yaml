@@ -1,0 +1,21 @@
+# Drain requires explicit all-Namespace policy and a dedicated reviewed identity.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kupilot-node-drain
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    resourceNames: ["example-node"]
+    verbs: ["get", "patch"]
+  # RBAC cannot constrain this list by spec.nodeName or the later immutable plan.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["list"]
+  # Kubernetes does not reliably constrain create by resourceNames.
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]

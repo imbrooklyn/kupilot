@@ -17,7 +17,7 @@ import (
 
 const (
 	// PrivacyPolicyVersion changes whenever an eligible category or its meaning changes.
-	PrivacyPolicyVersion       = "2026-09-05.v3"
+	PrivacyPolicyVersion       = "2026-09-05.v4"
 	PrivacyRecordSchemaVersion = 3
 	maxPrivacyPolicyBytes      = 64
 )
@@ -86,7 +86,7 @@ var privacyCategoryCatalog = [...]privacyCategoryDefinition{
 	{DataCategoryResourceReferences, "The active Context and Namespace, plus permitted resource names and references used by this diagnostic run."},
 	{DataCategoryProjectedStatus, "Permitted Kubernetes status, conditions, counts, times, and resource relationships."},
 	{DataCategoryProjectedEvents, "Recent permitted Kubernetes Event reasons and messages after local safety checks."},
-	{DataCategoryRedactedContainerOutput, "Recent current or previous container output after local cleanup, size limits, and sensitive-value filtering."},
+	{DataCategoryRedactedContainerOutput, "Bounded container logs, remote-command output, container-file content, or diagnostic-Pod output after local cleanup, size limits, and sensitive-value filtering."},
 	{DataCategoryProjectedMetrics, "Current Kubernetes Metrics API CPU and memory snapshots normalized to integer quantities."},
 	{DataCategoryPrometheusResults, "Bounded samples from explicitly enabled code-owned Prometheus query templates."},
 	{DataCategoryRedactedLokiOutput, "Bounded Loki log excerpts after local multiline, terminal, and sensitive-value filtering."},
@@ -98,6 +98,7 @@ var neverEligibleModelData = [...]string{
 	"Kubernetes Secret objects or Secret data",
 	"Raw Kubernetes objects, full YAML, and unrestricted fields",
 	"Raw Events and raw or unbounded container output",
+	"Local process output, including bounded or redacted command output",
 	"Assembled raw prompts, protocol bodies, headers, and vendor errors",
 	"Raw PromQL, raw LogQL, arbitrary observability URLs or headers, and observability credentials",
 }
@@ -335,8 +336,10 @@ func (manager *PrivacyManager) Snapshot() PrivacyBindingSnapshot {
 	}
 }
 
-// AuthorizeLogs fails closed before either fixed container-log Tool can read.
-func (manager *PrivacyManager) AuthorizeLogs(ctx context.Context) PrivacyLogAuthorization {
+// AuthorizeContainerOutput fails closed before any admitted container output,
+// including logs, Pod Exec, file content, or diagnostic-Pod output, can cross
+// the model boundary.
+func (manager *PrivacyManager) AuthorizeContainerOutput(ctx context.Context) PrivacyLogAuthorization {
 	if err := manager.ensureLoaded(ctx); err != nil {
 		return PrivacyLogConsentRequired
 	}
@@ -349,6 +352,12 @@ func (manager *PrivacyManager) AuthorizeLogs(ctx context.Context) PrivacyLogAuth
 		return PrivacyLogConsentRequired
 	}
 	return PrivacyLogAllowed
+}
+
+// AuthorizeLogs preserves the narrower log-facing contract while sharing the
+// same consent-bound redacted-container-output category.
+func (manager *PrivacyManager) AuthorizeLogs(ctx context.Context) PrivacyLogAuthorization {
+	return manager.AuthorizeContainerOutput(ctx)
 }
 
 // AuthorizeDataSource binds an optional-source transfer to the exact accepted

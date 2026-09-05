@@ -13,15 +13,15 @@ import (
 
 func TestRunBudgetProfilesMatchOperationalContract(t *testing.T) {
 	tests := []struct {
-		profile              BudgetProfile
-		run                  time.Duration
-		steps, tools, models int
-		model, kube          time.Duration
-		bytes, logs, stalled int
+		profile                             BudgetProfile
+		run                                 time.Duration
+		steps, tools, models                int
+		model, kube                         time.Duration
+		bytes, logs, remote, local, stalled int
 	}{
-		{BudgetProfileCompact, 2 * time.Minute, 12, 16, 6, 60 * time.Second, 15 * time.Second, 1 * 1024 * 1024, 4, 2},
-		{BudgetProfileBalanced, 10 * time.Minute, 32, 48, 16, 120 * time.Second, 30 * time.Second, 4 * 1024 * 1024, 12, 4},
-		{BudgetProfileExtended, 30 * time.Minute, 64, 128, 32, 300 * time.Second, 60 * time.Second, 12 * 1024 * 1024, 32, 6},
+		{BudgetProfileCompact, 2 * time.Minute, 12, 16, 6, 60 * time.Second, 15 * time.Second, 1 * 1024 * 1024, 4, 2, 1, 2},
+		{BudgetProfileBalanced, 10 * time.Minute, 32, 48, 16, 120 * time.Second, 30 * time.Second, 4 * 1024 * 1024, 12, 4, 1, 4},
+		{BudgetProfileExtended, 30 * time.Minute, 64, 128, 32, 300 * time.Second, 60 * time.Second, 12 * 1024 * 1024, 32, 8, 1, 6},
 	}
 	for _, test := range tests {
 		t.Run(string(test.profile), func(t *testing.T) {
@@ -31,7 +31,8 @@ func TestRunBudgetProfilesMatchOperationalContract(t *testing.T) {
 			}
 			if limits.RunDuration != test.run || limits.Steps != test.steps || limits.ToolCalls != test.tools ||
 				limits.ModelCalls != test.models || limits.ModelRequestTimeout != test.model || limits.ToolRequestTimeout != test.kube ||
-				limits.RunToolResultBytes != test.bytes || limits.LogCalls != test.logs || limits.NoProgressSteps != test.stalled ||
+				limits.RunToolResultBytes != test.bytes || limits.LogCalls != test.logs || limits.RemoteExecCalls != test.remote ||
+				limits.LocalProcessCalls != test.local || limits.NoProgressSteps != test.stalled ||
 				limits.ToolResultBytes != domain.MaxToolResultBytes {
 				t.Fatalf("profile limits = %#v", limits)
 			}
@@ -305,6 +306,41 @@ func TestRunBudgetStopsAfterRepeatNoProgressCancellationAndDeadline(t *testing.T
 		}
 		assertBudgetStop(t, firstError(budget.ReserveToolCall(context.Background(), oneMore)), RunStopLogCallLimit)
 	})
+
+	t.Run("remote execution calls", func(t *testing.T) {
+		clock := newFakeClock()
+		limits := DefaultRunBudgetLimits()
+		budget, _ := NewRunBudget(limits, clock.Now(), clock.Now)
+		remoteInput := remoteDiagnosticsRunInput(t)
+		for index := 0; index < limits.RemoteExecCalls; index++ {
+			call, err := BindToolCall(remoteInput, invocationID(index), ToolSelection{
+				ID:            fmt.Sprintf("call-remote-%d", index+1),
+				Name:          domain.ToolNamePodExec,
+				ArgumentsJSON: fmt.Sprintf(`{"arguments":["literal;not-a-shell","$(ignored)","*.log"],"command_id":"literal-argv","container":"app","executable":"/usr/bin/printf","namespace":"test-namespace","pod_name":"sample-pod-%d","purpose":"Inspect exact argv output."}`, index),
+			})
+			if err != nil {
+				t.Fatalf("BindToolCall(remote %d) error = %v", index, err)
+			}
+			if _, err := budget.ReserveToolCall(context.Background(), call); err != nil {
+				t.Fatalf("ReserveToolCall(remote %d) error = %v", index, err)
+			}
+			if err := budget.CompleteToolCall(call, ToolCallOutcome{}); err != nil {
+				t.Fatalf("CompleteToolCall(remote %d) error = %v", index, err)
+			}
+		}
+		oneMore, err := BindToolCall(remoteInput, invocationID(limits.RemoteExecCalls), ToolSelection{
+			ID:            "call-remote-over",
+			Name:          domain.ToolNamePodExec,
+			ArgumentsJSON: `{"arguments":["literal;not-a-shell","$(ignored)","*.log"],"command_id":"literal-argv","container":"app","executable":"/usr/bin/printf","namespace":"test-namespace","pod_name":"sample-pod-over","purpose":"Inspect exact argv output."}`,
+		})
+		if err != nil {
+			t.Fatalf("BindToolCall(remote over) error = %v", err)
+		}
+		assertBudgetStop(t, firstError(budget.ReserveToolCall(context.Background(), oneMore)), RunStopRemoteExecLimit)
+		if snapshot := budget.Snapshot(); snapshot.RemoteExecCalls != limits.RemoteExecCalls {
+			t.Fatalf("remote execution calls = %d, want %d", snapshot.RemoteExecCalls, limits.RemoteExecCalls)
+		}
+	})
 }
 
 func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
@@ -333,6 +369,8 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		{name: "summary timeout", mutate: func(limits *RunBudgetLimits) { limits.SummaryRequestTimeout++ }},
 		{name: "Tool timeout", mutate: func(limits *RunBudgetLimits) { limits.ToolRequestTimeout++ }},
 		{name: "log calls", mutate: func(limits *RunBudgetLimits) { limits.LogCalls++ }},
+		{name: "remote execution calls", mutate: func(limits *RunBudgetLimits) { limits.RemoteExecCalls++ }},
+		{name: "local process calls", mutate: func(limits *RunBudgetLimits) { limits.LocalProcessCalls++ }},
 		{name: "resource page bytes", mutate: func(limits *RunBudgetLimits) { limits.ResourcePageBytes++ }},
 	}
 	for _, current := range tests {
@@ -382,6 +420,8 @@ func TestRunBudgetRejectsExpandedLimitsAndCapsChildDeadline(t *testing.T) {
 		DataSourceBytes:       512,
 		DataSourceWindow:      time.Minute,
 		DataSourceStep:        15 * time.Second,
+		RemoteExecCalls:       1,
+		LocalProcessCalls:     1,
 		ResourcePages:         1,
 		ResourcePageItems:     1,
 		ResourcePageBytes:     512,

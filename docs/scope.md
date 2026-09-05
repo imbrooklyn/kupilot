@@ -3,11 +3,12 @@
 - Status: Accepted `v0.5` target
 - Date: 2026-09-03
 
-The current code now includes the named-model and safe Session-context runtime
-slice. The items below define the complete admitted `v0.5` scope; broader
-capabilities, permissions, RBAC, and execution must not be described as
-reachable until their specific code, configuration, migrations, tests, and
-evidence gates pass.
+The current code includes the named-model and safe Session-context runtime,
+broad read/observability, remote-diagnostic adapters, deterministic permission
+foundation, typed remediation, and default-off exact local-process slices. The
+items below define the complete admitted `v0.5` scope. Deterministic reachability
+for one slice is not live-integration or release evidence, and no broader
+capability may be inferred from it.
 
 ## In scope for `v0.5`
 
@@ -156,8 +157,11 @@ Restricted local argv is default off and risk-classified from exact behavior.
 It uses a policy-selected executable and argv, fixed validated working
 directory, allowlisted minimal environment, and finite process/output lifetime.
 Shell is always separate, `critical`, and default off; its own schema binds one
-exact bounded command string. OS sandboxing is not a substitute for Kubernetes
-scope, RBAC, remote target, network, data, and audit controls.
+exact bounded command string. The current model proposal is narrower and
+selects only its configured policy ID. The local adapter provides no OS
+filesystem or network sandbox; exact approval must display that fact. OS
+sandboxing would not substitute for Kubernetes scope, RBAC, remote target,
+network, data, and audit controls.
 
 Every such operation uses one immutable digest-bound `ActionEnvelope`, current
 target and generation revalidation, durable pre-operation audit, at most one

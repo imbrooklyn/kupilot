@@ -1,13 +1,16 @@
 # Operational and Diagnostic Capabilities
 
-- Status: Accepted `v0.5` target; read and observability slices implemented
+- Status: Accepted `v0.5` target; read, observability, remote-diagnostic,
+  local-execution, and typed-remediation slices implemented
 - Date: 2026-09-05
 
 The checked-in implementation now includes the broad built-in/CRD resource
 read and query slice and the deterministic Events, logs, Metrics API,
-Prometheus, and Loki adapters. This page also defines later P0 capabilities;
-remote/local diagnostics and additional remediation rows must not be read as
-claims that those Tools are reachable.
+Prometheus, and Loki adapters. It also includes the default-off exact Pod Exec,
+container-file, and diagnostic-Pod capabilities described below, plus exact
+default-off local process policies and the seven typed remediation operations.
+These paths have deterministic composition and adapter evidence; they are not
+claims of live tool, cluster, RBAC, CNI, or operating-system sandbox validation.
 
 Kupilot answers operational questions through a versioned, compile-time
 catalog of typed, bounded capabilities. Support means the Agent can gather a
@@ -64,12 +67,15 @@ Metrics API reads and normalized integer CPU/memory quantities. Prometheus and
 Loki use only configured canonical origins and code-owned query IDs.
 
 The default `ask` composition routes container output and optional external
-data-source access to permission review. Until the later permission delivery
-surface can create and consume the required `ActionEnvelope`, those
-review-class calls fail closed before external I/O. Deterministic adapter and
-Tool tests exercise the post-authorization path without claiming live endpoint
-or cluster integration. No remote diagnostic, local process, or new write
-operation is added here.
+data-source access to permission review. The S04 remote-diagnostic gate creates
+and atomically consumes the same durable `ActionEnvelope` lifecycle for an
+automatic full-access/custom route or an eligible current-process Session
+rule. Human and Reviewer routes fail closed before remote execution until their
+delivery integration is completed; configuring an entry alone never executes
+it. Deterministic adapter and Tool tests exercise the authorized path without
+claiming live endpoint or cluster integration. The separate shared dispatcher
+now owns local-process and typed-remediation decisions; it does not silently
+extend authority to the remote-diagnostic gate.
 
 Source allowlisting occurs before projection, normalization, sensitive-value
 handling, limits, neutral serialization, and final role/origin/category consent.
@@ -93,12 +99,66 @@ path is not part of this slice.
 
 | Capability | Base risk | Required boundary |
 | --- | --- | --- |
-| Container file read | `review` | Exact Pod UID/container/normalized path; rechecked in-container symlink resolution; deny credentials, ServiceAccount paths, devices, and unsafe pseudo-filesystems; bounded projected output. |
+| Container file read | `review` | Exact Pod UID/container/normalized path; one-exec archive-reported component-type checks; deny credentials, ServiceAccount paths, devices, and unsafe pseudo-filesystems; bounded projected output and an explicit filesystem-race residual. |
 | Predefined Pod diagnostic | `review` | One exact read-only policy-owned argv through client-go `pods/exec`; `stdin=false`, `tty=false`, `shell=false`; exact Pod UID/container; finite time/output and owned cancellation. |
 | Other Pod Exec | `critical`, default off | Exact Pod UID/container/executable/argv and data/network/sink effects; stdin, TTY, and shell default off; explicit enablement and decision; no shell smuggling or inherited credential. |
 | Diagnostic Pod | `critical`, default off | Policy-selected pinned image, Namespace, non-root/non-privileged context, read-only root filesystem, no host mounts/network, finite resources/time/output, disabled token automount, exact in-cluster target, and separately audited create/observe/delete/ambiguous-cleanup states. |
 | Restricted local argv | Risk from exact behavior; default off | Policy-selected executable and argv, direct launch with `shell=false`, fixed validated working directory, allowlisted minimal environment, no inherited stdin, owned process group, bounded output, cancellation, and join. |
 | Shell | `critical`, default off | Separate typed operation binding a policy-selected shell and exact bounded command string; never an argv fallback; only explicit full-access or exact custom critical-auto may omit a per-action prompt. |
+
+The current `pod_exec` implementation resolves one exact Pod UID/resource
+version and container. After the permission decision, Application invokes a
+fresh target revalidation before durable consumption/pre-audit; the Kubernetes
+adapter repeats the exact GET before the sole exec attempt. Before creating
+approval authority, Application also proves the normalized plan is an exact
+member of the process-frozen remote-diagnostics catalog. A configured
+executable and argv must match byte for byte, must contain no credential-shaped
+value, and cannot name a direct shell or dispatch one through a recognized
+executable multiplexer. It issues one redirect-denying client-go SPDY
+`pods/exec` request with stdout and stderr enabled and stdin/TTY/shell disabled.
+The adapter owns cancellation, deadline, stream close and join, ordered bounded
+project-owned chunks, and bundle shutdown. It performs no WebSocket fallback or
+second transport attempt because a failed upgrade can leave command execution
+ambiguous. Metacharacters are literal argv bytes, not shell syntax. A general
+policy-owned command can still have in-container side effects or network
+behavior: its exact argv and the conservative remote-Pod network effect are
+approval-visible, but Kupilot does not infer or sandbox the executable's
+implementation and the policy never admits credential input or output.
+
+The current container-file reader uses one exact no-shell USTAR invocation with
+a one-block record size. The action binds the full archive transport ceiling
+and a smaller content ceiling after deterministic framing is reserved. It
+passes every normalized parent followed by the final file under a configured
+application-data root. The local parser requires those archive headers in that
+exact order, requires every parent to be a directory and the final entry to be
+a bounded regular file, and rejects links, devices, duplicates, extra entries,
+stderr, Secret/ConfigMap/projected/credential mounts, ServiceAccount-token
+paths, and unsafe pseudo-filesystems. A sensitive mount at `/`, sensitive
+volume device, duplicate volume identity, or unknown mount/device reference
+causes the Pod projection to fail closed. This is a cooperative in-container
+archive check, not an atomic kernel `openat2` guarantee; a container able to
+race its filesystem remains a documented residual risk.
+
+Each current `run_diagnostic_pod` policy entry uses the fixed TCP-connect
+contract; a unique local ID selects one exact target. Policy fixes its
+Namespace, same-Namespace Service and port, digest-pinned image, and
+`/bin/nc -z -v -w 5` prefix. Runtime fixes the generated Pod name,
+disabled token automount, default ServiceAccount identity, non-root IDs,
+runtime-default seccomp, dropped capabilities, no privilege escalation,
+read-only root filesystem, no volumes or host namespaces, disabled Service
+links, non-preempting scheduling, zero admitted API-default priority, finite
+resources, restart policy, active deadline, and output limits.
+Service UID/resource version, non-empty selector, and port are revalidated
+before create, and the returned/admitted Pod spec is checked before waiting.
+ExternalName, selectorless, obvious metadata/link-local/address-confusion, and
+policy-external targets are rejected. Create, wait, log, delete, and cleanup
+are distinct, atomically audited states; definite create rejection does not
+delete a pre-existing Pod, while ambiguous create/delete paths clean only the
+exact invocation-bound target and never retry creation. Bundle shutdown first
+cancels the owner, retains its transport for bounded cleanup, joins it, and
+only then closes the transport. An enforced matching NetworkPolicy and
+compatible CNI remain an operator-provided deployment prerequisite that
+Kupilot does not verify.
 
 Restricted `kubectl`, `helm`, and `argocd` integrations are long-tail escape
 valves only when exact verbs, flags, files, destinations, output projections,
@@ -109,6 +169,19 @@ reference, application, revision, and consent. They never replace a typed
 restart, scale, rollback, Pod delete, cordon, uncordon, or drain. An
 operating-system sandbox is not equivalent to Kubernetes RBAC, remote Pod
 isolation, or NetworkPolicy.
+
+The implemented local runner accepts only a configured policy ID from the
+model. Runtime resolves a fixed absolute executable, structurally classified
+argv or separately configured shell string, normalized working directory,
+minimal `LANG`/`LC_ALL`/`NO_COLOR` environment, filesystem identities, data and
+network effects, and finite timeout/line/byte ceilings into the envelope.
+Direct argv keeps stdin and TTY closed and treats metacharacters literally;
+known interpreters, command multiplexers, wrapper executables, credential or
+identity override flags, values-file/plugin surfaces, symlink paths, and script
+executables are rejected. The adapter owns one process group, cancellation,
+bounded drain/join, and combined ordered output. It provides no filesystem or
+network sandbox, so `ask` never automatically approves an unsandboxed arbitrary
+command and shell remains a separate default-off `critical` operation.
 
 ## P0 typed remediation
 
@@ -124,8 +197,9 @@ isolation, or NetworkPolicy.
 
 Every sensitive or effectful operation first becomes an immutable versioned
 `ActionEnvelope`. Application alone performs policy, permission, fresh target,
-decision, digest, scope/policy generation, durable pre-operation audit, final
-revalidation, and one-attempt execution. Acceptance, failure, ambiguous
+decision, digest, scope/policy generation, target revalidation before durable
+consumption/pre-operation audit, final generation and adapter target checks,
+and one-attempt execution. Acceptance, failure, ambiguous
 outcome, progress, cleanup, timeout, and verified completion are distinct.
 There is no automatic execution retry.
 

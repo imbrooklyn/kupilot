@@ -3,7 +3,7 @@
 - Status: Accepted target for `v0.5`
 - Date: 2026-09-05
 
-The checked-in SQLite schema is now at forward-only migration 9. It implements
+The checked-in SQLite schema is now at forward-only migration 11. It implements
 the safe Session-summary/coverage record, role-scoped consent, named
 model-request metadata, and minimal generalized ActionEnvelope, approval, and
 Reviewer-decision metadata described here. Migration 8 adds bounded exact API
@@ -11,10 +11,22 @@ identity, resource-policy version/generation, and partial state to accepted
 resource Evidence. Migration 9 adds the observability-policy version,
 source-origin hash, normalized series identity, observation window, and exact
 source-consent origin hashes; it adds no raw Kubernetes/data-source payload,
-query, credential, or continuation token. Only the existing typed Deployment
-restart is composed through the action lifecycle. New execution records remain
-accepted targets unless separately identified as implemented; this document
-does not make them reachable.
+query, credential, or continuation token. Migration 10 expands the fixed
+ToolInvocation-name constraint to the complete 14-entry catalog and admits
+only the exact remote-diagnostics policy version for sanitized accepted
+Evidence. It also corrects the existing closed ActionEnvelope constraint so a
+remote-Pod network destination hash is required and can be stored. Existing
+bounded canonical Tool arguments remain eligible operational detail; raw exec
+streams, archives, file content, Pod bodies, logs, credentials, and action-audit
+command bodies remain prohibited.
+Migration 11 expands only the closed operation and parameter-kind constraints
+for typed remediation, exact local argv, and shell identities; it adds no
+payload column. The supervised restart, additional typed remediation, and
+default-off local-process actions are composed through the shared action
+lifecycle. The remote-diagnostic default `ask` human-delivery route remains
+fail-closed in this slice. No raw argv, shell command, executable or working-
+directory path, child environment, credential value, Kubernetes response, or
+process output is eligible for SQLite, audit, logs, or export.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -183,16 +195,17 @@ Eligible operational detail is limited to:
   stable error class, safe summary, byte and Evidence counters, and truncation
   metadata.
 - Accepted Evidence identity and provenance, exact bounded API
-  group/version/resource/Kind/scope and applicable resource- or
-  observability-policy version/generation, safe ResourceRef and source path,
+  group/version/resource/Kind/scope and applicable resource-, observability-,
+  or remote-diagnostics-policy version/generation, safe ResourceRef and source path,
   optional source-origin hash, normalized series identity and query window,
   concise projected fact, observation time, optional resource version,
   deterministic severity, partial/redaction/truncation metadata, and
   normalization fingerprint.
 
 There is no generic Tool input or ToolResult body. A concise Evidence fact may be
-derived from an eligible Event or bounded container output, but the source
-payload and excerpt are not durable. Kubernetes discovery responses, raw
+derived from an eligible Event. Remote-command, container-file, and diagnostic-
+Pod Evidence facts retain only the safe target, sanitized line/byte counts, and
+content fingerprint; neither source payload nor excerpt is durable. Kubernetes discovery responses, raw
 objects, and continuation tokens are not durable. Model-supplied scope,
 endpoint, credential, deadline, arbitrary Kind, access policy, and hard limits
 are not model-supplied canonical Tool arguments. An explicit target Namespace
@@ -245,6 +258,16 @@ outcome, cleanup, and verified completion remain separate states.
 Human Session rules are current-process authority and are not persisted for
 resume. Audit may retain the safe fact that a rule matched, but not a reusable
 rule or token.
+
+A diagnostic-Pod outcome is one atomic group of five bounded audit events for
+create, wait, log, delete, and cleanup. These events contain only fixed state,
+attempt/ambiguity flags, exact safe identity metadata, and envelope linkage;
+the created Pod body, retrieved log bytes, and cleanup response are never
+durable. A drain phase audit preserves the actual Namespace of each attempted
+Pod, including an `all`-policy Pod outside the working Namespace, only when the
+event is linked to the exact approval ID and ActionEnvelope digest. This is
+bounded target identity metadata, not reusable cross-Namespace authority.
+A failed result-audit write never authorizes an automatic external retry.
 
 Migration 7 first makes every legacy pending or approved restart request
 terminal with the `process_restarted` reason, then archives the legacy tables

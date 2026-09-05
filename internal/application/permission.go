@@ -279,12 +279,15 @@ func (rule SessionPermissionRule) Validate() error {
 	kind, targetKindValid := domain.ResourceKindForReference(target)
 	targetNamespaceValid := targetKindValid &&
 		(kind.ClusterScoped() && rule.TargetNamespace == "" || kind.Namespaced() && domain.ValidNamespaceName(rule.TargetNamespace))
-	argvRule := rule.ParameterKind == domain.ActionParametersRemoteArgv || rule.ParameterKind == domain.ActionParametersLocalArgv
-	argumentBindingValid := !argvRule && rule.ParameterDigest.Valid() && rule.Container == "" && rule.Executable == "" &&
-		rule.ArgumentPrefix == (domain.ActionArguments{}) ||
-		argvRule && rule.ParameterDigest == "" && (domain.ActionParameters{
+	remoteArgvRule := rule.ParameterKind == domain.ActionParametersRemoteArgv
+	localArgvRule := rule.ParameterKind == domain.ActionParametersLocalArgv
+	argumentBindingValid := !remoteArgvRule && !localArgvRule && rule.ParameterDigest.Valid() &&
+		rule.Container == "" && rule.Executable == "" && rule.ArgumentPrefix == (domain.ActionArguments{}) ||
+		remoteArgvRule && rule.ParameterDigest == "" && (domain.ActionParameters{
 			Kind: rule.ParameterKind, Container: rule.Container, Executable: rule.Executable, Arguments: rule.ArgumentPrefix,
-		}).Validate() == nil
+		}).Validate() == nil ||
+		localArgvRule && rule.ParameterDigest.Valid() && rule.Container == "" &&
+			domain.ValidLocalExecutionPath(rule.Executable) && rule.ArgumentPrefix.Valid()
 	if !rule.ID.Valid() || !rule.SessionID.Valid() || !rule.Operation.Valid() || rule.Scope.Validate() != nil ||
 		!domain.ValidContextName(rule.Scope.Context) || !domain.ValidNamespaceName(rule.Scope.Namespace) ||
 		rule.Scope.Generation < 1 || !rule.NamespaceAccess.Valid() || rule.TargetAPIVersion == "" ||
@@ -318,7 +321,7 @@ func (rule SessionPermissionRule) matches(envelope domain.ActionEnvelope, now ti
 }
 
 func validPermissionNetworkDestination(effects domain.ActionNetworkEffects, destination domain.ActionDigest) bool {
-	requiresHash := effects&(domain.ActionNetworkModelOrigin|domain.ActionNetworkDataSource) != 0
+	requiresHash := effects&(domain.ActionNetworkModelOrigin|domain.ActionNetworkDataSource|domain.ActionNetworkRemotePod|domain.ActionNetworkExternalCommand) != 0
 	if requiresHash {
 		return destination.Valid()
 	}
@@ -332,12 +335,16 @@ func permissionRuleParametersMatch(rule SessionPermissionRule, parameters domain
 	if rule.ParameterKind != domain.ActionParametersRemoteArgv && rule.ParameterKind != domain.ActionParametersLocalArgv {
 		return parameters.Digest().Equal(rule.ParameterDigest)
 	}
+	if rule.ParameterKind == domain.ActionParametersLocalArgv && !parameters.Digest().Equal(rule.ParameterDigest) {
+		return false
+	}
 	if parameters.Container != rule.Container || parameters.Executable != rule.Executable {
 		return false
 	}
 	prefix := rule.ArgumentPrefix.Values()
 	actual := parameters.Arguments.Values()
-	if len(prefix) == 0 || len(actual) < len(prefix) {
+	if len(prefix) == 0 || len(actual) < len(prefix) ||
+		rule.ParameterKind == domain.ActionParametersLocalArgv && len(actual) != len(prefix) {
 		return false
 	}
 	for index := range prefix {
@@ -682,11 +689,18 @@ func permissionRuleParameterBinding(
 	if prefixCount < 1 || prefixCount > len(values) {
 		return "", "", "", domain.ActionArguments{}, ErrPermissionRuleInvalid
 	}
+	if parameters.Kind == domain.ActionParametersLocalArgv && prefixCount != len(values) {
+		return "", "", "", domain.ActionArguments{}, ErrPermissionRuleInvalid
+	}
 	prefix, err := domain.NewActionArguments(values[:prefixCount])
 	if err != nil {
 		return "", "", "", domain.ActionArguments{}, ErrPermissionRuleInvalid
 	}
-	return "", parameters.Container, parameters.Executable, prefix, nil
+	digest := domain.ActionDigest("")
+	if parameters.Kind == domain.ActionParametersLocalArgv {
+		digest = parameters.Digest()
+	}
+	return digest, parameters.Container, parameters.Executable, prefix, nil
 }
 
 // RevokeSessionRule removes explicit process authority and advances generation.

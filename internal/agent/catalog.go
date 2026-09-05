@@ -15,7 +15,7 @@ import (
 
 const (
 	// ToolCatalogVersion versions the complete built-in model-visible catalog.
-	ToolCatalogVersion = "kupilot-operational-tools-v4"
+	ToolCatalogVersion = "kupilot-operational-tools-v5"
 
 	maxToolPurposeBytes = 1024
 	maxRequestedEvents  = 50
@@ -56,6 +56,9 @@ const (
 	queryLokiSchema           = `{"additionalProperties":false,"properties":{"contains":{"maxLength":256,"type":["string","null"]},"line_limit":{"maximum":1000,"minimum":1,"type":["integer","null"]},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"query_id":{"enum":["pod_logs"],"type":"string"},"window_seconds":{"maximum":86400,"minimum":60,"type":["integer","null"]}},"required":["contains","line_limit","namespace","pod_name","purpose","query_id","window_seconds"],"type":"object"}`
 	getRelatedResourcesSchema = `{"additionalProperties":false,"properties":{"include":{"items":{"enum":["owners","pods","replica_sets","service_endpoints","services"],"type":"string"},"maxItems":3,"minItems":1,"type":["array","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"},"relation_depth":{"maximum":2,"minimum":1,"type":["integer","null"]},"resource":{"additionalProperties":false,"properties":{"api_version":{"enum":["v1","apps/v1","batch/v1",null],"type":["string","null"]},"kind":{"enum":["Pod","Deployment","ReplicaSet","Job","Service"],"type":"string"},"name":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"uid":{"maxLength":256,"type":["string","null"]}},"required":["api_version","kind","name","namespace","uid"],"type":"object"}},"required":["include","purpose","relation_depth","resource"],"type":"object"}`
 	getClusterOverviewSchema  = `{"additionalProperties":false,"properties":{"limit":{"maximum":50,"minimum":2,"type":["integer","null"]},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["limit","purpose"],"type":"object"}`
+	podExecSchema             = `{"additionalProperties":false,"properties":{"arguments":{"items":{"maxLength":4096,"minLength":1,"type":"string"},"maxItems":16,"minItems":1,"type":"array"},"command_id":{"maxLength":64,"minLength":1,"pattern":"^[a-z][a-z0-9_-]{0,63}$","type":"string"},"container":{"maxLength":253,"minLength":1,"type":"string"},"executable":{"maxLength":1024,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["arguments","command_id","container","executable","namespace","pod_name","purpose"],"type":"object"}`
+	readContainerFileSchema   = `{"additionalProperties":false,"properties":{"container":{"maxLength":253,"minLength":1,"type":"string"},"namespace":{"maxLength":63,"type":["string","null"]},"path":{"maxLength":256,"minLength":2,"type":"string"},"pod_name":{"maxLength":253,"minLength":1,"type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["container","namespace","path","pod_name","purpose"],"type":"object"}`
+	runDiagnosticPodSchema    = `{"additionalProperties":false,"properties":{"diagnostic_id":{"maxLength":64,"minLength":1,"pattern":"^[a-z][a-z0-9_-]{0,63}$","type":"string"},"purpose":{"maxLength":1024,"minLength":1,"type":"string"}},"required":["diagnostic_id","purpose"],"type":"object"}`
 )
 
 // ToolSpecifications returns a defensive copy of the exact ordered catalog.
@@ -72,6 +75,9 @@ func ToolSpecifications() []ToolSpecification {
 		{Name: domain.ToolNameQueryLoki, Version: ToolCatalogVersion, Description: "Run one enabled code-owned Loki log query for an exact Pod and bounded time range. Only an optional literal contains filter is accepted; raw LogQL, regex, URLs, headers, credentials, and result ceilings are not accepted.", InputSchemaJSON: queryLokiSchema},
 		{Name: domain.ToolNameGetRelatedResources, Version: ToolCatalogVersion, Description: "Follow only code-defined, bounded same-Namespace relationships from one allowlisted resource.", InputSchemaJSON: getRelatedResourcesSchema},
 		{Name: domain.ToolNameGetClusterOverview, Version: ToolCatalogVersion, Description: "Use this for requests asking which Nodes and/or Namespaces exist or for their health. It reads both bounded projections in one concise cluster overview and never performs discovery or returns addresses, provider identifiers, images, system information, or capacity maps.", InputSchemaJSON: getClusterOverviewSchema},
+		{Name: domain.ToolNamePodExec, Version: ToolCatalogVersion, Description: "Execute one exact policy-admitted argv vector in one verified Pod container. Context, Namespace, Pod UID, stdin=false, tty=false, shell=false, timeout, and output ceilings are injected and revalidated by the runtime.", InputSchemaJSON: podExecSchema},
+		{Name: domain.ToolNameReadContainerFile, Version: ToolCatalogVersion, Description: "Read one exact normalized path below a configured container application-data root. The runtime verifies the Pod UID, container, mount policy, archive-reported component types, regular-file type, consent, and output ceilings.", InputSchemaJSON: readContainerFileSchema},
+		{Name: domain.ToolNameRunDiagnosticPod, Version: ToolCatalogVersion, Description: "Run one configured temporary diagnostic against one exact same-Namespace Service. Image, command, target, ServiceAccount, security context, resources, lifetime, output bounds, and cleanup are fixed by runtime policy.", InputSchemaJSON: runDiagnosticPodSchema},
 	}
 }
 
@@ -95,6 +101,9 @@ type ToolHandlers struct {
 	QueryLoki           Tool
 	GetRelatedResources Tool
 	GetClusterOverview  Tool
+	PodExec             Tool
+	ReadContainerFile   Tool
+	RunDiagnosticPod    Tool
 }
 
 // Validate checks that every admitted Tool has exactly one injected handler.
@@ -138,6 +147,21 @@ func (handlers ToolHandlers) Resolve(name domain.ToolName) (Tool, error) {
 		return handlers.GetRelatedResources, nil
 	case domain.ToolNameGetClusterOverview:
 		return handlers.GetClusterOverview, nil
+	case domain.ToolNamePodExec:
+		if handlers.PodExec == nil {
+			return nil, ErrToolPolicyDenied
+		}
+		return handlers.PodExec, nil
+	case domain.ToolNameReadContainerFile:
+		if handlers.ReadContainerFile == nil {
+			return nil, ErrToolPolicyDenied
+		}
+		return handlers.ReadContainerFile, nil
+	case domain.ToolNameRunDiagnosticPod:
+		if handlers.RunDiagnosticPod == nil {
+			return nil, ErrToolPolicyDenied
+		}
+		return handlers.RunDiagnosticPod, nil
 	default:
 		return nil, ErrToolPolicyDenied
 	}
@@ -224,21 +248,22 @@ type ToolCallIdentity struct {
 // BoundToolCall is created only after strict model-call validation. Accessors
 // expose immutable values and no caller-controlled scope or ceiling field.
 type BoundToolCall struct {
-	invocationID     domain.ToolInvocationID
-	runID            domain.AgentRunID
-	sessionID        domain.SessionID
-	modelCallID      string
-	name             domain.ToolName
-	version          string
-	purpose          string
-	argumentsJSON    string
-	argumentsDigest  string
-	scope            domain.ClusterScope
-	policyGeneration domain.PolicyGeneration
-	resourcePolicy   domain.ResourcePolicy
-	sourcePolicy     domain.DataSourcePolicy
-	externalCallCost int
-	ceilings         ToolCallCeilings
+	invocationID      domain.ToolInvocationID
+	runID             domain.AgentRunID
+	sessionID         domain.SessionID
+	modelCallID       string
+	name              domain.ToolName
+	version           string
+	purpose           string
+	argumentsJSON     string
+	argumentsDigest   string
+	scope             domain.ClusterScope
+	policyGeneration  domain.PolicyGeneration
+	resourcePolicy    domain.ResourcePolicy
+	sourcePolicy      domain.DataSourcePolicy
+	remoteDiagnostics domain.RemoteDiagnosticsPolicyCatalog
+	externalCallCost  int
+	ceilings          ToolCallCeilings
 }
 
 // Validate checks the complete runtime-bound call.
@@ -246,7 +271,7 @@ func (call BoundToolCall) Validate() error {
 	selection := ToolSelection{ID: call.modelCallID, Name: call.name, ArgumentsJSON: call.argumentsJSON}
 	if !call.invocationID.Valid() || !call.runID.Valid() || !call.sessionID.Valid() || selection.Validate() != nil ||
 		call.version != ToolCatalogVersion || call.argumentsDigest != domain.SHA256Hex(call.argumentsJSON) ||
-		call.scope.Validate() != nil || !call.policyGeneration.Valid() || !validAgentText(call.purpose, maxToolPurposeBytes, false) || !call.ceilings.valid() {
+		call.scope.Validate() != nil || !call.policyGeneration.Valid() || call.remoteDiagnostics.Validate() != nil || !validAgentText(call.purpose, maxToolPurposeBytes, false) || !call.ceilings.valid() {
 		return ErrInvalidBoundToolCall
 	}
 	if call.name == domain.ToolNameGetResource || call.name == domain.ToolNameListResources {
@@ -283,8 +308,17 @@ func (call BoundToolCall) Scope() domain.ClusterScope                { return ca
 func (call BoundToolCall) PolicyGeneration() domain.PolicyGeneration { return call.policyGeneration }
 func (call BoundToolCall) ResourcePolicy() domain.ResourcePolicy     { return call.resourcePolicy.Copy() }
 func (call BoundToolCall) SourcePolicy() domain.DataSourcePolicy     { return call.sourcePolicy.Copy() }
-func (call BoundToolCall) ExternalCallCost() int                     { return call.externalCallCost }
-func (call BoundToolCall) Ceilings() ToolCallCeilings                { return call.ceilings }
+func (call BoundToolCall) RemoteDiagnosticsPolicies() domain.RemoteDiagnosticsPolicyCatalog {
+	file, found := call.remoteDiagnostics.ContainerFile()
+	if !found {
+		catalog, _ := domain.NewRemoteDiagnosticsPolicyCatalog(call.remoteDiagnostics.PodExecPolicies(), nil, call.remoteDiagnostics.DiagnosticPodPolicies())
+		return catalog
+	}
+	catalog, _ := domain.NewRemoteDiagnosticsPolicyCatalog(call.remoteDiagnostics.PodExecPolicies(), &file, call.remoteDiagnostics.DiagnosticPodPolicies())
+	return catalog
+}
+func (call BoundToolCall) ExternalCallCost() int      { return call.externalCallCost }
+func (call BoundToolCall) Ceilings() ToolCallCeilings { return call.ceilings }
 
 // Identity returns the frozen canonical repeat key.
 func (call BoundToolCall) Identity() ToolCallIdentity {
@@ -536,6 +570,29 @@ type getRelatedResourcesArguments struct {
 	Resource      resourceArgument `json:"resource"`
 }
 
+type podExecArguments struct {
+	Arguments  []string `json:"arguments"`
+	CommandID  string   `json:"command_id"`
+	Container  string   `json:"container"`
+	Executable string   `json:"executable"`
+	Namespace  string   `json:"namespace"`
+	PodName    string   `json:"pod_name"`
+	Purpose    string   `json:"purpose"`
+}
+
+type readContainerFileArguments struct {
+	Container string `json:"container"`
+	Namespace string `json:"namespace"`
+	Path      string `json:"path"`
+	PodName   string `json:"pod_name"`
+	Purpose   string `json:"purpose"`
+}
+
+type runDiagnosticPodArguments struct {
+	DiagnosticID string `json:"diagnostic_id"`
+	Purpose      string `json:"purpose"`
+}
+
 // BindToolCall strictly decodes a complete structured selection, canonicalizes
 // defaults, and injects scope and ceilings from RunInput.
 func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selection ToolSelection) (BoundToolCall, error) {
@@ -564,20 +621,21 @@ func BindToolCall(input RunInput, invocationID domain.ToolInvocationID, selectio
 		requestTimeout = sourcePolicy.RequestTimeout
 	}
 	call := BoundToolCall{
-		invocationID:     invocationID,
-		runID:            input.RunID(),
-		sessionID:        input.SessionID(),
-		modelCallID:      selection.ID,
-		name:             selection.Name,
-		version:          ToolCatalogVersion,
-		purpose:          purpose,
-		argumentsJSON:    canonical,
-		argumentsDigest:  domain.SHA256Hex(canonical),
-		scope:            input.Scope(),
-		policyGeneration: input.PolicyGeneration(),
-		resourcePolicy:   policy,
-		sourcePolicy:     sourcePolicy,
-		externalCallCost: callCost,
+		invocationID:      invocationID,
+		runID:             input.RunID(),
+		sessionID:         input.SessionID(),
+		modelCallID:       selection.ID,
+		name:              selection.Name,
+		version:           ToolCatalogVersion,
+		purpose:           purpose,
+		argumentsJSON:     canonical,
+		argumentsDigest:   domain.SHA256Hex(canonical),
+		scope:             input.Scope(),
+		policyGeneration:  input.PolicyGeneration(),
+		resourcePolicy:    policy,
+		sourcePolicy:      sourcePolicy,
+		remoteDiagnostics: input.RemoteDiagnosticsPolicies(),
+		externalCallCost:  callCost,
 		ceilings: ToolCallCeilings{
 			RequestTimeout:          requestTimeout,
 			MaxResultBytes:          limits.ToolResultBytes,
@@ -1019,9 +1077,73 @@ func canonicalToolArguments(input RunInput, selection ToolSelection) (string, st
 			return "", "", ErrToolPolicyDenied
 		}
 		return marshalCanonical(getClusterOverviewArguments{Limit: limit, Purpose: purpose}, purpose)
+	case domain.ToolNamePodExec:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "arguments", "command_id", "container", "executable", "namespace", "pod_name", "purpose"); err != nil {
+			return "", "", err
+		}
+		var wire podExecArguments
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		purpose, namespace, err := normalizePodObservation(scope, wire.Namespace, wire.PodName, wire.Purpose)
+		policy, found := input.RemoteDiagnosticsPolicies().ResolvePodExec(wire.CommandID)
+		if err != nil || !domain.ValidActionReasonSummary(purpose) || !found || !domain.ValidResourceName(wire.Container) || wire.Executable != policy.Executable || !equalStrings(wire.Arguments, policy.Arguments.Values()) {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(podExecArguments{
+			Arguments: append([]string(nil), wire.Arguments...), CommandID: policy.ID, Container: wire.Container,
+			Executable: policy.Executable, Namespace: namespace, PodName: wire.PodName, Purpose: purpose,
+		}, purpose)
+	case domain.ToolNameReadContainerFile:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "container", "namespace", "path", "pod_name", "purpose"); err != nil {
+			return "", "", err
+		}
+		var wire readContainerFileArguments
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		purpose, namespace, err := normalizePodObservation(scope, wire.Namespace, wire.PodName, wire.Purpose)
+		policy, found := input.RemoteDiagnosticsPolicies().ContainerFile()
+		normalized, pathErr := domain.NormalizeContainerFilePath(wire.Path)
+		if err != nil || !domain.ValidActionReasonSummary(purpose) || pathErr != nil || !found || !policy.AllowedRoots.Allows(normalized) || !domain.ValidResourceName(wire.Container) {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(readContainerFileArguments{
+			Container: wire.Container, Namespace: namespace, Path: normalized, PodName: wire.PodName, Purpose: purpose,
+		}, purpose)
+	case domain.ToolNameRunDiagnosticPod:
+		if err := requireExactJSONObjectFields(selection.ArgumentsJSON, "diagnostic_id", "purpose"); err != nil {
+			return "", "", err
+		}
+		var wire runDiagnosticPodArguments
+		if err := strictDecode(selection.ArgumentsJSON, &wire); err != nil {
+			return "", "", err
+		}
+		purpose, err := safeToolPurpose(wire.Purpose)
+		policy, found := input.RemoteDiagnosticsPolicies().ResolveDiagnosticPod(wire.DiagnosticID)
+		if err != nil || !domain.ValidActionReasonSummary(purpose) || !found ||
+			(policy.Namespace != scope.Namespace && scope.NamespaceAccess != domain.NamespaceAccessAll) {
+			return "", "", ErrToolPolicyDenied
+		}
+		if _, targetErr := policy.TargetHost(); targetErr != nil {
+			return "", "", ErrToolPolicyDenied
+		}
+		return marshalCanonical(runDiagnosticPodArguments{DiagnosticID: policy.ID, Purpose: purpose}, purpose)
 	default:
 		return "", "", ErrToolPolicyDenied
 	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeIncludes(kind domain.ResourceKind, requested []string) ([]string, error) {

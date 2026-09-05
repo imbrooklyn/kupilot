@@ -303,7 +303,10 @@ func (state *runState) finishLocalDiagnosis(ctx context.Context, failure *runtim
 		agent.RunStopSummaryCallLimit,
 		agent.RunStopSummaryCostLimit,
 		agent.RunStopToolResultBytes,
-		agent.RunStopLogCallLimit:
+		agent.RunStopLogCallLimit,
+		agent.RunStopMetricCallLimit,
+		agent.RunStopDataSourceLimit,
+		agent.RunStopRemoteExecLimit:
 		kind = domain.MissingInformationTruncated
 	}
 	draft := agent.DiagnosisDraft{

@@ -24,7 +24,7 @@ func TestApprovalDialogDefaultsToRejectAndRendersBoundSummary(t *testing.T) {
 	}
 	view := dialog.View(100)
 	for _, want := range []string{
-		"Restart approval", "Operation: Restart Deployment", "Scope: test-context / test-namespace · scope revision 7",
+		"Action approval", "Operation: Restart Deployment", "Scope: test-context / test-namespace · scope revision 7",
 		"Current: Deployment generation 8", "Proposed: Update only", "TTL: 17s", strings.Repeat("b", 64),
 		"› Reject", "  Approve",
 	} {

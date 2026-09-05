@@ -20,6 +20,7 @@ const (
 	ClassAuthenticationFailed    ErrorClass = domain.SafeErrorClassAuthenticationFailed
 	ClassPermissionDenied        ErrorClass = domain.SafeErrorClassPermissionDenied
 	ClassNotFound                ErrorClass = domain.SafeErrorClassNotFound
+	ClassConflict                ErrorClass = domain.SafeErrorClassConflict
 	ClassUnsupported             ErrorClass = domain.SafeErrorClassUnsupported
 	ClassPolicyDenied            ErrorClass = domain.SafeErrorClassPolicyDenied
 	ClassStaleScope              ErrorClass = domain.SafeErrorClassStaleScope
@@ -138,6 +139,15 @@ func classifyKubernetesError(operation string, raw error) *SafeError {
 	}
 	if apierrors.IsNotFound(raw) {
 		return newKubeSafeError(ClassNotFound, "kubernetes_not_found", operation, "The requested Kubernetes object was not found.")
+	}
+	if apierrors.IsAlreadyExists(raw) || apierrors.IsConflict(raw) {
+		return newKubeSafeError(ClassConflict, "kubernetes_conflict", operation, "The Kubernetes object changed or already exists.")
+	}
+	if apierrors.IsInvalid(raw) || apierrors.IsBadRequest(raw) {
+		return newKubeSafeError(ClassInvalidInput, "kubernetes_request_invalid", operation, "Kubernetes rejected the bounded request.")
+	}
+	if apierrors.IsMethodNotSupported(raw) || apierrors.IsNotAcceptable(raw) || apierrors.IsUnsupportedMediaType(raw) {
+		return newKubeSafeError(ClassUnsupported, "kubernetes_request_unsupported", operation, "Kubernetes does not support the bounded request.")
 	}
 	if apierrors.IsTooManyRequests(raw) {
 		return newKubeSafeError(ClassRateLimited, "kubernetes_rate_limited", operation, "Kubernetes temporarily limited the request rate.")

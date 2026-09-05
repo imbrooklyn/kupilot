@@ -1,0 +1,10 @@
+# Exact example for one Node admitted to cordon or uncordon.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kupilot-node-scheduling
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    resourceNames: ["example-node"]
+    verbs: ["get", "patch"]

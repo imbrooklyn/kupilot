@@ -89,6 +89,164 @@ func TestPermissionProfileEffectRiskCartesianMatrix(t *testing.T) {
 	}
 }
 
+func TestLocalExecutionPermissionProfileMatrixUsesExactOperationAndRisk(t *testing.T) {
+	tests := []struct {
+		name      string
+		policy    PermissionPolicy
+		operation domain.ActionOperation
+		risk      domain.RiskClass
+		want      domain.ReviewDisposition
+	}{
+		{name: "read-only direct argv", policy: permissionPolicy(domain.PermissionProfileReadOnly), operation: domain.ActionOperationRestrictedLocalArgv, risk: domain.RiskReview, want: domain.ReviewDispositionDeny},
+		{name: "ask direct argv", policy: permissionPolicy(domain.PermissionProfileAsk), operation: domain.ActionOperationRestrictedLocalArgv, risk: domain.RiskReview, want: domain.ReviewDispositionHuman},
+		{name: "ask shell", policy: permissionPolicy(domain.PermissionProfileAsk), operation: domain.ActionOperationShell, risk: domain.RiskCritical, want: domain.ReviewDispositionHuman},
+		{name: "auto-review direct argv", policy: permissionPolicy(domain.PermissionProfileAutoReview), operation: domain.ActionOperationRestrictedLocalArgv, risk: domain.RiskReview, want: domain.ReviewDispositionReviewer},
+		{name: "auto-review shell", policy: permissionPolicy(domain.PermissionProfileAutoReview), operation: domain.ActionOperationShell, risk: domain.RiskCritical, want: domain.ReviewDispositionHuman},
+		{name: "full-access direct argv", policy: PermissionPolicy{Profile: domain.PermissionProfileFullAccess, Generation: 1, FullAccessAllowed: true, HighRiskAcknowledged: true}, operation: domain.ActionOperationRestrictedLocalArgv, risk: domain.RiskReview, want: domain.ReviewDispositionAutomatic},
+		{name: "full-access shell", policy: PermissionPolicy{Profile: domain.PermissionProfileFullAccess, Generation: 1, FullAccessAllowed: true, HighRiskAcknowledged: true}, operation: domain.ActionOperationShell, risk: domain.RiskCritical, want: domain.ReviewDispositionAutomatic},
+		{name: "custom exact direct argv", policy: PermissionPolicy{Profile: domain.PermissionProfileCustom, Generation: 1, CustomRoutes: []CustomPermissionRoute{{Operation: domain.ActionOperationRestrictedLocalArgv, Risk: domain.RiskReview, Disposition: domain.ReviewDispositionAutomatic}}}, operation: domain.ActionOperationRestrictedLocalArgv, risk: domain.RiskReview, want: domain.ReviewDispositionAutomatic},
+		{name: "custom shell defaults human", policy: permissionPolicy(domain.PermissionProfileCustom), operation: domain.ActionOperationShell, risk: domain.RiskCritical, want: domain.ReviewDispositionHuman},
+		{name: "custom exact shell", policy: PermissionPolicy{Profile: domain.PermissionProfileCustom, Generation: 1, HighRiskAcknowledged: true, CustomRoutes: []CustomPermissionRoute{{Operation: domain.ActionOperationShell, Risk: domain.RiskCritical, Disposition: domain.ReviewDispositionAutomatic}}}, operation: domain.ActionOperationShell, risk: domain.RiskCritical, want: domain.ReviewDispositionAutomatic},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := EvaluatePermission(test.policy, PermissionEvaluationInput{
+				Operation: test.operation, Effect: domain.CapabilityEffectLocalExecute, Risk: test.risk,
+				CapabilityAdmitted: true, CapabilityEnabled: true,
+			})
+			if got.Validate() != nil || got.Disposition != test.want {
+				t.Fatalf("local permission = %#v, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestS04ExecutionPermissionRouteMatrixIsComplete(t *testing.T) {
+	operations := []struct {
+		name      string
+		operation domain.ActionOperation
+		effect    domain.CapabilityEffectClass
+		risk      domain.RiskClass
+	}{
+		{"predefined Pod diagnostic", domain.ActionOperationPodDiagnostic, domain.CapabilityEffectRemoteExecute, domain.RiskReview},
+		{"general Pod Exec", domain.ActionOperationPodExec, domain.CapabilityEffectRemoteExecute, domain.RiskCritical},
+		{"container file read", domain.ActionOperationContainerFileRead, domain.CapabilityEffectRemoteExecute, domain.RiskReview},
+		{"diagnostic Pod", domain.ActionOperationDiagnosticPod, domain.CapabilityEffectClusterMutation, domain.RiskCritical},
+		{"restart", domain.ActionOperationRestartDeployment, domain.CapabilityEffectClusterMutation, domain.RiskReview},
+		{"scale positive delta one", domain.ActionOperationScaleWorkload, domain.CapabilityEffectClusterMutation, domain.RiskReview},
+		{"scale zero or other delta", domain.ActionOperationScaleWorkload, domain.CapabilityEffectClusterMutation, domain.RiskCritical},
+		{"rollback", domain.ActionOperationRollbackDeployment, domain.CapabilityEffectClusterMutation, domain.RiskCritical},
+		{"delete owned Pod", domain.ActionOperationDeleteOwnedPod, domain.CapabilityEffectClusterMutation, domain.RiskReview},
+		{"cordon", domain.ActionOperationCordonNode, domain.CapabilityEffectClusterMutation, domain.RiskReview},
+		{"uncordon", domain.ActionOperationUncordonNode, domain.CapabilityEffectClusterMutation, domain.RiskReview},
+		{"drain", domain.ActionOperationDrainNode, domain.CapabilityEffectClusterMutation, domain.RiskCritical},
+		{"restricted local read", domain.ActionOperationRestrictedLocalArgv, domain.CapabilityEffectLocalExecute, domain.RiskReview},
+		{"restricted local side effect", domain.ActionOperationRestrictedLocalArgv, domain.CapabilityEffectLocalExecute, domain.RiskCritical},
+		{"separate shell", domain.ActionOperationShell, domain.CapabilityEffectLocalExecute, domain.RiskCritical},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			profiles := []struct {
+				name   string
+				policy PermissionPolicy
+				want   domain.ReviewDisposition
+				reason string
+			}{
+				{"read-only", permissionPolicy(domain.PermissionProfileReadOnly), domain.ReviewDispositionDeny, "read_only_effect_denied"},
+				{"ask", permissionPolicy(domain.PermissionProfileAsk), domain.ReviewDispositionHuman, permissionHumanReason(operation.risk)},
+				{"auto-review", permissionPolicy(domain.PermissionProfileAutoReview), permissionAutoReviewRoute(operation.risk), permissionAutoReviewReason(operation.risk)},
+				{"full-access", PermissionPolicy{Profile: domain.PermissionProfileFullAccess, Generation: 1, FullAccessAllowed: true, HighRiskAcknowledged: true}, domain.ReviewDispositionAutomatic, "explicit_full_access"},
+				{"custom default", permissionPolicy(domain.PermissionProfileCustom), permissionCustomDefaultRoute(operation.risk), permissionCustomDefaultReason(operation.risk)},
+				{"custom exact", exactS04CustomPermission(operation.operation, operation.risk), permissionCustomExactRoute(operation.risk), "custom_route"},
+			}
+			for _, profile := range profiles {
+				t.Run(profile.name, func(t *testing.T) {
+					input := PermissionEvaluationInput{
+						Operation: operation.operation, Effect: operation.effect, Risk: operation.risk,
+						CapabilityAdmitted: true, CapabilityEnabled: true,
+					}
+					got := EvaluatePermission(profile.policy, input)
+					if got.Validate() != nil || got.Disposition != profile.want || got.ReasonCode != profile.reason {
+						t.Fatalf("EvaluatePermission() = %#v, want %q/%q", got, profile.want, profile.reason)
+					}
+					for _, denial := range []struct {
+						name     string
+						admitted bool
+						enabled  bool
+						reason   string
+					}{
+						{"not admitted", false, true, "capability_not_admitted"},
+						{"disabled", true, false, "capability_disabled"},
+					} {
+						t.Run(denial.name, func(t *testing.T) {
+							input.CapabilityAdmitted, input.CapabilityEnabled = denial.admitted, denial.enabled
+							denied := EvaluatePermission(profile.policy, input)
+							if denied.Validate() != nil || denied.Disposition != domain.ReviewDispositionDeny || denied.ReasonCode != denial.reason {
+								t.Fatalf("hard denial = %#v, want deny/%q", denied, denial.reason)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func permissionHumanReason(risk domain.RiskClass) string {
+	if risk == domain.RiskCritical {
+		return "critical_human_required"
+	}
+	return "human_review_required"
+}
+
+func permissionAutoReviewRoute(risk domain.RiskClass) domain.ReviewDisposition {
+	if risk == domain.RiskCritical {
+		return domain.ReviewDispositionHuman
+	}
+	return domain.ReviewDispositionReviewer
+}
+
+func permissionAutoReviewReason(risk domain.RiskClass) string {
+	if risk == domain.RiskCritical {
+		return "critical_human_required"
+	}
+	return "reviewer_delegated"
+}
+
+func permissionCustomDefaultRoute(risk domain.RiskClass) domain.ReviewDisposition {
+	if risk == domain.RiskCritical {
+		return domain.ReviewDispositionHuman
+	}
+	return domain.ReviewDispositionDeny
+}
+
+func permissionCustomDefaultReason(risk domain.RiskClass) string {
+	if risk == domain.RiskCritical {
+		return "custom_critical_human_default"
+	}
+	return "custom_route_missing"
+}
+
+func exactS04CustomPermission(operation domain.ActionOperation, risk domain.RiskClass) PermissionPolicy {
+	disposition := domain.ReviewDispositionReviewer
+	acknowledged := false
+	if risk == domain.RiskCritical {
+		disposition = domain.ReviewDispositionAutomatic
+		acknowledged = true
+	}
+	return PermissionPolicy{
+		Profile: domain.PermissionProfileCustom, Generation: 1, HighRiskAcknowledged: acknowledged,
+		CustomRoutes: []CustomPermissionRoute{{Operation: operation, Risk: risk, Disposition: disposition}},
+	}
+}
+
+func permissionCustomExactRoute(risk domain.RiskClass) domain.ReviewDisposition {
+	if risk == domain.RiskCritical {
+		return domain.ReviewDispositionAutomatic
+	}
+	return domain.ReviewDispositionReviewer
+}
+
 func expectedPermissionDisposition(
 	profile domain.PermissionProfile,
 	effect domain.CapabilityEffectClass,
@@ -253,6 +411,59 @@ func TestSessionPermissionRuleMatchesSubresourceAndArgvPrefixOnly(t *testing.T) 
 	afterRevoke := permissionArgvEnvelope(t, 3, "00000000-0000-7000-8000-000000000038", "exec", "diagnostic-tool", []string{"status", "--detailed"})
 	if got := manager.Evaluate(afterRevoke, true, true, afterRevoke.RequestedAt); got.Disposition != domain.ReviewDispositionHuman || got.MatchedRuleID != "" {
 		t.Fatalf("revoked rule evaluation = %#v", got)
+	}
+}
+
+func TestSessionPermissionRuleMatchesOnlyOneExactLocalArgv(t *testing.T) {
+	sessionID := domain.SessionID("00000000-0000-7000-8000-000000000002")
+	manager, err := NewPermissionManager(permissionPolicy(domain.PermissionProfileAsk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.BindSession(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	hooks := &permissionHookOrder{}
+	if err := manager.BindInvalidationHooks(hooks, hooks); err != nil {
+		t.Fatal(err)
+	}
+	base := permissionLocalArgvEnvelope(t, 1, "00000000-0000-7000-8000-000000000071", []string{"status", "--brief"})
+	if _, err := manager.CreateSessionRule(context.Background(), CreateSessionPermissionRuleCommand{
+		Actor: PermissionChangeActorLocalUser, RuleID: "00000000-0000-7000-8000-000000000072",
+		SessionID: sessionID, Envelope: base, TargetNamePrefix: "test-namespace", ArgumentPrefixCount: 1,
+		CreatedAt: base.RequestedAt.Add(time.Second), ExpiresAt: base.RequestedAt.Add(time.Hour),
+	}); err != ErrPermissionRuleInvalid {
+		t.Fatalf("CreateSessionRule(partial local argv) error = %v", err)
+	}
+	rule, err := manager.CreateSessionRule(context.Background(), CreateSessionPermissionRuleCommand{
+		Actor: PermissionChangeActorLocalUser, RuleID: "00000000-0000-7000-8000-000000000073",
+		SessionID: sessionID, Envelope: base, TargetNamePrefix: "test-namespace", ArgumentPrefixCount: 2,
+		CreatedAt: base.RequestedAt.Add(time.Second), ExpiresAt: base.RequestedAt.Add(time.Hour),
+	})
+	if err != nil || rule.ParameterKind != domain.ActionParametersLocalArgv || rule.Container != "" ||
+		!rule.ParameterDigest.Valid() || rule.Executable != "/opt/bin/diagnostic" ||
+		!reflect.DeepEqual(rule.ArgumentPrefix.Values(), []string{"status", "--brief"}) {
+		t.Fatalf("CreateSessionRule(local argv) = %#v/%v", rule, err)
+	}
+	matching := permissionLocalArgvEnvelope(t, 2, "00000000-0000-7000-8000-000000000074", []string{"status", "--brief"})
+	if got := manager.Evaluate(matching, true, true, matching.RequestedAt.Add(2*time.Second)); got.Disposition != domain.ReviewDispositionAutomatic || got.MatchedRuleID != rule.ID {
+		t.Fatalf("matching local argv route = %#v", got)
+	}
+	extended := permissionLocalArgvEnvelope(t, 2, "00000000-0000-7000-8000-000000000075", []string{"status", "--brief", "extra"})
+	if got := manager.Evaluate(extended, true, true, extended.RequestedAt.Add(2*time.Second)); got.Disposition != domain.ReviewDispositionHuman || got.MatchedRuleID != "" {
+		t.Fatalf("expanded local argv route = %#v", got)
+	}
+	changedIntent := matching.Intent
+	changedIntent.Parameters.WorkingDirectoryID = domain.ActionDigest(strings.Repeat("c", 64))
+	changed, err := domain.NewActionEnvelope(
+		"00000000-0000-7000-8000-000000000076", matching.SessionID, matching.RunID,
+		changedIntent, matching.RequestedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.Evaluate(changed, true, true, changed.RequestedAt.Add(2*time.Second)); got.Disposition != domain.ReviewDispositionHuman || got.MatchedRuleID != "" {
+		t.Fatalf("changed local execution identity route = %#v", got)
 	}
 }
 
@@ -518,7 +729,10 @@ func permissionArgvEnvelope(
 			Kind: domain.ActionParametersRemoteArgv, Container: "app", Executable: executable, Arguments: arguments,
 		},
 		DataCategories: domain.ActionDataContainerOutput, AllowedSinks: domain.ActionSinkTerminal,
-		NetworkEffects:     domain.ActionNetworkKubernetesAPI | domain.ActionNetworkRemotePod,
+		NetworkEffects: domain.ActionNetworkKubernetesAPI | domain.ActionNetworkRemotePod,
+		NetworkDestinationHash: domain.RemotePodNetworkDestinationHash(domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "test-namespace", Name: "sample-pod", UID: "pod-uid", ResourceVersion: "42",
+		}, "app"),
 		Limits:             domain.ActionLimits{Timeout: 30 * time.Second, MaximumItems: 1, MaximumOutput: 4096},
 		VerificationPlanID: "pod-diagnostic/v1", ReasonSummary: "Run one predefined read-only diagnostic.",
 		RiskSummary: "The diagnostic executes fixed read-only arguments in one exact Pod container.",
@@ -529,6 +743,64 @@ func permissionArgvEnvelope(
 	)
 	if err != nil {
 		t.Fatalf("NewActionEnvelope() error = %v", err)
+	}
+	return envelope
+}
+
+func permissionLocalArgvEnvelope(
+	t *testing.T,
+	generation domain.PolicyGeneration,
+	requestID domain.ApprovalID,
+	argv []string,
+) domain.ActionEnvelope {
+	t.Helper()
+	arguments, err := domain.NewActionArguments(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := domain.NewActionEnvironment([]string{"LC_ALL=C", "NO_COLOR=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestedAt := time.UnixMilli(1_700_000_000_000).UTC()
+	intent := domain.ActionIntent{
+		Operation:              domain.ActionOperationRestrictedLocalArgv,
+		OperationSchemaVersion: domain.ActionOperationRestrictedLocalArgv.SchemaVersion(),
+		PolicyVersion:          domain.ActionPolicyVersion,
+		PermissionProfile:      domain.PermissionProfileAsk,
+		Risk:                   domain.RiskReview,
+		Effect:                 domain.CapabilityEffectLocalExecute,
+		PolicyGeneration:       generation,
+		Scope:                  domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
+		NamespaceAccess:        domain.NamespaceAccessCurrent,
+		Target: domain.ActionTarget{Resource: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Namespace", Name: "test-namespace", UID: "namespace-uid", ResourceVersion: "42",
+		}, Fingerprint: strings.Repeat("d", 64)},
+		Parameters: domain.ActionParameters{
+			Kind: domain.ActionParametersLocalArgv, PolicyID: "local-status", Executable: "/opt/bin/diagnostic",
+			ExecutableID: domain.ActionDigest(strings.Repeat("a", 64)), Arguments: arguments,
+			WorkingDirectory: "/var/empty", WorkingDirectoryID: domain.ActionDigest(strings.Repeat("b", 64)),
+			Environment: environment, CredentialReference: domain.LocalCredentialNone,
+		},
+		DataCategories: domain.ActionDataProcessOutput,
+		AllowedSinks:   domain.ActionSinkTerminal | domain.ActionSinkLocalProcess,
+		NetworkEffects: domain.ActionNetworkNone,
+		Limits: domain.ActionLimits{
+			Timeout: 30 * time.Second, MaximumItems: 1, MaximumLines: 20, MaximumBytes: 2048, MaximumOutput: 2048,
+		},
+		VerificationPlanID: domain.LocalCommandVerificationPlanID,
+		ReasonSummary:      "Run one exact configured diagnostic.",
+		RiskSummary:        "The approved process runs one exact direct argv vector without a shell or inherited environment.",
+	}
+	if intent.ValidateLocalCommand() != nil {
+		t.Fatalf("local ActionIntent is invalid: %#v", intent)
+	}
+	envelope, err := domain.NewActionEnvelope(
+		requestID, "00000000-0000-7000-8000-000000000002",
+		"00000000-0000-7000-8000-000000000003", intent, requestedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return envelope
 }

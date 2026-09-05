@@ -63,6 +63,9 @@ const (
 	ToolNameQueryLoki           ToolName = "query_loki"
 	ToolNameGetRelatedResources ToolName = "get_related_resources"
 	ToolNameGetClusterOverview  ToolName = "get_cluster_overview"
+	ToolNamePodExec             ToolName = "pod_exec"
+	ToolNameReadContainerFile   ToolName = "read_container_file"
+	ToolNameRunDiagnosticPod    ToolName = "run_diagnostic_pod"
 )
 
 // Valid reports whether the Tool belongs to the complete current catalog.
@@ -78,7 +81,10 @@ func (name ToolName) Valid() bool {
 		ToolNameQueryPrometheus,
 		ToolNameQueryLoki,
 		ToolNameGetRelatedResources,
-		ToolNameGetClusterOverview:
+		ToolNameGetClusterOverview,
+		ToolNamePodExec,
+		ToolNameReadContainerFile,
+		ToolNameRunDiagnosticPod:
 		return true
 	default:
 		return false

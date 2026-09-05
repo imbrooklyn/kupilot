@@ -1,9 +1,10 @@
 # Supporting Observation Details
 
-This interaction remains normative for the Accepted `v0.5` target. The
-checked-in binary still exposes only `v0.4` Evidence sources; future CRD,
-metrics, optional data-source, file, remote diagnostic, and process projections
-must pass the same deterministic provenance and safe-display boundary.
+This interaction remains normative for the Accepted `v0.5` target. The checked-
+in binary exposes built-in and exact-CRD reads, Events, logs, metrics, optional
+data sources, and bounded remote-diagnostic Evidence projections. Local-process
+and mutation results remain action state rather than raw persisted Evidence;
+all displayed content passes the same provenance and safe-display boundary.
 
 Internally, every confirmed fact remains bound to machine-checked Evidence from
 the current diagnostic run. The normal interface presents these records as

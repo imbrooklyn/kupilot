@@ -11,16 +11,19 @@ reachability. The checked-in runtime now uses the stable Eino ADK path, named
 model profiles, role-bound consent, safe Session context and summarization,
 separate Agent, Agent-summary, and Reviewer budgets, broad policy-bound
 Kubernetes resource reads, and deterministic observability adapters. It also
-contains the deterministic permission/action foundation and Reviewer routing used by the existing
-supervised Deployment restart. Public permission controls and new execution or
-remediation paths remain targets. Review-class logs and optional sources fail
-closed before I/O in the default `ask` composition until that permission
-delivery path can supply their ActionEnvelopes.
+contains the deterministic permission/action foundation and Reviewer routing
+used by the existing supervised Deployment restart and the default-off Pod
+Exec, container-file, and diagnostic-Pod handlers. The shared Application
+dispatcher additionally owns typed scale/rollback/controller-owned-Pod delete/
+cordon/uncordon/drain and exact local direct-argv/separate-shell actions.
+Human/Reviewer remote-diagnostic routes, review-class logs, and optional sources
+fail closed before I/O in the default `ask` composition until their delivery
+path can own those ActionEnvelopes.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v9`
-- Capability catalog: `kupilot-operational-tools-v4`
+- System prompt: `kupilot-agent-policy-v12`
+- Capability catalog: `kupilot-operational-tools-v5`
 
 ## Frozen run input
 
@@ -31,8 +34,9 @@ Application currently creates an immutable RunInput containing:
 - verified Context, working Namespace, namespace-access policy, scope
   generation, and activation time;
 - optional selected ResourceRef;
-- exact prompt and capability-catalog versions, the exact resource-policy
-  catalog, and its policy generation;
+- exact prompt and capability-catalog versions, exact resource, observability,
+  remote-diagnostic, local-command, and local-shell policy catalogs, and their
+  policy generation;
 - eligible ordered same-Session context, safe summary, and content-free
   coverage metadata; and
 - finite Agent and Agent-summary call, time, byte, stream, Tool, resource page,
@@ -99,7 +103,7 @@ indefinite correction loop.
 
 ## Capability binding
 
-The current `kupilot-operational-tools-v4` catalog contains eleven fixed
+The current `kupilot-operational-tools-v5` catalog contains fourteen fixed
 diagnostic Tools. Resource get/list now select only a local `resource_type` ID
 from the frozen built-in and exact configured CRD catalog. They support exact
 get, bounded list/count/table projections, normalized describe detail, typed
@@ -108,9 +112,15 @@ continuation. Events add typed filters and pagination; current/previous Pod logs
 add explicit all-container and literal-search modes; Pod/Node metrics use the
 typed Metrics API; and optional Prometheus/Loki Tools select only enabled
 code-owned query IDs. Related resources and cluster overview retain their
-narrower typed behavior. Container files, Pod diagnostics, additional typed
-remediation, restricted local argv, and the separate shell risk class remain
-later slices.
+narrower typed behavior. The three additional Tools are exact policy-bound
+`pod_exec`, `read_container_file`, and `run_diagnostic_pod`. Diagnostic-Pod
+Namespace/image/argv/target and all remote deadlines/ceilings are runtime-
+owned; Pod Exec repeats a configured executable/argv for exact matching but
+cannot select another command. Typed remediation proposals carry only the
+operation and bounded target parameter; local-process proposals carry only an
+exact policy ID. Runtime performs fresh target/filesystem preparation and
+injects all executable, argv or shell-command, cwd, environment, identity,
+effect, timeout, and output authority.
 Every current model schema is strict: all object properties are
 declared, every property is required, optional values use explicit `null`, and
 additional properties are rejected.
@@ -183,8 +193,13 @@ verified fact.
 ## Proposed actions
 
 The deterministic permission and controlled-action foundation described here
-is implemented. Current production composition uses it only for the existing
-supervised Deployment restart; the expanded remediation catalog is not exposed.
+is implemented. Current production composition uses it for the existing
+supervised Deployment restart, all six additional typed remediation operations,
+exact local direct argv, and the separate shell operation. The three default-
+off remote-diagnostic handlers are also wired, but their gate can consume only
+an automatic route or a matching current-process Session rule in this slice;
+human and Reviewer routes remain fail-closed pending the next integration
+slice.
 
 The final response may contain only versioned typed proposals from the P0
 catalog: restart, scale, rollback, one controller-owned ordinary Pod delete,
@@ -254,6 +269,8 @@ endpoint evidence may require a tighter configuration.
 | Metric containers per Pod | 20 | 35 | 50 | 50 |
 | Metric response bytes | 128 KiB | 256 KiB | 1 MiB | 4 MiB |
 | Optional data-source calls | 4 | 16 | 64 | 64 |
+| Remote-execution calls | 2 | 4 | 8 | 16 |
+| Local-process proposals / possible attempts | 1 | 1 | 1 | 1 |
 | Loki pages per call | 2 | 4 | 8 | 8 |
 | Prometheus series per call | 10 | 25 | 100 | 100 |
 | Prometheus samples per call | 100 | 400 | 1,000 | 1,000 |
@@ -274,13 +291,17 @@ Reservations happen before I/O. Completion accounts actual Tool-result bytes,
 accepted Evidence progress, and retryability. Once stopped, a budget cannot be
 reopened.
 
-The current Agent, Reviewer, and Agent-summary reservations are independent.
+The current Agent, Reviewer, Agent-summary, optional-source, remote-execution,
+and local-process reservations are independent. Each remote operation also
+intersects its exact policy time/line/byte ceiling with the run Tool deadline,
+log projection ceilings, and cumulative Tool-result byte budget.
 Each model call consumes one code-defined cost unit; that unit is a finite call
 budget, not a price estimate. Exact context-window and token values still
 require evidence from the selected endpoint. Missing token evidence never
 permits an unlimited request; byte, call, time, and cost-unit ceilings fail
-closed. Remote-exec, local-process, stream, and idle budgets remain part of the
-accepted later capability work.
+closed. Every local policy adds exact time, line, byte, and combined-output
+limits; typed multi-object remediation adds a bounded target-count ceiling.
+Model streams retain independent byte and time ceilings.
 
 ## Session context and summarization
 
@@ -342,20 +363,23 @@ the TUI receives a smaller projection because model-start and individual
 Evidence-acceptance events are not rendered as transcript entries.
 
 The current transcript shows bounded provisional answer Markdown, compact
-diagnostic steps, safe warnings, the existing restart approval interaction, and
-the validated final Markdown answer. Application already owns permission
-routing, Reviewer decisions, and content-free typed action status; complete
-permission and operation-specific delivery remains later work.
+diagnostic steps, safe warnings, generic typed-action approval/attempt/
+ambiguity/verification state, and the validated final Markdown answer.
+Application owns permission routing, Reviewer decisions, and content-free typed
+action status; richer operation-specific visual treatment is not required for
+execution authority.
 The internal stream and the smaller UI projection have independent run-wide
 event ceilings; excess provisional refreshes may be omitted because the
 validated terminal answer replaces the draft. `/status` is a local Application
 query exposing the current catalog, scope, named model roles/origin hashes,
 consent, content-free memory and summary coverage, budgets and usage, run state,
 the resource page/item/per-response/aggregate ceilings, the
+remote-diagnostic policy version and enabled-entry counts, the
+local-execution policy version and enabled direct/shell entry counts, the
 byte/call/time/cost-unit evidence basis with no endpoint-token claim,
 privacy, and storage health without model, Kubernetes, Reviewer, process, or
-executor activity. The complete `/permissions` interaction and detailed action
-outcome display remain later work.
+executor activity. The complete `/permissions` management interaction remains
+later work.
 
 ## Failure classes
 

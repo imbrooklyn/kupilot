@@ -3,10 +3,12 @@
 This page defines the Accepted `v0.5` RBAC target and identifies the currently
 implemented slices. The primary checked-in YAML grants the built-in broad-read
 resources, existing Events/logs/relationships, and one separately gated exact
-Deployment restart. Secret metadata, Pod/Node metrics, and one example exact
-CRD use separate opt-in fixtures. No fixture pre-grants optional non-Kubernetes
-data sources, Pod Exec, diagnostic Pod, local execution, scale, rollback, Pod
-delete, Node scheduling, or drain permissions.
+Deployment restart. Secret metadata, Pod/Node metrics, one example exact CRD,
+Pod Exec/container-file reads, and diagnostic Pods use separate opt-in
+fixtures. Scale, rollback, one owned-Pod delete, Node scheduling, and drain now
+have separate opt-in fixtures as well. No fixture pre-grants optional non-
+Kubernetes data sources or local execution; those use their explicitly selected
+local process and existing external identity rather than Kubernetes client-go.
 
 Do not grant `cluster-admin`, wildcard verbs or resources, generic Secret
 access, generic write permissions, or broad discovery for convenience.
@@ -28,13 +30,13 @@ rule set and must be bound only where enabled:
 | Events and logs | `events list` and `pods/log get` only where the corresponding data category is enabled. |
 | Pod/Node metrics | Exact metrics API resources and read verbs required by the typed projection. |
 | Sensitive Kubernetes reads | A dedicated exact rule only when Secret metadata, one ConfigMap key, or one non-credential environment value is enabled. Kubernetes RBAC cannot distinguish metadata or one key from values, so source projection, `review`, consent, and sink policy remain mandatory and Secret values remain denied. |
-| Container file or Pod Exec | `pods/exec create` only in exact admitted Namespaces; Application still binds Pod/container/path or argv. |
-| Diagnostic Pod | Namespaced Pod `create`, `get`, and `delete` only for the dedicated policy; image, security context, target, lifetime, and cleanup remain local controls. |
-| Scale | Exact controller read plus the selected `scale` subresource operation; resource names should be constrained where Kubernetes supports it. |
-| Restart/rollback | Exact Deployment and required ReplicaSet reads plus only the operation-specific Deployment mutation verb. |
-| Delete Pod | Exact namespaced Pod read/delete permission only for installations that enable the controller-owned-Pod operation. |
-| Cordon/uncordon | Exact Node read/patch permission for admitted Node names where practical. |
-| Drain | Exact Node read/patch, Pod reads, PDB reads, and eviction subresource permission required by the fixed plan; no wildcard or force shortcut. |
+| Container file or Pod Exec | Exact Pod `get` plus namespaced `pods/exec create`; Application still binds Pod UID/container/path or argv. Kubernetes does not reliably constrain `create` by `resourceNames`. |
+| Diagnostic Pod | Exact Service `get`, and namespaced Pod `create`, `get`, `delete`, and `pods/log get` for a dedicated policy identity; image, spec, target, lifetime, and cleanup remain local controls. |
+| Scale | [scale-role.yaml](scale-role.yaml): exact controller read plus `scale` get/update; resource names constrained. |
+| Restart/rollback | [restart-role.yaml](restart-role.yaml) for annotation-only restart; [rollback-role.yaml](rollback-role.yaml) for exact Deployment get/update and bounded ReplicaSet get/list. |
+| Delete Pod | [owned-pod-delete-role.yaml](owned-pod-delete-role.yaml): exact Pod get/delete plus one known controller read. |
+| Cordon/uncordon | [node-scheduling-cluster-role.yaml](node-scheduling-cluster-role.yaml): exact Node get/patch. |
+| Drain | [drain-cluster-role.yaml](drain-cluster-role.yaml): exact Node get/patch plus cluster-wide Pod and PDB reads and namespaced eviction create required by the immutable plan. |
 
 RBAC cannot express field projection, CRD-field allowlists, exact exec argv,
 path and symlink rules, diagnostic image/destination policy, semantic mutation
@@ -45,6 +47,33 @@ Prometheus and Loki are non-Kubernetes data sources and use separate endpoint
 and credential policy. Restricted local `kubectl`, `helm`, or `argocd` argv
 uses the local user's kubeconfig identity and cannot be made safe by broadening
 RBAC. Shell remains a separate default-off critical capability.
+
+## Current remote diagnostic fixtures
+
+[pod-exec-role.yaml](pod-exec-role.yaml) supports predefined Pod diagnostics,
+general Pod Exec, and container-file reads for one reviewed Pod. The core Pod
+`get` rule is exact-name so initial resolution and pre-exec UID/resource-version
+revalidation cannot silently target another Pod. The `pods/exec create` rule is
+Namespace-wide because Kubernetes RBAC does not reliably restrict a create
+request by resource name. Use a dedicated identity and bind the Role only in an
+exact admitted Namespace. Kupilot still requires an enabled policy, exact
+container and argv or normalized file path, a current digest-bound
+ActionEnvelope, and one non-retried exec attempt.
+
+[diagnostic-pod-role.yaml](diagnostic-pod-role.yaml) supports the exact Service
+revalidation, temporary Pod create/wait/log/delete lifecycle, and cleanup
+verification. The policy fixes the Namespace and Service. Pod creation and the
+generated invocation-bound Pod name cannot be narrowed with a static
+`resourceNames` rule, so this fixture intentionally requires a dedicated
+identity and Namespace. It grants no Pod list, watch, update, patch, exec,
+attach, port-forward, Secret, ServiceAccount, Role, or binding permission.
+
+Neither fixture is enabled by being installed. Remote diagnostics are absent
+by default from configuration, `read-only` denies them, and every admitted
+output still requires redacted-container-output consent and sink checks. The
+diagnostic-Pod policy also requires operator-confirmed egress isolation by an
+enforced NetworkPolicy and compatible CNI. Kupilot does not inspect or prove
+that enforcement, and a pinned image is not a network sandbox.
 
 ## Choose a namespace policy first
 
@@ -146,9 +175,9 @@ permission, normally supplied when the namespaced ClusterRole is bound with a
 ClusterRoleBinding. With `current`, Kupilot rejects the request before any
 Kubernetes call; without matching RBAC, it reports an explicit permission gap.
 
-## Current exact Deployment restart
+## Current exact typed remediation fixtures
 
-[restart-role.yaml](restart-role.yaml) is the only write-bearing fixture. It
+[restart-role.yaml](restart-role.yaml) is the narrow annotation-restart fixture. It
 grants `get` and `patch` on one placeholder `apps/v1` Deployment in one
 placeholder Namespace. Replace both placeholders, use a RoleBinding in that
 Namespace, and create another reviewed resource-name rule for each additional
@@ -163,6 +192,36 @@ enforces the fixed annotation-only patch, local 60-second digest-bound approval,
 fresh UID/template/generation checks, resource-version precondition, durable
 pre-write audit, and one non-retried attempt. Never replace `resourceNames`
 with a wildcard or bind this Role cluster-wide.
+
+[scale-role.yaml](scale-role.yaml), [rollback-role.yaml](rollback-role.yaml),
+[owned-pod-delete-role.yaml](owned-pod-delete-role.yaml), and
+[node-scheduling-cluster-role.yaml](node-scheduling-cluster-role.yaml) are
+operation-specific examples. Replace every placeholder, remove unused workload
+or controller kinds, and bind only where the matching code-owned action is
+enabled. Kubernetes RBAC cannot constrain an allowed Deployment update to a
+template copy, a Node patch to `spec.unschedulable`, or a Pod delete to nonzero
+grace and UID/resource-version preconditions; Kupilot enforces and records those
+semantics independently.
+
+[drain-cluster-role.yaml](drain-cluster-role.yaml) is intentionally broader and
+must use a dedicated reviewed identity with the explicit `all` Namespace
+policy. Kubernetes authorization cannot restrict a Pod list by Node, a PDB list
+to later-matching selectors, or eviction create to an approval-bound target
+set. Kupilot therefore bounds and digests the complete sorted Pod/PDB plan,
+denies DaemonSet/static/mirror/unmanaged Pods and local-data volumes (`emptyDir`,
+`hostPath`, generic ephemeral, inline CSI, and GitRepo), revalidates the exact
+plan after approval, repeats the complete Pod-set query after cordoning, and
+attaches UID/resource-version preconditions to every eviction. Any set change
+stops before eviction. Do not install this fixture when those cluster-wide
+reads are unacceptable.
+
+Every typed mutation performs one or more
+`authorization.k8s.io/v1/selfsubjectaccessreviews` creates before approval
+consumption. Most Kubernetes installations provide self-review through their
+standard authenticated-user roles. If the selected identity lacks it, the
+separate [self-access-review-cluster-role.yaml](self-access-review-cluster-role.yaml)
+shows the sole required cluster-scoped rule; binding it does not grant the
+reviewed operation itself.
 
 ## Partial permission behavior
 
@@ -179,6 +238,14 @@ Kupilot never broadens a request after denial:
   different metrics source.
 - Missing restart get or patch permission prevents preparation, execution, or
   verification at its exact stage; no broader credential or request is tried.
+- Missing operation-specific read, mutation, eviction, or self-review
+  permission prevents that typed remediation at its exact stage. Kupilot never
+  substitutes local kubectl or retries with a broader identity.
+- Missing exact Pod get or `pods/exec create` permission prevents Pod Exec and
+  container-file reads; Kupilot does not fall back to kubectl or another Pod.
+- Missing Service get or any diagnostic-Pod lifecycle verb leaves that exact
+  phase failed or unknown. Kupilot attempts only identity-bound cleanup and
+  never retries creation automatically.
 - A configured CRD or Secret metadata read with no matching exact optional
   permission remains unavailable. Kupilot does not retry with another identity,
   permission profile, local command, or broader API.

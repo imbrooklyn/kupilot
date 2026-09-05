@@ -28,7 +28,7 @@ func TestApprovalDialogDefaultsRejectAndEmitsOneBoundDecision(t *testing.T) {
 	}
 	view := model.render()
 	for _, want := range []string{
-		"Restart approval", "Operation: Restart Deployment", "scope revision 7", "› Reject", "Current: Deployment generation 8",
+		"Action approval", "Operation: Restart Deployment", "scope revision 7", "› Reject", "Current: Deployment generation 8",
 		"Proposed: Update only", string(request.Digest),
 	} {
 		if !strings.Contains(view, want) {
@@ -40,7 +40,7 @@ func TestApprovalDialogDefaultsRejectAndEmitsOneBoundDecision(t *testing.T) {
 	}
 	model, decisionCmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	decision := commandFromCmd(t, decisionCmd)
-	if decision.Kind != application.UICommandRejectRestart || decision.RequestID == 0 ||
+	if decision.Kind != application.UICommandRejectAction || decision.RequestID == 0 ||
 		decision.RunID != request.RunID || decision.ExpectedScopeGeneration != request.Scope.Generation ||
 		decision.ApprovalID != request.RequestID || decision.ApprovalDigest != request.Digest ||
 		!decision.ApprovalNonce.Equal(request.Nonce) || decision.ApprovalSequence != request.Sequence {
@@ -70,7 +70,7 @@ func TestCtrlCRejectsAnActiveApprovalInsteadOfQuitting(t *testing.T) {
 	}})
 	model, command := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	decision := commandFromCmd(t, command)
-	if decision.Kind != application.UICommandRejectRestart || !model.approvalDialog.Open() ||
+	if decision.Kind != application.UICommandRejectAction || !model.approvalDialog.Open() ||
 		!model.approvalDialog.Submitted() || model.pendingApprovalID != decision.RequestID {
 		t.Fatalf("Ctrl+C approval decision/state = %#v open=%v submitted=%v pending=%d",
 			decision, model.approvalDialog.Open(), model.approvalDialog.Submitted(), model.pendingApprovalID)
@@ -125,7 +125,7 @@ func TestApprovalDialogRendersOrderedPatchAndRolloutResults(t *testing.T) {
 		Execution: &terminal,
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandApproveRestart, RequestID: approve.RequestID,
+		Command: application.UICommandApproveAction, RequestID: approve.RequestID,
 		Approval: &result, RunID: request.RunID,
 	}})
 	if model.pendingApproval != nil || !model.approvalDialog.Open() || !model.approvalDialog.Terminal() {
@@ -215,7 +215,7 @@ func TestApprovalDialogApproveRequiresExplicitSelectionAndRejectsStaleMessages(t
 	}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	approve := commandFromCmd(t, cmd)
-	if approve.Kind != application.UICommandApproveRestart {
+	if approve.Kind != application.UICommandApproveAction {
 		t.Fatalf("decision kind = %s, want approve_restart", approve.Kind)
 	}
 
@@ -225,14 +225,14 @@ func TestApprovalDialogApproveRequiresExplicitSelectionAndRejectsStaleMessages(t
 		State: domain.ApprovalStateApproved, StateReason: domain.ApprovalReasonUserApproved,
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandApproveRestart, RequestID: approve.RequestID + 1,
+		Command: application.UICommandApproveAction, RequestID: approve.RequestID + 1,
 		Approval: &oldResult, RunID: request.RunID,
 	}})
 	if model.pendingApproval == nil {
 		t.Fatal("stale command result cleared the pending decision")
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandApproveRestart, RequestID: approve.RequestID,
+		Command: application.UICommandApproveAction, RequestID: approve.RequestID,
 		Approval: &oldResult, RunID: request.RunID,
 	}})
 	if model.pendingApproval == nil || model.pendingApprovalID != 0 || model.approvalDialog.Open() {
@@ -254,7 +254,7 @@ func TestApprovalDialogApproveRequiresExplicitSelectionAndRejectsStaleMessages(t
 		Sequence: request.Sequence, Digest: request.Digest,
 	})
 	expire := commandFromCmd(t, expiry)
-	if expire.Kind != application.UICommandExpireRestart || model.pendingApprovalID == 0 {
+	if expire.Kind != application.UICommandExpireAction || model.pendingApprovalID == 0 {
 		t.Fatalf("approved-not-executed expiry command/state = %#v/%d", expire, model.pendingApprovalID)
 	}
 }
@@ -283,7 +283,7 @@ func TestApprovalDialogExpiryAndScopeChangeClearWithoutApproval(t *testing.T) {
 			Sequence: request.Sequence, Digest: request.Digest,
 		})
 		expire := commandFromCmd(t, cmd)
-		if expire.Kind != application.UICommandExpireRestart || model.approvalDialog.Open() {
+		if expire.Kind != application.UICommandExpireAction || model.approvalDialog.Open() {
 			t.Fatalf("expiry command/dialog = %#v/%v", expire, model.approvalDialog.Open())
 		}
 	})
@@ -297,7 +297,7 @@ func TestApprovalDialogExpiryAndScopeChangeClearWithoutApproval(t *testing.T) {
 			ScopeGeneration: 7, Sequence: 2, Approval: &request,
 		}})
 		expire := commandFromCmd(t, cmd)
-		if expire.Kind != application.UICommandExpireRestart || model.approvalDialog.Open() {
+		if expire.Kind != application.UICommandExpireAction || model.approvalDialog.Open() {
 			t.Fatalf("already-expired command/dialog = %#v/%v", expire, model.approvalDialog.Open())
 		}
 	})

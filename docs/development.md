@@ -6,10 +6,13 @@
 The commands below describe the currently implemented repository gates. Named
 model profiles, the stable Eino ADK Session-context/summarization slice, the
 deterministic permission matrix, and the common ActionEnvelope/approval
-foundation now have deterministic tests. Only the existing typed Deployment
-restart is composed through that action lifecycle. Additional catalog entries,
-permission delivery interactions, data sources, processes, and execution paths
-remain required targets; this document does not claim they are reachable.
+foundation now have deterministic tests. Restart, scale, rollback, one
+controller-owned Pod delete, cordon, uncordon, drain, exact local direct argv,
+and the separate shell operation are composed through one Application-owned
+dispatcher. Pod Exec, container-file, and diagnostic-Pod handlers retain their
+default-off gate; its default `ask` human-delivery route remains fail-closed.
+All execution evidence is synthetic or loopback-only and does not claim a live
+cluster, host tool, or sandbox integration.
 
 Kupilot's local and hosted gates use the repository `Makefile` as their single
 command source. The hosted workflow invokes the same targets contributors run
@@ -120,8 +123,20 @@ configuration files.
 
 CI and deterministic tests must not use a real cluster, model endpoint,
 kubeconfig, API key, or user state. Kubernetes and model transport tests use
-narrow fakes or loopback-only fixture servers, while SQLite tests use temporary
-database files that are not retained as artifacts.
+narrow fakes or loopback-only fixture servers. The remote-command fixture
+performs a real client-go SPDY upgrade against a request recorder and the
+diagnostic-Pod fixture records its exact create/wait/log/delete/cleanup
+lifecycle; neither contacts a cluster or public network. SQLite tests use
+temporary database files that are not retained as artifacts.
+
+Typed remediation fixtures record exact GET/LIST/PUT/PATCH/DELETE/eviction and
+SelfSubjectAccessReview requests, optimistic preconditions, semantic bodies,
+immutable drain sets, cancellation, ambiguity, and verification. Local-process
+fixtures execute only the current test binary with exact argv, inspect path and
+content identity, reject scripts and symlinks, prove minimal environment and
+literal metacharacters, bound ordered output, and own process-group
+cancellation/join. These tests prove adapter contracts, not operating-system
+filesystem or network sandboxing.
 
 ## Network and vulnerability-database policy
 

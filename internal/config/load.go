@@ -323,15 +323,16 @@ type legacyModelConfig struct {
 }
 
 type configV2Document struct {
-	Version       int                    `yaml:"version"`
-	Context       *string                `yaml:"context,omitempty"`
-	Namespace     *string                `yaml:"namespace,omitempty"`
-	NoColor       *bool                  `yaml:"no_color,omitempty"`
-	Runtime       *runtimeDocument       `yaml:"runtime,omitempty"`
-	Models        *modelsDocument        `yaml:"models"`
-	Kubernetes    *kubernetesDocument    `yaml:"kubernetes,omitempty"`
-	Observability *observabilityDocument `yaml:"observability,omitempty"`
-	Logging       *loggingDocument       `yaml:"logging,omitempty"`
+	Version        int                    `yaml:"version"`
+	Context        *string                `yaml:"context,omitempty"`
+	Namespace      *string                `yaml:"namespace,omitempty"`
+	NoColor        *bool                  `yaml:"no_color,omitempty"`
+	Runtime        *runtimeDocument       `yaml:"runtime,omitempty"`
+	Models         *modelsDocument        `yaml:"models"`
+	Kubernetes     *kubernetesDocument    `yaml:"kubernetes,omitempty"`
+	LocalExecution *LocalExecutionConfig  `yaml:"local_execution,omitempty"`
+	Observability  *observabilityDocument `yaml:"observability,omitempty"`
+	Logging        *loggingDocument       `yaml:"logging,omitempty"`
 }
 
 type observabilityDocument struct {
@@ -372,9 +373,10 @@ type modelProfileDocument struct {
 }
 
 type kubernetesDocument struct {
-	ExecCredentials  *string                           `yaml:"exec_credentials,omitempty"`
-	NamespaceAccess  *string                           `yaml:"namespace_access,omitempty"`
-	ResourcePolicies *[]KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty"`
+	ExecCredentials   *string                           `yaml:"exec_credentials,omitempty"`
+	NamespaceAccess   *string                           `yaml:"namespace_access,omitempty"`
+	ResourcePolicies  *[]KubernetesResourcePolicyConfig `yaml:"resource_policies,omitempty"`
+	RemoteDiagnostics *RemoteDiagnosticsConfig          `yaml:"remote_diagnostics,omitempty"`
 }
 
 type loggingDocument struct {
@@ -482,6 +484,12 @@ func applyRootDocument(config *Config, document configV2Document) {
 				(*document.Kubernetes.ResourcePolicies)...,
 			)
 		}
+		if document.Kubernetes.RemoteDiagnostics != nil {
+			config.Kubernetes.RemoteDiagnostics = cloneRemoteDiagnosticsConfig(document.Kubernetes.RemoteDiagnostics)
+		}
+	}
+	if document.LocalExecution != nil {
+		config.LocalExecution = cloneLocalExecutionConfig(*document.LocalExecution)
 	}
 	if document.Observability != nil {
 		if document.Observability.Prometheus != nil {
@@ -769,6 +777,10 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 			if !validKubernetesYAML(value, version == CurrentVersion) {
 				return false
 			}
+		case "local_execution":
+			if version != CurrentVersion || !validLocalExecutionYAML(value) {
+				return false
+			}
 		case "observability":
 			if version != CurrentVersion || !validObservabilityYAML(value, allowCredential) {
 				return false
@@ -842,17 +854,184 @@ func validModelYAML(node *yaml.Node, allowCredential, named bool) bool {
 	})
 }
 
-func validKubernetesYAML(node *yaml.Node, allowResourcePolicies bool) bool {
+func validKubernetesYAML(node *yaml.Node, allowOperationalPolicies bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
 		case "exec_credentials", "namespace_access":
 			return yamlString(value)
 		case "resource_policies":
-			return allowResourcePolicies && validResourcePoliciesYAML(value)
+			return allowOperationalPolicies && validResourcePoliciesYAML(value)
+		case "remote_diagnostics":
+			return allowOperationalPolicies && validRemoteDiagnosticsYAML(value)
 		default:
 			return false
 		}
 	})
+}
+
+func validRemoteDiagnosticsYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "pod_exec":
+			return validRemotePolicySequence(value, validPodExecPolicyYAML)
+		case "container_file":
+			return validContainerFilePolicyYAML(value)
+		case "diagnostic_pods":
+			return validRemotePolicySequence(value, validDiagnosticPodPolicyYAML)
+		default:
+			return false
+		}
+	})
+}
+
+func validLocalExecutionYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "commands":
+			return validLocalPolicySequence(value, validLocalCommandPolicyYAML)
+		case "shells":
+			return validLocalPolicySequence(value, validLocalShellPolicyYAML)
+		default:
+			return false
+		}
+	})
+}
+
+func validLocalPolicySequence(node *yaml.Node, validate func(*yaml.Node) bool) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) > domain.MaxLocalCommandPolicies {
+		return false
+	}
+	for _, item := range node.Content {
+		if !validate(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func validLocalCommandPolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "id", "kind", "executable", "working_directory", "credential_ref", "server_origin", "diagnostic_effect":
+			return yamlString(value)
+		case "arguments":
+			return validStringSequenceYAML(value, domain.MaxActionArguments)
+		case "environment":
+			return validStringSequenceYAML(value, domain.MaxActionEnvironment)
+		case "timeout_seconds", "max_lines", "max_bytes":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "id", "kind", "executable", "arguments", "working_directory", "environment", "credential_ref", "timeout_seconds", "max_lines", "max_bytes")
+}
+
+func validLocalShellPolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "id", "executable", "command", "working_directory", "network", "network_origin":
+			return yamlString(value)
+		case "environment":
+			return validStringSequenceYAML(value, domain.MaxActionEnvironment)
+		case "timeout_seconds", "max_lines", "max_bytes":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "id", "executable", "command", "working_directory", "environment", "network", "timeout_seconds", "max_lines", "max_bytes")
+}
+
+func validRemotePolicySequence(node *yaml.Node, validate func(*yaml.Node) bool) bool {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) > domain.MaxRemoteDiagnosticPolicies {
+		return false
+	}
+	for _, item := range node.Content {
+		if !validate(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPodExecPolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "id", "class", "executable":
+			return yamlString(value)
+		case "arguments":
+			return validStringSequenceYAML(value, domain.MaxActionArguments)
+		case "timeout_seconds", "max_lines", "max_bytes":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "id", "class", "executable", "arguments", "timeout_seconds", "max_lines", "max_bytes")
+}
+
+func validContainerFilePolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "reader_executable":
+			return yamlString(value)
+		case "allowed_roots":
+			return validStringSequenceYAML(value, domain.MaxContainerFileRoots)
+		case "timeout_seconds", "max_lines", "max_bytes":
+			return yamlScalar(value, "!!int")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "reader_executable", "allowed_roots", "timeout_seconds", "max_lines", "max_bytes")
+}
+
+func validDiagnosticPodPolicyYAML(node *yaml.Node) bool {
+	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
+		switch key {
+		case "id", "namespace", "image", "executable", "service_name":
+			return yamlString(value)
+		case "argument_prefix":
+			return validStringSequenceYAML(value, domain.MaxActionArguments-2)
+		case "port", "timeout_seconds", "max_lines", "max_bytes":
+			return yamlScalar(value, "!!int")
+		case "network_policy_required":
+			return yamlScalar(value, "!!bool")
+		default:
+			return false
+		}
+	}) && yamlMappingContainsEvery(node, "id", "namespace", "image", "executable", "argument_prefix", "service_name", "port", "network_policy_required", "timeout_seconds", "max_lines", "max_bytes")
+}
+
+func cloneRemoteDiagnosticsConfig(source *RemoteDiagnosticsConfig) *RemoteDiagnosticsConfig {
+	if source == nil {
+		return nil
+	}
+	result := &RemoteDiagnosticsConfig{PodExec: append([]PodExecPolicyConfig(nil), source.PodExec...), DiagnosticPods: append([]DiagnosticPodPolicyConfig(nil), source.DiagnosticPods...)}
+	for index := range result.PodExec {
+		result.PodExec[index].Arguments = append([]string(nil), source.PodExec[index].Arguments...)
+	}
+	for index := range result.DiagnosticPods {
+		result.DiagnosticPods[index].ArgumentPrefix = append([]string(nil), source.DiagnosticPods[index].ArgumentPrefix...)
+	}
+	if source.ContainerFile != nil {
+		copied := *source.ContainerFile
+		copied.AllowedRoots = append([]string(nil), source.ContainerFile.AllowedRoots...)
+		result.ContainerFile = &copied
+	}
+	return result
+}
+
+func cloneLocalExecutionConfig(source LocalExecutionConfig) LocalExecutionConfig {
+	result := LocalExecutionConfig{
+		Commands: append([]LocalCommandPolicyConfig(nil), source.Commands...),
+		Shells:   append([]LocalShellPolicyConfig(nil), source.Shells...),
+	}
+	for index := range result.Commands {
+		result.Commands[index].Arguments = append([]string(nil), source.Commands[index].Arguments...)
+		result.Commands[index].Environment = append([]string(nil), source.Commands[index].Environment...)
+	}
+	for index := range result.Shells {
+		result.Shells[index].Environment = append([]string(nil), source.Shells[index].Environment...)
+	}
+	return result
 }
 
 func validResourcePoliciesYAML(node *yaml.Node) bool {

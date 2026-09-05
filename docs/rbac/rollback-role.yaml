@@ -1,0 +1,15 @@
+# Exact example for one Deployment rollback target and its bounded revision set.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-deployment-rollback
+  namespace: example-namespace
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["example-deployment"]
+    verbs: ["get", "update"]
+  # Kubernetes cannot restrict list to ReplicaSets owned by one Deployment.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list"]

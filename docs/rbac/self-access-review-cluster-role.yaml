@@ -1,0 +1,9 @@
+# Bind only when the cluster's standard authenticated-user grants omit this API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kupilot-self-access-review
+rules:
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews"]
+    verbs: ["create"]

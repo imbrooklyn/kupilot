@@ -1,9 +1,10 @@
 # Getting Started
 
-This guide distinguishes current behavior from the Accepted `v0.5` target.
-Named model profiles and safe Session context/summarization are now reachable.
-Permission profiles, expanded data sources, and new execution or remediation
-features remain unavailable until their implementation and tests land.
+This guide distinguishes deterministic implementation evidence from live
+integration and release readiness. Named model profiles, safe Session context/
+summarization, expanded reads and diagnostics, permission routing, typed
+remediation, and default-off exact local execution are now composed. No real
+cluster or host-tool compatibility is implied.
 
 ## Requirements
 
@@ -106,18 +107,19 @@ Choose `kubernetes.namespace_access: current` for working-Namespace-only reads,
 or `all` for explicit cross-Namespace and all-Namespace reads in the same
 Context. Apply only the matching namespaced and cluster-scoped read rules
 through your normal cluster-administration process. If Deployment restart is
-needed, add the separate exact resource-name Role for each admitted target. Do
+needed, add its separate exact resource-name Role. Other typed remediation and
+remote diagnostics likewise use their operation-specific opt-in fixtures. Do
 not use `cluster-admin` or grant wildcard writes.
 
 Kupilot also enforces its own Kind, Namespace, relationship, projection, and
 budget allowlists. RBAC remains an independent defense if another defect or
 local configuration grants a broader identity.
 
-The `v0.5` target uses capability-split RBAC for exact built-in/CRD reads,
-metrics, logs, Pod Exec, diagnostic Pods, scale, eviction, Node patch, and other
-optional actions. Existing YAML fixtures intentionally remain the current
-`v0.4` read and exact Deployment-restart permissions; do not broaden them in
-advance or use `cluster-admin`.
+The current `v0.5` fixtures split exact built-in/CRD reads, metrics, logs, Pod
+Exec, diagnostic Pods, scale, rollback, Pod delete, eviction, and Node patch.
+Each remains disabled until explicitly configured and bound. Local execution
+uses an exact host policy and existing external identity, not a Kubernetes RBAC
+fixture.
 
 ## Start a new Session
 
@@ -150,11 +152,11 @@ or router. Summarization reuses `agent` rather than introducing a
 deterministic `review` route and its recommendation never becomes permission or
 execution authority by itself.
 
-The current permission foundation uses `ask` by default and exposes only local,
-content-free status plus the existing supervised Deployment restart flow. The
-complete `/permissions` interaction remains planned; `full-access` remains
-unreachable through current delivery and cannot enable a default-off capability
-or bypass RBAC, consent, scope, audit, or hard denial.
+The current permission foundation uses `ask` by default and exposes local,
+content-free status plus a generic supervised action flow for typed remediation
+and local execution. The complete `/permissions` management interaction remains
+planned. No profile can enable a default-off capability or bypass RBAC,
+consent, scope, audit, fresh revalidation, or hard denial.
 
 Every question after the first in a Session receives one ordered, bounded
 representation of all retained eligible safe history when such history exists.
@@ -166,11 +168,11 @@ budget gates pass; failure causes zero model calls and no current-question-only
 fallback. Historic scope, Evidence, permissions, rules, ActionEnvelopes, and
 execution never regain authority.
 
-Later capability work may include the additional P0 typed reads,
-metrics, optional data sources, remote diagnostics, local argv, and remediation
-documented in [Operational Capabilities](../diagnostic-capabilities.md). It
-will require deterministic risk and an immutable ActionEnvelope for every
-sensitive or effectful request; none is made reachable by this guide.
+The implemented capability boundary is documented in
+[Operational Capabilities](../diagnostic-capabilities.md). Every sensitive or
+effectful request still requires deterministic risk and an immutable
+ActionEnvelope. Remote-diagnostic human/Reviewer delivery and complete
+permission management remain later integration work; this guide grants neither.
 
 ## Current first-run flow
 
@@ -191,8 +193,8 @@ sensitive or effectful request; none is made reachable by this guide.
    or cluster I/O, freezes Context, working Namespace, namespace policy, and
    budget, and shows compact bounded activity steps.
 6. Review the free-form Markdown answer and use `Ctrl+E` for bounded supporting
-   observations. A proposed `restart_deployment` action remains unexecuted until
-   a separate local approval is reviewed and accepted.
+   observations. Any proposed action remains unexecuted until its exact current
+   permission route, approval, revalidation, and durable pre-audit succeed.
 
 Changing Context, Namespace, or the container-output privacy category cancels
 an active AgentRun and invalidates stale work before another transfer.

@@ -23,15 +23,19 @@ type ToolScopeBinding struct {
 }
 
 var (
-	_ application.ScopeClientFactory     = (*ToolScopeBinding)(nil)
-	_ application.ScopeInvalidationHook  = (*ToolScopeBinding)(nil)
-	_ toolcontract.ResourceReader        = (*ToolScopeBinding)(nil)
-	_ toolcontract.ResourceQueryReader   = (*ToolScopeBinding)(nil)
-	_ toolcontract.EventReader           = (*ToolScopeBinding)(nil)
-	_ toolcontract.PodLogReader          = (*ToolScopeBinding)(nil)
-	_ toolcontract.PodLogsReader         = (*ToolScopeBinding)(nil)
-	_ toolcontract.MetricReader          = (*ToolScopeBinding)(nil)
-	_ toolcontract.RelatedResourceReader = (*ToolScopeBinding)(nil)
+	_ application.ScopeClientFactory                = (*ToolScopeBinding)(nil)
+	_ application.ScopeInvalidationHook             = (*ToolScopeBinding)(nil)
+	_ toolcontract.ResourceReader                   = (*ToolScopeBinding)(nil)
+	_ toolcontract.ResourceQueryReader              = (*ToolScopeBinding)(nil)
+	_ toolcontract.EventReader                      = (*ToolScopeBinding)(nil)
+	_ toolcontract.PodLogReader                     = (*ToolScopeBinding)(nil)
+	_ toolcontract.PodLogsReader                    = (*ToolScopeBinding)(nil)
+	_ toolcontract.MetricReader                     = (*ToolScopeBinding)(nil)
+	_ toolcontract.RelatedResourceReader            = (*ToolScopeBinding)(nil)
+	_ toolcontract.RemoteTargetResolver             = (*ToolScopeBinding)(nil)
+	_ toolcontract.RemoteCommandExecutor            = (*ToolScopeBinding)(nil)
+	_ toolcontract.DiagnosticPodRunner              = (*ToolScopeBinding)(nil)
+	_ application.RemoteDiagnosticActionRevalidator = (*ToolScopeBinding)(nil)
 )
 
 // NewToolScopeBinding wraps the existing narrow Gateway without creating a
@@ -208,6 +212,46 @@ func (gateway *ToolScopeBinding) ReadRelatedResources(
 		return toolcontract.RelatedObservationGraph{}, err
 	}
 	return reader.ReadRelatedResources(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) ResolvePod(ctx context.Context, request toolcontract.PodResolveRequest) (toolcontract.ResolvedPod, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.ResolvedPod{}, err
+	}
+	return reader.ResolvePod(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) ResolveService(ctx context.Context, request toolcontract.ServiceResolveRequest) (toolcontract.ResolvedService, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.ResolvedService{}, err
+	}
+	return reader.ResolveService(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) ExecuteRemoteCommand(ctx context.Context, request toolcontract.RemoteCommandRequest) (toolcontract.RemoteCommandObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.RemoteCommandObservation{}, err
+	}
+	return reader.ExecuteRemoteCommand(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) RunDiagnosticPod(ctx context.Context, request toolcontract.DiagnosticPodRequest) (toolcontract.DiagnosticPodObservation, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.DiagnosticPodObservation{}, err
+	}
+	return reader.RunDiagnosticPod(ctx, request)
+}
+
+func (gateway *ToolScopeBinding) RevalidateRemoteDiagnosticAction(ctx context.Context, plan domain.RemoteDiagnosticActionPlan) error {
+	reader, err := gateway.readerFor(plan.Scope)
+	if err != nil {
+		return err
+	}
+	return reader.RevalidateRemoteDiagnosticAction(ctx, plan)
 }
 
 func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolResourceReader, error) {

@@ -172,11 +172,15 @@ func TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection(t *testing.T) {
 		"answer_markdown",
 		"evidence_citations",
 		"proposed_actions",
-		"operation must be restart_deployment",
+		"The admitted operations are restart_deployment, scale_workload, rollback_deployment",
+		"Never invent a capability, parse a call from prose, request an unlisted command or command policy",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("System Prompt missing %q", required)
 		}
+	}
+	if strings.Contains(prompt, "request shell or kubectl execution") {
+		t.Fatal("System Prompt retained a pre-v0.5 prohibition that conflicts with exact policy-ID action proposals")
 	}
 	if got := input.Question(); got != question {
 		t.Fatalf("user message = %q", got)
@@ -226,7 +230,7 @@ func TestSystemPromptRequiresAvailableCapabilitiesBeforeAnswering(t *testing.T) 
 		}
 	}
 	specifications := ToolSpecifications()
-	if len(specifications) != 11 || specifications[1].Name != domain.ToolNameListResources ||
+	if len(specifications) != 14 || specifications[1].Name != domain.ToolNameListResources ||
 		specifications[10].Name != domain.ToolNameGetClusterOverview ||
 		!strings.Contains(specifications[1].Description, "local resource_type ID") ||
 		!strings.Contains(specifications[1].Description, "'*' requires namespace_access=all") {

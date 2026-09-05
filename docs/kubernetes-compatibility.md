@@ -7,9 +7,13 @@ The checked-in runtime implements the `v0.5` read and observability slices:
 reviewed built-ins, safe Secret metadata, exact policy-admitted CRD reads,
 typed queries, runtime-owned pagination, normalized Events, bounded Pod logs,
 and typed Pod/Node Metrics API snapshots. Optional Prometheus and Loki clients
-are separate non-Kubernetes adapters. Remote diagnostics and additional
-remediation operations remain later slices. Accepted target text is not
-evidence that those later capabilities are reachable.
+are separate non-Kubernetes adapters. It also implements the default-off exact
+Pod Exec, container-file, and diagnostic-Pod handlers. Their default `ask`
+human-delivery route remains fail-closed. Typed scale, rollback, controller-
+owned Pod delete, cordon, uncordon, and drain are implemented behind the shared
+action dispatcher. The exact local runner is a separate non-Kubernetes adapter
+and never serves as a fallback for these typed operations. Deterministic tests
+are not live-cluster, RBAC-installation, or local-tool evidence.
 
 Kupilot pins `k8s.io/client-go v0.35.7` together with matching `k8s.io/api` and
 `k8s.io/apimachinery` modules. The upstream module requires Go 1.25.0. Kupilot
@@ -95,9 +99,9 @@ queries, fragments, custom transports, and legacy auth providers. It exposes
 no dynamic client, discovery client, REST client, arbitrary GVR, raw request
 builder, Watch, informer, generic resource operation, or generic write port.
 
-Closing a bundle rejects new requests, cancels and joins in-flight requests and
-exec credential children, clears bundle-local credential state, and closes idle
-connections.
+Closing a bundle rejects new requests, cancels and joins in-flight requests,
+remote-command streams, and exec credential children, clears bundle-local
+credential state, and closes idle connections.
 
 ## Scope activation
 
@@ -217,34 +221,98 @@ version, template fingerprint, generation, or concurrency precondition. No
 automatic write retry is allowed. Rollout verification performs bounded exact
 Deployment GETs and never changes the prior write outcome.
 
-## Accepted `v0.5` remote diagnostics and remediation
+## Implemented `v0.5` remote diagnostics
+
+Remote command transport is confined to `internal/kube` and uses the pinned
+client-go v0.35.7 `remotecommand.NewSPDYExecutorRejectRedirects` API. The exact
+POST targets `api/v1/namespaces/<namespace>/pods/<pod>/exec`, sends a typed
+`PodExecOptions`, and sets `stdin=false`, `tty=false`, `stdout=true`, and
+`stderr=true`. The runtime includes the exact container and argv parameters and
+one bounded timeout query. It owns cancellation, stream completion, ordered
+project-owned stdout/stderr chunks, byte and line ceilings, and bundle close.
+It deliberately performs no WebSocket fallback or second transport attempt:
+after an upgrade failure, a retry could execute the command twice.
 
 - Container-file read binds one exact Pod/container/path and denies unsafe
-  symlinks, credential and ServiceAccount paths, devices, and unsafe pseudo-
-  filesystems before returning a bounded projection.
+  credential and ServiceAccount mounts and paths, devices, and unsafe pseudo-
+  filesystems before returning a bounded projection. One no-shell exact USTAR
+  argv with a one-block record size reports each normalized path component and
+  keeps deterministic framing within the transport-byte ceiling. The local
+  parser requires ordered directory headers followed by one bounded regular-
+  file header and rejects links, duplicates, extra entries, and stderr. This
+  cooperative check has a documented filesystem race residual and is not an
+  atomic `openat2` guarantee.
 - Predefined read-only Pod diagnostics and separately gated other Pod Exec bind
-  exact Pod/container identity and argv and use the client-go remote-command
-  path without a shell. Stdin, TTY, output, time, data, sink, and network
-  effects are explicit.
+  exact Pod UID/resource version/container identity and policy-owned executable
+  and argv. Application revalidates those facts after the decision and before
+  durable consumption; the adapter repeats the check before the sole remote-
+  command attempt. Shell, stdin, and TTY remain false; output, time, data,
+  sink, network effects, and the exact live Pod/container destination digest
+  are explicit. Metacharacters remain literal argv bytes. A configured general
+  executable can still implement in-container side effects or network access;
+  the exact argv and conservative remote-Pod network effect are bound for
+  review, but no in-container network sandbox is claimed.
 - Diagnostic Pods use a policy-selected pinned image, non-root security
   context, no privilege, read-only root filesystem, no host mounts or host
   network, finite resources and lifetime, disabled ServiceAccount-token
-  automount, exact in-cluster target, and separately audited create,
-  observation, delete, and ambiguous-cleanup states. An image allowlist is not
-  a NetworkPolicy guarantee.
-- Scale targets one exact Deployment or StatefulSet. Rollback targets one exact
-  Deployment and freshly validated ReplicaSet revision. Pod delete targets one
-  ordinary controller-owned Pod and denies force, grace-zero, bulk, unmanaged,
-  static, or mirror cases. Cordon/uncordon change only one Node's
-  `spec.unschedulable`. Drain binds one Node and a bounded complete eligible Pod
-  set and admits no force, delete-emptydir, or ignore-daemonset escape hatch.
-  Each pre-bound drain mutation is attempted and audited at most once.
+  automount, disabled Service links, `preemptionPolicy=Never`, only a zero
+  API-default priority with no PriorityClass, exact same-Namespace Service and
+  port, and separately audited create, wait, log, delete, and ambiguous-cleanup
+  states.
+  Service UID, resource version, non-empty selector, and port are revalidated
+  before create; the returned and subsequently observed Pod must preserve the
+  exact restricted spec. ExternalName, selectorless, obvious metadata/link-
+  local/address-confusion, and policy-external targets are rejected. A
+  definite create rejection performs no delete. Ambiguous create or delete can
+  clean only the exact generated, labelled, invocation-bound Pod and never
+  retries create. Bundle close cancels the owner while retaining transport for
+  bounded cleanup, then joins the owner before transport shutdown. The
+  envelope also binds the exact Service DNS/port destination digest. Policy
+  requires an operator assertion that a matching NetworkPolicy and compatible
+  CNI are deployed; Kupilot does not inspect or prove that enforcement, and an
+  image allowlist is not a network sandbox.
 
-Every operation uses a versioned `ActionEnvelope`, fresh UID/resource-version
-or operation-specific fingerprint, scope and policy generations, durable pre-
-operation audit, at most one attempt, fail-closed ambiguous outcome, and a
-separate verification plan. Generic patch/apply/edit/delete/YAML is not an
-adapter API.
+Each remote operation first becomes a versioned `ActionEnvelope` binding exact
+scope and policy generations, target identity/fingerprint, executable and argv
+or typed path, false stdin/TTY/shell flags, data/sink/network effects, limits,
+expiry, and verification plan. Application first proves that this normalized
+plan exactly matches its process-frozen catalog, then performs hard policy,
+permission, fresh revalidation, one-time durable approval consumption and pre-
+operation audit, final generation validation, at most one external attempt,
+and bounded outcome audit. Raw command, archive, file, and Pod-log output is not
+persisted; their Evidence facts contain only safe target metadata, counts, and
+a content fingerprint. Scope, policy generation, and category consent are
+checked again after safe projection and after the durable outcome audit before
+the prepared result is returned to the Agent.
+
+## Implemented typed `v0.5` remediation
+
+- Scale uses the exact Deployment or StatefulSet `scale` subresource and sends
+  the prepared resource version with one replica target. Rollback selects one
+  bounded owned ReplicaSet revision, ignores and removes the controller-owned
+  `pod-template-hash`, then updates only the exact Deployment template from the
+  fresh source. A paused Deployment is denied.
+- Pod delete accepts one ordinary controller-owned Pod and sends one 30-second
+  delete with UID and resource-version preconditions. Force, grace-zero, bulk,
+  unmanaged, static, mirror, deleting, or ambiguous-owner targets are denied.
+- Cordon and uncordon send one merge patch containing only the prepared
+  resource version and `spec.unschedulable`. Drain first binds one schedulable
+  Node, its complete bounded all-Namespace Pod set, and every matching PDB. It
+  denies DaemonSet, static, mirror, unmanaged, deleting, ambiguous-PDB,
+  insufficient-disruption, partial, or empty plans. `emptyDir`, `hostPath`,
+  generic ephemeral, inline CSI, and deprecated GitRepo volumes are treated as
+  local data and denied. After cordoning once, it repeats the same bounded
+  all-Namespace Pod query and requires the complete approved UID/resource-
+  version/fingerprint set before issuing one preconditioned eviction per bound
+  Pod in deterministic order.
+
+Every operation uses a versioned `ActionEnvelope`, fresh UID/resource version
+or operation-specific fingerprint, scope and policy generations, exact
+SelfSubjectAccessReview attributes, durable pre-operation audit, at most one
+attempt per bound side effect, fail-closed ambiguous outcome, and a separate
+bounded verification read. A changed target or drain set invalidates approval;
+partial drain acceptance is explicit and is never retried automatically.
+Generic patch/apply/edit/delete/YAML is not an adapter API.
 
 ## Exec credential authentication
 
@@ -265,8 +333,17 @@ limits, internal continuation, projections, cancellation, timeout,
 scope/policy generation, RBAC denial, partial state, and zero-call local
 denials. Request-recording Kubernetes and loopback Prometheus/Loki HTTP
 fixtures supplement client-go object fakes because the fake alone is not a
-security oracle. Later slices must add their own remote-command and action
-evidence before those capabilities can be described as implemented.
+security oracle. The remote-diagnostic matrix additionally exercises a real
+loopback SPDY upgrade, exact exec query/options, redirect denial, ordered and
+bounded stream collection, cancellation/join, stale and permission zero-call
+paths, file-archive validation, exact diagnostic-Pod spec and request sequence,
+and ambiguous cleanup. It is deterministic API evidence, not live-cluster,
+RBAC-installation, CNI, image, or endpoint compatibility evidence. The typed-
+remediation matrix records exact preparation and verification reads,
+SelfSubjectAccessReview attributes, `scale` PUT, Deployment PUT, Pod DELETE,
+Node merge PATCH, and eviction POST bodies and paths. It also covers stale
+targets, cancellation, transport ambiguity, immutable drain sets, unsafe Pod/
+PDB cases, and zero-call denial without contacting a cluster.
 
 ## References
 

@@ -121,12 +121,31 @@ role-scoped consent row and returns migrated consent to pending. It stores no
 raw Event, log, metric, PromQL/LogQL, response body, credential, or continuation
 token.
 
+Migration 10 rebuilds the ToolInvocation table to admit the complete fixed
+14-entry Tool catalog and rebuilds the Evidence table to admit the one exact
+`kupilot.remote-diagnostics-policy/v1` provenance value. It also rebuilds the
+closed approval tables so the already-admitted remote-Pod network-effect bit
+requires and accepts its destination hash. It preserves all prior rows and
+other constraints. ToolInvocation retains only its existing bounded canonical
+argument projection; action, approval, and audit rows receive only command
+identity and parameter digests. No raw remote-command chunk, archive, container
+file, diagnostic-Pod body or log, credential, or generic payload is stored.
+
+Migration 11 rebuilds only the closed approval operation and parameter-kind
+constraints to admit typed remediation, exact local direct argv, and the
+separate shell operation. It adds no payload column. Executable/working-
+directory identity, argv, shell command, environment, external origin, process
+output, mutation bodies, and Kubernetes response bytes remain represented only
+by bounded identities or digests where eligible and never by raw content.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
 `approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
 common approval schema remains bound to fixed typed state rather than a generic
-payload or write command. Only the existing supervised Deployment restart is
-currently composed through it.
+payload or write command. Restart, typed remediation, and default-off local
+process actions use its shared dispatcher. Remote-diagnostic handlers use the
+same envelope schema but their default `ask` human-delivery route remains fail-
+closed in this slice.
 
 The `settings` table admits only code-owned typed records. In addition to the
 retention setting, `scope.last_context` schema version 1 stores one strict,
@@ -202,8 +221,8 @@ bounded the source data:
 | Session context summary | One bounded safe summary with its hash, schema/policy versions, covered first/last Message IDs, ordered count/byte count/digest, generation time, Agent profile/origin hash, and degraded/truncation markers. Text is at most 16 KiB; coverage is at most 4,096 Messages and 4 MiB. Recent-tail text remains in Message rows. |
 | Action approval | Explicit bounded ActionEnvelope identity, scope and policy generations, target facts, effect bitsets, limits, typed-parameter kind and digest, nonce hash, lifecycle state, and decision metadata. No raw typed parameter, executable, argv, command, environment, external output, or generic payload is accepted. Legacy unexecuted restart authority is made terminal by migration 7. |
 | Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
-| ToolInvocation | One of the seven admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
-| Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. |
+| ToolInvocation | One of the 14 admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
+| Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-, observability-, or remote-diagnostics-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. Raw remote output and remote-output excerpts are never stored; those facts contain only safe target metadata, counts, and a fingerprint. |
 | Diagnosis | Validated free-form Markdown, claim-to-Evidence citations, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every retained confirmed fact cites same-run Evidence when written. |
 | AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, approval, and write-safety event types. |
 | Setting | `retention.operational_detail_days` is a schema-version-1 integer from 0 through 3,650. `scope.last_context` is a schema-version-1 strict JSON object containing one Context display name. Both use injected UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |
@@ -268,9 +287,11 @@ canaries outside eligible DTOs, persist safe derivatives, and scan both the
 database and WAL. Static guards keep sqlx imports inside the SQLite adapter and
 reject `SELECT *`, unsafe or panic-style helpers, unbounded selection, generic
 map boundaries, formatted SQL, and non-Context database calls in repositories.
-Composition tests prove that the only reachable executor is the fixed
-Deployment restarter and that only the Application approval coordinator can
-call it after durable pre-write audit.
+Composition tests prove that only the Application approval coordinator can
+reach the restart, typed-remediation, or local-process executors, and only after
+durable single-use approval consumption and pre-operation audit. Static import
+guards keep production `os/exec` in the local executor adapter, apart from the
+separately documented kubeconfig exec-credential boundary.
 
 ## Resume and startup recovery
 

@@ -90,6 +90,99 @@ kubernetes:
   #       max_bytes: 1048576
   #       max_returned: 50
 
+  # Remote diagnostics are disabled when this block is absent. Every entry is
+  # exact and remains subject to permission routing, RBAC, output consent,
+  # immutable run ceilings, target revalidation, and durable action audit.
+  # Metacharacters in arguments remain literal because no shell is used.
+  # remote_diagnostics:
+  #   pod_exec:
+  #     - id: dns-config
+  #       class: predefined
+  #       executable: /bin/cat
+  #       arguments: [/etc/resolv.conf]
+  #       timeout_seconds: 5
+  #       max_lines: 20
+  #       max_bytes: 4096
+  #     # General exact argv is critical and must use another explicit entry.
+  #     # - id: print-literal
+  #     #   class: general
+  #     #   executable: /usr/bin/printf
+  #     #   arguments: [literal;not-a-shell]
+  #     #   timeout_seconds: 5
+  #     #   max_lines: 20
+  #     #   max_bytes: 4096
+  #   container_file:
+  #     reader_executable: /bin/tar
+  #     allowed_roots: [/var/app/data]
+  #     timeout_seconds: 5
+  #     max_lines: 20
+  #     max_bytes: 4096
+  #   diagnostic_pods:
+  #     - id: tcp-connect
+  #       namespace: default
+  #       image: registry.example.invalid/diagnostic@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  #       executable: /bin/nc
+  #       argument_prefix: [-z, -v, -w, "5"]
+  #       # The exact Service must have a non-empty selector.
+  #       service_name: example-service
+  #       port: 8443
+  #       # This is an operator assertion, not runtime proof of CNI isolation.
+  #       network_policy_required: true
+  #       timeout_seconds: 10
+  #       max_lines: 20
+  #       max_bytes: 4096
+
+# Local execution is disabled when this top-level block is absent. Replace
+# every path and target with an exact locally verified value before enabling an
+# entry. The child receives only the listed LANG/LC_ALL/NO_COLOR values; it
+# receives no inherited HOME, PATH, proxy, model, kubeconfig, or debug-secret
+# environment. Direct argv is not an OS filesystem or network sandbox.
+# local_execution:
+#   commands:
+#     - id: kubectl-rollout-status
+#       kind: kubectl
+#       executable: /usr/local/bin/kubectl
+#       arguments: [rollout, status, deployment/example, --watch=false]
+#       working_directory: /var/empty
+#       environment: [LC_ALL=C, NO_COLOR=1]
+#       credential_ref: none
+#       timeout_seconds: 30
+#       max_lines: 200
+#       max_bytes: 32768
+#     - id: helm-history
+#       kind: helm
+#       executable: /usr/local/bin/helm
+#       arguments: [history, example, --max, "20"]
+#       working_directory: /var/empty
+#       environment: [LC_ALL=C, NO_COLOR=1]
+#       credential_ref: none
+#       timeout_seconds: 30
+#       max_lines: 200
+#       max_bytes: 32768
+#     - id: argocd-sync-revision
+#       kind: argocd
+#       executable: /usr/local/bin/argocd
+#       arguments: [app, sync, example, --revision, exact-revision]
+#       working_directory: /var/empty
+#       environment: [LC_ALL=C, NO_COLOR=1]
+#       credential_ref: argocd_cli_profile
+#       server_origin: https://argocd.example.invalid
+#       timeout_seconds: 60
+#       max_lines: 400
+#       max_bytes: 65536
+#   # Shell is a separate critical operation. It is never inferred from or
+#   # enabled by a direct-argv entry, and the exact command is approval-visible.
+#   shells:
+#     - id: exact-maintenance-shell
+#       executable: /bin/sh
+#       command: printf exact-policy-owned-command
+#       working_directory: /var/empty
+#       environment: [LC_ALL=C, NO_COLOR=1]
+#       network: none
+#       timeout_seconds: 10
+#       max_lines: 20
+#       max_bytes: 4096
+
 # Optional sources are two fixed slots. Each endpoint is a bare canonical
 # origin; redirects, raw PromQL/LogQL, arbitrary headers, and URL paths are
 # denied. File api_key values are plaintext; prefer the matching one-shot

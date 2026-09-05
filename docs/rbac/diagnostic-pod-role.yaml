@@ -1,0 +1,24 @@
+# Optional v0.5 diagnostic-Pod fixture. Use a dedicated identity and Namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-diagnostic-pod
+  namespace: replace-with-policy-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["replace-with-policy-service"]
+    verbs: ["get"]
+  # Pod create cannot be constrained by resourceName, and Kupilot generates a
+  # fresh invocation-bound name. Local policy fixes the complete Pod spec.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create"]
+  # The generated name also prevents a static resourceNames restriction here.
+  # Kupilot checks its labels, target digest, and UID before cleanup.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]

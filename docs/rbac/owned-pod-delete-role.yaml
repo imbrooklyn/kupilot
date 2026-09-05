@@ -1,0 +1,15 @@
+# Exact example for one ordinary Pod and its known ReplicaSet controller.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-owned-pod-delete
+  namespace: example-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["example-pod"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    resourceNames: ["example-replicaset"]
+    verbs: ["get"]

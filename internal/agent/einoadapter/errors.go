@@ -109,7 +109,10 @@ func runtimeFailureFromBudget(err error) *runtimeFailure {
 		agent.RunStopToolResultBytes,
 		agent.RunStopRepeatedToolCall,
 		agent.RunStopNoProgress,
-		agent.RunStopLogCallLimit:
+		agent.RunStopLogCallLimit,
+		agent.RunStopMetricCallLimit,
+		agent.RunStopDataSourceLimit,
+		agent.RunStopRemoteExecLimit:
 		return localRuntimeStop(budgetError.Reason(), budgetError.Class(), budgetError.Error(), err)
 	default:
 		return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)

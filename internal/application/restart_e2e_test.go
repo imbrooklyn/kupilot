@@ -17,7 +17,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 		fixture := newApprovalCoordinatorFixture(t)
 		request := fixture.submit(t, 100)
 		result, err := fixture.coordinator.Decide(
-			context.Background(), approvalDecisionCommand(UICommandRejectRestart, request, 100, 1),
+			context.Background(), approvalDecisionCommand(UICommandRejectAction, request, 100, 1),
 		)
 		if err != nil || result.State != domain.ApprovalStateRejected || fixture.executor.calls != 0 ||
 			fixture.rollout.calls != 0 || fixture.persistence.consumes != 0 {
@@ -30,7 +30,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 		request := fixture.submit(t, 101)
 		fixture.clock.set(request.ExpiresAt)
 		result, err := fixture.coordinator.Decide(
-			context.Background(), approvalDecisionCommand(UICommandApproveRestart, request, 101, 2),
+			context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 101, 2),
 		)
 		if !errors.Is(err, ErrApprovalExpired) || result.State != domain.ApprovalStateExpired ||
 			fixture.executor.calls != 0 || fixture.rollout.calls != 0 || fixture.persistence.consumes != 0 {
@@ -41,7 +41,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 	t.Run("replayed decision", func(t *testing.T) {
 		fixture := newApprovalCoordinatorFixture(t)
 		request := fixture.submit(t, 112)
-		command := approvalDecisionCommand(UICommandApproveRestart, request, 112, 112)
+		command := approvalDecisionCommand(UICommandApproveAction, request, 112, 112)
 		approved, err := fixture.coordinator.Decide(context.Background(), command)
 		if err != nil || approved.State != domain.ApprovalStateApproved {
 			t.Fatalf("initial approval result/error = %#v/%v", approved, err)
@@ -56,7 +56,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 	t.Run("process restart invalidation", func(t *testing.T) {
 		old := newApprovalCoordinatorFixture(t)
 		request := old.submit(t, 113)
-		command := approvalDecisionCommand(UICommandApproveRestart, request, 113, 113)
+		command := approvalDecisionCommand(UICommandApproveAction, request, 113, 113)
 		approved, err := old.coordinator.Decide(context.Background(), command)
 		if err != nil || approved.State != domain.ApprovalStateApproved {
 			t.Fatalf("pre-restart approval result/error = %#v/%v", approved, err)
@@ -123,7 +123,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 			UIRestartPatchAccepted, UIRestartRolloutProgress, UIRestartRolloutSucceeded,
 		})
 		_, replayErr := fixture.coordinator.ConsumeApprovedRestart(
-			context.Background(), approvalDecisionCommand(UICommandApproveRestart, fixture.persistence.lastCreated, 102, 102),
+			context.Background(), approvalDecisionCommand(UICommandApproveAction, fixture.persistence.lastCreated, 102, 102),
 		)
 		if !errors.Is(replayErr, ErrApprovalUnavailable) || fixture.executor.calls != 1 || fixture.rollout.calls != 1 {
 			t.Fatalf("replay error/write/rollout = %v/%d/%d, want unavailable/1/1", replayErr, fixture.executor.calls, fixture.rollout.calls)
@@ -152,7 +152,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 	t.Run("Context switch before write", func(t *testing.T) {
 		fixture := newApprovalCoordinatorFixture(t)
 		request := fixture.submit(t, 120)
-		command := approvalDecisionCommand(UICommandApproveRestart, request, 120, 120)
+		command := approvalDecisionCommand(UICommandApproveAction, request, 120, 120)
 		approved, err := fixture.coordinator.Decide(context.Background(), command)
 		if err != nil || approved.State != domain.ApprovalStateApproved {
 			t.Fatalf("pre-switch approval result/error = %#v/%v", approved, err)
@@ -498,7 +498,7 @@ func approveAndConsumeRestart(
 ) (UIApprovalResult, error) {
 	t.Helper()
 	request := fixture.submit(t, sequence)
-	command := approvalDecisionCommand(UICommandApproveRestart, request, sequence, uint64(sequence))
+	command := approvalDecisionCommand(UICommandApproveAction, request, sequence, uint64(sequence))
 	approved, err := fixture.coordinator.Decide(context.Background(), command)
 	if err != nil || approved.State != domain.ApprovalStateApproved || fixture.executor.calls != 0 {
 		t.Fatalf("Decide(approve) result/error/write = %#v/%v/%d", approved, err, fixture.executor.calls)

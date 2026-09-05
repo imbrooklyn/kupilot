@@ -130,6 +130,15 @@ func TestActionIntentRequiresExactExternalNetworkDestination(t *testing.T) {
 	if base.Validate() == nil {
 		t.Fatal("Kubernetes-only action accepted an unrelated destination hash")
 	}
+	base.NetworkEffects = ActionNetworkKubernetesAPI | ActionNetworkRemotePod
+	base.NetworkDestinationHash = ""
+	if base.Validate() == nil {
+		t.Fatal("remote Pod action accepted without an exact destination hash")
+	}
+	base.NetworkDestinationHash = ActionDigest(strings.Repeat("e", 64))
+	if base.Validate() != nil {
+		t.Fatalf("remote Pod action rejected with destination hash: %v", base.Validate())
+	}
 }
 
 func TestActionParametersAreClosedAndArgvIsCopied(t *testing.T) {
@@ -148,7 +157,10 @@ func TestActionParametersAreClosedAndArgvIsCopied(t *testing.T) {
 		t.Fatalf("returned argv aliases authority = %#v", got)
 	}
 	parameters := ActionParameters{
-		Kind: ActionParametersLocalArgv, Executable: "kubectl", Arguments: arguments,
+		Kind: ActionParametersLocalArgv, PolicyID: "test-command", Executable: "/usr/local/bin/kubectl",
+		ExecutableID: ActionDigest(strings.Repeat("a", 64)), Arguments: arguments,
+		WorkingDirectory: "/var/empty", WorkingDirectoryID: ActionDigest(strings.Repeat("b", 64)),
+		Environment: ActionEnvironment{}, CredentialReference: LocalCredentialNone,
 	}
 	if parameters.Validate() != nil || !parameters.Digest().Valid() {
 		t.Fatalf("parameters validation/digest = %v/%q", parameters.Validate(), parameters.Digest())

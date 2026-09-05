@@ -9,78 +9,98 @@ import (
 )
 
 var (
-	// ErrInvalidReadOnlyToolCatalog reports incomplete dependencies for the
+	// ErrInvalidToolCatalog reports incomplete dependencies for the
 	// compile-time built-in catalog.
-	ErrInvalidReadOnlyToolCatalog = errors.New("the fixed read-only Tool catalog dependencies are invalid")
+	ErrInvalidToolCatalog = errors.New("the fixed operational Tool catalog dependencies are invalid")
 )
 
-// ReadOnlyToolCatalogDependencies contain the active dependencies for the
-// built-in handlers. They are concrete and cannot register a dynamically named
-// Tool.
-type ReadOnlyToolCatalogDependencies struct {
+// ToolCatalogDependencies contains the active dependencies for the built-in
+// handlers. They are concrete and cannot register a dynamically named Tool.
+// Remote execution remains an explicit optional dependency and frozen policy.
+type ToolCatalogDependencies struct {
 	Resources ResourceToolDependencies
 	Events    EventToolDependencies
 	Logs      LogToolDependencies
 	Metrics   MetricToolDependencies
 	Sources   DataSourceToolDependencies
 	Related   RelatedToolDependencies
+	Remote    *RemoteDiagnosticToolDependencies
 }
 
-// NewReadOnlyToolCatalog constructs the compile-time fixed handler table used
+// NewToolCatalog constructs the compile-time fixed handler table used
 // by the Agent adapter. Schema authority remains in the neutral Agent catalog.
-func NewReadOnlyToolCatalog(dependencies ReadOnlyToolCatalogDependencies) (agent.ToolHandlers, error) {
+func NewToolCatalog(dependencies ToolCatalogDependencies) (agent.ToolHandlers, error) {
 	getResource, err := NewGetResourceTool(dependencies.Resources)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	listResources, err := NewListResourcesTool(dependencies.Resources)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getEvents, err := NewGetEventsTool(dependencies.Events)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getPodLogs, err := NewGetPodLogsTool(dependencies.Logs)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getPreviousPodLogs, err := NewGetPreviousPodLogsTool(dependencies.Logs)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getPodMetrics, err := NewGetPodMetricsTool(dependencies.Metrics)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getNodeMetrics, err := NewGetNodeMetricsTool(dependencies.Metrics)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	queryPrometheus, err := NewQueryPrometheusTool(dependencies.Sources)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	queryLoki, err := NewQueryLokiTool(dependencies.Sources)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getRelatedResources, err := NewGetRelatedResourcesTool(dependencies.Related)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	getClusterOverview, err := NewGetClusterOverviewTool(dependencies.Resources)
 	if err != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
+	}
+	var podExec agent.Tool
+	var readContainerFile agent.Tool
+	var runDiagnosticPod agent.Tool
+	if dependencies.Remote != nil {
+		podExecTool, remoteErr := NewPodExecTool(*dependencies.Remote)
+		if remoteErr != nil {
+			return agent.ToolHandlers{}, ErrInvalidToolCatalog
+		}
+		fileTool, remoteErr := NewReadContainerFileTool(*dependencies.Remote)
+		if remoteErr != nil {
+			return agent.ToolHandlers{}, ErrInvalidToolCatalog
+		}
+		diagnosticTool, remoteErr := NewRunDiagnosticPodTool(*dependencies.Remote)
+		if remoteErr != nil {
+			return agent.ToolHandlers{}, ErrInvalidToolCatalog
+		}
+		podExec, readContainerFile, runDiagnosticPod = podExecTool, fileTool, diagnosticTool
 	}
 	handlers := agent.ToolHandlers{
 		GetResource: getResource, ListResources: listResources, GetEvents: getEvents,
 		GetPodLogs: getPodLogs, GetPreviousPodLogs: getPreviousPodLogs, GetRelatedResources: getRelatedResources,
 		GetPodMetrics: getPodMetrics, GetNodeMetrics: getNodeMetrics, QueryPrometheus: queryPrometheus, QueryLoki: queryLoki,
 		GetClusterOverview: getClusterOverview,
+		PodExec:            podExec, ReadContainerFile: readContainerFile, RunDiagnosticPod: runDiagnosticPod,
 	}
 	if handlers.Validate() != nil {
-		return agent.ToolHandlers{}, ErrInvalidReadOnlyToolCatalog
+		return agent.ToolHandlers{}, ErrInvalidToolCatalog
 	}
 	return handlers, nil
 }

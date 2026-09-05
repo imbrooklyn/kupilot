@@ -147,10 +147,15 @@ type ClientBundle struct {
 	dynamic        dynamic.Interface
 	metadata       metadata.Interface
 	metrics        metricsv1beta1.MetricsV1beta1Interface
+	streamConfig   *rest.Config
 	requestTimeout time.Duration
 	transport      http.RoundTripper
 	lifecycle      *lifecycleRoundTripper
 	exec           *execCredentialManager
+	remoteMu       sync.Mutex
+	remoteClosing  bool
+	remoteClosed   chan struct{}
+	remoteInflight sync.WaitGroup
 	closeOnce      sync.Once
 	stopMu         sync.Mutex
 	stopOwner      func() bool
@@ -182,6 +187,16 @@ func (bundle *ClientBundle) Close() {
 
 func (bundle *ClientBundle) closeResources() {
 	bundle.closeOnce.Do(func() {
+		bundle.remoteMu.Lock()
+		bundle.remoteClosing = true
+		if bundle.remoteClosed != nil {
+			close(bundle.remoteClosed)
+		}
+		bundle.remoteMu.Unlock()
+		// Remote owners receive cancellation first and retain the still-open
+		// typed transport for their bounded diagnostic-Pod cleanup. Once every
+		// owner has joined, no remote cleanup request can race transport close.
+		bundle.remoteInflight.Wait()
 		if bundle.lifecycle != nil {
 			bundle.lifecycle.closeAndWait()
 		}
@@ -190,6 +205,23 @@ func (bundle *ClientBundle) closeResources() {
 		}
 		closeIdleConnections(bundle.transport)
 	})
+}
+
+func (bundle *ClientBundle) beginRemoteAttempt() bool {
+	if bundle == nil || bundle.lifecycle == nil || bundle.remoteClosed == nil {
+		return false
+	}
+	bundle.remoteMu.Lock()
+	defer bundle.remoteMu.Unlock()
+	if bundle.remoteClosing {
+		return false
+	}
+	bundle.remoteInflight.Add(1)
+	return true
+}
+
+func (bundle *ClientBundle) endRemoteAttempt() {
+	bundle.remoteInflight.Done()
 }
 
 // Create resolves one exact Context and builds a fresh typed client bundle.
@@ -369,10 +401,12 @@ func (factory *ClientFactory) Create(ctx context.Context, contextName string) (*
 		dynamic:        dynamicClient,
 		metadata:       metadataClient,
 		metrics:        metricsClient,
+		streamConfig:   rest.CopyConfig(clientConfig),
 		requestTimeout: factory.requestTimeout,
 		transport:      lifecycle,
 		lifecycle:      lifecycle,
 		exec:           manager,
+		remoteClosed:   make(chan struct{}),
 	}
 	stopOwner := context.AfterFunc(ctx, bundle.closeResources)
 	bundle.stopMu.Lock()

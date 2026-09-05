@@ -1,0 +1,15 @@
+# Exact example for one enabled scale target. Remove the unused workload kind.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-workload-scale
+  namespace: example-namespace
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    resourceNames: ["example-workload"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale"]
+    resourceNames: ["example-workload"]
+    verbs: ["get", "update"]

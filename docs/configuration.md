@@ -1,7 +1,7 @@
 # Kupilot Configuration
 
-- Status: Accepted `v0.5` contract with named-model, read, and observability
-  policy configuration implemented
+- Status: Accepted `v0.5` contract with named-model, read, observability,
+  remote-diagnostic, and local-execution policy configuration implemented
 - Date: 2026-09-05
 
 The current parser writes strict schema version 2 and reads schema version 1
@@ -10,9 +10,12 @@ rewrites a user file; the next explicit interactive save writes version 2 and
 does not carry the historical v1 output-token default into the new schema.
 Version 2 implements typed `agent` and optional `approval_reviewer` profiles,
 exact `kubernetes.resource_policies` entries for approved CRDs, and the two
-fixed optional `observability.prometheus` and `observability.loki` slots.
-Remote diagnostic and expanded execution policy fields remain outside the
-implemented schema; unknown future-looking fields are rejected.
+fixed optional `observability.prometheus` and `observability.loki` slots. It
+also implements the default-off exact `kubernetes.remote_diagnostics` policy
+for Pod Exec, container-file reads, and diagnostic Pods, and the separate
+default-off top-level `local_execution` direct-argv and shell catalogs. Typed
+remediation semantics are code-owned and have no generic patch, apply, or
+per-operation policy payload. Unknown future-looking fields are rejected.
 
 Kupilot uses one process-frozen Home for its automatically managed local files.
 `KUPILOT_HOME` selects an absolute, normalized directory; otherwise Kupilot
@@ -115,15 +118,21 @@ extension payloads:
   and credential protections; and
 - the existing `compact`, `balanced`, and `extended` run-budget selection,
   now consumed by independent Agent, Agent-summary, Reviewer, and broad
-  Kubernetes page/item/byte ceilings; and
+  Kubernetes page/item/byte ceilings;
 - an optional finite list of exact CRD read policies. Built-in resource
-  policies remain code-owned and cannot be replaced by configuration.
+  policies remain code-owned and cannot be replaced by configuration; and
+- an optional exact remote-diagnostic catalog whose presence enables only its
+  fixed no-shell argv, application-data roots, pinned image, policy Namespace,
+  Service, port, and finite limits; and
+- optional exact local direct-argv and separate shell catalogs binding fixed
+  paths, structured command semantics, minimal environment, explicit network
+  identity, and finite limits.
 
-Public permission controls, remote diagnostic policies, and expanded execution
-settings remain accepted targets for later scoped work. They are not silently
-accepted by the version 2 parser. Optional data-source configuration constructs
-only the bounded client and policy; it cannot bypass consent, permission,
-ActionEnvelope, or sink gates.
+Public permission-profile configuration and generic remediation settings are
+not accepted by the version 2 parser. Optional data-source, remote-diagnostic,
+or local-execution configuration constructs only a bounded policy; it cannot
+bypass consent, permission, ActionEnvelope, RBAC or path/target revalidation,
+audit, or sink gates.
 
 Default-off high-risk capabilities remain disabled even under `full-access`.
 Permission profiles route only admitted and enabled operations. Configuration
@@ -175,6 +184,17 @@ an actual key so it remains safe to copy and inspect.
 | `kubernetes.resource_policies[].fields` | One to 32 exact scalar projections. Every field names a local ID, dot-separated `metadata`, `spec`, or `status` path, scalar type (`string`, `integer`, `decimal`, `boolean`, or `timestamp`), data class (`metadata`, `status`, `spec`, or `sensitive`), selector source, operators, and an explicit Evidence flag. Credential-, Secret-, token-, password-, API-key-, private-key-, access-key-, and environment-shaped paths must be classified `sensitive`; sensitive fields cannot create Evidence and are not reachable through the broad-read Tools. |
 | `selector_source`, `selector_key`, and `operators` in a resource field | `none`, exact Kubernetes `field`, or exact `label`. Field selectors are limited to `metadata.name` or `metadata.namespace` with equality/inequality. Label selectors use one exact configured key and equality, inequality, or existence. Other declared operators are evaluated locally over the already admitted scalar projection. Raw selectors and expressions are absent. |
 | `kubernetes.resource_policies[].limits` | Required positive `max_pages`, `page_items`, `page_bytes`, `max_items`, `max_bytes`, and `max_returned`. Hard caps are 8 pages, 100 items/page, 1 MiB/page, 500 scanned items, 4 MiB total, and 50 returned items. The frozen run profile may tighten every value. |
+| `kubernetes.remote_diagnostics` | Omitted by default, which disables all three remote capabilities. It accepts only the fixed `pod_exec`, `container_file`, and `diagnostic_pods` fields. There is no environment or CLI override. |
+| `kubernetes.remote_diagnostics.pod_exec[]` | At most 32 total Pod-exec and diagnostic-Pod entries. Each unique ID binds `class`, one normalized absolute non-shell `executable`, one exact non-empty non-credential argv vector of at most 16 entries and 4096 aggregate bytes, and finite limits. Direct shells and explicit shell dispatch through common executable multiplexers are rejected. `predefined` accepts only the code-owned `dns-config` or `process-status` contract; `general` is always `critical` because the configured executable may have in-container side effects or network behavior that Kupilot cannot infer or sandbox. The envelope binds the exact argv and conservative remote-Pod network effect. The model must repeat the selected executable and argv exactly and cannot add stdin, TTY, shell, deadline, or ceilings. |
+| `kubernetes.remote_diagnostics.container_file` | Optional single reader policy. `reader_executable` is exactly `/bin/tar` or `/usr/bin/tar`; one through eight normalized absolute application-data roots are required. Root `/`, traversal, trailing slash, credential roots, ServiceAccount-token roots, `/proc`, `/sys`, `/dev`, and other code-denied system roots are rejected. Runtime uses fixed USTAR arguments with a one-block record size, rejects sensitive Pod mounts and non-regular archive entries, and derives a smaller file-content limit after reserving deterministic archive headers, padding, and terminators inside `max_bytes`. |
+| `kubernetes.remote_diagnostics.diagnostic_pods[]` | Each unique local ID fixes a valid Namespace, same-Namespace Service name and port, one SHA-256 digest-pinned image, and the code-owned TCP-connect `/bin/nc -z -v -w 5` prefix. Image repository components are lowercase; an optional bounded tag is allowed, while URL schemes, user information, query/fragment text, percent escapes, empty path components, and invalid registry ports are rejected. The Service must retain a non-empty selector at both resolution and final pre-create revalidation; ExternalName, selectorless, obvious metadata/link-local/address-confusion, and policy-external targets are rejected. Namespace, image, argv, destination, Pod name/spec, ServiceAccount handling, and resources are absent from the Tool schema. `network_policy_required` must be `true`; this is an operator assertion, not runtime evidence that a compatible CNI enforces egress isolation. |
+| Remote `timeout_seconds`, `max_lines`, and `max_bytes` | Required positive values capped at 60 seconds, 1000 lines, and 65536 bytes. The immutable run Tool deadline, log limits, and result-byte limit can only tighten them. For a container-file read, `max_bytes` bounds the complete USTAR transport and the envelope separately binds the derived content limit. A diagnostic-Pod timeout must be at least six seconds. |
+| `local_execution` | Omitted by default, which disables both local process classes. It accepts only `commands` and `shells`, each with at most 32 exact entries and no environment or CLI override. An entry does not grant permission or claim an OS sandbox. |
+| `local_execution.commands[]` | A unique bounded policy ID binds one `kind` (`kubectl`, `helm`, `argocd`, or `diagnostic`), normalized absolute executable and working directory, one structurally classified argv vector of at most 16 entries/4096 bytes, an ordered minimal environment, credential-reference identity, optional exact origin/effect, and finite limits. Kubectl/Helm/Argo entries accept only their closed operation shapes and deny Context, kubeconfig, token, impersonation, server, TLS, values-file, config, credential, plugin/post-renderer, and stdin override surfaces. Diagnostic entries declare `no_network_read`, `external_read`, or `external_side_effect`; known shells, interpreters, wrappers/multiplexers, and executable scripts are denied. |
+| `local_execution.commands[].environment` | Zero to eight unique entries totaling at most 2048 bytes. Only `LANG` or `LC_ALL` set to `C`, `POSIX`, or `C.UTF-8`, and `NO_COLOR=1`, are admitted. The child inherits no `HOME`, `PATH`, proxy, model, kubeconfig, debug, or credential variable. |
+| `local_execution.commands[].credential_ref` and `server_origin` | `argocd` requires the opaque identity `argocd_cli_profile` and one canonical explicit HTTPS origin (loopback HTTP only); other command kinds require `none`. No credential value, file path, environment variable, CLI argument, or Authorization material is injected by this policy. |
+| `local_execution.shells[]` | A wholly separate `critical` entry binding one admitted absolute shell executable, one exact trimmed command string of at most 4096 bytes, exact cwd/environment, explicit `none`, `kubernetes_api`, or `external` network effect, optional canonical external origin, and finite limits. A direct-argv entry cannot select or fall back to it. |
+| Local `timeout_seconds`, `max_lines`, and `max_bytes` | Required positive values capped at 600 seconds, 10000 lines, and 4 MiB. Runtime binds the same byte ceiling as combined process output and never accepts a model-selected limit. |
 | `observability.prometheus` | Optional fixed Prometheus slot. Its `endpoint` must be one canonical HTTPS origin or an explicit loopback HTTP origin, with no path, user information, query, or fragment. |
 | `observability.prometheus.credential_ref` | `none` or `prometheus`. The latter requires exactly one plaintext file key or `KUPILOT_PROMETHEUS_API_KEY`; the value is extracted into an opaque source-owned wrapper. |
 | `observability.prometheus.queries` | One or more unique code-owned IDs: `pod_cpu_usage`, `pod_memory_working_set`, `pod_network_receive_rate`, or `pod_network_transmit_rate`. Raw PromQL is not a schema field. |
@@ -216,7 +236,9 @@ The admitted environment variables are:
 - Model credentials: `KUPILOT_AGENT_API_KEY`, legacy Agent alias
   `KUPILOT_MODEL_API_KEY`, and `KUPILOT_APPROVAL_REVIEWER_API_KEY`.
 - Kubernetes: `KUPILOT_EXEC_CREDENTIALS` and
-  `KUPILOT_NAMESPACE_ACCESS`.
+  `KUPILOT_NAMESPACE_ACCESS`. Remote-diagnostic policy has no environment
+  override. Local-execution policy likewise has no environment or CLI override;
+  its configured child environment is not inherited from this list.
 - Optional source credentials: `KUPILOT_PROMETHEUS_API_KEY` and
   `KUPILOT_LOKI_API_KEY`. Source origins and query IDs have no environment or
   CLI override.

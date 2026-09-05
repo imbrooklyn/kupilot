@@ -5,11 +5,13 @@
 
 The checked-in implementation now includes the named-model, Eino ADK runtime,
 role-scoped consent, safe Session context and summarization, and deterministic
-permission/action foundation of ADR-0044 through ADR-0047. Only the existing
-supervised Deployment restart is composed through that action lifecycle. The
-broader capabilities, public permission controls, RBAC, and new execution or
-remediation paths remain implementation targets; no `v0.5` release artifact is
-claimed.
+permission/action foundation of ADR-0044 through ADR-0047. The supervised
+Deployment restart, typed scale/rollback/controller-owned-Pod delete/cordon/
+uncordon/drain actions, and default-off exact local argv and separate shell
+paths are composed through the shared Application action lifecycle. The broad
+read/observability and default-off remote-diagnostic slices are also present.
+This is deterministic implementation evidence, not a live integration or
+`v0.5` release-artifact claim.
 
 ## Product definition
 

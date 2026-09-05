@@ -40,7 +40,7 @@ var (
 	// ErrApprovalRolloutUnavailable reports an accepted PATCH that could not be verified.
 	ErrApprovalRolloutUnavailable = errors.New("the Deployment rollout verification is unavailable")
 	// ErrApprovalResultAuditUnavailable reports exhausted bounded post-attempt audit writes.
-	ErrApprovalResultAuditUnavailable = errors.New("the Deployment restart result audit is unavailable")
+	ErrApprovalResultAuditUnavailable = errors.New("the approved action result audit is unavailable")
 )
 
 // ApprovalLifecycle is the narrow approval service surface used by Application.
@@ -54,14 +54,14 @@ type ApprovalLifecycle interface {
 	CommitConsume(context.Context, approval.ExecutionClaim) (domain.ApprovalRequest, error)
 }
 
-// ConsumeApprovedRestart owns the sole operation path: durable decision proof,
+// ConsumeApprovedRestart owns the typed restart path: durable decision proof,
 // fresh target validation, atomic consume/pre-audit, final scope and policy
 // checks, and at most one exact executor call.
 func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	ctx context.Context,
 	command UICommand,
 ) (UIApprovalResult, error) {
-	if coordinator == nil || ctx == nil || command.Kind != UICommandApproveRestart || command.Validate() != nil {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandApproveAction || command.Validate() != nil {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	if err := ctx.Err(); err != nil {
@@ -71,7 +71,8 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	tracked, ok := coordinator.active[command.ApprovalID]
 	if !ok || tracked.request.State != domain.ApprovalStateApproved || tracked.request.RunID != command.RunID ||
 		tracked.consuming || tracked.sequence != command.ApprovalSequence ||
-		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration {
+		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		tracked.action.kind != trackedActionRestart || !tracked.action.matches(tracked.request.Intent) {
 		coordinator.mu.Unlock()
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
@@ -274,6 +275,8 @@ type ApprovalCoordinatorConfig struct {
 	Rollout            RestartRolloutObserver
 	RestartRevalidator approval.RestartDeploymentRevalidator
 	RestartExecutor    approval.RestartDeploymentExecutor
+	Remediation        RemediationActionExecutor
+	LocalProcesses     LocalProcessExecutor
 	Permissions        *PermissionManager
 	Reviewer           *ReviewerModelBinding
 	Reviews            ActionReviewPersistence
@@ -296,6 +299,8 @@ type ApprovalCoordinator struct {
 	rollout          RestartRolloutObserver
 	restartValidator approval.RestartDeploymentRevalidator
 	restartExecutor  approval.RestartDeploymentExecutor
+	remediation      RemediationActionExecutor
+	localProcesses   LocalProcessExecutor
 	permissions      *PermissionManager
 	reviewer         *ReviewerModelBinding
 	reviews          ActionReviewPersistence
@@ -311,6 +316,41 @@ type trackedApproval struct {
 	route        PermissionEvaluation
 	reviewing    bool
 	reviewCancel context.CancelFunc
+	action       trackedAction
+}
+
+type trackedActionKind uint8
+
+const (
+	trackedActionRestart trackedActionKind = iota + 1
+	trackedActionRemediation
+	trackedActionLocalCommand
+	trackedActionLocalShell
+)
+
+// trackedAction retains the complete project-owned execution plan only for
+// the current process. Persistence receives the canonical parameter digest,
+// never raw argv, paths, environment values, or a shell command.
+type trackedAction struct {
+	kind        trackedActionKind
+	remediation domain.RemediationActionPlan
+	command     domain.LocalCommandActionPlan
+	shell       domain.LocalShellActionPlan
+}
+
+func (action trackedAction) matches(intent domain.ActionIntent) bool {
+	switch action.kind {
+	case trackedActionRestart:
+		return intent.ValidateRestartDeployment() == nil
+	case trackedActionRemediation:
+		return action.remediation.MatchesIntent(intent)
+	case trackedActionLocalCommand:
+		return action.command.MatchesIntent(intent)
+	case trackedActionLocalShell:
+		return action.shell.MatchesIntent(intent)
+	default:
+		return false
+	}
 }
 
 // NewApprovalCoordinator constructs a fail-closed non-executing coordinator.
@@ -330,7 +370,8 @@ func NewApprovalCoordinator(config ApprovalCoordinatorConfig) (*ApprovalCoordina
 		service: config.Service, persistence: config.Persistence, resultAudits: config.ResultAudits, scope: config.Scope,
 		approvalIDs: config.ApprovalIDs, auditIDs: config.AuditIDs, uiEvents: config.UIEvents,
 		rollout: config.Rollout, restartValidator: config.RestartRevalidator,
-		restartExecutor: config.RestartExecutor, permissions: config.Permissions,
+		restartExecutor: config.RestartExecutor, remediation: config.Remediation,
+		localProcesses: config.LocalProcesses, permissions: config.Permissions,
 		reviewer: config.Reviewer, reviews: config.Reviews, now: config.Now,
 		persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
 	}
@@ -385,6 +426,24 @@ func (coordinator *ApprovalCoordinator) SubmitRestartDeploymentProposal(
 		sequence < 1 || sequence > 4096 || intent.ValidateRestartDeployment() != nil {
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable
 	}
+	return coordinator.submitPreparedAction(
+		ctx, runID, sessionID, sequence, intent,
+		trackedAction{kind: trackedActionRestart},
+	)
+}
+
+func (coordinator *ApprovalCoordinator) submitPreparedAction(
+	ctx context.Context,
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	sequence int64,
+	intent domain.ActionIntent,
+	action trackedAction,
+) (domain.ApprovalRequest, error) {
+	if coordinator == nil || ctx == nil || !runID.Valid() || !sessionID.Valid() ||
+		sequence < 1 || sequence > 4096 || !action.matches(intent) {
+		return domain.ApprovalRequest{}, ErrApprovalUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
@@ -425,7 +484,7 @@ func (coordinator *ApprovalCoordinator) SubmitRestartDeploymentProposal(
 		coordinator.mu.Unlock()
 		return domain.ApprovalRequest{}, ErrApprovalPersistenceUnavailable
 	}
-	tracked := trackedApproval{request: request, sequence: sequence, route: route}
+	tracked := trackedApproval{request: request, sequence: sequence, route: route, action: action}
 	coordinator.active[request.ID] = tracked
 	coordinator.mu.Unlock()
 
@@ -469,7 +528,7 @@ func (coordinator *ApprovalCoordinator) publishApprovalDialog(ctx context.Contex
 // returning a visible result. Approved remains approved-not-executed.
 func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICommand) (UIApprovalResult, error) {
 	if coordinator == nil || ctx == nil || command.Validate() != nil ||
-		(command.Kind != UICommandApproveRestart && command.Kind != UICommandRejectRestart) {
+		(command.Kind != UICommandApproveAction && command.Kind != UICommandRejectAction) {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	if err := ctx.Err(); err != nil {
@@ -489,7 +548,7 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 		currentScope = current.Snapshot()
 	}
 	choice := domain.ApprovalDecisionReject
-	if command.Kind == UICommandApproveRestart {
+	if command.Kind == UICommandApproveAction {
 		choice = domain.ApprovalDecisionApprove
 	}
 	updated, decision, decideErr := coordinator.service.Decide(ctx, approval.DecisionCommand{
@@ -561,7 +620,7 @@ func (coordinator *ApprovalCoordinator) Expire(ctx context.Context, requestID do
 
 // ExpireCommand checks the complete dialog identity before applying TTL expiry.
 func (coordinator *ApprovalCoordinator) ExpireCommand(ctx context.Context, command UICommand) (UIApprovalResult, error) {
-	if coordinator == nil || ctx == nil || command.Kind != UICommandExpireRestart || command.Validate() != nil {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandExpireAction || command.Validate() != nil {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	coordinator.mu.Lock()

@@ -222,10 +222,27 @@ func (event AuditEvent) Validate() error {
 	if event.Scope != nil && event.Scope.Validate() != nil {
 		return ErrInvalidAuditEvent
 	}
-	if event.Subject != nil && (event.Scope == nil || event.Subject.Validate() != nil || event.Subject.Namespace != event.Scope.Namespace) {
-		return ErrInvalidAuditEvent
+	if event.Subject != nil {
+		kind, known := ResourceKindForReference(*event.Subject)
+		if event.Scope == nil || event.Subject.Validate() != nil || !known ||
+			kind.Namespaced() && event.Subject.Namespace != event.Scope.Namespace && !event.validCrossNamespaceDrainPhase() ||
+			kind.ClusterScoped() && event.Subject.Namespace != "" {
+			return ErrInvalidAuditEvent
+		}
 	}
 	return nil
+}
+
+// validCrossNamespaceDrainPhase admits only one exact exception to the
+// working-Namespace audit subject rule. A drain approved under its separately
+// validated all-Namespace ActionEnvelope must retain each real Pod Namespace;
+// the approval identifier and envelope digest keep that subject linked to the
+// durable authority that carries the namespace-access policy.
+func (event AuditEvent) validCrossNamespaceDrainPhase() bool {
+	return (event.Type == AuditEventWriteAttempted || event.Type == AuditEventWriteOutcomeUnknown) &&
+		event.Actor == AuditActorSystem && event.SessionID != nil && event.RunID != nil &&
+		event.Details.Operation != nil && *event.Details.Operation == string(ActionOperationDrainNode) &&
+		ApprovalID(event.CorrelationID).Valid() && validSHA256Hex(event.IntegrityHash)
 }
 
 // SettingKey identifies one code-defined non-secret durable preference.

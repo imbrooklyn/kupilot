@@ -138,8 +138,8 @@ bounded representation of all retained eligible safe history when such history
 exists. Application first checks the current named role/profile, canonical
 origin, exact data categories and consent, verified current scope/generation,
 coverage, and finite context/summary budget. A failed gate causes zero model
-calls and no current-question-only fallback. The accepted permission work will
-add its independent policy-generation gate. The current question is included
+calls and no current-question-only fallback. The independent policy-generation
+gate also invalidates prior permission, review, rule, and action state. The current question is included
 exactly once. Partial streams, Tool calls/results, raw model traffic, command
 output, and approval dialogs are never replayed as conversation history.
 

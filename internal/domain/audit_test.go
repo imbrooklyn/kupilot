@@ -52,6 +52,11 @@ func TestAuditEventValidationUsesClosedTypesAndTypedDetails(t *testing.T) {
 		AuditEventSessionExportRequested.AllowedInMinimalPersistence() {
 		t.Fatal("Session export audit was not classified as standard-persistence read audit")
 	}
+	clusterSubject := event
+	clusterSubject.Subject = &ResourceRef{APIVersion: "v1", Kind: "Node", Name: "worker-a"}
+	if err := clusterSubject.Validate(); err != nil {
+		t.Fatalf("cluster-scoped audit subject Validate() error = %v", err)
+	}
 
 	tests := []struct {
 		name   string
@@ -59,6 +64,7 @@ func TestAuditEventValidationUsesClosedTypesAndTypedDetails(t *testing.T) {
 	}{
 		{name: "unknown event", mutate: func(value *AuditEvent) { value.Type = "free_form" }},
 		{name: "unknown actor", mutate: func(value *AuditEvent) { value.Actor = "remote" }},
+		{name: "known Kind API mismatch", mutate: func(value *AuditEvent) { value.Subject.APIVersion = "apps/v1" }},
 		{name: "subject without scope", mutate: func(value *AuditEvent) { value.Scope = nil }},
 		{name: "oversized correlation", mutate: func(value *AuditEvent) { value.CorrelationID = strings.Repeat("c", maxAuditCorrelationIDBytes+1) }},
 		{name: "oversized detail", mutate: func(value *AuditEvent) {
@@ -69,9 +75,55 @@ func TestAuditEventValidationUsesClosedTypesAndTypedDetails(t *testing.T) {
 	for _, current := range tests {
 		t.Run(current.name, func(t *testing.T) {
 			value := event
+			if value.Subject != nil {
+				subject := *value.Subject
+				value.Subject = &subject
+			}
 			current.mutate(&value)
 			if err := value.Validate(); err == nil {
 				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
+func TestAuditEventAllowsOnlyDigestBoundCrossNamespaceDrainPhases(t *testing.T) {
+	newEvent := func() AuditEvent {
+		sessionID := SessionID("00000000-0000-7000-8000-000000001411")
+		runID := AgentRunID("00000000-0000-7000-8000-000000001412")
+		operation := string(ActionOperationDrainNode)
+		return AuditEvent{
+			ID: "00000000-0000-7000-8000-000000001413", SessionID: &sessionID, RunID: &runID,
+			Type: AuditEventWriteAttempted, Actor: AuditActorSystem, Outcome: AuditOutcomeSuccess,
+			Scope:         &ScopeSnapshot{Context: "test-context", Namespace: "team-a", Generation: 5},
+			Subject:       &ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-b", Name: "sample-pod", UID: "pod-uid", ResourceVersion: "9"},
+			Details:       AuditDetails{Operation: &operation},
+			CorrelationID: "00000000-0000-7000-8000-000000001414",
+			IntegrityHash: strings.Repeat("a", 64), OccurredAt: time.UnixMilli(50).UTC(),
+		}
+	}
+	if err := newEvent().Validate(); err != nil {
+		t.Fatalf("cross-Namespace drain phase Validate() error = %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*AuditEvent)
+	}{
+		{name: "another operation", mutate: func(event *AuditEvent) {
+			operation := string(ActionOperationScaleWorkload)
+			event.Details.Operation = &operation
+		}},
+		{name: "final result type", mutate: func(event *AuditEvent) { event.Type = AuditEventWriteVerified }},
+		{name: "missing digest", mutate: func(event *AuditEvent) { event.IntegrityHash = "" }},
+		{name: "unbound correlation", mutate: func(event *AuditEvent) { event.CorrelationID = "not-an-approval" }},
+		{name: "non-system actor", mutate: func(event *AuditEvent) { event.Actor = AuditActorUser }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := newEvent()
+			test.mutate(&event)
+			if err := event.Validate(); err == nil {
+				t.Fatal("cross-Namespace audit exception was broadened")
 			}
 		})
 	}

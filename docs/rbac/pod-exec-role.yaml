@@ -1,0 +1,16 @@
+# Optional v0.5 exact-Pod remote diagnostic fixture. Replace both placeholders.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kupilot-pod-exec
+  namespace: replace-with-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["replace-with-pod-name"]
+    verbs: ["get"]
+  # Kubernetes RBAC cannot reliably constrain a create request by resourceName.
+  # Kupilot independently binds the exact Pod UID, container, and argv.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]

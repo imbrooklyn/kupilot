@@ -2,9 +2,10 @@
 
 These terms are canonical public product language.
 
-The checked-in implementation includes the named-model and safe Session-context
-runtime slice. Other terms marked as `v0.5` targets describe the Accepted
-implementation contract, not current reachability.
+The checked-in implementation includes the named-model, safe Session-context,
+expanded diagnostic, permission, typed-action, and default-off local-execution
+slices. Accepted language still does not imply live integration or release
+readiness.
 
 ## AgentRun
 
@@ -51,7 +52,7 @@ input candidate, not proof of existence; a run capability must verify it.
 The local conversation container for messages and completed AgentRuns across
 launches. A Session is not live Kubernetes authority. Bare startup creates a
 new Session; explicit resume restores safe history and unverified candidates
-only. Under the `v0.5` target, every later question receives one ordered,
+only. Every later question receives one ordered,
 bounded representation of retained eligible prior same-Session turns; resume
 itself performs no external I/O and historic state restores no authority.
 
@@ -65,10 +66,9 @@ or mutation.
 ## Proposed action
 
 Descriptive typed output from the Agent. It carries no nonce, digest, target
-fingerprint, or executor authority. The current `v0.4` catalog admits only an
-exact Deployment restart proposal. The `v0.5` target admits only the typed P0
-operations in the Product Contract, each of which must first become a locally
-validated ActionEnvelope.
+fingerprint, or executor authority. The current catalog admits only the typed
+P0 operations in the Product Contract, each of which must first become a
+locally validated ActionEnvelope.
 
 ## Permission profile
 

@@ -1,9 +1,10 @@
 # Kupilot User Guide
 
-This guide distinguishes the current reachable `v0.4` behavior from the
-Accepted `v0.5` target. Named model roles, permission profiles, expanded
-capabilities, Session summarization, and generic ActionEnvelope execution are
-not reachable until their implementation and tests land.
+This guide describes the current deterministic `v0.5` implementation boundary.
+Named model roles, safe Session context/summarization, expanded diagnostics,
+permission routing, the shared ActionEnvelope dispatcher, typed remediation,
+and default-off exact local execution are present. This does not claim a live
+integration or release artifact.
 
 - [Getting Started](getting-started.md): build, configure, start, and use the
   single-screen TUI.
@@ -20,14 +21,15 @@ not reachable until their implementation and tests land.
   typed resource catalog, regression scenarios, Evidence, and action boundary.
 - [Permissions and Controlled Actions](approval.md): `v0.5` permission profiles,
   Reviewer routing, ActionEnvelope, one-attempt execution, and verification,
-  plus the currently implemented Deployment restart boundary.
+  plus the currently composed typed remediation and local-process boundaries.
 - [Least-Privilege RBAC](../rbac/README.md): exact Kubernetes verbs, resources,
   subresources, and binding guidance.
 - [Troubleshooting](../troubleshooting.md): safe recovery from common startup,
   scope, permission, model, privacy, storage, and terminal failures.
 
-The current composition reads only through seven typed bounded capabilities and
-admits one supervised exact Deployment restart. The Accepted `v0.5` target adds
-typed daily operations, explicitly gated Pod diagnostics and local argv, and a
-separate shell risk class without adding generic model authority, autonomous
-remediation, or reusable cross-Session approval.
+The current composition uses fourteen typed bounded diagnostic capabilities and
+admits supervised restart, scale, rollback, controller-owned Pod delete,
+cordon, uncordon, drain, exact local argv, and a separate shell risk class. It
+adds no generic model authority, autonomous remediation, or reusable cross-
+Session approval. Remote-diagnostic human/Reviewer delivery remains fail-closed
+until its separate integration is completed.

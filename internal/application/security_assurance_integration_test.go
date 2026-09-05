@@ -407,7 +407,7 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	}
 	modelRequest := assuranceModelRequest()
 	modelRequest.Messages = append(modelRequest.Messages, toolMessage)
-	if len(modelRequest.Tools) != 11 || len(modelRequest.Messages) != 2 {
+	if len(modelRequest.Tools) != 14 || len(modelRequest.Messages) != 2 {
 		t.Fatal("safe model sink projection is invalid")
 	}
 	for _, message := range modelRequest.Messages {
