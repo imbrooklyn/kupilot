@@ -5,8 +5,12 @@ contract accepted for Kupilot `v0.5`. The checked-in runtime implements the
 required `agent` profile, optional `approval_reviewer` transport seam, Eino ADK
 composition, safe Session context, Agent-profile summarization, and the strict
 Reviewer transport consumed by deterministic permission routing. Reviewer
-output remains non-authoritative and only the existing supervised Deployment
-restart consumes the current action foundation.
+output remains non-authoritative. The current Application action foundation
+covers the supervised Deployment restart, six additional typed remediation
+operations, exact local direct-argv and separate-shell actions, and the three
+default-off remote-diagnostic handlers. Human and Reviewer delivery for those
+remote diagnostics remains fail-closed until its inline supervision path owns
+the corresponding ActionEnvelopes.
 
 The protocol is intentionally narrower than the broad and inconsistent use of
 the term "OpenAI-compatible." Compatibility means passing this contract for
@@ -172,11 +176,11 @@ non-sensitive values:
 The model request contains no endpoint, origin, credential, Context, Namespace,
 deadline, redirect setting, arbitrary Tool, or hard-limit override. Every model
 request made for Agent investigation carries the complete current frozen
-catalog of exactly seven strict Tool specifications. Summary and Reviewer
-requests are non-streaming and Tool-free. The wider `v0.5` catalog remains a
-later implementation target and is not claimed here. "Strict" describes
-Kupilot's closed JSON Schemas and local binder; it does not require a
-provider-specific strict-output flag.
+catalog of exactly fourteen strict Tool specifications. Summary and Reviewer
+requests are non-streaming and Tool-free. Capabilities outside this versioned,
+code-owned catalog remain unavailable until their exact schema, policy, wiring,
+and tests are implemented. "Strict" describes Kupilot's closed JSON Schemas and
+local binder; it does not require a provider-specific strict-output flag.
 
 ## Implemented Agent Chat Completions wire profile
 
@@ -188,7 +192,7 @@ POST {configured-endpoint}/chat/completions
 
 The request uses the fields emitted by the pinned Eino ChatModel and asks for
 one streamed choice. The required effective values are the configured `model`,
-bounded conversation `messages`, seven function `tools`, `stream: true`,
+bounded conversation `messages`, fourteen function `tools`, `stream: true`,
 `stream_options.include_usage: true`, and the bounded `temperature`.
 `max_tokens` is present only when typed configuration explicitly sets
 `models.agent.max_output_tokens` from endpoint evidence. When configuration sets
@@ -327,7 +331,7 @@ or summarization call.
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |
-| Tool specifications per Agent investigation request | Exactly 7; summary and Reviewer requests carry none |
+| Tool specifications per Agent investigation request | Exactly 14; summary and Reviewer requests carry none |
 | One strict Tool input schema | 16 KiB |
 | One assembled Tool argument object | 8 KiB |
 | One Tool-call identifier | 256 bytes |
@@ -479,9 +483,12 @@ non-streaming no-Tool Reviewer responses, malformed/timeout/cancelled review,
 safe Session context ordering, current-question-once, ADK summarization,
 coverage/recent-tail integrity, and proof of no fallback or cross-origin retry.
 The current fixtures also cover Reviewer permission routing, durable decisions,
-pre-operation audit, and one-attempt execution for the existing supervised
-Deployment restart. Each additional action still requires its own later exact
-transport and execution fixtures before it may be claimed reachable.
+pre-operation audit, and one-attempt execution for the supervised Deployment
+restart, all six additional typed remediation operations, exact local
+direct-argv and separate-shell actions, and the three default-off
+remote-diagnostic handlers. Human and Reviewer remote-diagnostic delivery
+remains fail-closed pending its inline supervision path; deterministic handler
+and automatic-route coverage does not claim that delivery path is reachable.
 
 Deterministic CI remains the required protocol and safety proof. Opt-in tagged
 live integration may establish compatibility only for the exact endpoint,
