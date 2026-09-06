@@ -1176,23 +1176,13 @@ func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, t
 			return model, nil
 		}
 		resumed := *model.pendingResumed
-		useSaved := model.scopeConflict.UseSavedScope()
-		requestID := resumed.ResumeRequestID
-		command := application.UICommand{
-			Kind: application.UICommandAcceptResume, RequestID: requestID,
-			ExpectedScopeGeneration: model.scope.Generation,
-		}
-		if useSaved && resumed.SavedScope != nil {
-			scope := *resumed.SavedScope
-			command.Kind = application.UICommandActivateScope
-			command.Scope = &scope
-		}
+		command := model.resumeDecisionCommand(resumed, model.scopeConflict.UseSavedScope())
 		if command.Validate() != nil {
 			model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 			return model, nil
 		}
 		model.closeEvidenceInteraction()
-		model.pendingScopeID = requestID
+		model.pendingScopeID = resumed.ResumeRequestID
 		model.scope.Switching = true
 		model.scopeConflict.Close()
 		return model, applicationCommand(command)
@@ -1228,10 +1218,7 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 		model.focus = FocusModal
 		return nil
 	}
-	command := application.UICommand{
-		Kind: application.UICommandAcceptResume, RequestID: resumed.ResumeRequestID,
-		ExpectedScopeGeneration: model.scope.Generation,
-	}
+	command := model.resumeDecisionCommand(resumed, false)
 	if command.Validate() != nil {
 		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 		return nil
@@ -1240,6 +1227,31 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 	model.pendingScopeID = command.RequestID
 	model.scope.Switching = true
 	return applicationCommand(command)
+}
+
+func (model Model) resumeDecisionCommand(
+	resumed application.UIResumedSession,
+	useSaved bool,
+) application.UICommand {
+	command := application.UICommand{
+		Kind: application.UICommandAcceptResume, RequestID: resumed.ResumeRequestID,
+		ExpectedScopeGeneration: model.scope.Generation,
+	}
+	var target *domain.ScopeCandidate
+	if useSaved && resumed.SavedScope != nil {
+		scope := *resumed.SavedScope
+		target = &scope
+	} else if model.scope.Generation == 0 {
+		scope := domain.ScopeCandidate{Context: model.scope.Context, Namespace: model.scope.Namespace}
+		if scope.Validate() == nil {
+			target = &scope
+		}
+	}
+	if target != nil {
+		command.Kind = application.UICommandActivateScope
+		command.Scope = target
+	}
+	return command
 }
 
 func (model *Model) finishResumeScopeActivation(result application.UICommandOutcome) tea.Cmd {

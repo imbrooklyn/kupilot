@@ -28,6 +28,9 @@ This file records notable user-visible changes to Kupilot.
 - Reconstruct retained final assistant answers in the strict response envelope
   during Session replay so follow-up turns keep the structured protocol while
   historic Evidence and action proposals remain non-authoritative.
+- Freshly activate the resolved startup Context candidate after an explicit
+  Session selection and before resume acceptance, so resumed Sessions retain
+  current scope authority without treating historic scope as authority.
 - Generalized the restart-only action path into immutable digest-bound
   ActionEnvelopes with deterministic risk, policy and scope generations,
   durable pre-operation audit, at most one external attempt, and separate

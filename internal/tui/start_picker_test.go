@@ -154,7 +154,7 @@ func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
 	}
 }
 
-func TestTopLevelResumeKeepsHistoricScopeOutOfAcceptance(t *testing.T) {
+func TestTopLevelResumeFreshlyActivatesUnverifiedStartupScopeBeforeAcceptance(t *testing.T) {
 	t.Parallel()
 
 	newModel := func() Model {
@@ -181,10 +181,21 @@ func TestTopLevelResumeKeepsHistoricScopeOutOfAcceptance(t *testing.T) {
 	}
 
 	same, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "current-context", Namespace: "default"})
+	activation := applicationCommandFromCmd(t, command)
+	if same.scopeConflict.Open() || activation.Scope == nil || activation.Kind != application.UICommandActivateScope ||
+		activation.ExpectedScopeGeneration != 0 || activation.Scope.Context != "current-context" || activation.Scope.Namespace != "default" {
+		t.Fatalf("same-scope activation = conflict %v command %#v", same.scopeConflict.Open(), activation)
+	}
+	same, command = updateModel(t, same, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandActivateScope, RequestID: activation.RequestID,
+		Scope: &application.UIScopeResult{
+			RequestID: activation.RequestID, ExpectedGeneration: 0, ScopeGeneration: 1,
+			Context: "current-context", Namespace: "default", ReadOnly: true,
+		},
+	}})
 	accept := applicationCommandFromCmd(t, command)
-	if same.scopeConflict.Open() || accept.Scope != nil || accept.Kind != application.UICommandAcceptResume ||
-		accept.ExpectedScopeGeneration != 0 {
-		t.Fatalf("same-scope acceptance = conflict %v command %#v", same.scopeConflict.Open(), accept)
+	if accept.Kind != application.UICommandAcceptResume || accept.Scope != nil || accept.ExpectedScopeGeneration != 1 {
+		t.Fatalf("post-activation acceptance = %#v", accept)
 	}
 
 	different, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"})
@@ -192,9 +203,46 @@ func TestTopLevelResumeKeepsHistoricScopeOutOfAcceptance(t *testing.T) {
 		t.Fatal("different unverified scope did not require confirmation")
 	}
 	different, command = updateModel(t, different, tea.KeyPressMsg{Code: tea.KeyEnter})
-	accept = applicationCommandFromCmd(t, command)
-	if accept.Kind != application.UICommandAcceptResume || accept.Scope != nil {
-		t.Fatalf("keep-current acceptance = %#v", accept)
+	activation = applicationCommandFromCmd(t, command)
+	if activation.Kind != application.UICommandActivateScope || activation.Scope == nil ||
+		activation.Scope.Context != "current-context" || activation.Scope.Namespace != "default" {
+		t.Fatalf("keep-current activation = %#v", activation)
+	}
+}
+
+func TestTopLevelResumeScopeActivationFailureCancelsWithoutAcceptance(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		StartIntent: application.UIStartIntent{Kind: application.UIStartResumeID, SessionID: testSessionID},
+		Scope:       ScopeView{Context: "current-context", Namespace: "default"},
+	})
+	request := resumeRequestFromCmd(t, model.Init())
+	resumed := application.UIResumedSession{
+		ResumeRequestID: request.RequestID,
+		Session: application.UISessionCandidate{
+			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			Context: "current-context", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
+		},
+		SavedScope: &domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
+	}
+	model, command := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
+		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
+	}})
+	activation := applicationCommandFromCmd(t, command)
+	model, command = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandActivateScope, RequestID: activation.RequestID,
+		Scope: &application.UIScopeResult{
+			RequestID: activation.RequestID, ExpectedGeneration: 0, ScopeGeneration: 1,
+			Failure: application.UIQueryUnavailable,
+		},
+	}})
+	cancel := applicationCommandFromCmd(t, command)
+	if cancel.Kind != application.UICommandCancelResume || cancel.RequestID != request.RequestID ||
+		!model.startup.Failed || model.pendingResumed != nil || !model.dialog.Open() || model.session.ID != "" {
+		t.Fatalf("failed activation = command %#v startup %#v pending=%v dialog=%v session=%#v",
+			cancel, model.startup, model.pendingResumed != nil, model.dialog.Open(), model.session)
 	}
 }
 
