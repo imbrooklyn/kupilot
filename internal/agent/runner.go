@@ -36,19 +36,26 @@ type RunInput struct {
 	promptVersion     string
 	catalogVersion    string
 	conversation      ConversationContext
+	steering          RunSteeringBridge
 }
 
 // ConversationTurn is the minimal safe prior-turn projection supplied to
 // Eino. Historic scope, resources, Evidence, Tools, and authority are absent.
 type ConversationTurn struct {
 	MessageID   domain.MessageID
+	RunID       domain.AgentRunID
+	RunSequence int
 	Role        domain.MessageRole
 	Content     string
 	ContentHash string
 }
 
 func (turn ConversationTurn) validate() error {
-	if !turn.MessageID.Valid() || (turn.Role != domain.MessageRoleUser && turn.Role != domain.MessageRoleAssistant) ||
+	coverage := domain.SessionContextCoverageItem{
+		MessageID: turn.MessageID, RunID: turn.RunID, RunSequence: turn.RunSequence,
+		Role: turn.Role, ContentHash: turn.ContentHash, ContentBytes: len(turn.Content),
+	}
+	if coverage.Validate() != nil ||
 		!domain.ValidModelText(turn.Content, domain.MaxModelInputMessageBytes, false) ||
 		turn.ContentHash != domain.MessageContentHash(turn.Content) {
 		return ErrInvalidRunInput
@@ -69,7 +76,8 @@ func NewConversationContext(sessionID domain.SessionID, turns []ConversationTurn
 	coverage := make([]domain.SessionContextCoverageItem, len(turns))
 	for index, turn := range turns {
 		coverage[index] = domain.SessionContextCoverageItem{
-			MessageID: turn.MessageID, Role: turn.Role, ContentHash: turn.ContentHash, ContentBytes: len(turn.Content),
+			MessageID: turn.MessageID, RunID: turn.RunID, RunSequence: turn.RunSequence,
+			Role: turn.Role, ContentHash: turn.ContentHash, ContentBytes: len(turn.Content),
 		}
 	}
 	return NewConversationContextWithCoverage(sessionID, turns, summary, coverage)
@@ -86,15 +94,8 @@ func NewConversationContextWithCoverage(sessionID domain.SessionID, turns []Conv
 		coverage: append([]domain.SessionContextCoverageItem(nil), coverage...),
 	}
 	totalBytes := 0
-	for index, turn := range copyContext.turns {
+	for _, turn := range copyContext.turns {
 		if turn.validate() != nil {
-			return ConversationContext{}, ErrInvalidRunInput
-		}
-		wantRole := domain.MessageRoleUser
-		if index%2 == 1 {
-			wantRole = domain.MessageRoleAssistant
-		}
-		if turn.Role != wantRole {
 			return ConversationContext{}, ErrInvalidRunInput
 		}
 		totalBytes += len(turn.Content)
@@ -113,24 +114,21 @@ func NewConversationContextWithCoverage(sessionID domain.SessionID, turns []Conv
 	if copyContext.summary != nil {
 		covered = copyContext.summary.CoveredCount
 	}
-	if covered%2 != 0 || len(copyContext.turns)%2 != 0 || len(copyContext.coverage) != covered+len(copyContext.turns) ||
+	if len(copyContext.coverage) != covered+len(copyContext.turns) ||
 		len(copyContext.coverage) > domain.MaxSessionContextMessages {
+		return ConversationContext{}, ErrInvalidRunInput
+	}
+	if len(copyContext.coverage) > 0 && domain.ValidateSessionContextCoverage(copyContext.coverage) != nil {
 		return ConversationContext{}, ErrInvalidRunInput
 	}
 	for index, item := range copyContext.coverage {
 		if item.Validate() != nil {
 			return ConversationContext{}, ErrInvalidRunInput
 		}
-		wantRole := domain.MessageRoleUser
-		if index%2 == 1 {
-			wantRole = domain.MessageRoleAssistant
-		}
-		if item.Role != wantRole {
-			return ConversationContext{}, ErrInvalidRunInput
-		}
 		if index >= covered {
 			turn := copyContext.turns[index-covered]
-			if item.MessageID != turn.MessageID || item.Role != turn.Role || item.ContentHash != turn.ContentHash ||
+			if item.MessageID != turn.MessageID || item.RunID != turn.RunID || item.RunSequence != turn.RunSequence ||
+				item.Role != turn.Role || item.ContentHash != turn.ContentHash ||
 				item.ContentBytes != len(turn.Content) {
 				return ConversationContext{}, ErrInvalidRunInput
 			}
@@ -428,6 +426,22 @@ func (input RunInput) Conversation() ConversationContext {
 	context, _ := NewConversationContextWithCoverage(input.sessionID, input.conversation.turns, input.conversation.summary, input.conversation.coverage)
 	return context
 }
+
+// WithRunSteering attaches the one run-local Application bridge without
+// changing any immutable run authority. The bridge is process-local and is
+// never part of Session context or persistence.
+func WithRunSteering(input RunInput, bridge RunSteeringBridge) (RunInput, error) {
+	if input.Validate() != nil || bridge == nil {
+		return RunInput{}, ErrInvalidRunInput
+	}
+	input.steering = bridge
+	return input, nil
+}
+
+// Steering returns the optional run-local input bridge. Tests and consumers
+// that construct an Agent directly may omit it; production composition binds
+// Application before the run goroutine starts.
+func (input RunInput) Steering() RunSteeringBridge { return input.steering }
 
 // AgentRunner is the active consumer-owned single-run port. Implementations
 // block until exactly one terminal outcome, honor ctx, and publish only

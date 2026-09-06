@@ -10,6 +10,9 @@ integration or release artifact.
   single-screen TUI.
 - [Sessions and Scope](sessions-and-scope.md): new Sessions, explicit resume,
   saved-scope conflicts, and ResourceRef revalidation.
+- [Steering and Queued Follow-Ups](conversation-input.md): active-run `Enter`,
+  FIFO `Tab` queueing, `Alt+Up` edit-last, commitment states, recovery, and
+  no-auto-send failures.
 - [Privacy and Local Data](privacy-and-local-data.md): cloud categories,
   consent, container output, SQLite, local logs, retention, per-Session
   deletion, redacted export, and cleanup.

@@ -60,6 +60,23 @@ func TestStartIntentsProduceOnlyTheirTypedStartupAction(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithUnverifiedDefaultEntersContextPicker(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		StartIntent: application.UIStartIntent{Kind: application.UIStartNew},
+		Scope:       ScopeView{Context: "configured-context", Namespace: "default"},
+	})
+	query := completionQueryFromCmd(t, model.Init())
+	if query.Kind != application.UICompletionContext || query.ScopeGeneration != 0 ||
+		!model.contextPicker.Open() || model.activePicker != application.UICompletionContext ||
+		model.composer.Value() != "/context " || !model.scopeSelectionRequired {
+		t.Fatalf("unverified startup scope picker = query %#v picker=%v active=%q draft=%q required=%v",
+			query, model.contextPicker.Open(), model.activePicker, model.composer.Value(), model.scopeSelectionRequired)
+	}
+}
+
 func TestDirectResumeStartIntentsReachReadyOnlyAfterMatchingFakeResult(t *testing.T) {
 	t.Parallel()
 
@@ -116,7 +133,7 @@ func TestDirectResumeStartIntentsReachReadyOnlyAfterMatchingFakeResult(t *testin
 					Context: "current", Namespace: "default", ReadOnly: true,
 				},
 			}})
-			if !model.startup.Ready || !model.session.Resumed || model.session.ID != tt.resultID || model.scopeConflict.Open() {
+			if !model.startup.Ready || !model.session.Resumed || model.session.ID != tt.resultID {
 				t.Fatalf("resumed state = startup %#v session %#v", model.startup, model.session)
 			}
 			assertSingleEditor(t, model)
@@ -148,13 +165,13 @@ func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
 		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
 	}})
 	command := applicationCommandFromCmd(t, cmd)
-	if model.scopeConflict.Open() || command.Kind != application.UICommandAcceptResume || command.Scope != nil ||
+	if command.Kind != application.UICommandAcceptResume || command.Scope != nil ||
 		command.ExpectedScopeGeneration != model.scope.Generation {
-		t.Fatalf("explicit-scope resume state = conflict %v command %#v", model.scopeConflict.Open(), command)
+		t.Fatalf("explicit-scope resume command = %#v", command)
 	}
 }
 
-func TestTopLevelResumeFreshlyActivatesUnverifiedStartupScopeBeforeAcceptance(t *testing.T) {
+func TestTopLevelResumeRequiresPickerBeforeActivatingUnverifiedStartupScope(t *testing.T) {
 	t.Parallel()
 
 	newModel := func() Model {
@@ -181,13 +198,23 @@ func TestTopLevelResumeFreshlyActivatesUnverifiedStartupScopeBeforeAcceptance(t 
 	}
 
 	same, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "current-context", Namespace: "default"})
+	query := completionQueryFromCmd(t, command)
+	if query.Kind != application.UICompletionContext || !same.contextPicker.Open() || !same.resumeScopeSelection {
+		t.Fatalf("unverified same-candidate picker = query %#v picker=%v", query, same.contextPicker.Open())
+	}
+	same, _ = updateModel(t, same, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Contexts: []application.UIContextCandidate{{Name: "current-context", Current: true}},
+	}})
+	same, command = updateModel(t, same, tea.KeyPressMsg{Code: tea.KeyEnter})
 	activation := applicationCommandFromCmd(t, command)
-	if same.scopeConflict.Open() || activation.Scope == nil || activation.Kind != application.UICommandActivateScope ||
-		activation.ExpectedScopeGeneration != 0 || activation.Scope.Context != "current-context" || activation.Scope.Namespace != "default" {
-		t.Fatalf("same-scope activation = conflict %v command %#v", same.scopeConflict.Open(), activation)
+	if activation.Kind != application.UICommandSelectContext || activation.Scope != nil ||
+		activation.ExpectedScopeGeneration != 0 || activation.Text != "current-context" ||
+		activation.RequestID != same.pendingResumed.ResumeRequestID {
+		t.Fatalf("picker-selected same-candidate activation = %#v", activation)
 	}
 	same, command = updateModel(t, same, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandActivateScope, RequestID: activation.RequestID,
+		Command: application.UICommandSelectContext, RequestID: activation.RequestID,
 		Scope: &application.UIScopeResult{
 			RequestID: activation.RequestID, ExpectedGeneration: 0, ScopeGeneration: 1,
 			Context: "current-context", Namespace: "default", ReadOnly: true,
@@ -199,48 +226,40 @@ func TestTopLevelResumeFreshlyActivatesUnverifiedStartupScopeBeforeAcceptance(t 
 	}
 
 	different, command := resumeResult(t, newModel(), domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"})
-	if command != nil || !different.scopeConflict.Open() {
-		t.Fatal("different unverified scope did not require confirmation")
+	query = completionQueryFromCmd(t, command)
+	if query.Kind != application.UICompletionContext || !different.contextPicker.Open() || !different.resumeScopeSelection {
+		t.Fatalf("conflicting candidate picker = query %#v picker=%v", query, different.contextPicker.Open())
 	}
+	different, _ = updateModel(t, different, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Contexts: []application.UIContextCandidate{{Name: "current-context", Current: true}, {Name: "saved-context"}},
+	}})
 	different, command = updateModel(t, different, tea.KeyPressMsg{Code: tea.KeyEnter})
 	activation = applicationCommandFromCmd(t, command)
-	if activation.Kind != application.UICommandActivateScope || activation.Scope == nil ||
-		activation.Scope.Context != "current-context" || activation.Scope.Namespace != "default" {
-		t.Fatalf("keep-current activation = %#v", activation)
+	if activation.Kind != application.UICommandSelectContext || activation.Scope != nil ||
+		activation.Text != "current-context" || activation.RequestID != different.pendingResumed.ResumeRequestID {
+		t.Fatalf("picker-selected current activation = %#v", activation)
 	}
 }
 
-func TestResumeDecisionUsesExplicitScopeVerificationState(t *testing.T) {
+func TestResumeDecisionUsesOnlyCurrentVerifiedAuthority(t *testing.T) {
 	t.Parallel()
 
 	resumed := application.UIResumedSession{ResumeRequestID: 17}
-	unverified := NewModel(Config{
-		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{
-			Context: "current-context", Namespace: "default", Generation: 9, ReadOnly: true,
-		},
-	})
-	command := unverified.resumeDecisionCommand(resumed, false)
-	if command.Kind != application.UICommandActivateScope || command.Scope == nil ||
-		command.ExpectedScopeGeneration != 9 || command.Scope.Context != "current-context" ||
-		command.Scope.Namespace != "default" {
-		t.Fatalf("unverified scope decision = %#v", command)
-	}
-
 	verified := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		Scope: ScopeView{
 			Context: "current-context", Namespace: "default", Generation: 9, ReadOnly: true, Verified: true,
 		},
 	})
-	command = verified.resumeDecisionCommand(resumed, false)
+	command := verified.resumeDecisionCommand(resumed)
 	if command.Kind != application.UICommandAcceptResume || command.Scope != nil ||
 		command.ExpectedScopeGeneration != 9 {
 		t.Fatalf("verified scope decision = %#v", command)
 	}
 }
 
-func TestTopLevelResumeScopeActivationFailureCancelsWithoutAcceptance(t *testing.T) {
+func TestTopLevelResumeScopeActivationFailureReturnsToPickerWithoutAcceptance(t *testing.T) {
 	t.Parallel()
 
 	model := NewModel(Config{
@@ -260,23 +279,30 @@ func TestTopLevelResumeScopeActivationFailureCancelsWithoutAcceptance(t *testing
 	model, command := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
 		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
 	}})
+	initialQuery := completionQueryFromCmd(t, command)
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: initialQuery.RequestID, Kind: initialQuery.Kind, ScopeGeneration: initialQuery.ScopeGeneration,
+		Contexts: []application.UIContextCandidate{{Name: "current-context", Current: true}},
+	}})
+	model, command = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	activation := applicationCommandFromCmd(t, command)
 	model, command = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
-		Command: application.UICommandActivateScope, RequestID: activation.RequestID,
+		Command: application.UICommandSelectContext, RequestID: activation.RequestID,
 		Scope: &application.UIScopeResult{
 			RequestID: activation.RequestID, ExpectedGeneration: 0, ScopeGeneration: 1,
 			Failure: application.UIQueryUnavailable,
 		},
 	}})
-	cancel := applicationCommandFromCmd(t, command)
-	if cancel.Kind != application.UICommandCancelResume || cancel.RequestID != request.RequestID ||
-		!model.startup.Failed || model.pendingResumed != nil || !model.dialog.Open() || model.session.ID != "" {
-		t.Fatalf("failed activation = command %#v startup %#v pending=%v dialog=%v session=%#v",
-			cancel, model.startup, model.pendingResumed != nil, model.dialog.Open(), model.session)
+	query := completionQueryFromCmd(t, command)
+	if query.Kind != application.UICompletionContext || query.ScopeGeneration != 1 ||
+		model.startup.Failed || model.pendingResumed == nil || model.dialog.Open() || !model.contextPicker.Open() ||
+		model.session.ID != "" {
+		t.Fatalf("failed activation picker = query %#v startup %#v pending=%v dialog=%v picker=%v session=%#v",
+			query, model.startup, model.pendingResumed != nil, model.dialog.Open(), model.contextPicker.Open(), model.session)
 	}
 }
 
-func TestCtrlCCancelsInTUIResumeScopeConflict(t *testing.T) {
+func TestCtrlCCancelsInTUIResumeScopePicker(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
@@ -294,15 +320,16 @@ func TestCtrlCCancelsInTUIResumeScopeConflict(t *testing.T) {
 	model, command := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
 		RequestID: request.RequestID, Mode: request.Mode, Session: &resumed,
 	}})
-	if command != nil || !model.scopeConflict.Open() {
-		t.Fatal("resume did not enter the scope-conflict interaction")
+	query := completionQueryFromCmd(t, command)
+	if query.Kind != application.UICompletionContext || !model.contextPicker.Open() || !model.resumeScopeSelection {
+		t.Fatal("resume did not enter the scope picker")
 	}
 	model, command = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	cancel := applicationCommandFromCmd(t, command)
 	if cancel.Kind != application.UICommandCancelResume || cancel.RequestID != request.RequestID ||
-		model.scopeConflict.Open() || model.pendingResumed != nil || model.session.ID != testSessionID || !model.startup.Ready {
-		t.Fatalf("Ctrl+C scope-conflict cancellation = %#v conflict=%v pending=%v session=%q ready=%v",
-			cancel, model.scopeConflict.Open(), model.pendingResumed != nil, model.session.ID, model.startup.Ready)
+		model.contextPicker.Open() || model.pendingResumed != nil || model.session.ID != testSessionID || !model.startup.Ready {
+		t.Fatalf("Ctrl+C scope-picker cancellation = %#v picker=%v pending=%v session=%q ready=%v",
+			cancel, model.contextPicker.Open(), model.pendingResumed != nil, model.session.ID, model.startup.Ready)
 	}
 	model.composer.Reset()
 	if !model.composer.PreviousHistory() || model.composer.Value() != "Current Session question." {

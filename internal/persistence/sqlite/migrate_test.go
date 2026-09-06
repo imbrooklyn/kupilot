@@ -60,7 +60,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 12 {
+	if err != nil || len(migrations) != 13 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -208,12 +208,15 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := applyMigration(context.Background(), db, migrations[11], "0.5.0", false); err != nil {
 		t.Fatalf("apply v0.5 observation action migration error = %v", err)
 	}
+	if err := applyMigration(context.Background(), db, migrations[12], "0.6.0", false); err != nil {
+		t.Fatalf("apply run conversation sequence migration error = %v", err)
+	}
 	wantRows := map[string]int{
 		"sessions": 1, "messages": 1, "agent_runs": 1, "model_requests": 1,
 		"tool_invocations": 1, "evidence_items": 1, "diagnoses": 1, "audit_events": 1,
 		"settings": 1, "privacy_consents": 1, "approvals": 1, "approval_decisions": 1,
 		"legacy_restart_approvals": 1, "legacy_restart_approval_decisions": 0,
-		"action_reviews": 1, "schema_migrations": 12, "session_context_summaries": 0,
+		"action_reviews": 1, "schema_migrations": 13, "session_context_summaries": 0,
 	}
 	for table, want := range wantRows {
 		var got int
@@ -288,7 +291,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		migratedModelRequest.ReservedCostUnit != 1 {
 		t.Fatalf("migrated model request = %#v/%v", migratedModelRequest, err)
 	}
-	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0"}
+	wantVersions := []string{"0.1.0", "0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.5.0", "0.6.0"}
 	assertMigrationApplicationVersions(t, db, wantVersions)
 	assertNoMigrationForeignKeyViolation(t, db)
 
@@ -361,7 +364,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 12 {
+	if err != nil || len(migrations) != 13 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -416,7 +419,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 12 {
+	if err != nil || len(migrations) != 13 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -502,7 +505,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 12 {
+	if err != nil || len(migrations) != 13 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -567,7 +570,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 12 {
+		if err != nil || len(migrations) != 13 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -648,7 +651,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 12 {
+		if err != nil || len(migrations) != 13 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -684,6 +687,171 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 			t.Fatalf("foreign-key state/error = %d/%v", foreignKeys, err)
 		}
 	})
+}
+
+func TestRunConversationSequenceMigrationBackfillsAndInvalidatesDerivedSummary(t *testing.T) {
+	db, migrations := openMigrationV12Fixture(t, "run-sequence-backfill")
+	sessionID := "00000000-0000-7000-8000-000000009851"
+	userMessageID := "00000000-0000-7000-8000-000000009852"
+	runID := "00000000-0000-7000-8000-000000009853"
+	assistantMessageID := "00000000-0000-7000-8000-000000009854"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO sessions (id, title, status, privacy_mode, version, created_at_ms, updated_at_ms) VALUES (?, 'Sequence migration', 'active', 'standard', 1, 9850, 9854)`, []any{sessionID}},
+		{`INSERT INTO messages (id, session_id, role, content, content_format, status, content_hash, created_at_ms) VALUES (?, ?, 'user', 'Released question', 'plain', 'committed', ?, 9851)`, []any{userMessageID, sessionID, domain.MessageContentHash("Released question")}},
+		{`INSERT INTO agent_runs (id, session_id, request_message_id, retained_request_message_id, status, scope_context, scope_namespace, scope_generation, prompt_version, tool_catalog_version, started_at_ms, finished_at_ms) VALUES (?, ?, ?, ?, 'completed', 'test-context', 'test-namespace', 1, 'prompt-v1', 'tools-v1', 9851, 9853)`, []any{runID, sessionID, userMessageID, userMessageID}},
+		{`UPDATE messages SET run_id = ? WHERE id = ?`, []any{runID, userMessageID}},
+		{`INSERT INTO messages (id, session_id, run_id, role, content, content_format, status, content_hash, created_at_ms) VALUES (?, ?, ?, 'assistant', 'Released answer', 'markdown', 'committed', ?, 9853)`, []any{assistantMessageID, sessionID, runID, domain.MessageContentHash("Released answer")}},
+		{`INSERT INTO session_context_summaries (session_id, summary_text, summary_hash, schema_version, policy_version, covered_first_message_id, covered_through_message_id, covered_count, covered_bytes, coverage_digest, generated_at_ms, agent_profile, agent_origin_hash, truncated, degraded) VALUES (?, 'Released summary', ?, 'session-context-summary/v1', 'safe-conversation-context/2026-09-04.v1', ?, ?, 2, 31, ?, 9854, 'agent', ?, 0, 0)`, []any{sessionID, domain.SHA256Hex("Released summary"), userMessageID, assistantMessageID, strings.Repeat("c", 64), strings.Repeat("d", 64)}},
+	}
+	for index, statement := range statements {
+		if _, err := db.ExecContext(context.Background(), statement.query, statement.args...); err != nil {
+			t.Fatalf("v12 fixture statement %d error = %v", index, err)
+		}
+	}
+
+	if err := applyMigration(context.Background(), db, migrations[12], "0.6.0", false); err != nil {
+		t.Fatalf("apply run conversation sequence migration error = %v", err)
+	}
+	rows, err := db.QueryxContext(context.Background(), `
+		SELECT id, run_sequence
+		FROM messages
+		WHERE run_id = ?
+		ORDER BY run_sequence
+	`, runID)
+	if err != nil {
+		t.Fatalf("backfilled sequence query error = %v", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("backfilled sequence close error = %v", err)
+		}
+	}()
+	var sequences []struct {
+		ID       string
+		Sequence int
+	}
+	for rows.Next() {
+		var value struct {
+			ID       string
+			Sequence int
+		}
+		if err := rows.Scan(&value.ID, &value.Sequence); err != nil {
+			t.Fatalf("backfilled sequence scan error = %v", err)
+		}
+		sequences = append(sequences, value)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("backfilled sequence rows error = %v", err)
+	}
+	want := []struct {
+		id       string
+		sequence int
+	}{{userMessageID, 0}, {assistantMessageID, 1}}
+	if len(sequences) != len(want) {
+		t.Fatalf("backfilled sequence count = %d, want %d", len(sequences), len(want))
+	}
+	for index := range want {
+		if sequences[index].ID != want[index].id || sequences[index].Sequence != want[index].sequence {
+			t.Fatalf("backfilled sequence %d = %q/%d", index, sequences[index].ID, sequences[index].Sequence)
+		}
+	}
+	var summaryCount int
+	if err := db.GetContext(context.Background(), &summaryCount, `SELECT count(session_id) FROM session_context_summaries`); err != nil || summaryCount != 0 {
+		t.Fatalf("derived summary count/error = %d/%v, want 0/nil", summaryCount, err)
+	}
+	var migrationCount int
+	if err := db.GetContext(context.Background(), &migrationCount, `SELECT count(version) FROM schema_migrations WHERE version = 13`); err != nil || migrationCount != 1 {
+		t.Fatalf("migration 13 count/error = %d/%v", migrationCount, err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO messages (
+			id, session_id, run_id, run_sequence, role, content,
+			content_format, status, content_hash, created_at_ms
+		) VALUES (?, ?, ?, 0, 'user', 'Duplicate sequence', 'plain', 'committed', ?, 9855)
+	`, "00000000-0000-7000-8000-000000009855", sessionID, runID, domain.MessageContentHash("Duplicate sequence")); err == nil {
+		t.Fatal("duplicate run sequence was accepted")
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO messages (
+			id, session_id, run_id, run_sequence, role, content,
+			content_format, status, content_hash, created_at_ms
+		) VALUES (?, ?, ?, 10, 'user', 'Sequence above limit', 'plain', 'committed', ?, 9856)
+	`, "00000000-0000-7000-8000-000000009856", sessionID, runID, domain.MessageContentHash("Sequence above limit")); err == nil {
+		t.Fatal("run sequence above the fixed ceiling was accepted")
+	}
+}
+
+func TestRunConversationSequenceMigrationRollsBackConflictingReleasedRows(t *testing.T) {
+	db, migrations := openMigrationV12Fixture(t, "run-sequence-rollback")
+	sessionID := "00000000-0000-7000-8000-000000009861"
+	firstMessageID := "00000000-0000-7000-8000-000000009862"
+	runID := "00000000-0000-7000-8000-000000009863"
+	secondMessageID := "00000000-0000-7000-8000-000000009864"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO sessions (id, title, status, privacy_mode, version, created_at_ms, updated_at_ms) VALUES (?, 'Conflicting sequence', 'active', 'standard', 1, 9860, 9864)`, []any{sessionID}},
+		{`INSERT INTO messages (id, session_id, role, content, content_format, status, content_hash, created_at_ms) VALUES (?, ?, 'user', 'First released question', 'plain', 'committed', ?, 9861)`, []any{firstMessageID, sessionID, domain.MessageContentHash("First released question")}},
+		{`INSERT INTO agent_runs (id, session_id, request_message_id, retained_request_message_id, status, scope_context, scope_namespace, scope_generation, prompt_version, tool_catalog_version, started_at_ms, finished_at_ms) VALUES (?, ?, ?, ?, 'completed', 'test-context', 'test-namespace', 1, 'prompt-v1', 'tools-v1', 9861, 9863)`, []any{runID, sessionID, firstMessageID, firstMessageID}},
+		{`UPDATE messages SET run_id = ? WHERE id = ?`, []any{runID, firstMessageID}},
+		{`INSERT INTO messages (id, session_id, run_id, role, content, content_format, status, content_hash, created_at_ms) VALUES (?, ?, ?, 'user', 'Unexpected second question', 'plain', 'committed', ?, 9862)`, []any{secondMessageID, sessionID, runID, domain.MessageContentHash("Unexpected second question")}},
+		{`INSERT INTO session_context_summaries (session_id, summary_text, summary_hash, schema_version, policy_version, covered_first_message_id, covered_through_message_id, covered_count, covered_bytes, coverage_digest, generated_at_ms, agent_profile, agent_origin_hash, truncated, degraded) VALUES (?, 'Preserved summary', ?, 'session-context-summary/v1', 'safe-conversation-context/2026-09-04.v1', ?, ?, 2, 50, ?, 9864, 'agent', ?, 0, 0)`, []any{sessionID, domain.SHA256Hex("Preserved summary"), firstMessageID, secondMessageID, strings.Repeat("e", 64), strings.Repeat("f", 64)}},
+	}
+	for index, statement := range statements {
+		if _, err := db.ExecContext(context.Background(), statement.query, statement.args...); err != nil {
+			t.Fatalf("conflicting v12 fixture statement %d error = %v", index, err)
+		}
+	}
+
+	if err := applyMigration(context.Background(), db, migrations[12], "0.6.0", false); err == nil {
+		t.Fatal("conflicting run sequence migration error = nil")
+	}
+	var migrationCount int
+	if err := db.GetContext(context.Background(), &migrationCount, `SELECT count(version) FROM schema_migrations WHERE version = 13`); err != nil || migrationCount != 0 {
+		t.Fatalf("rolled-back migration count/error = %d/%v", migrationCount, err)
+	}
+	var sequenceColumnCount int
+	if err := db.GetContext(context.Background(), &sequenceColumnCount, `
+		SELECT count(name)
+		FROM pragma_table_info('messages')
+		WHERE name = 'run_sequence'
+	`); err != nil || sequenceColumnCount != 0 {
+		t.Fatalf("rolled-back sequence column count/error = %d/%v", sequenceColumnCount, err)
+	}
+	var messageCount int
+	if err := db.GetContext(context.Background(), &messageCount, `SELECT count(id) FROM messages WHERE run_id = ?`, runID); err != nil || messageCount != 2 {
+		t.Fatalf("preserved Message count/error = %d/%v", messageCount, err)
+	}
+	var summaryCount int
+	if err := db.GetContext(context.Background(), &summaryCount, `SELECT count(session_id) FROM session_context_summaries WHERE session_id = ?`, sessionID); err != nil || summaryCount != 1 {
+		t.Fatalf("preserved summary count/error = %d/%v", summaryCount, err)
+	}
+}
+
+func openMigrationV12Fixture(t *testing.T, name string) (*sqlx.DB, []migration) {
+	t.Helper()
+	stateDir := testStateDir(t)
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
+	raw.SetMaxOpenConns(1)
+	db := sqlx.NewDb(raw, driverName)
+	t.Cleanup(func() { _ = db.Close() })
+	migrations, err := loadMigrations()
+	if err != nil || len(migrations) != 13 {
+		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
+	}
+	for index := 0; index < 12; index++ {
+		if err := applyMigration(context.Background(), db, migrations[index], "v12-"+name, index == 0); err != nil {
+			t.Fatalf("applyMigration(%d) error = %v", index+1, err)
+		}
+	}
+	return db, migrations
 }
 
 func TestMigrateLegacyFixture(t *testing.T) {
@@ -751,7 +919,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 13, "000013_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 14, "000014_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -1005,6 +1173,7 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000010_remote_diagnostic_evidence.sql",
 		"000011_local_execution_and_remediation.sql",
 		"000012_observation_action_parameters.sql",
+		"000013_run_conversation_sequence.sql",
 	}
 	count := 0
 	for rows.Next() {

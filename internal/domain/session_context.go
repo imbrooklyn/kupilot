@@ -11,9 +11,14 @@ import (
 
 const (
 	// SessionContextSummarySchemaVersion changes when durable summary fields change.
-	SessionContextSummarySchemaVersion = "session-context-summary/v1"
+	SessionContextSummarySchemaVersion = "session-context-summary/v2"
 	// SafeConversationContextPolicyVersion changes when eligible context meaning changes.
-	SafeConversationContextPolicyVersion = "safe-conversation-context/2026-09-04.v1"
+	SafeConversationContextPolicyVersion = "safe-conversation-context/2026-09-06.v2"
+	// MaxCommittedSteerInputs bounds additional user inputs committed to one run.
+	MaxCommittedSteerInputs = 8
+	// MaxRunConversationSequence is the final assistant sequence after the
+	// initial user input and every admitted steer.
+	MaxRunConversationSequence = MaxCommittedSteerInputs + 1
 	// MaxSessionContextMessages is the aggregate safe-message selection ceiling.
 	MaxSessionContextMessages = 4096
 	// MaxSessionHistoryBytes bounds all selected eligible durable content. It is
@@ -52,6 +57,8 @@ type SessionContextSummary struct {
 // Message. It cannot restore scope, Evidence, Tool output, or any authority.
 type SessionContextCoverageItem struct {
 	MessageID    MessageID
+	RunID        AgentRunID
+	RunSequence  int
 	Role         MessageRole
 	ContentHash  string
 	ContentBytes int
@@ -59,7 +66,10 @@ type SessionContextCoverageItem struct {
 
 // Validate checks one exact coverage element.
 func (item SessionContextCoverageItem) Validate() error {
-	if !item.MessageID.Valid() || (item.Role != MessageRoleUser && item.Role != MessageRoleAssistant) ||
+	if !item.MessageID.Valid() || !item.RunID.Valid() || item.RunSequence < 0 || item.RunSequence > MaxRunConversationSequence ||
+		(item.Role != MessageRoleUser && item.Role != MessageRoleAssistant) ||
+		(item.Role == MessageRoleUser && item.RunSequence > MaxCommittedSteerInputs) ||
+		(item.Role == MessageRoleAssistant && item.RunSequence < 1) ||
 		!validSHA256Hex(item.ContentHash) || item.ContentBytes < 1 || item.ContentBytes > MaxModelInputMessageBytes {
 		return ErrInvalidSessionContextSummary
 	}
@@ -73,7 +83,7 @@ func (summary SessionContextSummary) Validate() error {
 		summary.SummaryHash != SHA256Hex(summary.Text) ||
 		summary.SchemaVersion != SessionContextSummarySchemaVersion ||
 		summary.PolicyVersion != SafeConversationContextPolicyVersion ||
-		summary.CoveredCount < 2 || summary.CoveredCount > MaxSessionContextMessages || summary.CoveredCount%2 != 0 ||
+		summary.CoveredCount < 2 || summary.CoveredCount > MaxSessionContextMessages ||
 		summary.CoveredBytes < 1 || summary.CoveredBytes > MaxSessionHistoryBytes ||
 		!validSHA256Hex(summary.CoverageDigest) || !validSHA256Hex(summary.AgentOriginHash) ||
 		!ValidModelToken(summary.AgentProfile, maxModelIdentifierBytes) ||
@@ -92,17 +102,60 @@ func SessionContextCoverageDigest(messages []Message) (string, int, error) {
 	sessionID := messages[0].SessionID
 	items := make([]SessionContextCoverageItem, len(messages))
 	for _, message := range messages {
-		if message.Validate() != nil || message.SessionID != sessionID || message.Status != MessageStatusCommitted ||
+		if message.Validate() != nil || message.SessionID != sessionID || message.RunID == nil || message.RunSequence == nil ||
+			message.Status != MessageStatusCommitted ||
 			(message.Role != MessageRoleUser && message.Role != MessageRoleAssistant) {
 			return "", 0, ErrInvalidSessionContextSummary
 		}
 	}
 	for index, message := range messages {
 		items[index] = SessionContextCoverageItem{
-			MessageID: message.ID, Role: message.Role, ContentHash: message.Hash, ContentBytes: len(message.Content),
+			MessageID: message.ID, RunID: *message.RunID, RunSequence: *message.RunSequence,
+			Role: message.Role, ContentHash: message.Hash, ContentBytes: len(message.Content),
 		}
 	}
+	if ValidateSessionContextCoverage(items) != nil {
+		return "", 0, ErrInvalidSessionContextSummary
+	}
 	return SessionContextCoverageDigestItems(items)
+}
+
+// ValidateSessionContextCoverage verifies complete, contiguous completed-run
+// groups: one or more user inputs followed by exactly one final assistant.
+func ValidateSessionContextCoverage(items []SessionContextCoverageItem) error {
+	if len(items) == 0 || len(items) > MaxSessionContextMessages {
+		return ErrInvalidSessionContextSummary
+	}
+	seenRuns := make(map[AgentRunID]struct{})
+	for index := 0; index < len(items); {
+		first := items[index]
+		if first.Validate() != nil || first.Role != MessageRoleUser || first.RunSequence != 0 {
+			return ErrInvalidSessionContextSummary
+		}
+		if _, duplicate := seenRuns[first.RunID]; duplicate {
+			return ErrInvalidSessionContextSummary
+		}
+		seenRuns[first.RunID] = struct{}{}
+		runID := first.RunID
+		sequence := 0
+		for index < len(items) && items[index].RunID == runID && items[index].Role == MessageRoleUser {
+			item := items[index]
+			if item.Validate() != nil || item.RunSequence != sequence || sequence > MaxCommittedSteerInputs {
+				return ErrInvalidSessionContextSummary
+			}
+			sequence++
+			index++
+		}
+		if index >= len(items) || items[index].RunID != runID || items[index].Role != MessageRoleAssistant ||
+			items[index].RunSequence != sequence || items[index].Validate() != nil {
+			return ErrInvalidSessionContextSummary
+		}
+		index++
+		if index < len(items) && items[index].RunID == runID {
+			return ErrInvalidSessionContextSummary
+		}
+	}
+	return nil
 }
 
 // SessionContextCoverageDigestItems hashes one ordered content-free coverage list.
@@ -122,6 +175,8 @@ func SessionContextCoverageDigestItems(items []SessionContextCoverageItem) (stri
 			return "", 0, ErrInvalidSessionContextSummary
 		}
 		writeCoverageString(digest, string(item.MessageID))
+		writeCoverageString(digest, string(item.RunID))
+		writeCoverageUint64(digest, uint64(item.RunSequence))
 		writeCoverageString(digest, string(item.Role))
 		writeCoverageString(digest, item.ContentHash)
 		writeCoverageUint64(digest, uint64(item.ContentBytes))

@@ -96,6 +96,7 @@ type ScopeManager struct {
 	resources    ResourceService
 	hook         ScopeInvalidationHook
 	approvalHook ScopeInvalidationHook
+	inputHook    ScopeInvalidationHook
 	now          func() time.Time
 	access       domain.NamespaceAccessPolicy
 
@@ -137,6 +138,36 @@ func (manager *ScopeManager) BindApprovalInvalidationHook(hook ScopeInvalidation
 		)
 	}
 	manager.approvalHook = hook
+	return nil
+}
+
+// BindConversationInputInvalidationHook attaches the Application-owned local
+// queue before it can accept input. An already verified process-local scope is
+// admissible because a newly composed Coordinator has no older input to
+// invalidate. Later switches invalidate input after the generation advances
+// and before the old run is cancelled.
+func (manager *ScopeManager) BindConversationInputInvalidationHook(hook ScopeInvalidationHook) error {
+	if manager == nil || hook == nil {
+		return newScopeError(
+			domain.SafeErrorClassConfigurationInvalid,
+			"scope_input_hook_invalid",
+			"bind_input_invalidation",
+			"Conversation input invalidation could not be bound safely.",
+		)
+	}
+	manager.switchMu.Lock()
+	defer manager.switchMu.Unlock()
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.inputHook != nil {
+		return newScopeError(
+			domain.SafeErrorClassConflict,
+			"scope_input_hook_conflict",
+			"bind_input_invalidation",
+			"Conversation input invalidation could not be bound safely.",
+		)
+	}
+	manager.inputHook = hook
 	return nil
 }
 
@@ -777,12 +808,16 @@ func cancelInvalidatedRun(cancel context.CancelFunc) {
 }
 
 func (manager *ScopeManager) invalidateHook(generation int64) error {
+	var inputErr error
+	if manager.inputHook != nil {
+		inputErr = manager.inputHook.InvalidateScope(generation)
+	}
 	var approvalErr error
 	if manager.approvalHook != nil {
 		approvalErr = manager.approvalHook.InvalidateScope(generation)
 	}
 	runtimeErr := manager.hook.InvalidateScope(generation)
-	if approvalErr != nil || runtimeErr != nil {
+	if inputErr != nil || approvalErr != nil || runtimeErr != nil {
 		return newScopeError(
 			domain.SafeErrorClassInternal,
 			"scope_invalidation_failed",

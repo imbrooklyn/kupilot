@@ -230,6 +230,9 @@ func (repository *AgentRunRepository) FinishWithMessage(ctx context.Context, mes
 		if domain.ValidateAgentRunTransition(current, run) != nil {
 			return sessioncontract.ErrAgentRunConflict
 		}
+		if err := requireNextRunSequence(ctx, tx, run.ID, *message.RunSequence); err != nil {
+			return err
+		}
 		if err := insertMessage(ctx, tx, message); err != nil {
 			return err
 		}
@@ -286,6 +289,7 @@ func validBeginPair(message domain.Message, run domain.AgentRun) bool {
 		message.Status == domain.MessageStatusCommitted &&
 		run.Status == domain.AgentRunStatusRunning &&
 		message.RunID != nil && *message.RunID == run.ID &&
+		message.RunSequence != nil && *message.RunSequence == 0 &&
 		message.SessionID == run.SessionID && message.ID == run.RequestMessageID &&
 		messageMatchesRun(message, run) &&
 		!message.CreatedAt.After(*run.StartedAt)
@@ -296,6 +300,7 @@ func validFinishPair(message domain.Message, run domain.AgentRun) bool {
 		message.Role == domain.MessageRoleAssistant &&
 		message.Status == domain.MessageStatusCommitted &&
 		message.RunID != nil && *message.RunID == run.ID &&
+		message.RunSequence != nil && *message.RunSequence >= 1 &&
 		message.SessionID == run.SessionID &&
 		messageMatchesRun(message, run) &&
 		!message.CreatedAt.Before(*run.StartedAt) &&
@@ -310,6 +315,21 @@ func messageMatchesRun(message domain.Message, run domain.AgentRun) bool {
 		return message.Resource == nil && run.Resource == nil
 	}
 	return *message.Resource == *run.Resource
+}
+
+func requireNextRunSequence(ctx context.Context, tx *sqlx.Tx, runID domain.AgentRunID, sequence int) error {
+	var lastSequence sql.NullInt64
+	if err := tx.GetContext(ctx, &lastSequence, `
+		SELECT max(run_sequence)
+		FROM messages
+		WHERE run_id = ?
+	`, runID); err != nil {
+		return err
+	}
+	if !lastSequence.Valid || lastSequence.Int64+1 != int64(sequence) {
+		return sessioncontract.ErrAgentRunConflict
+	}
+	return nil
 }
 
 func validateRunningAgentRunRows(ctx context.Context, tx *sqlx.Tx) error {

@@ -4,7 +4,8 @@ Status: Accepted architecture target for Kupilot `v0.5`.
 
 The checked-in implementation now includes the named-model, stable Eino ADK,
 role-scoped consent, safe Session-memory/summarization, deterministic
-permission routing, common ActionEnvelope/approval lifecycle, and related
+permission routing, Application-owned run steering and queued follow-up,
+common ActionEnvelope/approval lifecycle, and related
 budget and status foundations. The broad read/observability catalog, existing
 typed Deployment restart, and default-off Pod Exec, container-file, and
 diagnostic-Pod handlers are composed. The shared Application dispatcher also
@@ -68,6 +69,10 @@ define the admitted behavior.
 16. The optional model Reviewer is never authority. Application's
     deterministic policy remains the only source of capability, risk, scope,
     approval, execution, and fail-closed decisions.
+17. Application is the only steering and follow-up queue owner. Eino v0.9.19
+    supplies the next-model-boundary state rewrite and model wrapper, but Eino
+    `TurnLoop`, another conversation loop, and another durable input store are
+    prohibited.
 
 ## 2. System context
 
@@ -123,6 +128,14 @@ reporting remains disabled, so native selection, copy, wheel, and trackpad
 scrolling belong to the terminal emulator. The retained bounded transcript
 supports keyboard review. This delivery projection is independent of SQLite
 Message commitment and explicit Session resume.
+
+During a regular active run, delivery routes ordinary `Enter` input to an
+Application pending-steer command and ordinary `Tab` input to its process-local
+FIFO queue only after modal, picker, completion, approval, Reviewer, IME,
+paste, selection, and composer editing have declined the event. `Alt+Up`
+requests one atomic LIFO edit only when the composer is empty. Delivery renders
+bounded Application projections; it neither owns the queue nor appends a user
+history row before a committed event.
 
 Shutdown may print a prepared block only before its first insertion batch. Once
 insertion has begun, renderer completion is ambiguous during interruption, so
@@ -239,6 +252,14 @@ sequenceDiagram
     App->>Store: final answer and terminal run transaction
     App-->>TUI: replace draft with validated free-form Markdown
 ```
+
+At a later Eino model boundary, the summary handler runs first. The steering
+handler then claims at most one current pending input and appends it to Eino
+message state. Its model wrapper calls the Application persistence and event
+commit barrier before delegating to real model I/O. A failed barrier performs
+zero model calls. A clean durably completed run may atomically claim and start
+one FIFO successor; every unsafe or unknown terminal outcome suppresses
+automatic drain.
 
 The model/Tool middle segment is owned by Eino ADK `ChatModelAgent` and `Runner`
 inside `einoadapter` and repeats within frozen role and capability budgets.
@@ -536,6 +557,7 @@ and its own durable outcome, and any retry requires a fresh envelope.
 | AgentRun | IDs, frozen scope/policy/profile, counters, status, times, safe reason | One Application-owned terminal transition |
 | ModelProfile | Name, fixed consumer role, non-secret settings, canonical origin hash, limits | Explicit composition only; no fallback or router |
 | SessionContext | Eligible committed message IDs, safe summary and coverage, recent tail | Context only; never restores operational authority |
+| ConversationInput | Item/request ID, Session/run binding, scope and policy generations, safe text hash, creation time, revision, lifecycle | Application-owned process-local draft; only `committed` becomes a Message |
 | ToolInvocation | versioned name, canonical safe arguments, injected scope, status, summary, limits | Model syntax alone is not authorization |
 | ToolResult | ephemeral typed data, Evidence, warnings, truncation, safe error | Never persisted as a generic result body |
 | Evidence | IDs, run/invocation, exact ResourceRef, run scope, fact, source, time, safety metadata | Created only by deterministic local handling |
@@ -554,6 +576,9 @@ Representative contracts are:
 ```text
 AgentRunner.Run(ctx, safe Session context, immutable RunInput, RunEventSink)
     -> validated Diagnosis or classified terminal error
+
+RunInputBridge.Claim/Commit(ctx, exact run and generation)
+    -> one bounded steer claim or no input
 
 Tool.Execute(ctx, BoundToolCall)
     -> safe ToolResult
@@ -590,6 +615,11 @@ local budget stop. Tool calls completed with either finish reason remain
 invalid. Kupilot does not add a second conversation loop, memory manager,
 summary engine, or framework-neutral runtime facade.
 
+The run-local input bridge is not a framework-neutral Agent facade. It is the
+narrow consumer port required by the one Eino adapter to claim one steer and
+run the Application commit barrier. Application's single queue mutex owns FIFO
+drain, LIFO edit, revisions, invalidation, and the edit-versus-drain race.
+
 The passive provisional projector does not alter that ownership. It does not
 decode SSE, assemble Eino messages or Tool arguments, or decide a finish reason.
 If a response later resolves to `tool_calls`, the first requested Tool event
@@ -611,6 +641,15 @@ records for their specified periods. Minimal mode keeps model context only in
 the current process and retains only mandatory lifecycle and action-audit
 metadata.
 
+A completed run group contains one initial user Message, zero or more
+committed steer user Messages in commit order, and one final assistant Message.
+The existing `messages` table remains the sole durable conversation source.
+Pending, committing, queued, rejected, and recovered items are not persisted,
+resumed, summarized, retained, or exported as drafts. Unknown lifecycle
+metadata is process-local; its already committed Message follows ordinary
+retention and export, while the incomplete or failed run group is excluded from
+model replay.
+
 For every AgentRun after the first question in a Session, Application supplies
 Eino with exactly one ordered, bounded representation of all retained eligible
 prior same-Session messages. On the current stable dependency line, existing
@@ -629,6 +668,13 @@ causes zero model calls rather than a current-question-only fallback. History
 never restores a running Agent, stream, client, generation, Evidence authority,
 permission rule, Reviewer decision, approval, ActionEnvelope, or execution
 state.
+
+A new Session receives the configured default Context and Namespace only as a
+candidate and activates it through the normal independent verification path.
+A resumed historic scope is likewise only a candidate. If the same scope was
+already independently verified in the current process, Application may use
+that current authority; unavailable or conflicting candidates enter the
+picker without silent fallback.
 
 ## 13. Security and conformance requirements
 
@@ -677,3 +723,4 @@ Required deterministic checks include:
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

@@ -17,20 +17,31 @@ This file records notable user-visible changes to Kupilot.
   approval/reviewer state, narrow Session rules, and one-attempt action
   supervision.
 - Added strict version 2 configuration, forward-only SQLite migrations through
-  migration 12, split least-privilege RBAC fixtures, and opt-in tagged model,
+  migration 13, split least-privilege RBAC fixtures, and opt-in tagged model,
   Reviewer, Session, and disposable-cluster integration harnesses.
+- Added active-run `Enter` steering at the next model boundary, a bounded
+  process-local FIFO follow-up queue on active-run `Tab`, and empty-composer
+  `Alt+Up` edit-last for queued or recovered ordinary input.
 
 ### Changed
 
 - Reused Eino ADK `ChatModelAgent`, `Runner`, Tool-message pairing, message
   state, and summarization middleware inside the single model boundary while
   retaining safe SQLite Messages as the sole durable Session source.
+- Upgraded the Eino core dependency to v0.9.19 and added an Application-owned
+  pending/committing/committed/rejected/unknown/recovered input bridge without
+  adopting Eino `TurnLoop`, another Agent loop, or another conversation store.
+- Extended completed-run Session context to one initial user Message, ordered
+  committed steer Messages, and one final assistant Message. Only clean
+  durably completed turns auto-start one queued successor; every unsafe or
+  unknown outcome requires explicit recovery.
 - Reconstruct retained final assistant answers in the strict response envelope
   during Session replay so follow-up turns keep the structured protocol while
   historic Evidence and action proposals remain non-authoritative.
-- Freshly activate the resolved startup Context candidate after an explicit
-  Session selection and before resume acceptance, so resumed Sessions retain
-  current scope authority without treating historic scope as authority.
+- Give each new Session the configured default Context/Namespace candidate and
+  verify it through normal scope activation. Resume reuses an exact independently
+  verified current scope, while unavailable or conflicting historic candidates
+  enter the ordinary scope picker without restoring historic authority.
 - Generalized the restart-only action path into immutable digest-bound
   ActionEnvelopes with deterministic risk, policy and scope generations,
   durable pre-operation audit, at most one external attempt, and separate

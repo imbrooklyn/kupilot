@@ -4,7 +4,7 @@
 - Date: 2026-08-30
 - Amended: 2026-09-02
 - Supersedes: ADR-0023
-- Amended by: ADR-0044 and ADR-0045
+- Amended by: ADR-0044, ADR-0045, and ADR-0048
 
 ADR-0044 and ADR-0045 make permission selection, Reviewer delegation, exact
 approval, execution outcome, and verification P0 interactions for `v0.5`.

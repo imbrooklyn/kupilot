@@ -54,14 +54,18 @@ type Message struct {
 	ID        MessageID
 	SessionID SessionID
 	RunID     *AgentRunID
-	Role      MessageRole
-	Content   string
-	Format    MessageFormat
-	Status    MessageStatus
-	Scope     *ScopeSnapshot
-	Resource  *ResourceRef
-	Hash      string
-	CreatedAt time.Time
+	// RunSequence is the zero-based committed conversation order inside one
+	// AgentRun. It is present for durable run user/assistant Messages and absent
+	// for Session-only notices and legacy non-run rows.
+	RunSequence *int
+	Role        MessageRole
+	Content     string
+	Format      MessageFormat
+	Status      MessageStatus
+	Scope       *ScopeSnapshot
+	Resource    *ResourceRef
+	Hash        string
+	CreatedAt   time.Time
 }
 
 // Validate checks the complete safe Message persistence contract.
@@ -72,6 +76,7 @@ func (message Message) Validate() error {
 	}
 	if !message.ID.Valid() || !message.SessionID.Valid() ||
 		(message.RunID != nil && !message.RunID.Valid()) ||
+		(message.RunSequence != nil && (message.RunID == nil || *message.RunSequence < 0 || *message.RunSequence > MaxRunConversationSequence)) ||
 		(message.Role != MessageRoleUser && message.Role != MessageRoleAssistant && message.Role != MessageRoleSystemNotice) ||
 		(message.Format != MessageFormatPlain && message.Format != MessageFormatMarkdown) ||
 		(message.Status != MessageStatusCommitted && message.Status != MessageStatusInterrupted && message.Status != MessageStatusRedacted) ||
@@ -79,6 +84,13 @@ func (message Message) Validate() error {
 		message.Hash != MessageContentHash(message.Content) ||
 		!validDurableTime(message.CreatedAt) {
 		return ErrInvalidMessage
+	}
+	if message.RunSequence != nil {
+		if message.Role == MessageRoleSystemNotice ||
+			message.Role == MessageRoleUser && *message.RunSequence > MaxCommittedSteerInputs ||
+			message.Role == MessageRoleAssistant && *message.RunSequence < 1 {
+			return ErrInvalidMessage
+		}
 	}
 	if message.Scope != nil {
 		if err := message.Scope.Validate(); err != nil {

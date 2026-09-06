@@ -5,7 +5,7 @@
 - Amended: 2026-09-02
 - Supersedes: ADR-0006
 - Amends: ADR-0010, ADR-0022, and ADR-0036
-- Amended by: ADR-0046 and ADR-0047
+- Amended by: ADR-0046, ADR-0047, and ADR-0048
 
 ADR-0046 composes explicit `agent` and optional `approval_reviewer` consumers
 through this same boundary without adding a provider router or a second Eino

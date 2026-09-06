@@ -67,6 +67,10 @@ Stable ADK `ChatModelAgent` and `Runner` own the in-run message state,
 Tool-message pairing, ReAct iteration, and events. Before each bounded model
 call, project policy validates the Eino-owned conversation in place and invokes
 the concrete Eino OpenAI ChatModel.
+Eino v0.9.19 runs the summarization handler first and then the run-local steer
+handler's `BeforeModelRewriteState`; the returned Messages are persisted before
+the same handler's `WrapModel` executes the Application commit barrier around
+real model I/O. A failed barrier does not delegate to the model.
 There is no parallel neutral request/message protocol or custom conversation
 loop. Eino serializes the request, decodes the SSE response, and assembles its
 message stream. The adapter then validates and locally canonicalizes the one
@@ -112,17 +116,20 @@ objects, injected authority fields, and sensitive model text remain terminal.
 
 The production model transport uses
 `github.com/cloudwego/eino-ext/components/model/openai` v0.1.13 with
-`github.com/cloudwego/eino` v0.9.13. The component, ReAct runtime, and hardened
+`github.com/cloudwego/eino` v0.9.19. The component, ReAct runtime, and hardened
 `net/http` wrapper are all contained in `internal/agent/einoadapter`.
 
 Those pins are the implemented runtime and the exact tagged source reviewed for
-this slice. Tagged Eino v0.9.13 provides stable ADK `ChatModelAgent`, `Runner`,
-message state, Tool pairing, and summarization middleware, but no suitable
-stable runner-managed durable Session contract. The review on 2026-09-04 found
-v0.9.19 as the latest visible stable release and v0.10.0-alpha.31 as
-prerelease. The implementation therefore remains on v0.9.13 and uses the
-existing SQLite safe Messages through a thin project-owned selection bridge;
-it does not adopt a prerelease Session API or maintain a second runtime.
+this slice. Eino v0.9.19 is the exact stable target at commit
+`9d983b36a5112a1c233056b1a099825298fafb8f`. Its handler, wrapper, and
+chat-model sources are unchanged from v0.9.13; its summarization change keeps
+the current context on two error returns. It provides stable ADK
+`ChatModelAgent`, `Runner`, message state, Tool pairing, model-boundary
+handlers, and summarization middleware, but no accepted/committed/recovered
+product steering protocol and no suitable runner-managed durable Session
+contract. Kupilot keeps the existing SQLite safe Messages through the thin
+project-owned selection bridge and does not adopt `TurnLoop`, a prerelease
+Session API, or a second runtime.
 
 The Eino component is the only Chat Completions serializer and stream decoder.
 Kupilot does not replace or reconstruct its JSON request. A payload observer
@@ -329,7 +336,7 @@ or summarization call.
 | Serialized JSON request body | 256 KiB |
 | Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
 | Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
-| Eligible durable recent tail after summarization | Exactly 16 user/assistant Messages (eight complete turns); any current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
+| Eligible durable recent tail after summarization | At least 16 user/assistant Messages and at most 25 so the cut remains on a complete-run boundary; current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
 | Retained final assistant answer representation | Current strict final-response JSON envelope containing the validated Markdown answer and empty Evidence/action arrays; raw model traffic is never replayed |
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
@@ -474,6 +481,7 @@ synthetic English content and loopback `httptest` servers.
 | Generated credential, endpoint-error, and caller-callback canaries | Header-only credential use and safe sink confinement |
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 | Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
+| Scripted steer boundary routes | Summary-before-steer order, durable commit before model I/O, exact-once active input, intact Tool pairs, and zero model calls after a failed barrier |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -485,6 +493,8 @@ different-origin profiles, independent credentials and consent, strict
 non-streaming no-Tool Reviewer responses, malformed/timeout/cancelled review,
 safe Session context ordering, current-question-once, ADK summarization,
 coverage/recent-tail integrity, and proof of no fallback or cross-origin retry.
+They also cover pending, committing, committed, rejected, unknown, and
+recovered input, with no automatic transport retry and no Eino `TurnLoop`.
 The current fixtures also cover Reviewer permission routing, durable decisions,
 pre-operation audit, and one-attempt execution for the supervised Deployment
 restart, all six additional typed remediation operations, exact local
@@ -509,4 +519,5 @@ cost; neither evidence level replaces deterministic CI.
 - [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)

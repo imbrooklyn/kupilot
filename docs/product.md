@@ -1,11 +1,13 @@
 # Kupilot Product Contract
 
 - Status: Accepted `v0.5` target
-- Date: 2026-09-03
+- Date: 2026-09-06
 
 The checked-in implementation now includes the named-model, Eino ADK runtime,
 role-scoped consent, safe Session context and summarization, and deterministic
-permission/action foundation of ADR-0044 through ADR-0047. The supervised
+permission/action foundation of ADR-0044 through ADR-0048. Active-run steering,
+bounded process-local follow-up input, and edit-last remain Application-owned
+while Eino retains the one in-run Agent loop. The supervised
 Deployment restart, typed scale/rollback/controller-owned-Pod delete/cordon/
 uncordon/drain actions, and default-off exact local argv and separate shell
 paths are composed through the shared Application action lifecycle. The broad
@@ -59,6 +61,10 @@ dashboard, command palette, YAML editor, action menu, or shell console.
 10. **Local ownership and deletion.** Kupilot has no hosted control plane or
     product telemetry. Eligible local history follows the retention, export,
     and deletion contracts.
+11. **Explicit input commitment.** Acceptance of active-run input is not model
+    commitment. Application commits a steer only at the next Eino model
+    boundary, queues successor work only in the current process, and never
+    automatically resends input after an unsafe or unknown outcome.
 
 ## Intended user journey
 
@@ -95,6 +101,13 @@ dashboard, command palette, YAML editor, action menu, or shell console.
     in process. Resume sends nothing, and a failed consent, scope, policy,
     coverage, or budget gate causes zero model calls rather than a silent
     current-question-only fallback.
+11. During a regular active run, ordinary `Enter` input may steer the next
+    model invocation and `Tab` may queue a FIFO successor. `Alt+Up` restores
+    the newest editable queued, rejected, or recovered item only into an empty
+    composer.
+    A clean durably completed turn starts at most one queued successor;
+    failure, cancellation, timeout, stale state, degraded persistence, and an
+    unknown outcome never auto-send it.
 
 ## P0 operational capability contract
 
@@ -206,6 +219,17 @@ rule, Reviewer decision, approval, ActionEnvelope, execution, or generation.
 Summary or compaction failure cannot cause an oversized or silently truncated
 model request.
 
+One completed run may contain one initial committed user Message, zero or more
+committed steer user Messages, and one final assistant Message. Pending,
+committing, queued, rejected, and recovered drafts are current-process state
+rather than durable model history. An unknown lifecycle can follow only a
+Message commit, but an incomplete or failed run group is ineligible for model
+replay. Application owns input identity, limits, generations, persistence
+barrier, FIFO/LIFO transitions, and one-at-a-time clean-success drain. Eino
+v0.9.19 supplies the existing
+`BeforeModelRewriteState` and `WrapModel` boundaries without becoming the queue
+owner or adding `TurnLoop`.
+
 ## Evidence, data, and network contract
 
 Only deterministic runtime handling creates Evidence. Model output can cite an
@@ -258,3 +282,4 @@ needed for daily operations.
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

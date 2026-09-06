@@ -15,14 +15,14 @@ import (
 const (
 	insertMessageSQL = `
 		INSERT INTO messages (
-			id, session_id, run_id, role, content, content_format, status,
+			id, session_id, run_id, run_sequence, role, content, content_format, status,
 			scope_context, scope_namespace, scope_generation,
 			resource_refs_json, content_hash, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getMessageByIDSQL = `
 		SELECT
-			id, session_id, run_id, role, content, content_format, status,
+			id, session_id, run_id, run_sequence, role, content, content_format, status,
 			scope_context, scope_namespace, scope_generation,
 			resource_refs_json, content_hash, created_at_ms
 		FROM messages
@@ -30,7 +30,7 @@ const (
 	`
 	listCommittedMessagesSQL = `
 		SELECT
-			id, session_id, run_id, role, content, content_format, status,
+			id, session_id, run_id, run_sequence, role, content, content_format, status,
 			scope_context, scope_namespace, scope_generation,
 			resource_refs_json, content_hash, created_at_ms
 		FROM messages
@@ -40,7 +40,7 @@ const (
 	`
 	listCommittedMessagesAfterSQL = `
 		SELECT
-			id, session_id, run_id, role, content, content_format, status,
+			id, session_id, run_id, run_sequence, role, content, content_format, status,
 			scope_context, scope_namespace, scope_generation,
 			resource_refs_json, content_hash, created_at_ms
 		FROM messages
@@ -61,6 +61,7 @@ type messageRow struct {
 	ID               string         `db:"id"`
 	SessionID        string         `db:"session_id"`
 	RunID            sql.NullString `db:"run_id"`
+	RunSequence      sql.NullInt64  `db:"run_sequence"`
 	Role             string         `db:"role"`
 	Content          string         `db:"content"`
 	ContentFormat    string         `db:"content_format"`
@@ -191,12 +192,16 @@ func insertMessage(ctx context.Context, tx *sqlx.Tx, message domain.Message) err
 	}
 	var (
 		runID           any
+		runSequence     any
 		scopeContext    any
 		scopeNamespace  any
 		scopeGeneration any
 	)
 	if message.RunID != nil {
 		runID = *message.RunID
+	}
+	if message.RunSequence != nil {
+		runSequence = *message.RunSequence
 	}
 	if message.Scope != nil {
 		scopeContext = message.Scope.Context
@@ -209,6 +214,7 @@ func insertMessage(ctx context.Context, tx *sqlx.Tx, message domain.Message) err
 		message.ID,
 		message.SessionID,
 		runID,
+		runSequence,
 		message.Role,
 		message.Content,
 		message.Format,
@@ -245,22 +251,31 @@ func (row messageRow) domainMessage() (domain.Message, error) {
 		return domain.Message{}, err
 	}
 	value := domain.Message{
-		ID:        domain.MessageID(row.ID),
-		SessionID: domain.SessionID(row.SessionID),
-		RunID:     runID,
-		Role:      domain.MessageRole(row.Role),
-		Content:   row.Content,
-		Format:    domain.MessageFormat(row.ContentFormat),
-		Status:    domain.MessageStatus(row.Status),
-		Scope:     scope,
-		Resource:  resource,
-		Hash:      row.ContentHash,
-		CreatedAt: time.UnixMilli(row.CreatedAtMS).UTC(),
+		ID:          domain.MessageID(row.ID),
+		SessionID:   domain.SessionID(row.SessionID),
+		RunID:       runID,
+		RunSequence: optionalInt(row.RunSequence),
+		Role:        domain.MessageRole(row.Role),
+		Content:     row.Content,
+		Format:      domain.MessageFormat(row.ContentFormat),
+		Status:      domain.MessageStatus(row.Status),
+		Scope:       scope,
+		Resource:    resource,
+		Hash:        row.ContentHash,
+		CreatedAt:   time.UnixMilli(row.CreatedAtMS).UTC(),
 	}
 	if err := value.Validate(); err != nil {
 		return domain.Message{}, err
 	}
 	return value, nil
+}
+
+func optionalInt(value sql.NullInt64) *int {
+	if !value.Valid || value.Int64 < 0 || value.Int64 > int64(^uint(0)>>1) {
+		return nil
+	}
+	result := int(value.Int64)
+	return &result
 }
 
 func optionalRunID(value sql.NullString) (*domain.AgentRunID, error) {

@@ -181,6 +181,13 @@ tests for the exact Eino and Eino OpenAI versions. Stable Eino ADK
 summarization middleware must be reused directly inside
 `internal/agent/einoadapter`.
 
+The active-run input bridge is pinned to Eino v0.9.19 handler ordering:
+summarization first, then a `BeforeModelRewriteState` steer claim whose returned
+Messages are persisted, followed by the same handler's `WrapModel` commit
+barrier before real model I/O. Compatibility tests must fail if that ordering
+or state persistence changes. Eino `TurnLoop` is not a queue implementation or
+commit primitive and must not appear in production.
+
 Do not add another conversation/ReAct loop, `MemoryManager`, summary engine,
 generic checkpoint/event store, raw framework transcript, or framework-neutral
 Agent/memory facade. Runner-managed durable Session support may replace the
@@ -210,8 +217,10 @@ class, Reviewer failure, Session rules, both generations, safe history and
 current-question-once, summarization coverage, each capability's exact request
 and projection, ActionEnvelope fields, durable pre-operation audit, at-most-one
 execution attempt, ambiguous outcomes, verification, process join, and
-prohibited-data absence. Every denial asserts the relevant external call count
-is zero.
+prohibited-data absence. It also covers steering lifecycle, FIFO one-at-a-time
+drain, LIFO edit, exact queue limits and one-over, generation invalidation,
+complete-run Session grammar, model-input exact-once, and every no-auto-send
+terminal state. Every denial asserts the relevant external call count is zero.
 
 ## Hosted CI
 
@@ -298,3 +307,4 @@ composition; Accepted documentation alone is not release evidence.
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

@@ -151,6 +151,7 @@ func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 	runID := domain.AgentRunID("0198a46e-7d2a-7d34-9b6f-2df5f45a2a10")
 	model = updateTUIModel(t, model, tui.ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 1, PolicyGeneration: 1, Sequence: 1,
+		Text: "How many Nodes are Ready?",
 	}})
 	model = updateTUIModel(t, model, tui.ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: runID, ScopeGeneration: 1, PolicyGeneration: 1, Sequence: 2,

@@ -14,6 +14,7 @@ import (
 )
 
 var _ application.SessionLifecyclePersistence = (*SessionRepository)(nil)
+var _ application.RunInputPersistence = (*AgentRunRepository)(nil)
 
 const tightenOperationalDetailRetentionSQL = `
 	INSERT INTO settings (key, value_json, schema_version, updated_at_ms)
@@ -282,6 +283,50 @@ func (repository *AgentRunRepository) BeginWithAudit(
 	)
 }
 
+// AppendRunInput atomically commits one sequential steer only while its exact
+// standard-mode AgentRun is still running. Queue and rejected input never call
+// this port.
+func (repository *AgentRunRepository) AppendRunInput(ctx context.Context, message domain.Message) error {
+	if err := repositoryContext(ctx, repository.db, "append_agent_run_input"); err != nil {
+		return err
+	}
+	if message.Validate() != nil || message.Role != domain.MessageRoleUser ||
+		message.Status != domain.MessageStatusCommitted || message.RunID == nil || message.RunSequence == nil ||
+		*message.RunSequence < 1 || *message.RunSequence > domain.MaxCommittedSteerInputs {
+		return sessioncontract.ErrInvalidRepositoryRequest
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		if err := ensureStandardActiveSession(ctx, tx, message.SessionID); err != nil {
+			return err
+		}
+		run, err := getAgentRun(ctx, tx, *message.RunID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return sessioncontract.ErrAgentRunNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if run.Status != domain.AgentRunStatusRunning || run.SessionID != message.SessionID ||
+			!messageMatchesRun(message, run) || run.StartedAt == nil || message.CreatedAt.Before(*run.StartedAt) {
+			return sessioncontract.ErrAgentRunConflict
+		}
+		if err := requireNextRunSequence(ctx, tx, run.ID, *message.RunSequence); err != nil {
+			return err
+		}
+		if err := insertMessage(ctx, tx, message); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, message.SessionID, message.CreatedAt)
+	})
+	return coordinatedRepositoryResult(
+		repository.db,
+		err,
+		"agent_run_input_append_failed",
+		"append_agent_run_input",
+		"Kupilot could not commit the active-run input.",
+	)
+}
+
 // FinishWithAudit atomically stores one terminal run without durable Diagnosis
 // content and its required terminal audit.
 func (repository *AgentRunRepository) FinishWithAudit(
@@ -344,6 +389,9 @@ func (repository *AgentRunRepository) CompleteWithAudit(
 		}
 		if domain.ValidateAgentRunTransition(current, run) != nil || current.Scope != diagnosis.Scope {
 			return sessioncontract.ErrAgentRunConflict
+		}
+		if err := requireNextRunSequence(ctx, tx, run.ID, *message.RunSequence); err != nil {
+			return err
 		}
 		if err := insertCoordinatedDiagnosis(ctx, tx, diagnosis, encoded); err != nil {
 			return err

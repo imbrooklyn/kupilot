@@ -42,6 +42,7 @@ func TestSessionContextRepositoryPagesPersistsCoverageAndCascades(t *testing.T) 
 			session.ID, &runID, answer, finishedAt,
 		)
 		assistant.Role = domain.MessageRoleAssistant
+		assistant.RunSequence = testIntPointer(1)
 		assistant.Format = domain.MessageFormatMarkdown
 		assistant.Scope = &running.Scope
 		diagnosis := domain.Diagnosis{

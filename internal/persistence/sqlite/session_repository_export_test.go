@@ -84,6 +84,18 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	if err := NewDiagnosisRepository(db).Save(context.Background(), diagnosis); err != nil {
 		t.Fatalf("Save(Diagnosis) error = %v", err)
 	}
+	steer := testMessage(
+		"00000000-0000-7000-8000-000000008011",
+		run.SessionID,
+		&run.ID,
+		"Include this committed steer in the safe export.",
+		startedAt.Add(6*time.Millisecond),
+	)
+	steer.RunSequence = testIntPointer(1)
+	steer.Scope = &run.Scope
+	if err := NewAgentRunRepository(db).AppendRunInput(context.Background(), steer); err != nil {
+		t.Fatalf("AppendRunInput(steer) error = %v", err)
+	}
 	unreferencedInvocation := testToolInvocation("00000000-0000-7000-8000-000000008009", run, 2, startedAt.Add(time.Millisecond))
 	unreferenced := make([]domain.Evidence, application.MaxExportEvidence)
 	for index := range unreferenced {
@@ -107,6 +119,7 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 		diagnosis.CreatedAt.Add(time.Millisecond),
 	)
 	assistant.Role = domain.MessageRoleAssistant
+	assistant.RunSequence = testIntPointer(2)
 	assistant.Format = domain.MessageFormatMarkdown
 	assistant.Scope = &run.Scope
 	terminal := testTerminalRun(run, domain.AgentRunStatusCompleted, assistant.CreatedAt)
@@ -116,7 +129,7 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	contextPage, err := NewMessageRepository(db).ListEligibleModelContext(context.Background(), application.ModelContextPageRequest{
 		SessionID: run.SessionID, Limit: 10,
 	})
-	if err != nil || len(contextPage.Messages) != 2 {
+	if err != nil || len(contextPage.Messages) != 3 || contextPage.Messages[1].ID != steer.ID {
 		t.Fatalf("ListEligibleModelContext() = %#v/%v", contextPage, err)
 	}
 	coverageDigest, coveredBytes, err := domain.SessionContextCoverageDigest(contextPage.Messages)
@@ -128,8 +141,8 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 		SummaryHash:    domain.SHA256Hex("Historic safe context with " + credentialCanary),
 		SchemaVersion:  domain.SessionContextSummarySchemaVersion,
 		PolicyVersion:  domain.SafeConversationContextPolicyVersion,
-		CoveredFirstID: contextPage.Messages[0].ID, CoveredThroughID: contextPage.Messages[1].ID,
-		CoveredCount: 2, CoveredBytes: coveredBytes, CoverageDigest: coverageDigest,
+		CoveredFirstID: contextPage.Messages[0].ID, CoveredThroughID: contextPage.Messages[2].ID,
+		CoveredCount: 3, CoveredBytes: coveredBytes, CoverageDigest: coverageDigest,
 		GeneratedAt: startedAt.Add(30 * time.Minute), AgentProfile: "agent",
 		AgentOriginHash: domain.SHA256Hex("https://model.example"),
 	}
@@ -142,7 +155,8 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 		t.Fatalf("ReadExportSnapshot() error = %v", err)
 	}
 	if snapshot.Session.ID != run.SessionID || snapshot.Session.PrivacyMode != domain.PrivacyModeStandard ||
-		len(snapshot.Messages) != 2 || len(snapshot.Diagnoses) != 1 || len(snapshot.Evidence) != 1 ||
+		len(snapshot.Messages) != 3 || snapshot.Messages[1].Role != domain.MessageRoleUser ||
+		snapshot.Messages[1].Content != steer.Content || len(snapshot.Diagnoses) != 1 || len(snapshot.Evidence) != 1 ||
 		snapshot.ContextSummary == nil || snapshot.ContextSummary.CoverageDigest != coverageDigest {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}

@@ -12,6 +12,11 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/tui/components"
 )
 
+const (
+	maxConversationPreviewTextBytes = 512
+	maxConversationPreviewTextLines = 2
+)
+
 // View deterministically renders transcript, composer, suggestions, then footer.
 func (model Model) View() tea.View {
 	content, composerY, composerVisible := model.renderLayout()
@@ -94,8 +99,6 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 
 	overlay := ""
 	switch {
-	case model.scopeConflict.Open():
-		overlay = model.scopeConflict.View(model.width)
 	case model.evidenceDialog.Open():
 		overlay = model.evidenceDialog.View(model.width, model.height)
 	case model.dialog.Open():
@@ -229,20 +232,71 @@ func joinLayoutSections(sections []string, gap int) string {
 }
 
 func (model Model) workingView() string {
-	if !model.run.Active || model.run.Terminal {
+	lines := make([]string, 0, 1+application.MaxConversationInputPreviewItems)
+	if model.run.Active && !model.run.Terminal {
+		bullet := "•"
+		bulletStyle := model.styles.working.Normal
+		if model.workingFrame/6%2 == 1 {
+			bullet = "◦"
+			bulletStyle = model.styles.working.Muted
+		}
+		line := bulletStyle.Render(bullet) + " " + model.shimmerText("Working")
+		line += model.styles.working.Muted.Render(" (" + components.FormatElapsedCompact(model.workingElapsed()) + " • ")
+		line += model.styles.working.Normal.Render("esc")
+		line += model.styles.working.Muted.Render(" to interrupt)")
+		lines = append(lines, line)
+	}
+	for index, item := range model.conversationPreview {
+		if index >= application.MaxConversationInputPreviewItems {
+			break
+		}
+		text := boundedConversationPreviewText(item.Text)
+		if text == "" {
+			continue
+		}
+		label := conversationInputLabel(item.State)
+		line := model.styles.working.Muted.Render("↳ "+label+" · ") + model.styles.working.Normal.Render(text)
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
 		return ""
 	}
-	bullet := "•"
-	bulletStyle := model.styles.working.Normal
-	if model.workingFrame/6%2 == 1 {
-		bullet = "◦"
-		bulletStyle = model.styles.working.Muted
+	return lipgloss.NewStyle().MaxWidth(model.contentWidth()).Render(strings.Join(lines, "\n"))
+}
+
+func conversationInputLabel(state application.ConversationInputState) string {
+	switch state {
+	case application.ConversationInputPending:
+		return "Pending steer (accepted locally)"
+	case application.ConversationInputCommitting:
+		return "Committing steer"
+	case application.ConversationInputQueued:
+		return "Queued follow-up"
+	case application.ConversationInputRejected:
+		return "Rejected input"
+	case application.ConversationInputRecovered:
+		return "Recovered input"
+	case application.ConversationInputUnknown:
+		return "Unknown outcome"
+	default:
+		return "Conversation input"
 	}
-	line := bulletStyle.Render(bullet) + " " + model.shimmerText("Working")
-	line += model.styles.working.Muted.Render(" (" + components.FormatElapsedCompact(model.workingElapsed()) + " • ")
-	line += model.styles.working.Normal.Render("esc")
-	line += model.styles.working.Muted.Render(" to interrupt)")
-	return lipgloss.NewStyle().MaxWidth(model.contentWidth()).Render(line)
+}
+
+func boundedConversationPreviewText(value string) string {
+	value = sanitizeExternalText(value, maxConversationPreviewTextBytes)
+	lines := strings.Split(value, "\n")
+	truncated := len(lines) > maxConversationPreviewTextLines
+	if truncated {
+		lines = lines[:maxConversationPreviewTextLines]
+	}
+	for index := range lines {
+		lines[index] = strings.TrimSpace(lines[index])
+	}
+	if truncated {
+		lines[len(lines)-1] = strings.TrimSpace(lines[len(lines)-1] + " …")
+	}
+	return strings.TrimSpace(strings.Join(lines, " / "))
 }
 
 func (model Model) workingElapsed() time.Duration {

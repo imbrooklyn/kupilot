@@ -7,6 +7,7 @@ type KeyMap struct {
 	Submit         key.Binding
 	Newline        key.Binding
 	Complete       key.Binding
+	EditFollowUp   key.Binding
 	Previous       key.Binding
 	Next           key.Binding
 	PreviousAlt    key.Binding
@@ -26,6 +27,7 @@ func DefaultKeyMap() KeyMap {
 		Submit:         key.NewBinding(key.WithKeys("enter")),
 		Newline:        key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j")),
 		Complete:       key.NewBinding(key.WithKeys("tab")),
+		EditFollowUp:   key.NewBinding(key.WithKeys("alt+up")),
 		Previous:       key.NewBinding(key.WithKeys("up")),
 		Next:           key.NewBinding(key.WithKeys("down")),
 		PreviousAlt:    key.NewBinding(key.WithKeys("ctrl+p")),

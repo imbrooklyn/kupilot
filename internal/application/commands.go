@@ -67,6 +67,9 @@ type UICommandKind string
 
 const (
 	UICommandSubmitQuestion    UICommandKind = "submit_question"
+	UICommandSubmitSteer       UICommandKind = "submit_steer"
+	UICommandEnqueueFollowUp   UICommandKind = "enqueue_follow_up"
+	UICommandPopFollowUp       UICommandKind = "pop_follow_up"
 	UICommandSelectContext     UICommandKind = "select_context"
 	UICommandSelectNamespace   UICommandKind = "select_namespace"
 	UICommandSelectResource    UICommandKind = "select_resource"
@@ -130,7 +133,9 @@ func (command UICommand) Validate() error {
 	}
 	permissionCommand := command.Kind == UICommandChangePermission || command.Kind == UICommandCreateSessionRule ||
 		command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
-		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction
+		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction ||
+		command.Kind == UICommandSubmitSteer || command.Kind == UICommandEnqueueFollowUp ||
+		command.Kind == UICommandPopFollowUp
 	if !permissionCommand && command.hasPermissionPayload() {
 		return ErrInvalidUICommand
 	}
@@ -149,6 +154,20 @@ func (command UICommand) Validate() error {
 		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
 			!validUICommandText(command.Text, MaxQuestionBytes) {
+			return ErrInvalidUICommand
+		}
+	case UICommandSubmitSteer, UICommandEnqueueFollowUp:
+		if command.RequestID == 0 || !command.RunID.Valid() || command.ExpectedScopeGeneration < 1 ||
+			!command.ExpectedPolicyGeneration.Valid() || command.Scope != nil || command.Resource != nil ||
+			command.hasPrivacyPayload() || command.hasApprovalPayload() || command.PermissionProfile != "" ||
+			command.HighRiskAcknowledged || !validUICommandText(command.Text, MaxConversationInputItemBytes) {
+			return ErrInvalidUICommand
+		}
+	case UICommandPopFollowUp:
+		if command.RequestID == 0 || !command.RunID.Valid() || command.ExpectedScopeGeneration < 1 ||
+			!command.ExpectedPolicyGeneration.Valid() || command.Text != "" || command.Scope != nil ||
+			command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.PermissionProfile != "" || command.HighRiskAcknowledged {
 			return ErrInvalidUICommand
 		}
 	case UICommandSelectContext:

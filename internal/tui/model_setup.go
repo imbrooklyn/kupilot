@@ -160,9 +160,9 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) {
+func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) tea.Cmd {
 	if model.modelSetup == nil || model.pendingModelSetupID == 0 || result.RequestID != model.pendingModelSetupID || result.Validate() != nil {
-		return
+		return nil
 	}
 	model.modelEndpoint = model.modelSetup.Endpoint
 	model.modelName = sanitizeExternalText(result.Model, application.MaxModelSetupNameBytes)
@@ -179,6 +179,10 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	} else {
 		model.transcript.AppendNotice("Model configured for this Kupilot process only.")
 	}
+	if model.scopeSelectionRequired && model.startup.Ready && !model.scope.Verified {
+		return model.beginRequiredScopeSelection()
+	}
+	return nil
 }
 
 func (model *Model) acceptCancelledModelSetupFailure(message ApplicationFailureMsg) bool {

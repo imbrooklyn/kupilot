@@ -261,6 +261,11 @@ func (fake *dispatchApplication) ExecuteUICommand(
 			RemoteDiagnosticsPolicyVersion: domain.RemoteDiagnosticsPolicyVersion,
 			LocalExecutionPolicyVersion:    domain.LocalExecutionPolicyVersion,
 			ResourceTypeCount:              len(domain.BuiltInResourcePolicies()),
+			ConversationInput: application.ConversationInputStatus{
+				MaximumItems:     application.MaxConversationInputItems,
+				MaximumBytes:     application.MaxConversationInputAggregateBytes,
+				MaximumItemBytes: application.MaxConversationInputItemBytes,
+			},
 			AgentModel: application.UIModelRoleStatus{
 				Role: domain.ModelRoleAgent, Profile: "agent", OriginHash: strings.Repeat("a", 64),
 				Configured: true, Available: true, Consented: true,

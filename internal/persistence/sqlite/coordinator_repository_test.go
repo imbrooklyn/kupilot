@@ -86,6 +86,7 @@ func TestCoordinatorRepositoriesRunMinimalSessionWithoutContentPersistence(t *te
 		finishedAt,
 	)
 	assistant.Role = domain.MessageRoleAssistant
+	assistant.RunSequence = testIntPointer(1)
 	assistant.Format = domain.MessageFormatMarkdown
 	assistant.Scope = &run.Scope
 	terminalAudit := coordinatedRunAudit(
@@ -131,6 +132,262 @@ func TestCoordinatorRepositoriesRunMinimalSessionWithoutContentPersistence(t *te
 	if bytes.Count(storageBytes, []byte(contentCanary)) != 0 {
 		t.Fatal("minimal Session content canary reached SQLite or WAL")
 	}
+}
+
+func TestCoordinatorRepositoryCommitsSequentialRunInputsAtomically(t *testing.T) {
+	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-run-input-sequence")
+	base := time.UnixMilli(8_600).UTC()
+	session := testSession(
+		"00000000-0000-7000-8000-000000008601",
+		"Sequential run input",
+		domain.PrivacyModeStandard,
+		base,
+	)
+	if err := NewSessionRepository(database).Create(context.Background(), session); err != nil {
+		t.Fatalf("Create(Session) error = %v", err)
+	}
+	request, run := testRunningPair(
+		"00000000-0000-7000-8000-000000008602",
+		"00000000-0000-7000-8000-000000008603",
+		session.ID,
+		base.Add(time.Millisecond),
+	)
+	runs := NewAgentRunRepository(database)
+	if err := runs.BeginWithAudit(context.Background(), request, run, coordinatedRunAudit(
+		"00000000-0000-7000-8000-000000008604",
+		run,
+		domain.AuditEventRunStarted,
+		base.Add(2*time.Millisecond),
+	)); err != nil {
+		t.Fatalf("BeginWithAudit() error = %v", err)
+	}
+
+	first := testMessage(
+		"00000000-0000-7000-8000-000000008605",
+		session.ID,
+		&run.ID,
+		"Also inspect the bounded recent Events.",
+		base.Add(2*time.Millisecond),
+	)
+	first.RunSequence = testIntPointer(1)
+	first.Scope = &run.Scope
+	if err := runs.AppendRunInput(context.Background(), first); err != nil {
+		t.Fatalf("AppendRunInput(first) error = %v", err)
+	}
+
+	duplicate := first
+	duplicate.ID = "00000000-0000-7000-8000-000000008606"
+	duplicate.Content = "This duplicate sequence must not commit."
+	duplicate.Hash = domain.MessageContentHash(duplicate.Content)
+	duplicate.CreatedAt = base.Add(3 * time.Millisecond)
+	if err := runs.AppendRunInput(context.Background(), duplicate); !errors.Is(err, sessioncontract.ErrAgentRunConflict) {
+		t.Fatalf("AppendRunInput(duplicate sequence) error = %v, want ErrAgentRunConflict", err)
+	}
+
+	outOfOrder := duplicate
+	outOfOrder.ID = "00000000-0000-7000-8000-000000008607"
+	outOfOrder.RunSequence = testIntPointer(3)
+	if err := runs.AppendRunInput(context.Background(), outOfOrder); !errors.Is(err, sessioncontract.ErrAgentRunConflict) {
+		t.Fatalf("AppendRunInput(out of order) error = %v, want ErrAgentRunConflict", err)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	second := duplicate
+	second.ID = "00000000-0000-7000-8000-000000008608"
+	second.Content = "Then compare the controller conditions."
+	second.Hash = domain.MessageContentHash(second.Content)
+	second.RunSequence = testIntPointer(2)
+	if err := runs.AppendRunInput(cancelled, second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AppendRunInput(cancelled) error = %v, want context.Canceled", err)
+	}
+	if err := runs.AppendRunInput(context.Background(), second); err != nil {
+		t.Fatalf("AppendRunInput(second) error = %v", err)
+	}
+
+	finishedAt := base.Add(5 * time.Millisecond)
+	terminal := testTerminalRun(run, domain.AgentRunStatusCompleted, finishedAt)
+	diagnosis := domain.Diagnosis{
+		ID:             "00000000-0000-7000-8000-000000008609",
+		RunID:          run.ID,
+		Scope:          run.Scope,
+		AnswerMarkdown: "The bounded observations support the final answer.",
+		CreatedAt:      finishedAt,
+	}
+	assistant := testMessage(
+		"00000000-0000-7000-8000-000000008610",
+		session.ID,
+		&run.ID,
+		diagnosis.AnswerMarkdown,
+		finishedAt,
+	)
+	assistant.Role = domain.MessageRoleAssistant
+	assistant.Format = domain.MessageFormatMarkdown
+	assistant.Scope = &run.Scope
+	assistant.RunSequence = testIntPointer(4)
+	terminalAudit := coordinatedRunAudit(
+		"00000000-0000-7000-8000-000000008611",
+		terminal,
+		domain.AuditEventRunCompleted,
+		finishedAt,
+	)
+	if err := runs.CompleteWithAudit(context.Background(), diagnosis, assistant, terminal, terminalAudit); !errors.Is(err, sessioncontract.ErrAgentRunConflict) {
+		t.Fatalf("CompleteWithAudit(gapped sequence) error = %v, want ErrAgentRunConflict", err)
+	}
+	assistant.RunSequence = testIntPointer(3)
+	if err := runs.CompleteWithAudit(context.Background(), diagnosis, assistant, terminal, terminalAudit); err != nil {
+		t.Fatalf("CompleteWithAudit() error = %v", err)
+	}
+
+	rows, err := database.handle.QueryxContext(context.Background(), `
+		SELECT run_sequence, role
+		FROM messages
+		WHERE run_id = ?
+		ORDER BY run_sequence
+	`, run.ID)
+	if err != nil {
+		t.Fatalf("Message sequence query error = %v", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("Message sequence close error = %v", err)
+		}
+	}()
+	wantRoles := []string{"user", "user", "user", "assistant"}
+	index := 0
+	for rows.Next() {
+		var sequence int
+		var role string
+		if err := rows.Scan(&sequence, &role); err != nil {
+			t.Fatalf("Message sequence scan error = %v", err)
+		}
+		if index >= len(wantRoles) || sequence != index || role != wantRoles[index] {
+			t.Fatalf("Message sequence row %d = %d/%q", index, sequence, role)
+		}
+		index++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Message sequence rows error = %v", err)
+	}
+	if index != len(wantRoles) {
+		t.Fatalf("Message sequence row count = %d, want %d", index, len(wantRoles))
+	}
+
+	afterTerminal := second
+	afterTerminal.ID = "00000000-0000-7000-8000-000000008612"
+	afterTerminal.RunSequence = testIntPointer(4)
+	afterTerminal.CreatedAt = base.Add(6 * time.Millisecond)
+	if err := runs.AppendRunInput(context.Background(), afterTerminal); !errors.Is(err, sessioncontract.ErrAgentRunConflict) {
+		t.Fatalf("AppendRunInput(terminal run) error = %v, want ErrAgentRunConflict", err)
+	}
+}
+
+func TestCoordinatorRepositoryRunInputDenialsAndRollback(t *testing.T) {
+	t.Run("minimal mode retains no steer", func(t *testing.T) {
+		database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-run-input-minimal")
+		base := time.UnixMilli(8_650).UTC()
+		session := testSession(
+			"00000000-0000-7000-8000-000000008651",
+			"",
+			domain.PrivacyModeMinimal,
+			base,
+		)
+		if err := NewSessionRepository(database).Create(context.Background(), session); err != nil {
+			t.Fatalf("Create(Session) error = %v", err)
+		}
+		request, run := testRunningPair(
+			"00000000-0000-7000-8000-000000008652",
+			"00000000-0000-7000-8000-000000008653",
+			session.ID,
+			base.Add(time.Millisecond),
+		)
+		runs := NewAgentRunRepository(database)
+		if err := runs.BeginWithAudit(context.Background(), request, run, coordinatedRunAudit(
+			"00000000-0000-7000-8000-000000008654",
+			run,
+			domain.AuditEventRunStarted,
+			base.Add(2*time.Millisecond),
+		)); err != nil {
+			t.Fatalf("BeginWithAudit() error = %v", err)
+		}
+		steer := testMessage(
+			"00000000-0000-7000-8000-000000008655",
+			session.ID,
+			&run.ID,
+			"Memory-only follow-up.",
+			base.Add(3*time.Millisecond),
+		)
+		steer.RunSequence = testIntPointer(1)
+		steer.Scope = &run.Scope
+		if err := runs.AppendRunInput(context.Background(), steer); !errors.Is(err, sessioncontract.ErrDurableContentDisabled) {
+			t.Fatalf("AppendRunInput(minimal) error = %v, want ErrDurableContentDisabled", err)
+		}
+		var count int
+		if err := database.handle.GetContext(context.Background(), &count, `SELECT count(id) FROM messages`); err != nil || count != 0 {
+			t.Fatalf("minimal Message count/error = %d/%v", count, err)
+		}
+	})
+
+	t.Run("session touch failure rolls back steer and hides content", func(t *testing.T) {
+		database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-run-input-rollback")
+		base := time.UnixMilli(8_670).UTC()
+		session := testSession(
+			"00000000-0000-7000-8000-000000008671",
+			"Run input rollback",
+			domain.PrivacyModeStandard,
+			base,
+		)
+		if err := NewSessionRepository(database).Create(context.Background(), session); err != nil {
+			t.Fatalf("Create(Session) error = %v", err)
+		}
+		request, run := testRunningPair(
+			"00000000-0000-7000-8000-000000008672",
+			"00000000-0000-7000-8000-000000008673",
+			session.ID,
+			base.Add(time.Millisecond),
+		)
+		runs := NewAgentRunRepository(database)
+		if err := runs.BeginWithAudit(context.Background(), request, run, coordinatedRunAudit(
+			"00000000-0000-7000-8000-000000008674",
+			run,
+			domain.AuditEventRunStarted,
+			base.Add(2*time.Millisecond),
+		)); err != nil {
+			t.Fatalf("BeginWithAudit() error = %v", err)
+		}
+		triggerCanary := "synthetic-run-input-touch-canary"
+		if _, err := database.handle.ExecContext(context.Background(), `
+			CREATE TRIGGER fail_run_input_touch
+			BEFORE UPDATE OF updated_at_ms ON sessions
+			BEGIN
+				SELECT RAISE(ABORT, 'synthetic-run-input-touch-canary');
+			END
+		`); err != nil {
+			t.Fatalf("rollback trigger setup error = %v", err)
+		}
+		contentCanary := "run-input-content-must-not-leak"
+		steer := testMessage(
+			"00000000-0000-7000-8000-000000008675",
+			session.ID,
+			&run.ID,
+			contentCanary,
+			base.Add(3*time.Millisecond),
+		)
+		steer.RunSequence = testIntPointer(1)
+		steer.Scope = &run.Scope
+		err := runs.AppendRunInput(context.Background(), steer)
+		assertStorageError(t, err, ClassPersistenceUnavailable, "agent_run_input_append_failed")
+		if strings.Contains(err.Error(), triggerCanary) || strings.Contains(err.Error(), contentCanary) {
+			t.Fatal("AppendRunInput() error disclosed driver or bound content")
+		}
+		if _, err := NewMessageRepository(database).GetByID(context.Background(), steer.ID); !errors.Is(err, sessioncontract.ErrMessageNotFound) {
+			t.Fatalf("failed AppendRunInput left Message: %v", err)
+		}
+		persisted, err := runs.GetByID(context.Background(), run.ID)
+		if err != nil || persisted.Status != domain.AgentRunStatusRunning {
+			t.Fatalf("AgentRun after rolled-back input = %#v/%v", persisted, err)
+		}
+	})
 }
 
 func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *testing.T) {
@@ -181,7 +438,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
 		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
 		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
-		"settings": 2, "privacy_consents": 1, "schema_migrations": 12,
+		"settings": 2, "privacy_consents": 1, "schema_migrations": 13,
 	} {
 		var got int
 		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {
@@ -277,6 +534,7 @@ func TestCoordinatorRepositoriesKeepZeroDayDetailOutOfSQLite(t *testing.T) {
 		finishedAt,
 	)
 	assistant.Role = domain.MessageRoleAssistant
+	assistant.RunSequence = testIntPointer(1)
 	assistant.Format = domain.MessageFormatMarkdown
 	assistant.Scope = &run.Scope
 	runAudit := coordinatedRunAudit(
@@ -469,6 +727,7 @@ func TestCoordinatorTransactionsRollBackWhenRequiredAuditFails(t *testing.T) {
 			finishedAt,
 		)
 		assistant.Role = domain.MessageRoleAssistant
+		assistant.RunSequence = testIntPointer(1)
 		assistant.Format = domain.MessageFormatMarkdown
 		assistant.Scope = &run.Scope
 		audit := coordinatedRunAudit(

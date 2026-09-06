@@ -82,7 +82,8 @@ func TestCoordinatorLoadsEveryEligiblePageForFreshStandardContext(t *testing.T) 
 		}
 		messages[index] = domain.Message{
 			ID: domain.MessageID(coordinatorUUID(30_000 + index)), SessionID: session.ID, RunID: &runID,
-			Role: role, Content: content, Format: format, Status: domain.MessageStatusCommitted,
+			RunSequence: intPointer(index % 2),
+			Role:        role, Content: content, Format: format, Status: domain.MessageStatusCommitted,
 			Hash: domain.MessageContentHash(content), CreatedAt: base.Add(time.Duration(index) * time.Millisecond),
 		}
 		if messages[index].Validate() != nil {
@@ -368,7 +369,8 @@ func seedCoordinatorContext(
 		}
 		messages[index] = domain.Message{
 			ID: domain.MessageID(coordinatorUUID(54_000 + index)), SessionID: session.ID, RunID: &runID,
-			Role: role, Content: content, Format: format, Status: domain.MessageStatusCommitted,
+			RunSequence: intPointer(index % 2),
+			Role:        role, Content: content, Format: format, Status: domain.MessageStatusCommitted,
 			Hash: domain.MessageContentHash(content), CreatedAt: base.Add(time.Duration(index) * time.Millisecond),
 		}
 		if messages[index].Validate() != nil {

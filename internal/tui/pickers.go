@@ -111,7 +111,11 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		if !ok {
 			return nil
 		}
+		resumeSelection := model.resumeScopeSelection && model.pendingResumed != nil
 		requestID := model.nextUIRequestID()
+		if resumeSelection {
+			requestID = model.pendingResumed.ResumeRequestID
+		}
 		command := application.UICommand{
 			Kind: application.UICommandSelectContext, RequestID: requestID,
 			Text: candidate.Name, ExpectedScopeGeneration: model.scope.Generation,
@@ -124,13 +128,18 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		model.scope.Switching = true
 		model.composer.Reset()
 		model.closePickers()
+		model.resumeScopeSelection = resumeSelection
 		return applicationCommand(command)
 	case application.UICompletionNamespace:
 		candidate, ok := model.namespacePicker.Selected()
 		if !ok {
 			return nil
 		}
+		resumeSelection := model.resumeScopeSelection && model.pendingResumed != nil
 		requestID := model.nextUIRequestID()
+		if resumeSelection {
+			requestID = model.pendingResumed.ResumeRequestID
+		}
 		command := application.UICommand{
 			Kind: application.UICommandSelectNamespace, RequestID: requestID,
 			Text: candidate.Name, ExpectedScopeGeneration: model.scope.Generation,
@@ -143,6 +152,7 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		model.scope.Switching = true
 		model.composer.Reset()
 		model.closePickers()
+		model.resumeScopeSelection = resumeSelection
 		return applicationCommand(command)
 	case application.UICompletionResource:
 		candidate, ok := model.resourcePicker.Selected()
@@ -183,6 +193,35 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+func (model *Model) beginRequiredScopeSelection() tea.Cmd {
+	model.closeDialog()
+	model.composer.Reset()
+	model.composer.SetValue("/context ")
+	model.resumeScopeSelection = false
+	return model.openCompletion(application.UICompletionContext, "", resumeOriginNone)
+}
+
+func (model *Model) beginResumeScopeSelection(resumed application.UIResumedSession) tea.Cmd {
+	model.closeEvidenceInteraction()
+	model.closeDialog()
+	model.focus = FocusComposer
+	if model.terminalFocused {
+		_ = model.composer.Focus()
+	}
+	kind := application.UICompletionContext
+	prefix := "/context "
+	if resumed.SavedScope != nil && model.scope.Context != "" &&
+		resumed.SavedScope.Context == model.scope.Context && resumed.SavedScope.Namespace != model.scope.Namespace {
+		kind = application.UICompletionNamespace
+		prefix = "/namespace "
+	}
+	model.composer.Reset()
+	model.composer.SetValue(prefix)
+	command := model.openCompletion(kind, "", model.resumeOrigin)
+	model.resumeScopeSelection = true
+	return command
 }
 
 func (model *Model) openCompletion(kind application.UICompletionKind, filter string, origin resumeOrigin) tea.Cmd {
@@ -335,9 +374,9 @@ func (model *Model) applyResumedSession(resumed application.UIResumedSession) {
 	model.pendingResource = ResourceView{}
 	model.pendingResumed = nil
 	model.resumeOrigin = resumeOriginNone
+	model.resumeScopeSelection = false
 	model.closePickers()
 	model.composer.Reset()
-	model.scopeConflict.Close()
 	if model.terminalFocused {
 		_ = model.composer.Focus()
 	}
@@ -365,16 +404,6 @@ func scopeFailureText(code application.UIQueryFailureCode) string {
 	default:
 		return "The scope could not be activated safely."
 	}
-}
-
-func scopeLabel(contextName, namespace string) string {
-	if contextName == "" {
-		contextName = "unavailable"
-	}
-	if namespace == "" {
-		namespace = "unavailable"
-	}
-	return contextName + " / " + namespace
 }
 
 func (model *Model) setPickerLoading(kind application.UICompletionKind) {

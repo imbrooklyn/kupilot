@@ -167,10 +167,11 @@ func TestSubmittedHistoryKeepsComposerGeometryAcrossEnter(t *testing.T) {
 
 	model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, submit)
-	pendingHistory := model.transcript.View()
-	assertUserSurfaceGeometry(t, pendingHistory, model.contentWidth(), "first line", "third line")
+	if pendingHistory := model.transcript.View(); pendingHistory != "" {
+		t.Fatalf("uncommitted input entered transcript: %q", pendingHistory)
+	}
 
-	model, runStart := updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, runStart := updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "first line\nthird line")})
 	if runStart == nil {
 		t.Fatal("run start did not schedule the bounded Working update")
 	}
@@ -190,7 +191,7 @@ func TestWorkingLayoutKeepsNewestTurnVisibleAndFollowsCompletion(t *testing.T) {
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "Newest submitted question."})
 	model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, submit)
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "Newest submitted question.")})
 
 	workingView := model.transcript.View()
 	workingLines := strings.Split(workingView, "\n")
@@ -357,7 +358,7 @@ func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "How many Nodes are Ready?"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
-	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "How many Nodes are Ready?")})
 	if cmd == nil || !strings.Contains(model.View().Content, "How many Nodes are Ready?") {
 		t.Fatal("run start removed user history from the managed frame")
 	}
@@ -400,7 +401,7 @@ func populatedViewModel(t *testing.T) Model {
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "Why is the Pod restarting?"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "Why is the Pod restarting?")})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Inspecting.",
 	}})

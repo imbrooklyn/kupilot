@@ -149,7 +149,7 @@ func TestTerminalRuntimeCommitsHistoryOnceWithoutMouseOrAlternateScreen(t *testi
 	_ = commandFromCmd(t, submit)
 
 	rendered, final := runTerminalRuntime(t, model,
-		runStartedEvent(1),
+		runStartedEvent(1, "How many Nodes are Ready?"),
 		application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: testRunID,
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
@@ -364,13 +364,13 @@ func TestTerminalRuntimeSettlesCompactFrameBeforePrintingCompletedTurn(t *testin
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "List the cluster inventory."})
 	model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, submit)
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "List the cluster inventory.")})
 	userBlock, userRows := model.transcript.CommitReady()
 	if userBlock == "" || userRows == 0 || !strings.HasSuffix(userBlock, "\n") {
 		t.Fatal("submitted user history was not available")
 	}
 	model.terminalHistoryRows += userRows
 	model.reflow()
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventToolStep, RunID: testRunID,
 		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
@@ -513,7 +513,7 @@ func TestTerminalRuntimeBlocksUnsafeControlsBeforeHistoryInsertion(t *testing.T)
 	_ = commandFromCmd(t, submit)
 
 	rendered, final := runTerminalRuntime(t, model,
-		runStartedEvent(1),
+		runStartedEvent(1, "safe tail"),
 		application.UIEvent{
 			Kind: application.UIEventRunCompleted, RunID: testRunID,
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Ready\x1b]52;c;answer-canary\x07.",
@@ -538,7 +538,7 @@ func TestTerminalRuntimeCommitsTerminalCancellationWithoutLiveState(t *testing.T
 	_ = commandFromCmd(t, submit)
 
 	_, final := runTerminalRuntime(t, model,
-		runStartedEvent(1),
+		runStartedEvent(1, "Inspect the active run."),
 		application.UIEvent{
 			Kind: application.UIEventRunCancelled, RunID: testRunID,
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",

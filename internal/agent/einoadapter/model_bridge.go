@@ -2,6 +2,8 @@ package einoadapter
 
 import (
 	"context"
+	"reflect"
+	"sync/atomic"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -15,6 +17,28 @@ import (
 type guardedChatModel struct {
 	state *runState
 	model einomodel.ToolCallingChatModel
+}
+
+type preparedModelCallContextKey struct{}
+
+type preparedModelCall struct {
+	requestID   domain.ModelRequestID
+	reservation agent.CallReservation
+	messages    []*schema.Message
+	started     atomic.Bool
+	used        atomic.Bool
+}
+
+func withPreparedModelCall(ctx context.Context, prepared *preparedModelCall) context.Context {
+	return context.WithValue(ctx, preparedModelCallContextKey{}, prepared)
+}
+
+func preparedModelCallFromContext(ctx context.Context) *preparedModelCall {
+	if ctx == nil {
+		return nil
+	}
+	prepared, _ := ctx.Value(preparedModelCallContextKey{}).(*preparedModelCall)
+	return prepared
 }
 
 var _ einomodel.ToolCallingChatModel = (*guardedChatModel)(nil)
@@ -63,7 +87,16 @@ func (model *guardedChatModel) Stream(ctx context.Context, input []*schema.Messa
 	} else if len(options) != 0 {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	message, err := model.state.callModel(ctx, bound, input)
+	var (
+		message *schema.Message
+		err     error
+	)
+	prepared := preparedModelCallFromContext(ctx)
+	if prepared == nil {
+		message, err = model.state.callModel(ctx, bound, input)
+	} else {
+		message, err = model.state.executePreparedModelCall(ctx, bound, input, prepared)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +108,15 @@ func (state *runState) callModel(
 	model einomodel.ToolCallingChatModel,
 	messages []*schema.Message,
 ) (*schema.Message, error) {
-	if state == nil || state.client == nil || model == nil {
+	prepared, err := state.prepareModelCall(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	return state.executePreparedModelCall(ctx, model, messages, prepared)
+}
+
+func (state *runState) prepareModelCall(ctx context.Context, messages []*schema.Message) (*preparedModelCall, error) {
+	if state == nil || state.client == nil || ctx == nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	if err := state.checkScope(ctx); err != nil {
@@ -96,6 +137,53 @@ func (state *runState) callModel(
 	if err := state.validateConversation(safeMessages); err != nil {
 		return nil, err
 	}
+	if minimumModelPayloadBytes(safeMessages) > reservation.RequestBytes {
+		return nil, failedRuntime(
+			domain.SafeErrorClassBudgetExhausted,
+			"The model request exceeded its fixed byte limit.",
+			nil,
+		)
+	}
+	return &preparedModelCall{requestID: requestID, reservation: reservation, messages: safeMessages}, nil
+}
+
+// minimumModelPayloadBytes is a provider-independent lower bound for the
+// serialized messages. It deliberately excludes JSON framing and fixed Tool
+// schemas: exceeding this value already proves that the configured transport
+// request ceiling cannot fit, so a claimed steer can be recovered before its
+// durable commit barrier and before any model I/O.
+func minimumModelPayloadBytes(messages []*schema.Message) int {
+	total := 0
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		total += len(message.Role) + len(message.Content) + len(message.ToolCallID) + len(message.ToolName)
+		for _, call := range message.ToolCalls {
+			total += len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments)
+		}
+		if total > domain.MaxModelRequestBytes {
+			return total
+		}
+	}
+	return total
+}
+
+func (state *runState) executePreparedModelCall(
+	ctx context.Context,
+	model einomodel.ToolCallingChatModel,
+	messages []*schema.Message,
+	prepared *preparedModelCall,
+) (*schema.Message, error) {
+	if state == nil || state.client == nil || model == nil || ctx == nil || prepared == nil ||
+		!prepared.used.CompareAndSwap(false, true) {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	safeMessages := stripRunnerMessageMetadata(messages)
+	if !reflect.DeepEqual(safeMessages, prepared.messages) {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	requestID, reservation := prepared.requestID, prepared.reservation
 	if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID}); err != nil {
 		return nil, err
 	}
@@ -109,6 +197,7 @@ func (state *runState) callModel(
 		cancel()
 		return nil, err
 	}
+	prepared.started.Store(true)
 	message, modelError := state.client.streamBounded(modelCtx, requestID, model, safeMessages, reservation, preview.accept)
 	var finishError error
 	if modelError == nil && preview.failure == nil && message != nil && message.ResponseMeta != nil &&

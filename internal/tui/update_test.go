@@ -26,6 +26,13 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 		},
 		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessAll, ScopeGeneration: 7, ReadOnly: true,
 		RunID: testRunID, RunActive: true, CapabilityCatalogVersion: agent.ToolCatalogVersion,
+		ConversationInput: application.ConversationInputStatus{
+			Revision: 4, Pending: 1, Committing: 1, Committed: 1, Queued: 1,
+			Items: 4, Bytes: 4096,
+			MaximumItems:     application.MaxConversationInputItems,
+			MaximumBytes:     application.MaxConversationInputAggregateBytes,
+			MaximumItemBytes: application.MaxConversationInputItemBytes,
+		},
 		ResourcePolicyVersion: domain.ResourcePolicyVersion, ResourceTypeCount: len(domain.BuiltInResourcePolicies()),
 		ObservabilityPolicyVersion: domain.ObservabilityPolicyVersion, PrometheusEnabled: true,
 		RemoteDiagnosticsPolicyVersion: domain.RemoteDiagnosticsPolicyVersion,
@@ -203,6 +210,7 @@ func TestUpdateMaintainsOneEditorAcrossStates(t *testing.T) {
 	assertSingleEditor(t, model)
 
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model.composer.Reset()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	if !model.run.Active {
 		t.Fatal("run did not become active")
@@ -233,8 +241,12 @@ func TestUpdateSubmitsChatThroughDeferredTypedCommand(t *testing.T) {
 	if model.composer.Value() != "" {
 		t.Fatalf("draft after submit = %q", model.composer.Value())
 	}
-	if got := model.transcript.Entries(); len(got) != 1 || got[0].Kind != components.EntryUser || got[0].Text != intent.Text {
-		t.Fatalf("transcript entries = %#v", got)
+	if got := model.transcript.Entries(); len(got) != 0 {
+		t.Fatalf("uncommitted submit entered transcript: %#v", got)
+	}
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, intent.Text)})
+	if got := model.transcript.Entries(); len(got) != 2 || got[0].Kind != components.EntryUser || got[0].Text != intent.Text {
+		t.Fatalf("committed transcript entries = %#v", got)
 	}
 }
 
@@ -551,16 +563,20 @@ func TestSessionAndStatusSlashCommandsDispatchTypedApplicationIntents(t *testing
 	}
 }
 
-func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
+func TestUpdateActiveRunSteersAndRejectsLateEvents(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1, "initial question")})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "next question"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil || model.composer.Value() != "next question" {
-		t.Fatal("active run submission did not fail closed")
+	steer := applicationCommandFromCmd(t, cmd)
+	if steer.Kind != application.UICommandSubmitSteer || steer.Text != "next question" ||
+		steer.RunID != testRunID || steer.ExpectedScopeGeneration != 7 || steer.ExpectedPolicyGeneration != 1 ||
+		model.composer.Value() != "" || model.dialog.Open() {
+		t.Fatalf("active steer = %#v", steer)
 	}
+	model.pendingConversation = nil
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
@@ -617,10 +633,11 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 	if model.run.Active || !model.run.Terminal || model.run.StreamedText != "Final diagnosis." || model.run.LastSequence != 6 {
 		t.Fatalf("terminal run state = %#v", model.run)
 	}
+	model.composer.SetValue("follow-up after completion")
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
 	entries := model.transcript.Entries()
-	if len(entries) != 2 || len(entries[0].ToolSteps) != 1 {
+	if len(entries) != 2 || len(entries[1].ToolSteps) != 1 {
 		t.Fatalf("historic Tool steps were not retained: %#v", entries)
 	}
 }
@@ -726,14 +743,18 @@ func newTestModel() Model {
 	})
 }
 
-func runStartedEvent(sequence int64) application.UIEvent {
-	return application.UIEvent{
+func runStartedEvent(sequence int64, text ...string) application.UIEvent {
+	event := application.UIEvent{
 		Kind:             application.UIEventRunStarted,
 		RunID:            testRunID,
 		ScopeGeneration:  7,
 		PolicyGeneration: 1,
 		Sequence:         sequence,
 	}
+	if len(text) > 0 {
+		event.Text = text[0]
+	}
+	return event
 }
 
 func updateModel(t *testing.T, model Model, msg tea.Msg) (Model, tea.Cmd) {

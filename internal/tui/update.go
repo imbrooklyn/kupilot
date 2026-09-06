@@ -27,7 +27,9 @@ const helpText = `/help                 Show commands and key bindings
 /cancel               Cancel the active diagnostic run
 /quit                 Exit Kupilot
 
-Enter sends. Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Tab completes a command.
+Enter sends when idle and steers an active run at its next model boundary. During an active run, Tab queues one follow-up.
+Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up when the composer is empty.
+Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
 Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
@@ -96,7 +98,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case CommandResultMsg:
-		resumeScopeActivation := message.Result.Command == application.UICommandActivateScope &&
+		resumeScopeActivation := (message.Result.Command == application.UICommandActivateScope ||
+			message.Result.Command == application.UICommandSelectContext ||
+			message.Result.Command == application.UICommandSelectNamespace) &&
 			model.pendingResumed != nil && model.pendingResumed.ResumeRequestID == message.Result.RequestID
 		model.acceptCommandOutcome(message.Result)
 		model.reflow()
@@ -105,9 +109,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case ModelSetupResultMsg:
-		model.acceptModelSetupResult(message.Result)
+		cmd := model.acceptModelSetupResult(message.Result)
 		model.reflow()
-		return model, nil
+		return model, cmd
 	case ModelSetupCancelRejectedMsg:
 		if model.rejectModelSetupCancellation(message) {
 			model.showDialog("Cancellation unavailable", "The model setup cancellation request could not be queued. The current setup operation is still running.")
@@ -147,7 +151,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.FocusMsg:
 		model.terminalFocused = true
-		if !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() &&
+		if !model.dialog.Open() && !model.approvalDialog.Open() &&
 			!model.evidenceDialog.Open() && !model.transcript.EvidenceSelecting() {
 			_ = model.composer.Focus()
 			model.focus = FocusComposer
@@ -156,7 +160,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
 		return model, nil
 	case tea.PasteMsg:
-		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
+		if model.dialog.Open() || model.approvalDialog.Open() ||
 			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || !model.terminalFocused {
 			return model, nil
 		}
@@ -164,7 +168,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return model.updateKey(message)
 	default:
-		if model.dialog.Open() || model.scopeConflict.Open() || model.approvalDialog.Open() ||
+		if model.dialog.Open() || model.approvalDialog.Open() ||
 			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
 			return model, nil
 		}
@@ -177,6 +181,21 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
+	if message.Command == application.UICommandSubmitSteer ||
+		message.Command == application.UICommandEnqueueFollowUp ||
+		message.Command == application.UICommandPopFollowUp {
+		pending := model.pendingConversation
+		if pending == nil || message.RequestID != pending.RequestID || message.Command != pending.Kind ||
+			message.RunID != pending.RunID || message.ScopeGeneration != pending.ScopeGeneration ||
+			message.PolicyGeneration != pending.PolicyGeneration {
+			return false
+		}
+		if pending.Kind != application.UICommandPopFollowUp && model.composer.Value() == "" {
+			model.composer.SetValue(pending.Draft)
+		}
+		model.pendingConversation = nil
+		return true
+	}
 	if message.Command == application.UICommandApproveAction || message.Command == application.UICommandRejectAction ||
 		message.Command == application.UICommandCancelAction || message.Command == application.UICommandExpireAction {
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || message.RequestID != model.pendingApprovalID ||
@@ -218,6 +237,10 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 			return false
 		}
 		model.pendingSubmitID = 0
+		if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
+			model.composer.SetValue(model.pendingSubmitDraft)
+		}
+		model.pendingSubmitDraft = ""
 		return true
 	}
 	switch message.Command {
@@ -284,6 +307,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 		}
 		model.pendingResume = application.UIResumeRequest{}
 		model.pendingResumed = nil
+		model.resumeScopeSelection = false
 		if model.resumeOrigin == resumeOriginInTUI {
 			model.startup.Ready = true
 		}
@@ -299,6 +323,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 			model.scope.Switching = false
 			if message.Command == application.UICommandAcceptResume {
 				model.pendingResumed = nil
+				model.resumeScopeSelection = false
 				if model.resumeOrigin == resumeOriginInTUI {
 					model.startup.Ready = true
 				}
@@ -344,6 +369,9 @@ func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	if model.modelSetup != nil && model.modelSetup.Stage == modelSetupApplying {
 		return model, nil
 	}
+	if model.pendingConversation != nil {
+		return model, nil
+	}
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
 		if strings.ContainsRune(message.Content, '\n') || len(model.composer.Value())+len(message.Content) > 4096 {
 			model.showSessionExportTargetError("The export target must be one bounded single-line path.")
@@ -383,9 +411,6 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
 			model.cancelSessionExport()
 			return model, nil
-		}
-		if model.scopeConflict.Open() {
-			return model.updateScopeConflictKey(message)
 		}
 		if model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
 			model.closeEvidenceInteraction()
@@ -429,9 +454,6 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
 		return model.updateSessionExportTargetKey(message)
-	}
-	if model.scopeConflict.Open() {
-		return model.updateScopeConflictKey(message)
 	}
 	if model.evidenceDialog.Open() {
 		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
@@ -585,6 +607,15 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.modelSetup != nil && model.modelSetup.Stage == modelSetupApplying {
 		return model, nil
 	}
+	if model.pendingConversation != nil {
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.EditFollowUp) {
+		return model.editLastConversationInput()
+	}
+	if model.run.Active && key.Matches(message, model.keymap.Complete) {
+		return model.queueActiveDraft()
+	}
 	if key.Matches(message, model.keymap.Complete) {
 		return model, nil
 	}
@@ -637,7 +668,7 @@ func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, 
 	if model.approvalDialog.Terminal() &&
 		(key.Matches(message, model.keymap.Submit) || key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Quit)) {
 		model.approvalDialog.Close()
-		if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+		if model.terminalFocused && !model.dialog.Open() {
 			_ = model.composer.Focus()
 			model.focus = FocusComposer
 		}
@@ -760,8 +791,7 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 	}
 
 	if model.run.Active {
-		model.showDialog("Run active", "Cancel the active diagnostic run before sending another question.")
-		return model, nil
+		return model.dispatchActiveConversationInput(application.UICommandSubmitSteer, draft, historyDraft)
 	}
 	if model.scope.Switching {
 		model.showDialog("Scope switching", "Wait for scope activation to finish before sending a question.")
@@ -790,13 +820,104 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 		model.showDialog("Cannot send", "The question could not be submitted safely.")
 		return model, nil
 	}
-	model.transcript.AppendUser(draft)
-	model.composer.RecordSubmission(historyDraft)
 	model.composer.Reset()
+	model.composer.RecordSubmission(historyDraft)
 	model.slashMenu.Close()
 	model.pendingSubmitID = command.RequestID
+	model.pendingSubmitDraft = historyDraft
 	model.reflow()
 	return model, applicationCommand(command)
+}
+
+func (model Model) queueActiveDraft() (tea.Model, tea.Cmd) {
+	draft := model.composer.Value()
+	if strings.TrimSpace(draft) == "" {
+		return model, nil
+	}
+	if strings.HasPrefix(draft, "!") {
+		model.showDialog("Command unavailable", "Shell and bang commands are not supported.")
+		return model, nil
+	}
+	parsed := ParseSlashDraft(draft)
+	switch parsed.Mode {
+	case DraftEscapedChat:
+		return model.dispatchActiveConversationInput(
+			application.UICommandEnqueueFollowUp,
+			strings.TrimPrefix(draft, "/"),
+			draft,
+		)
+	case DraftChat:
+		return model.dispatchActiveConversationInput(application.UICommandEnqueueFollowUp, draft, draft)
+	default:
+		// Fixed and unknown Slash syntax remains local and never enters the
+		// follow-up queue. Visible completion already has higher priority.
+		return model, nil
+	}
+}
+
+func (model Model) dispatchActiveConversationInput(
+	kind application.UICommandKind,
+	text string,
+	historyDraft string,
+) (tea.Model, tea.Cmd) {
+	if !model.activeConversationInputAvailable() {
+		if model.run.Active && (model.pendingApproval != nil || model.actionPresentation != nil) {
+			model.showDialog("Input paused", "Finish the current approval or Reviewer interaction before steering or queueing input.")
+		}
+		return model, nil
+	}
+	command := application.UICommand{
+		Kind: kind, RequestID: model.nextUIRequestID(), Text: text, RunID: model.run.RunID,
+		ExpectedScopeGeneration:  model.run.ScopeGeneration,
+		ExpectedPolicyGeneration: model.run.PolicyGeneration,
+	}
+	if command.Validate() != nil {
+		model.showDialog("Cannot accept input", "The conversation input could not be submitted safely.")
+		return model, nil
+	}
+	model.pendingConversation = &pendingConversationInput{
+		RequestID: command.RequestID, Kind: kind, RunID: command.RunID,
+		ScopeGeneration: command.ExpectedScopeGeneration, PolicyGeneration: command.ExpectedPolicyGeneration,
+		Draft: historyDraft,
+	}
+	model.composer.Reset()
+	model.slashMenu.Close()
+	model.reflow()
+	return model, applicationCommand(command)
+}
+
+func (model Model) editLastConversationInput() (tea.Model, tea.Cmd) {
+	if model.composer.Value() != "" || !model.activeConversationInputAvailable() ||
+		model.conversationStatus.Editable == 0 {
+		return model, nil
+	}
+	command := application.UICommand{
+		Kind: application.UICommandPopFollowUp, RequestID: model.nextUIRequestID(), RunID: model.run.RunID,
+		ExpectedScopeGeneration:  model.run.ScopeGeneration,
+		ExpectedPolicyGeneration: model.run.PolicyGeneration,
+	}
+	if command.Validate() != nil {
+		return model, nil
+	}
+	model.pendingConversation = &pendingConversationInput{
+		RequestID: command.RequestID, Kind: command.Kind, RunID: command.RunID,
+		ScopeGeneration: command.ExpectedScopeGeneration, PolicyGeneration: command.ExpectedPolicyGeneration,
+	}
+	return model, applicationCommand(command)
+}
+
+func (model Model) activeConversationInputAvailable() bool {
+	return model.run.Active && !model.run.Terminal && model.pendingConversation == nil &&
+		model.pendingApproval == nil && model.actionPresentation == nil && !model.approvalDialog.Open() &&
+		!model.dialog.Open() && !model.pickerOpen() && !model.slashMenu.Open() &&
+		!model.evidenceDialog.Open() && !model.transcript.EvidenceSelecting()
+}
+
+func editableConversationInput(value string) string {
+	if strings.HasPrefix(value, "/") {
+		return "/" + value
+	}
+	return value
 }
 
 func (model Model) executeSlash(command SlashCommand, argument string) (tea.Model, tea.Cmd) {
@@ -961,7 +1082,7 @@ func (model *Model) showDialog(title, body string) {
 
 func (model *Model) closeDialog() {
 	model.dialog.Close()
-	if model.terminalFocused && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
+	if model.terminalFocused && !model.approvalDialog.Open() {
 		_ = model.composer.Focus()
 	}
 	model.focus = FocusComposer
@@ -1063,7 +1184,7 @@ func (model *Model) closeEvidenceInteraction() {
 	model.evidenceGeneration = 0
 	model.evidenceDialog.Close()
 	model.transcript.EndEvidenceSelection()
-	if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() && !model.approvalDialog.Open() {
+	if model.terminalFocused && !model.dialog.Open() && !model.approvalDialog.Open() {
 		_ = model.composer.Focus()
 		model.focus = FocusComposer
 	}
@@ -1126,8 +1247,18 @@ func (model Model) cancelRunCommand() tea.Cmd {
 
 func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
 	isSession := model.activePicker == application.UICompletionSession
+	resumeScope := model.resumeScopeSelection && model.pendingResumed != nil &&
+		(model.activePicker == application.UICompletionContext || model.activePicker == application.UICompletionNamespace)
 	topLevel := isSession && model.resumeOrigin == resumeOriginTopLevel && !model.startup.Ready
+	if resumeScope {
+		topLevel = model.resumeOrigin == resumeOriginTopLevel
+	}
+	requestID := uint64(0)
+	if resumeScope {
+		requestID = model.pendingResumed.ResumeRequestID
+	}
 	model.closePickers()
+	model.resumeScopeSelection = false
 	if isSession {
 		model.composer.Reset()
 		model.resumeOrigin = resumeOriginNone
@@ -1137,58 +1268,22 @@ func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
 	}
 	model.reflow()
 	if topLevel {
+		model.pendingResumed = nil
+		model.resumeOrigin = resumeOriginNone
+		model.resumeScopeSelection = false
 		return model, model.prepareQuit()
 	}
-	return model, nil
-}
-
-func (model Model) updateScopeConflictKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Quit):
-		topLevel := model.resumeOrigin == resumeOriginTopLevel
-		requestID := uint64(0)
-		if model.pendingResumed != nil {
-			requestID = model.pendingResumed.ResumeRequestID
-		}
-		model.scopeConflict.Close()
+	if resumeScope {
 		model.pendingResumed = nil
-		model.composer.Reset()
 		model.resumeOrigin = resumeOriginNone
-		if model.terminalFocused {
-			_ = model.composer.Focus()
-		}
-		model.focus = FocusComposer
-		if topLevel {
-			return model, model.prepareQuit()
-		}
+		model.resumeScopeSelection = false
 		model.startup.Ready = true
-		if requestID == 0 {
-			return model, nil
+		model.composer.Reset()
+		if requestID != 0 {
+			return model, applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
 		}
-		return model, applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
-	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
-		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
-		key.Matches(message, model.keymap.Complete), key.Matches(message, model.keymap.Reverse):
-		model.scopeConflict.Move(1)
-		return model, nil
-	case key.Matches(message, model.keymap.Submit):
-		if model.pendingResumed == nil {
-			return model, nil
-		}
-		resumed := *model.pendingResumed
-		command := model.resumeDecisionCommand(resumed, model.scopeConflict.UseSavedScope())
-		if command.Validate() != nil {
-			model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
-			return model, nil
-		}
-		model.closeEvidenceInteraction()
-		model.pendingScopeID = resumed.ResumeRequestID
-		model.scope.Switching = true
-		model.scopeConflict.Close()
-		return model, applicationCommand(command)
-	default:
-		return model, nil
 	}
+	return model, nil
 }
 
 func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd {
@@ -1212,13 +1307,15 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 	explicitTopLevelScope := model.resumeOrigin == resumeOriginTopLevel && model.startup.Intent.ExplicitScope
 	if !explicitTopLevelScope && resumed.SavedScope != nil &&
 		(resumed.SavedScope.Context != model.scope.Context || resumed.SavedScope.Namespace != model.scope.Namespace) {
-		model.closeEvidenceInteraction()
-		model.scopeConflict.Show(scopeLabel(model.scope.Context, model.scope.Namespace), scopeLabel(resumed.SavedScope.Context, resumed.SavedScope.Namespace))
-		model.composer.Blur()
-		model.focus = FocusModal
-		return nil
+		return model.beginResumeScopeSelection(resumed)
 	}
-	command := model.resumeDecisionCommand(resumed, false)
+	if !model.scope.Verified {
+		// A configured or historic candidate is not current authority. Resume
+		// itself performs no Kubernetes I/O; only an explicit picker selection
+		// may start the normal independent activation path.
+		return model.beginResumeScopeSelection(resumed)
+	}
+	command := model.resumeDecisionCommand(resumed)
 	if command.Validate() != nil {
 		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 		return nil
@@ -1231,27 +1328,11 @@ func (model *Model) stageResumeResult(result application.UIResumeResult) tea.Cmd
 
 func (model Model) resumeDecisionCommand(
 	resumed application.UIResumedSession,
-	useSaved bool,
 ) application.UICommand {
-	command := application.UICommand{
+	return application.UICommand{
 		Kind: application.UICommandAcceptResume, RequestID: resumed.ResumeRequestID,
 		ExpectedScopeGeneration: model.scope.Generation,
 	}
-	var target *domain.ScopeCandidate
-	if useSaved && resumed.SavedScope != nil {
-		scope := *resumed.SavedScope
-		target = &scope
-	} else if !model.scope.Verified {
-		scope := domain.ScopeCandidate{Context: model.scope.Context, Namespace: model.scope.Namespace}
-		if scope.Validate() == nil {
-			target = &scope
-		}
-	}
-	if target != nil {
-		command.Kind = application.UICommandActivateScope
-		command.Scope = target
-	}
-	return command
 }
 
 func (model *Model) finishResumeScopeActivation(result application.UICommandOutcome) tea.Cmd {
@@ -1261,15 +1342,12 @@ func (model *Model) finishResumeScopeActivation(result application.UICommandOutc
 	}
 	requestID := result.RequestID
 	if result.Scope.Failure != "" {
-		if model.resumeOrigin == resumeOriginTopLevel {
-			model.startup.Failed = true
-		} else {
-			model.startup.Ready = true
-		}
-		model.pendingResumed = nil
-		model.resumeOrigin = resumeOriginNone
-		return applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
+		model.resumeScopeSelection = false
+		model.pendingScopeID = 0
+		model.scope.Switching = false
+		return model.beginResumeScopeSelection(*model.pendingResumed)
 	}
+	model.resumeScopeSelection = false
 	command := application.UICommand{
 		Kind: application.UICommandAcceptResume, RequestID: requestID,
 		ExpectedScopeGeneration: model.scope.Generation,
@@ -1277,6 +1355,7 @@ func (model *Model) finishResumeScopeActivation(result application.UICommandOutc
 	if command.Validate() != nil {
 		model.pendingResumed = nil
 		model.resumeOrigin = resumeOriginNone
+		model.resumeScopeSelection = false
 		model.showDialog("Resume unavailable", "The Session choice could not be accepted safely.")
 		return applicationCommand(application.UICommand{Kind: application.UICommandCancelResume, RequestID: requestID})
 	}
@@ -1299,6 +1378,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.pendingScopeID = 0
 			model.scope.Switching = false
 			model.pendingResumed = nil
+			model.resumeScopeSelection = false
 			model.showDialog("Resume unavailable", resumeUIFailureText(result.Failure))
 			return
 		}
@@ -1324,6 +1404,8 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.resource = ResourceView{}
 		model.pendingResumed = nil
 		model.resumeOrigin = resumeOriginNone
+		model.resumeScopeSelection = false
+		model.scopeSelectionRequired = !model.scope.Verified
 		model.startup.Ready = true
 		model.resetTranscript()
 		if model.scope.Verified {
@@ -1369,19 +1451,46 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		}
 		model.pendingSubmitID = 0
 		if result.Failure == application.UIQueryConsentRequired && result.Privacy != nil {
+			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
+				model.composer.SetValue(model.pendingSubmitDraft)
+			}
+			model.pendingSubmitDraft = ""
 			model.pendingPrivacyID = result.RequestID
 			model.showPrivacyReview(*result.Privacy, nil)
 			return
 		}
 		if result.Failure == application.UIQueryModelRequired {
+			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
+				model.composer.SetValue(model.pendingSubmitDraft)
+			}
+			model.pendingSubmitDraft = ""
 			model.modelConfigured = false
 			model.beginMissingModelSetup()
 			model.showDialog("Model required", "Configure the model before sending another question.")
 			return
 		}
 		if result.Failure != "" {
+			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
+				model.composer.SetValue(model.pendingSubmitDraft)
+			}
+			model.pendingSubmitDraft = ""
 			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
 		}
+	case application.UICommandSubmitSteer, application.UICommandEnqueueFollowUp, application.UICommandPopFollowUp:
+		pending := model.pendingConversation
+		if pending == nil || result.RequestID != pending.RequestID || result.Command != pending.Kind ||
+			result.RunID != pending.RunID || result.ConversationInput == nil {
+			return
+		}
+		model.pendingConversation = nil
+		if result.Command == application.UICommandPopFollowUp {
+			if model.composer.Value() == "" && !model.pickerOpen() && !model.dialog.Open() &&
+				!model.approvalDialog.Open() && model.pendingApproval == nil && model.actionPresentation == nil {
+				model.composer.SetValue(editableConversationInput(result.ConversationInput.Text))
+			}
+			return
+		}
+		model.composer.RecordSubmission(pending.Draft)
 	case application.UICommandShowPrivacy, application.UICommandToggleLogs, application.UICommandTightenRetention:
 		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil || result.Lifecycle == nil {
 			return
@@ -1398,6 +1507,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.resource = ResourceView{}
 		model.pendingResumed = nil
 		model.resumeOrigin = resumeOriginNone
+		model.resumeScopeSelection = false
 		model.resetTranscript()
 		model.transcript.AppendNotice("A new Session was started with the selected persistence mode. No model request was sent.")
 		model.privacyPending = false
@@ -1514,7 +1624,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.pendingApprovalID = 0
 			model.approvalState = domain.ApprovalStateApproved
 			model.approvalDialog.Close()
-			if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+			if model.terminalFocused && !model.dialog.Open() {
 				_ = model.composer.Focus()
 				model.focus = FocusComposer
 			}
@@ -1595,7 +1705,7 @@ func (model *Model) clearApproval() {
 	model.pendingApproval = nil
 	model.pendingApprovalID = 0
 	model.approvalState = ""
-	if model.terminalFocused && !model.dialog.Open() && !model.scopeConflict.Open() {
+	if model.terminalFocused && !model.dialog.Open() {
 		_ = model.composer.Focus()
 		model.focus = FocusComposer
 	}
@@ -1657,6 +1767,7 @@ func (model *Model) resetAfterHistoryDeletion() {
 	model.resource = ResourceView{}
 	model.pendingResumed = nil
 	model.resumeOrigin = resumeOriginNone
+	model.resumeScopeSelection = false
 	model.resetTranscript()
 }
 
@@ -1845,10 +1956,11 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 	model.pendingResource = ResourceView{}
 	model.pendingResumed = nil
 	model.resumeOrigin = resumeOriginNone
+	model.resumeScopeSelection = false
+	model.scopeSelectionRequired = false
 	model.closePickers()
 	model.composer.Reset()
 	model.composer.ClearHistory()
-	model.scopeConflict.Close()
 	model.resetTranscript()
 	for _, message := range resumed.History {
 		textLimit := application.MaxQuestionBytes
@@ -1883,6 +1995,12 @@ func (model *Model) resetTranscript() {
 	model.evidenceGeneration = 0
 	model.evidenceDialog.Close()
 	model.evidenceReferences = nil
+	model.pendingConversation = nil
+	model.pendingSubmitDraft = ""
+	model.conversationRevision = 0
+	model.conversationStatus = application.ConversationInputStatus{}
+	model.conversationPreview = nil
+	model.committedConversation = nil
 	model.transcript = components.NewTranscript(model.styles.transcript, model.styles.toolSteps)
 }
 
@@ -1924,6 +2042,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 		Context: sanitizeExternalText(result.Context, 253), Namespace: sanitizeExternalText(result.Namespace, 63),
 		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly, Verified: true,
 	}
+	model.scopeSelectionRequired = false
 	if changed {
 		model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")
 	}
@@ -2113,6 +2232,17 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"",
 		"Run",
 		statusRow("State", run),
+		statusRow("Conversation input", fmt.Sprintf(
+			"%d items · %s · pending %d · committing %d · committed %d · queued %d · rejected %d · recovered %d · unknown %d · editable %d · revision %d",
+			status.ConversationInput.Items, statusBytes(status.ConversationInput.Bytes),
+			status.ConversationInput.Pending, status.ConversationInput.Committing,
+			status.ConversationInput.Committed, status.ConversationInput.Queued,
+			status.ConversationInput.Rejected, status.ConversationInput.Recovered,
+			status.ConversationInput.Unknown, status.ConversationInput.Editable,
+			status.ConversationInput.Revision)),
+		statusRow("Input limits", fmt.Sprintf("%d items · %s aggregate · %s each",
+			status.ConversationInput.MaximumItems, statusBytes(status.ConversationInput.MaximumBytes),
+			statusBytes(status.ConversationInput.MaximumItemBytes))),
 		statusRow("Catalog", status.CapabilityCatalogVersion),
 		statusRow("Resources", fmt.Sprintf("%s · %d types", status.ResourcePolicyVersion, status.ResourceTypeCount)),
 		statusRow("Observability", fmt.Sprintf("%s · Prometheus %s · Loki %s", status.ObservabilityPolicyVersion,
@@ -2270,7 +2400,14 @@ func statusActionDigest(digest domain.ActionDigest) string {
 }
 
 func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
-	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation ||
+	if event.Validate() != nil {
+		return nil
+	}
+	if event.Kind == application.UIEventConversationInput {
+		model.acceptConversationInputEvent(event)
+		return nil
+	}
+	if model.scope.Switching || event.ScopeGeneration != model.scope.Generation ||
 		event.PolicyGeneration != model.permission.PolicyGeneration {
 		return nil
 	}
@@ -2356,6 +2493,18 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.workingAt = startedAt
 		model.workingFrame = 0
 		model.closeEvidenceInteraction()
+		if event.Text != "" {
+			text := sanitizeExternalText(event.Text, application.MaxQuestionBytes)
+			if text != "" {
+				model.transcript.AppendUser(text)
+				history := editableConversationInput(text)
+				if model.pendingSubmitDraft != "" {
+					history = model.pendingSubmitDraft
+					model.pendingSubmitDraft = ""
+				}
+				model.composer.RecordSubmission(history)
+			}
+		}
 		model.transcript.StartAgent()
 		return workingTick(model.run)
 	}
@@ -2503,6 +2652,39 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	}
 	model.run.LastSequence = event.Sequence
 	return nil
+}
+
+func (model *Model) acceptConversationInputEvent(event application.UIEvent) {
+	input := event.ConversationInput
+	if input == nil || input.Revision <= model.conversationRevision ||
+		event.RunID != model.run.RunID || event.ScopeGeneration != model.run.ScopeGeneration ||
+		event.PolicyGeneration != model.run.PolicyGeneration {
+		return
+	}
+	model.conversationRevision = input.Revision
+	model.conversationStatus = input.Status
+	model.conversationPreview = make([]application.ConversationInputProjection, 0, len(input.Preview))
+	for _, projection := range input.Preview {
+		projection.Text = sanitizeExternalText(projection.Text, application.MaxConversationInputItemBytes)
+		if projection.Text != "" {
+			model.conversationPreview = append(model.conversationPreview, projection)
+		}
+	}
+	if input.Changed == nil || input.Changed.State != application.ConversationInputCommitted {
+		return
+	}
+	if model.committedConversation == nil {
+		model.committedConversation = make(map[domain.MessageID]struct{})
+	}
+	if _, duplicate := model.committedConversation[input.Changed.ItemID]; duplicate {
+		return
+	}
+	text := sanitizeExternalText(input.Changed.Text, application.MaxConversationInputItemBytes)
+	if text == "" {
+		return
+	}
+	model.committedConversation[input.Changed.ItemID] = struct{}{}
+	model.transcript.InsertUserBeforeActiveAgent(text)
 }
 
 func approvalTargetLabel(request application.UIApprovalRequest) string {

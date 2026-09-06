@@ -88,18 +88,17 @@ func SemanticPaletteFor(mode ThemeMode, darkBackground bool) SemanticPalette {
 }
 
 type styleSet struct {
-	palette       SemanticPalette
-	composer      components.ComposerStyles
-	working       workingStyles
-	transcript    components.TranscriptStyles
-	toolSteps     components.ToolStepStyles
-	slashMenu     components.SlashMenuStyles
-	picker        components.PickerStyles
-	dialog        components.DialogStyles
-	evidence      components.EvidenceDetailStyles
-	approval      components.ApprovalDialogStyles
-	scopeConflict components.ScopeConflictStyles
-	footer        components.FooterStyles
+	palette    SemanticPalette
+	composer   components.ComposerStyles
+	working    workingStyles
+	transcript components.TranscriptStyles
+	toolSteps  components.ToolStepStyles
+	slashMenu  components.SlashMenuStyles
+	picker     components.PickerStyles
+	dialog     components.DialogStyles
+	evidence   components.EvidenceDetailStyles
+	approval   components.ApprovalDialogStyles
+	footer     components.FooterStyles
 }
 
 type workingStyles struct {
@@ -251,11 +250,6 @@ func styleSetForPalette(palette SemanticPalette) styleSet {
 		picker: components.PickerStyles{
 			Normal: base, Selected: accent,
 			Muted: muted, Danger: danger,
-		},
-		scopeConflict: components.ScopeConflictStyles{
-			Frame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Warning).Padding(1, 2),
-			Title: warning,
-			Body:  base, Selected: accent, Muted: muted,
 		},
 		footer: components.FooterStyles{
 			Label: muted, Value: accent, Separator: muted, State: success, Warning: warning,

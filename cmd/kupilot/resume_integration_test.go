@@ -486,6 +486,7 @@ func seedIntegrationCompletedTurn(
 		Role: domain.MessageRoleUser, Content: question, Format: domain.MessageFormatPlain,
 		Status: domain.MessageStatusCommitted, Scope: &scope, Hash: domain.MessageContentHash(question), CreatedAt: startedAt,
 	}
+	request.RunSequence = integrationIntPointer(0)
 	running := domain.AgentRun{
 		ID: runID, SessionID: integrationSessionID, RequestMessageID: requestID,
 		Status: domain.AgentRunStatusRunning, Scope: scope,
@@ -503,10 +504,13 @@ func seedIntegrationCompletedTurn(
 		Role: domain.MessageRoleAssistant, Content: answer, Format: domain.MessageFormatMarkdown,
 		Status: domain.MessageStatusCommitted, Scope: &scope, Hash: domain.MessageContentHash(answer), CreatedAt: finishedAt,
 	}
+	assistant.RunSequence = integrationIntPointer(1)
 	if err := runs.FinishWithMessage(ctx, assistant, terminal); err != nil {
 		t.Fatalf("seed AgentRun FinishWithMessage() error = %v", err)
 	}
 }
+
+func integrationIntPointer(value int) *int { return &value }
 
 func sessionServiceForIntegration(
 	sessions *sqlite.SessionRepository,

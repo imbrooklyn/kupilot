@@ -128,10 +128,10 @@ resumed Session. A new confirmed fact must cite new Evidence from the new
 AgentRun.
 
 The command itself makes no model request, Tool call, Reviewer request,
-Kubernetes read, local-process launch, approval, or executor call. Selecting
-and accepting a saved scope is a later explicit action that performs normal
-scope verification. Supplying explicit `--context` or `--namespace` startup
-overrides also requests separate scope activation.
+Kubernetes read, local-process launch, approval, or executor call. A later
+scope-picker selection performs normal scope verification. Supplying explicit
+`--context` or `--namespace` startup overrides also requests separate scope
+activation.
 
 Every question after the first in a Session receives one ordered,
 bounded representation of all retained eligible safe history when such history
@@ -145,18 +145,19 @@ output, and approval dialogs are never replayed as conversation history.
 
 ## Saved-scope conflict
 
-A saved Context and Namespace are candidates, never live authority. When a
-resumed Session's saved scope differs from the current scope, Kupilot opens
-`Confirm Session scope` with two choices:
+A saved Context and Namespace are candidates, never live authority. If the
+same Context and Namespace are already independently verified in the current
+process, Kupilot accepts the resume under that current authority without
+another scope choice or Kubernetes request. Otherwise an unavailable or
+conflicting candidate opens the ordinary Context or Namespace picker. There is
+no historic-authority shortcut and no keep-current confirmation that could
+silently ignore the conflict.
 
-1. `Keep current scope`, selected by default.
-2. `Use saved scope`.
-
-No scope action occurs until the user confirms a choice. `Esc` cancels the
-resume. Choosing the saved scope resolves that Context from local kubeconfig,
-creates a fresh client bundle, and verifies the exact Namespace. Failure leaves
-the attempted generation unavailable; Kupilot does not silently restore the old
-client or create a new Session.
+No scope action occurs until the user chooses a picker item. `Esc` cancels the
+resume. A selection resolves its Context from local kubeconfig, creates a fresh
+client bundle, and verifies the exact Namespace. Failure returns to the picker
+with the attempted generation unavailable; Kupilot does not silently restore
+the old client or create a new Session.
 
 Explicit top-level `--context` or `--namespace` overrides take precedence over
 the saved candidate. They still require verification and do not make historic

@@ -68,6 +68,7 @@ type UIStatusResult struct {
 	PrometheusEnabled              bool
 	LokiEnabled                    bool
 	PersistenceDegraded            bool
+	ConversationInput              ConversationInputStatus
 	Budget                         UIBudgetStatus
 	ModelContext                   UIModelContextStatus
 	AgentModel                     UIModelRoleStatus
@@ -293,6 +294,7 @@ type UICommandOutcome struct {
 	Export             *SessionExportResult
 	Approval           *UIApprovalResult
 	Permissions        *UIPermissionsResult
+	ConversationInput  *ConversationInputProjection
 	RunID              domain.AgentRunID
 	Failure            UIQueryFailureCode
 }
@@ -338,6 +340,12 @@ func (result UICommandOutcome) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	if result.Export != nil && (result.Export.Validate() != nil || result.Command != UICommandExportSession) {
+		return ErrInvalidUIEvent
+	}
+	conversationCommand := result.Command == UICommandSubmitSteer || result.Command == UICommandEnqueueFollowUp ||
+		result.Command == UICommandPopFollowUp
+	if conversationCommand != (result.ConversationInput != nil) ||
+		result.ConversationInput != nil && !result.ConversationInput.validate() {
 		return ErrInvalidUIEvent
 	}
 	switch result.Command {
@@ -426,6 +434,22 @@ func (result UICommandOutcome) Validate() error {
 		if result.RunID != "" || result.Failure != UIQueryConsentRequired && result.Failure != UIQueryUnavailable ||
 			result.Failure == UIQueryConsentRequired && result.Privacy == nil ||
 			result.Failure != UIQueryConsentRequired && result.Privacy != nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandSubmitSteer, UICommandEnqueueFollowUp, UICommandPopFollowUp:
+		if result.RequestID == 0 || result.Failure != "" || !result.RunID.Valid() ||
+			result.Session != nil || result.Resumed != nil ||
+			result.Scope != nil || result.Resource != nil || result.Status != nil || result.Privacy != nil ||
+			result.Lifecycle != nil || result.Deletion != nil || result.HistoryDeletion != nil ||
+			result.LocalStateDeletion != nil || result.Export != nil || result.Approval != nil || result.Permissions != nil {
+			return ErrInvalidUIEvent
+		}
+		if result.Command != UICommandPopFollowUp && result.ConversationInput.RunID != result.RunID {
+			return ErrInvalidUIEvent
+		}
+		if result.Command == UICommandSubmitSteer && result.ConversationInput.State != ConversationInputPending ||
+			result.Command == UICommandEnqueueFollowUp && result.ConversationInput.State != ConversationInputQueued ||
+			result.Command == UICommandPopFollowUp && !result.ConversationInput.State.editable() {
 			return ErrInvalidUIEvent
 		}
 	case UICommandCancelRun:
@@ -552,7 +576,8 @@ func (result UIStatusResult) valid() bool {
 		result.ResourceTypeCount < len(domain.BuiltInResourcePolicies()) || result.ResourceTypeCount > domain.MaxResourcePolicyEntries ||
 		!result.Budget.valid() || !result.ModelContext.valid(result.Session != nil) ||
 		!result.AgentModel.valid(true) || !result.ReviewerModel.valid(false) ||
-		!result.Permission.valid(result.Session != nil) || result.Action != nil && !result.Action.valid() {
+		!result.Permission.valid(result.Session != nil) || !result.ConversationInput.valid() ||
+		result.Action != nil && !result.Action.valid() {
 		return false
 	}
 	return true
@@ -820,6 +845,7 @@ const (
 	UIEventApprovalClosed      UIEventKind = "approval_closed"
 	UIEventReviewerState       UIEventKind = "reviewer_state"
 	UIEventRestartExecution    UIEventKind = "restart_execution"
+	UIEventConversationInput   UIEventKind = "conversation_input"
 )
 
 const (
@@ -869,6 +895,38 @@ type UIEvent struct {
 	ApprovalResult     *UIApprovalResult
 	Reviewer           *UIReviewerEvent
 	RestartExecution   *UIRestartExecution
+	ConversationInput  *UIConversationInputEvent
+}
+
+// UIConversationInputEvent is a revisioned, bounded working-area snapshot.
+// Its content is never a committed transcript or status payload.
+type UIConversationInputEvent struct {
+	Revision int64
+	Status   ConversationInputStatus
+	Changed  *ConversationInputProjection
+	Preview  []ConversationInputProjection
+}
+
+func (event UIConversationInputEvent) valid() bool {
+	if event.Revision < 1 || event.Status.Revision != event.Revision || !event.Status.valid() ||
+		len(event.Preview) > MaxConversationInputPreviewItems {
+		return false
+	}
+	if event.Changed != nil && (!event.Changed.validate() || event.Changed.Revision > event.Revision) {
+		return false
+	}
+	seen := make(map[domain.MessageID]struct{}, len(event.Preview))
+	for _, item := range event.Preview {
+		if !item.validate() || item.Revision > event.Revision || item.State == ConversationInputCommitted ||
+			item.State == conversationInputDraining {
+			return false
+		}
+		if _, duplicate := seen[item.ItemID]; duplicate {
+			return false
+		}
+		seen[item.ItemID] = struct{}{}
+	}
+	return true
 }
 
 // Terminal reports whether later events for the same run must be ignored.
@@ -878,13 +936,22 @@ func (event UIEvent) Terminal() bool {
 
 // Validate checks identity, payload exclusivity, and fixed event states.
 func (event UIEvent) Validate() error {
+	if event.Kind == UIEventConversationInput {
+		if !event.RunID.Valid() || event.ScopeGeneration < 1 || !event.PolicyGeneration.Valid() ||
+			event.Sequence != 0 || event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil ||
+			event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil ||
+			event.ConversationInput == nil || !event.ConversationInput.valid() {
+			return ErrInvalidUIEvent
+		}
+		return nil
+	}
 	if !event.RunID.Valid() || event.ScopeGeneration < 1 || !event.PolicyGeneration.Valid() ||
-		event.Sequence < 1 || event.Sequence > maxUIEventSequence {
+		event.Sequence < 1 || event.Sequence > maxUIEventSequence || event.ConversationInput != nil {
 		return ErrInvalidUIEvent
 	}
 	switch event.Kind {
 	case UIEventRunStarted:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
+		if event.Text != "" && !validUICommandText(event.Text, MaxQuestionBytes) || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRunCompleted:
@@ -1381,13 +1448,19 @@ type eventBridge struct {
 	deltaEvents      int
 	deltaBytes       int
 	diagnosis        *domain.Diagnosis
+	initialInput     string
 }
 
-func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, policyGeneration domain.PolicyGeneration, sink UIEventSink) (*eventBridge, error) {
-	if !runID.Valid() || scopeGeneration < 1 || !policyGeneration.Valid() || sink == nil {
+func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, policyGeneration domain.PolicyGeneration, sink UIEventSink, initialInput ...string) (*eventBridge, error) {
+	if !runID.Valid() || scopeGeneration < 1 || !policyGeneration.Valid() || sink == nil || len(initialInput) > 1 ||
+		len(initialInput) == 1 && !validUICommandText(initialInput[0], MaxQuestionBytes) {
 		return nil, ErrInvalidUIEvent
 	}
-	return &eventBridge{runID: runID, scopeGeneration: scopeGeneration, policyGeneration: policyGeneration, sink: sink}, nil
+	bridge := &eventBridge{runID: runID, scopeGeneration: scopeGeneration, policyGeneration: policyGeneration, sink: sink}
+	if len(initialInput) == 1 {
+		bridge.initialInput = initialInput[0]
+	}
+	return bridge, nil
 }
 
 func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) error {
@@ -1429,7 +1502,7 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 			return ErrInvalidUIEvent
 		}
 		bridge.started = true
-		return bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted})
+		return bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted, Text: bridge.initialInput})
 	case agent.RunEventModelStreamStarted, agent.RunEventSummaryStarted, agent.RunEventSummaryReady, agent.RunEventEvidenceCollected:
 		return nil
 	case agent.RunEventDiagnosisReady:
@@ -1494,7 +1567,7 @@ func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) 
 	}
 	if !bridge.started {
 		bridge.started = true
-		if err := bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted}); err != nil {
+		if err := bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted, Text: bridge.initialInput}); err != nil {
 			return err
 		}
 	}

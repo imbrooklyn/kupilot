@@ -202,11 +202,11 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 	clock := newTestClock()
 	turns := []agent.ConversationTurn{
 		{
-			MessageID: "00000000-0000-7000-8000-000000008101", Role: domain.MessageRoleUser,
+			MessageID: "00000000-0000-7000-8000-000000008101", RunID: "00000000-0000-7000-8000-000000008100", RunSequence: 0, Role: domain.MessageRoleUser,
 			Content: "What was checked previously?", ContentHash: domain.MessageContentHash("What was checked previously?"),
 		},
 		{
-			MessageID: "00000000-0000-7000-8000-000000008102", Role: domain.MessageRoleAssistant,
+			MessageID: "00000000-0000-7000-8000-000000008102", RunID: "00000000-0000-7000-8000-000000008100", RunSequence: 1, Role: domain.MessageRoleAssistant,
 			Content: "Only the final validated answer is retained.\n\n| Item | Result |\n| --- | --- |\n| quoted | \"safe\" |",
 		},
 	}
@@ -262,11 +262,11 @@ func TestAdapterRejectsOversizedHistoricalAssistantRepresentationBeforeIO(t *tes
 	answer := strings.Repeat("\\", domain.MaxModelInputMessageBytes)
 	turns := []agent.ConversationTurn{
 		{
-			MessageID: "00000000-0000-7000-8000-000000008111", Role: domain.MessageRoleUser,
+			MessageID: "00000000-0000-7000-8000-000000008111", RunID: "00000000-0000-7000-8000-000000008110", RunSequence: 0, Role: domain.MessageRoleUser,
 			Content: "What was checked previously?", ContentHash: domain.MessageContentHash("What was checked previously?"),
 		},
 		{
-			MessageID: "00000000-0000-7000-8000-000000008112", Role: domain.MessageRoleAssistant,
+			MessageID: "00000000-0000-7000-8000-000000008112", RunID: "00000000-0000-7000-8000-000000008110", RunSequence: 1, Role: domain.MessageRoleAssistant,
 			Content: answer, ContentHash: domain.MessageContentHash(answer),
 		},
 	}

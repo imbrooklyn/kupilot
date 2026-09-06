@@ -341,8 +341,10 @@ func testConversation(t *testing.T, count int) agent.ConversationContext {
 			content = fmt.Sprintf("Prior final assistant answer %03d", index/2)
 		}
 		turns[index] = agent.ConversationTurn{
-			MessageID: domain.MessageID(fmt.Sprintf("00000000-0000-7000-8001-%012x", index+1)),
-			Role:      role, Content: content, ContentHash: domain.MessageContentHash(content),
+			MessageID:   domain.MessageID(fmt.Sprintf("00000000-0000-7000-8001-%012x", index+1)),
+			RunID:       domain.AgentRunID(fmt.Sprintf("00000000-0000-7000-8002-%012x", index/2+1)),
+			RunSequence: index % 2,
+			Role:        role, Content: content, ContentHash: domain.MessageContentHash(content),
 		}
 	}
 	conversation, err := agent.NewConversationContext(testSessionID, turns, nil)

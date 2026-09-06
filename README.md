@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0047 and the canonical docs. It is unreleased. Passing
+> by ADR-0044 through ADR-0048 and the canonical docs. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 
@@ -97,6 +97,18 @@ after current consent, scope, policy, coverage, and budget checks; a failed gate
 causes zero model calls, never a current-question-only fallback. History never
 restores scope, ResourceRef, Evidence, permission rules, Reviewer decisions,
 ActionEnvelopes, approvals, execution, or generations as authority.
+
+During one regular active run, ordinary `Enter` input is held for the next Eino
+model invocation and `Tab` queues a process-local FIFO successor. `Alt+Up`
+restores the newest editable queued, rejected, or recovered item only into an empty
+composer. Accepted input is not committed until Application durably records it
+at the model boundary. Only clean persisted completion starts one queued
+successor; failure, cancellation, timeout, stale state, degraded persistence,
+and unknown outcomes never auto-send. Pending and queued drafts are not
+resumable Session history or export data.
+
+See [Steering and Queued Follow-Ups](docs/user-guide/conversation-input.md) for
+the fixed keys, lifecycle states, limits, and recovery behavior.
 
 ## Current source build and runtime
 

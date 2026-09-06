@@ -217,7 +217,8 @@ func runSQLiteDiagnosticLifecycle(ctx context.Context, stateDir string) (_ domai
 	scope := terminal.Scope
 	answer := domain.Message{
 		ID: performanceIdentifier[domain.MessageID](30_007), SessionID: sessionID, RunID: &runID,
-		Role: domain.MessageRoleAssistant, Content: diagnosis.AnswerMarkdown, Format: domain.MessageFormatMarkdown,
+		RunSequence: testIntPointer(1),
+		Role:        domain.MessageRoleAssistant, Content: diagnosis.AnswerMarkdown, Format: domain.MessageFormatMarkdown,
 		Status: domain.MessageStatusCommitted, Hash: domain.MessageContentHash(diagnosis.AnswerMarkdown),
 		Scope: &scope, CreatedAt: *terminal.FinishedAt,
 	}

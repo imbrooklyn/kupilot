@@ -439,7 +439,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		}
 	}()
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
-		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
+		Sessions: sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		ModelContext: messageRepository,
 		ModelRuntime: initialRuntime, ModelFactory: modelFactory, ModelProfiles: profileWriter,
@@ -485,6 +485,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	} else if startResult.ScopeCandidate != nil {
 		initialScope.Context = startResult.ScopeCandidate.Context
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
+		initialScope.Generation = startResult.ScopeGeneration
 	}
 	model := tui.NewModel(tui.Config{
 		NoColor:                 loaded.NoColor,

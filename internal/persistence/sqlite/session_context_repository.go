@@ -13,31 +13,36 @@ import (
 const (
 	listEligibleModelContextSQL = `
 		SELECT
-			m.id, m.session_id, m.run_id, m.role, m.content, m.content_format, m.status,
+			m.id, m.session_id, m.run_id, m.run_sequence, m.role, m.content, m.content_format, m.status,
 			m.scope_context, m.scope_namespace, m.scope_generation,
-			m.resource_refs_json, m.content_hash, m.created_at_ms
+			m.resource_refs_json, m.content_hash, m.created_at_ms, r.started_at_ms
 		FROM messages AS m
 		JOIN agent_runs AS r ON r.id = m.run_id
 		WHERE m.session_id = ?
 			AND m.status = 'committed'
 			AND m.role IN ('user', 'assistant')
 			AND r.status = 'completed'
-		ORDER BY m.created_at_ms, m.id
+		ORDER BY r.started_at_ms, r.id, m.run_sequence, m.id
 		LIMIT ?
 	`
 	listEligibleModelContextAfterSQL = `
 		SELECT
-			m.id, m.session_id, m.run_id, m.role, m.content, m.content_format, m.status,
+			m.id, m.session_id, m.run_id, m.run_sequence, m.role, m.content, m.content_format, m.status,
 			m.scope_context, m.scope_namespace, m.scope_generation,
-			m.resource_refs_json, m.content_hash, m.created_at_ms
+			m.resource_refs_json, m.content_hash, m.created_at_ms, r.started_at_ms
 		FROM messages AS m
 		JOIN agent_runs AS r ON r.id = m.run_id
 		WHERE m.session_id = ?
 			AND m.status = 'committed'
 			AND m.role IN ('user', 'assistant')
 			AND r.status = 'completed'
-			AND (m.created_at_ms > ? OR (m.created_at_ms = ? AND m.id > ?))
-		ORDER BY m.created_at_ms, m.id
+			AND (
+				r.started_at_ms > ?
+				OR (r.started_at_ms = ? AND r.id > ?)
+				OR (r.started_at_ms = ? AND r.id = ? AND m.run_sequence > ?)
+				OR (r.started_at_ms = ? AND r.id = ? AND m.run_sequence = ? AND m.id > ?)
+			)
+		ORDER BY r.started_at_ms, r.id, m.run_sequence, m.id
 		LIMIT ?
 	`
 	loadSessionContextSummarySQL = `
@@ -97,6 +102,11 @@ type sessionContextSummaryRow struct {
 	Degraded         int    `db:"degraded"`
 }
 
+type modelContextRow struct {
+	messageRow
+	RunStartedAtMS int64
+}
+
 var _ application.ModelContextPersistence = (*MessageRepository)(nil)
 
 // ListEligibleModelContext returns only complete-run user/final-assistant rows.
@@ -115,19 +125,28 @@ func (repository *MessageRepository) ListEligibleModelContext(ctx context.Contex
 	if request.After == nil {
 		rows, err = repository.db.handle.QueryContext(ctx, listEligibleModelContextSQL, request.SessionID, limit)
 	} else {
-		boundary := request.After.CreatedAt.UTC().UnixMilli()
-		rows, err = repository.db.handle.QueryContext(ctx, listEligibleModelContextAfterSQL, request.SessionID, boundary, boundary, request.After.ID, limit)
+		boundary := request.After.RunStartedAt.UTC().UnixMilli()
+		rows, err = repository.db.handle.QueryContext(
+			ctx, listEligibleModelContextAfterSQL, request.SessionID,
+			boundary,
+			boundary, request.After.RunID,
+			boundary, request.After.RunID, request.After.RunSequence,
+			boundary, request.After.RunID, request.After.RunSequence, request.After.ID,
+			limit,
+		)
 	}
 	if err != nil {
 		return application.ModelContextPage{}, repositoryFailure(repository.db, "model_context_read_failed", "list_model_context", "Kupilot could not read safe Session model context.", err)
 	}
 	defer rows.Close()
 	values := make([]domain.Message, 0, limit)
+	orders := make([]application.ModelContextCursor, 0, limit)
 	for rows.Next() {
-		var row messageRow
+		var row modelContextRow
 		if err := rows.Scan(
-			&row.ID, &row.SessionID, &row.RunID, &row.Role, &row.Content, &row.ContentFormat, &row.Status,
+			&row.ID, &row.SessionID, &row.RunID, &row.RunSequence, &row.Role, &row.Content, &row.ContentFormat, &row.Status,
 			&row.ScopeContext, &row.ScopeNamespace, &row.ScopeGeneration, &row.ResourceRefsJSON, &row.ContentHash, &row.CreatedAtMS,
+			&row.RunStartedAtMS,
 		); err != nil {
 			return application.ModelContextPage{}, repositoryFailure(repository.db, "model_context_row_invalid", "list_model_context", "Kupilot could not read safe Session model context.", err)
 		}
@@ -136,6 +155,13 @@ func (repository *MessageRepository) ListEligibleModelContext(ctx context.Contex
 			return application.ModelContextPage{}, repositoryFailure(repository.db, "model_context_row_invalid", "list_model_context", "Kupilot could not read safe Session model context.", err)
 		}
 		values = append(values, message)
+		if message.RunID == nil || message.RunSequence == nil || row.RunStartedAtMS < 0 {
+			return application.ModelContextPage{}, repositoryFailure(repository.db, "model_context_row_invalid", "list_model_context", "Kupilot could not read safe Session model context safely.", domain.ErrInvalidMessage)
+		}
+		orders = append(orders, application.ModelContextCursor{
+			RunStartedAt: time.UnixMilli(row.RunStartedAtMS).UTC(), RunID: *message.RunID,
+			RunSequence: *message.RunSequence, ID: message.ID,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return application.ModelContextPage{}, repositoryFailure(repository.db, "model_context_read_failed", "list_model_context", "Kupilot could not read safe Session model context.", err)
@@ -143,8 +169,8 @@ func (repository *MessageRepository) ListEligibleModelContext(ctx context.Contex
 	page := application.ModelContextPage{Messages: values}
 	if len(values) > request.Limit {
 		page.Messages = values[:request.Limit]
-		last := page.Messages[len(page.Messages)-1]
-		page.Next = &application.ModelContextCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		value := orders[request.Limit-1]
+		page.Next = &value
 	}
 	return page, nil
 }

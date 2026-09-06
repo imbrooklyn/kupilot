@@ -117,6 +117,7 @@ func TestAgentRunRepositoryFinishWithMessageIsAtomic(t *testing.T) {
 	}
 	mismatchedAssistant := testMessage("00000000-0000-7000-8000-000000000607", primary.ID, &running.ID, "Mismatched scope", base.Add(2*time.Millisecond))
 	mismatchedAssistant.Role = domain.MessageRoleAssistant
+	mismatchedAssistant.RunSequence = testIntPointer(1)
 	mismatchedAssistant.Scope = &domain.ScopeSnapshot{Context: "other-context", Namespace: "test-namespace", Generation: 1}
 	mismatchedTerminal := testTerminalRun(running, domain.AgentRunStatusCompleted, base.Add(2*time.Millisecond))
 	if err := repository.FinishWithMessage(context.Background(), mismatchedAssistant, mismatchedTerminal); !errors.Is(err, sessioncontract.ErrInvalidRepositoryRequest) {
@@ -140,6 +141,7 @@ func TestAgentRunRepositoryFinishWithMessageIsAtomic(t *testing.T) {
 	}
 	failedAssistant := testMessage(duplicateID, primary.ID, &running.ID, "Would roll back", base.Add(3*time.Millisecond))
 	failedAssistant.Role = domain.MessageRoleAssistant
+	failedAssistant.RunSequence = testIntPointer(1)
 	failedAssistant.Scope = &running.Scope
 	failedTerminal := testTerminalRun(running, domain.AgentRunStatusCompleted, base.Add(3*time.Millisecond))
 	err = repository.FinishWithMessage(context.Background(), failedAssistant, failedTerminal)
@@ -154,6 +156,7 @@ func TestAgentRunRepositoryFinishWithMessageIsAtomic(t *testing.T) {
 
 	assistant := testMessage("00000000-0000-7000-8000-000000000606", primary.ID, &running.ID, "Final validated answer", base.Add(4*time.Millisecond))
 	assistant.Role = domain.MessageRoleAssistant
+	assistant.RunSequence = testIntPointer(1)
 	assistant.Scope = &running.Scope
 	terminal := testTerminalRun(running, domain.AgentRunStatusCompleted, base.Add(4*time.Millisecond))
 	inputTokens := int64(21)
@@ -446,6 +449,7 @@ func TestAgentRunRepositoryRecoveryRejectsInvalidDurableRows(t *testing.T) {
 func testRunningPair(messageID domain.MessageID, runID domain.AgentRunID, sessionID domain.SessionID, startedAt time.Time) (domain.Message, domain.AgentRun) {
 	scope := domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 1}
 	request := testMessage(messageID, sessionID, &runID, "Safe user request", startedAt)
+	request.RunSequence = testIntPointer(0)
 	request.Scope = &scope
 	return request, domain.AgentRun{
 		ID:                 runID,
@@ -467,6 +471,10 @@ func testTerminalRun(running domain.AgentRun, status domain.AgentRunStatus, fini
 }
 
 func timePointer(value time.Time) *time.Time {
+	return &value
+}
+
+func testIntPointer(value int) *int {
 	return &value
 }
 

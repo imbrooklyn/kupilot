@@ -121,6 +121,25 @@ func (transcript *Transcript) AppendUser(text string) {
 	transcript.viewport.GotoBottom()
 }
 
+// InsertUserBeforeActiveAgent commits a steer in the current run without
+// detaching the one streaming Agent entry. The final answer and Tool steps
+// remain after every user input committed for that run.
+func (transcript *Transcript) InsertUserBeforeActiveAgent(text string) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		!transcript.entries[transcript.activeAgent].Streaming {
+		transcript.AppendUser(text)
+		return
+	}
+	index := transcript.activeAgent
+	transcript.entries = append(transcript.entries, Entry{})
+	copy(transcript.entries[index+1:], transcript.entries[index:len(transcript.entries)-1])
+	transcript.entries[index] = Entry{Kind: EntryUser, Text: text}
+	transcript.activeAgent++
+	transcript.reviewing = false
+	transcript.refresh(false)
+	transcript.viewport.GotoBottom()
+}
+
 // AppendNotice adds muted typed status or failure text.
 func (transcript *Transcript) AppendNotice(text string) {
 	transcript.entries = append(transcript.entries, Entry{Kind: EntryNotice, Text: text})

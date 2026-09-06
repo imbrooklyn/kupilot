@@ -236,6 +236,7 @@ type PrivacyManager struct {
 	loaded      bool
 	logsEnabled bool
 	record      *PrivacyRecord
+	revision    uint64
 }
 
 // PrivacyBindingSnapshot is a content-free, no-I/O status projection.
@@ -244,6 +245,7 @@ type PrivacyBindingSnapshot struct {
 	OriginHash string
 	Loaded     bool
 	Accepted   bool
+	Revision   uint64
 }
 
 // NewPrivacyManager constructs the policy without loading durable state.
@@ -265,7 +267,7 @@ func NewPrivacyManager(config PrivacyManagerConfig) (*PrivacyManager, error) {
 		store: config.Store, role: role, origin: config.Origin, originHash: privacyOriginHash(config.Origin),
 		prometheusOrigin: config.PrometheusOrigin, prometheusOriginHash: optionalPrivacyOriginHash(config.PrometheusOrigin),
 		lokiOrigin: config.LokiOrigin, lokiOriginHash: optionalPrivacyOriginHash(config.LokiOrigin),
-		policyVersion: version, now: config.Now, logsEnabled: config.LogsEnabled,
+		policyVersion: version, now: config.Now, logsEnabled: config.LogsEnabled, revision: 1,
 	}, nil
 }
 
@@ -289,6 +291,7 @@ func (manager *PrivacyManager) ReconfigureOrigin(origin string) error {
 	manager.originHash = privacyOriginHash(origin)
 	manager.loaded = false
 	manager.record = nil
+	manager.advanceRevisionLocked()
 	return nil
 }
 
@@ -332,7 +335,7 @@ func (manager *PrivacyManager) Snapshot() PrivacyBindingSnapshot {
 	defer manager.mu.RUnlock()
 	return PrivacyBindingSnapshot{
 		Role: manager.role, OriginHash: manager.originHash,
-		Loaded: manager.loaded, Accepted: manager.loaded && manager.acceptedLocked(),
+		Loaded: manager.loaded, Accepted: manager.loaded && manager.acceptedLocked(), Revision: manager.revision,
 	}
 }
 
@@ -456,6 +459,7 @@ func (manager *PrivacyManager) Decide(
 	manager.logsEnabled = nextLogs
 	copy := clonePrivacyRecord(record)
 	manager.record = &copy
+	manager.advanceRevisionLocked()
 	result := manager.reviewLocked()
 	manager.mu.Unlock()
 	return result, nil
@@ -469,6 +473,7 @@ func (manager *PrivacyManager) FailClosed() {
 	manager.mu.Lock()
 	manager.loaded = true
 	manager.record = nil
+	manager.advanceRevisionLocked()
 	manager.mu.Unlock()
 }
 
@@ -519,7 +524,14 @@ func (manager *PrivacyManager) ensureLoaded(ctx context.Context) error {
 		}
 	}
 	manager.loaded = true
+	manager.advanceRevisionLocked()
 	return nil
+}
+
+func (manager *PrivacyManager) advanceRevisionLocked() {
+	if manager.revision < ^uint64(0) {
+		manager.revision++
+	}
 }
 
 func (manager *PrivacyManager) reviewLocked() PrivacyReview {

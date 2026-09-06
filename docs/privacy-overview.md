@@ -71,6 +71,9 @@ categories, including:
 
 - `user_question`: the current question after normalization,
   sensitive-value handling, and byte limits;
+- `user_question` also includes a committed active-run steer, but only after
+  Application accepts it at the next Eino model-invocation boundary and all
+  current consent, generation, persistence, and budget checks pass;
 - `safe_conversation_context`: bounded committed same-Session user and final
   assistant context, plus a safe summary and recent tail when required;
 - `resource_names_and_references`: the Context, working and explicitly targeted
@@ -223,6 +226,14 @@ delete-all-local-state likewise do not clear terminal-owned scrollback. Users
 handling sensitive operational data must use their terminal's own clearing and
 retention controls.
 
+The bounded working-area preview may temporarily display normalized pending,
+committing, queued, rejected, recovered, or unknown input. Uncommitted drafts
+do not enter immutable scrollback, SQLite, Session history, summary coverage,
+or export; an unknown lifecycle follows a Message already committed to
+scrollback and ordinary retention. Preview content remains visible terminal
+data until edited, committed, invalidated, or the Session ends, so native
+terminal capture remains an external retention surface.
+
 Only the same normalized, bounded projection eligible for visible rendering
 enters scrollback. Kupilot does not emit raw Kubernetes objects, credentials,
 provider bodies, model-selected escape sequences, clipboard controls, or
@@ -257,6 +268,12 @@ Standard persistence may additionally store:
 
 It never stores assembled prompts, streaming deltas, raw model traffic, raw
 Tool results, raw Kubernetes objects, raw Events, or raw container output.
+It also never stores the process-local input queue or pending, committing,
+rejected, and recovered drafts. Unknown lifecycle metadata stays in process,
+but its already committed safe user Message follows ordinary Message retention
+and export; its incomplete or failed run is not model replay context. A
+committed steer is an ordinary processed user Message, not a second durable
+input log.
 
 By default, safe Session history and validated answers remain until explicit
 deletion; capability, Evidence, and model-request detail expires after 30 days;
@@ -304,6 +321,8 @@ referenced Evidence summaries or expired markers.
 It excludes raw Tool input/output, raw logs or Events, Kubernetes objects, full
 prompts, model traffic, credentials, Secrets, kubeconfig data, approval nonce,
 and execution authority. Minimal Sessions cannot be exported.
+Queued and uncommitted input is excluded even when it was visible in the
+working preview.
 
 The file is created with owner-only permissions and atomic no-replace
 publication. It is not encrypted and survives later Session deletion; the user
@@ -344,3 +363,4 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

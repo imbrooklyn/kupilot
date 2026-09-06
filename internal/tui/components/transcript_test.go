@@ -29,6 +29,23 @@ func TestToolStepsSeparateCompactStatusFromDetails(t *testing.T) {
 	}
 }
 
+func TestCommittedSteerStaysBeforeTheActiveAgentWithoutDetachingIt(t *testing.T) {
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.AppendUser("Initial question.")
+	transcript.StartAgent()
+	transcript.AppendAgent("Provisional text.")
+	transcript.InsertUserBeforeActiveAgent("Committed steer.")
+	transcript.AppendAgent(" More text.")
+	transcript.FinishAgent("Final answer.")
+
+	entries := transcript.Entries()
+	if len(entries) != 3 || entries[0].Kind != EntryUser || entries[0].Text != "Initial question." ||
+		entries[1].Kind != EntryUser || entries[1].Text != "Committed steer." ||
+		entries[2].Kind != EntryAgent || entries[2].Text != "Final answer." || entries[2].Streaming {
+		t.Fatalf("entries = %#v", entries)
+	}
+}
+
 func TestTranscriptMatchesUserSurfaceAndFinalRunTimeline(t *testing.T) {
 	t.Parallel()
 

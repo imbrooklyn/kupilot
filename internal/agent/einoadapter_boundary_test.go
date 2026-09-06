@@ -141,6 +141,9 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 		if strings.Contains(text, "github.com/cloudwego/eino/flow/agent/react") {
 			t.Errorf("%s imports the retired flow/agent/react runtime", path)
 		}
+		if strings.Contains(text, "TurnLoop") {
+			t.Errorf("%s references the prohibited Eino outer TurnLoop", path)
+		}
 		if strings.HasPrefix(path, adapterRoot+string(filepath.Separator)) {
 			runnerCalls += strings.Count(text, "adk.NewRunner(")
 			chatModelAgentCalls += strings.Count(text, "adk.NewChatModelAgent(")
@@ -152,7 +155,7 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			specification, ok := node.(*ast.TypeSpec)
-			if ok && forbiddenTypes[specification.Name.Name] {
+			if ok && (forbiddenTypes[specification.Name.Name] || strings.Contains(specification.Name.Name, "Checkpoint")) {
 				t.Errorf("%s defines prohibited parallel runtime abstraction %s", path, specification.Name.Name)
 			}
 			return true

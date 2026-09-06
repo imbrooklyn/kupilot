@@ -5,6 +5,9 @@ Kupilot runs one supervised AgentRun at a time. Stable Eino ADK
 summarization middleware are confined to `internal/agent/einoadapter`; the rest
 of the system sees project-owned Session context, run inputs, events, bound
 capabilities, Evidence, ActionEnvelopes, outcomes, and safe errors.
+Application separately owns active-run input identity, queue state,
+generations, persistence intent, and commit decisions; Eino does not own the
+product follow-up queue.
 
 This document distinguishes the accepted `v0.5` target from current
 reachability. The checked-in runtime now uses the stable Eino ADK path, named
@@ -43,6 +46,8 @@ Application currently creates an immutable RunInput containing:
   coverage metadata; and
 - finite Agent and Agent-summary call, time, byte, stream, Tool, resource page,
   item, response-byte, aggregate-byte, and cost limits.
+- one run-local, vendor-free input bridge through which the Eino adapter may
+  claim and commit an exact pending steer.
 
 The composition root separately binds the exact Agent profile and optional
 Reviewer profile. Application checks the current Agent role, canonical origin,
@@ -70,7 +75,12 @@ approval, and action state, then cancel old work and reject late results.
    gives the trusted policy, ordered context, current question exactly once,
    current scope metadata, versioned capability catalog, and remaining code-
    owned ceilings to Eino ADK `Runner`.
-4. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
+4. Before each model invocation, Eino summarization runs first. A run-local
+   handler may then atomically claim one current pending steer in
+   `BeforeModelRewriteState`, append one user Message, and use `WrapModel` to
+   complete the Application persistence/event commit barrier before real model
+   I/O. A failed barrier delegates no call.
+5. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
    iteration. The Eino boundary drains one bounded model stream and asks Eino
    to assemble exactly one assistant message. After each Eino-decoded content
    chunk passes
@@ -79,17 +89,17 @@ approval, and action state, then cancel old work and reject late results.
    scope-current provisional text. The projector does not interpret response
    modality or Tool calls. Commentary accompanying a Tool selection is
    discarded and cannot authorize a Tool.
-5. Complete indexed Tool calls are strictly decoded and bound as one atomic
+6. Complete indexed Tool calls are strictly decoded and bound as one atomic
    batch. An admitted batch is canonicalized, budget-reserved, scope-injected,
    and dispatched through the fixed table. If every call is known and
    structurally safe but strict semantic binding denies any call, the whole
    batch instead receives fixed local policy feedback and performs no Tool
    handler or Kubernetes I/O.
-6. The handler performs bounded typed I/O, projects and sanitizes locally, and
+7. The handler performs bounded typed I/O, projects and sanitizes locally, and
    creates Evidence only after the post-I/O scope gate.
-7. Tool results return through a project-owned envelope and the ADK loop
+8. Tool results return through a project-owned envelope and the ADK loop
    continues until a final structured answer or a terminal policy outcome.
-8. The final answer is validated, persisted according to privacy mode, and
+9. The final answer is validated, persisted according to privacy mode, and
    atomically replaces any provisional transcript text. Structured same-Kind
    inventories with shared attributes default to one compact Markdown table per
    Kind without requiring the user to request formatting. When needed, Eino
@@ -102,6 +112,38 @@ is not an I/O retry because the rejected batch never reached a handler. A model
 may make a new corrected selection as another bounded Agent decision; model,
 step, and consecutive no-progress budgets still apply and prevent an
 indefinite correction loop.
+
+## Active-run input lifecycle
+
+During one regular active run, Application accepts normalized ordinary
+`Enter` input as `pending`. This is ownership, not model commitment and not a
+transcript row. At the next model boundary it becomes `committing`; successful
+durable Message insertion and event acceptance makes it `committed` before
+model I/O. A known validation or claim-notification refusal is `rejected` and
+performs zero model calls. A claimed input that cannot pass the remaining
+request budget, persistence, consent, generation, cancellation, timeout, or
+other authority barrier is `recovered`. If model I/O may have begun but
+delivery is uncertain, the committed input is `unknown` and is never retried
+automatically. An uncommitted input preserved after another unsafe terminal
+condition or invalidation is also `recovered`.
+
+Active-run `Tab` enqueues an ordinary FIFO successor. `Alt+Up` atomically
+removes the newest editable queued, rejected, or recovered item only when the
+composer is empty and no local interaction owns input. Pending, committing,
+committed, and unknown committed input is not editable. The queue is bounded
+to eight items, 65,536 bytes each, and 262,144 bytes in aggregate; one run may
+commit at most eight steers. It exists only in the current process and Session.
+
+Application starts at most one FIFO successor after a clean completed run and
+only after the final assistant Message and terminal transaction are durable.
+Failure, cancellation, timeout, stale generation, degraded persistence, sink
+failure, unknown outcome, or shutdown suppresses automatic drain. A clean
+completion with no further model boundary converts an unclaimed steer to an
+ordinary queued successor; an unsafe completion recovers it for editing.
+
+No implementation modifies an already-sent HTTP request. Eino `TurnLoop` is
+not used: it would add an outer buffered Agent loop and checkpoint owner whose
+preemption does not establish Application Message commitment.
 
 ## Capability binding
 
@@ -282,6 +324,10 @@ endpoint evidence may require a tighter configuration.
 | Data-source query window | 1 hour | 6 hours | 24 hours | 24 hours |
 | Data-source step ceiling | 1 min | 5 min | 15 min | 15 min |
 | Consecutive no-progress steps | 2 | 4 | 6 | 10 |
+| Pending and queued input items | 8 | 8 | 8 | 8 |
+| One pending or queued item | 64 KiB | 64 KiB | 64 KiB | 64 KiB |
+| Aggregate pending and queued input | 256 KiB | 256 KiB | 256 KiB | 256 KiB |
+| Committed steers per AgentRun | 8 | 8 | 8 | 8 |
 
 The model and Tool request deadlines are additionally capped by the owning
 run's remaining time. One ToolResult remains at most 64 KiB. Resource queries
@@ -324,6 +370,13 @@ not replayed. Historic scope, ResourceRef, Evidence, permission rules, Reviewer
 decisions, ActionEnvelopes, approvals, execution, clients, and generations are
 never restored as authority.
 
+One eligible completed run contains one initial user Message, zero or more
+committed steer user Messages in commit order, and one final assistant Message.
+Coverage and summary cuts end only at complete-run boundaries. Pending,
+committing, queued, rejected, and recovered drafts are neither prior context nor
+resumable authority. An unknown item has a committed Message, but its incomplete
+or failed run group is also ineligible for replay.
+
 At the Eino boundary, each retained final assistant answer is reconstructed in
 the current strict final-response JSON envelope. Only its locally validated
 visible Markdown is placed in `answer_markdown`; `evidence_citations` and
@@ -344,7 +397,8 @@ until a non-prerelease Eino runner-managed Session passes ADR-0047's gate.
 The current aggregate selection is capped at 4,096 eligible Messages and 4 MiB
 and is read in ascending keyset pages of 100. The Eino middleware is configured
 with `ContextMessages=160`, a 128 KiB UTF-8-content resource trigger, and an
-exact 16-Message recent tail. The resource counter is deliberately not called
+at-least-16 and at-most-25 Message recent tail so the cut preserves complete
+run groups. The resource counter is deliberately not called
 a tokenizer or token estimate. A safe summary is capped at 16 KiB.
 
 ## Cancellation and stale work
@@ -367,6 +421,14 @@ path.
 Application accepts monotonic run events with exact run ID, generation,
 sequence, and terminal-state checks. The TUI receives project-owned UI events;
 Bubble Tea does no business I/O in `Update` or `View`.
+
+Pending, committing, rejected, recovered, queued, and unknown lifecycle state
+appears in a bounded working preview. One delivered Application committed
+event inserts the user transcript row exactly once; a later unknown label does
+not insert it again. A rejected notification cannot undo an already appended
+Message and blocks model I/O instead. `/status` adds
+content-free queue count, aggregate bytes, lifecycle counts, active run, and
+both generations without external I/O.
 
 The internal run stream is capped at 32,768 ordered events. This is large enough
 for the hard Tool, Evidence, and model budgets but remains independently finite;
@@ -418,3 +480,4 @@ executor calls.
 - [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)

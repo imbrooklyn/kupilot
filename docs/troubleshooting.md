@@ -304,10 +304,12 @@ is no cwd, repository, Context, Namespace, or `--all` filter.
 ## A resumed Session shows a scope conflict
 
 Historic Context and Namespace values are unverified candidates. When the saved
-candidate differs from the current scope, `Keep current scope` is selected by
-default. `Use saved scope` performs normal Context construction and exact
-Namespace verification. No scope action occurs until confirmation; `Esc`
-cancels resume.
+candidate differs from current independently verified authority, Kupilot opens
+the ordinary Context or Namespace picker. Select one exact candidate to perform
+normal Context construction and Namespace verification. `Esc` cancels resume;
+there is no silent keep-current fallback. If current authority already matches
+the historic candidate exactly, Kupilot can accept it without another
+Kubernetes request.
 
 A saved ResourceRef is cleared and revalidated only after the chosen scope is
 active. Historic Evidence remains display-only. See

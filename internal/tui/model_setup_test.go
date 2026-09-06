@@ -59,11 +59,15 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		RequestID: message.Request.RequestID, Model: "diagnostic-model",
 		Origin: "https://model.example.test", Persisted: true,
 	}})
-	if !model.modelConfigured || model.modelSetup != nil || cmd != nil ||
+	if !model.modelConfigured || model.modelSetup != nil || cmd == nil ||
 		!transcriptContains(model, "Agent model configured.") ||
 		strings.Contains(model.footerView(), "model") ||
 		strings.Contains(model.render(), canary) || strings.Contains(model.TerminalTranscript(), canary) {
 		t.Fatalf("configured model state = configured=%v setup=%#v footer=%q", model.modelConfigured, model.modelSetup, model.footerView())
+	}
+	query := completionQueryFromCmd(t, cmd)
+	if query.Kind != application.UICompletionContext || !model.contextPicker.Open() || !model.scopeSelectionRequired {
+		t.Fatalf("post-setup scope query = %#v picker=%v required=%v", query, model.contextPicker.Open(), model.scopeSelectionRequired)
 	}
 	if model.composer.PreviousHistory() {
 		t.Fatal("credential was retained in composer history")
@@ -174,6 +178,7 @@ func TestCtrlCCancelsApplyingModelSetupWithCorrelationAndStaleSafety(t *testing.
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		ModelEndpoint: "https://old.example.test/v1", ModelName: "old-model",
 		ModelConfiguredSet: true, ModelConfigured: true,
+		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	model.beginModelSetup()
 	model.modelSetup.Stage = modelSetupApplying
@@ -276,6 +281,7 @@ func TestModelSlashReconfiguresAndFailureRestartsEditableFlow(t *testing.T) {
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		ModelEndpoint: "https://old.example.test/v1", ModelName: "old-model",
 		ModelConfiguredSet: true, ModelConfigured: true,
+		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/model"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})

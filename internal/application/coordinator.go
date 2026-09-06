@@ -37,6 +37,7 @@ var (
 type CoordinatorConfig struct {
 	Sessions            SessionPersistence
 	Runs                RunPersistence
+	RunInputs           RunInputPersistence
 	Tools               ToolEvidencePersistence
 	Audits              AuditPersistence
 	Scope               ActiveScope
@@ -96,6 +97,7 @@ type Coordinator struct {
 
 	sessions             SessionPersistence
 	runs                 RunPersistence
+	runInputs            RunInputPersistence
 	tools                ToolEvidencePersistence
 	audits               AuditPersistence
 	scope                ActiveScope
@@ -151,6 +153,7 @@ type Coordinator struct {
 	lastResult              *RunResult
 	lastDiagnosis           *domain.Diagnosis
 	lastEvidence            map[domain.EvidenceID]domain.Evidence
+	conversationInputs      conversationInputQueue
 }
 
 type activeRun struct {
@@ -171,6 +174,7 @@ type activeRun struct {
 	remoteExecCalls          int
 	localProcessCalls        int
 	summaryCalls             int
+	committedInputs          []agent.ConversationTurn
 
 	lastAgentSequence int64
 	publishing        bool
@@ -188,9 +192,10 @@ type pendingTool struct {
 }
 
 type pendingResume struct {
-	request    UIResumeRequest
-	record     ResumedSessionRecord
-	projection UIResumedSession
+	request        UIResumeRequest
+	record         ResumedSessionRecord
+	projection     UIResumedSession
+	scopeConfirmed bool
 }
 
 type startupResumeState struct {
@@ -278,6 +283,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		(config.UI.RemediationProposals != nil || config.UI.LocalProposals != nil) {
 		return nil, ErrCoordinatorDependency
 	}
+	runInputs := config.RunInputs
+	if runInputs == nil {
+		runInputs, _ = config.Runs.(RunInputPersistence)
+	}
 	exportDependencies := 0
 	if config.Exports != nil {
 		exportDependencies++
@@ -320,8 +329,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 			return nil, ErrCoordinatorDependency
 		}
 	}
-	return &Coordinator{
-		sessions: config.Sessions, runs: config.Runs, tools: config.Tools,
+	coordinator := &Coordinator{
+		sessions: config.Sessions, runs: config.Runs, runInputs: runInputs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
 		runner: runner, modelRuntime: config.ModelRuntime,
 		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles, reviewerModel: config.ReviewerModel,
@@ -342,7 +351,13 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		exports:              config.Exports,
 		exportFiles:          config.ExportFiles,
 		exportText:           config.ExportText,
-	}, nil
+	}
+	if uiScopes != nil {
+		if err := uiScopes.BindConversationInputInvalidationHook(coordinator); err != nil {
+			return nil, ErrCoordinatorDependency
+		}
+	}
+	return coordinator, nil
 }
 
 // StartUI performs mandatory startup maintenance, activates a new or explicitly
@@ -372,25 +387,28 @@ func (coordinator *Coordinator) StartUI(
 					if contextErr := ctx.Err(); contextErr != nil {
 						return UIStartResult{}, contextErr
 					}
-					return UIStartResult{}, ErrScopeUnavailable
-				}
-				result.Scope = &UIStartupScope{
-					Context: scope.Context, Namespace: scope.Namespace,
-					Generation: scope.Generation, ReadOnly: true,
-				}
-				if coordinator.saveScopePreference(ctx, scope.Context) != nil {
-					result.ScopePreferenceDegraded = true
+					// The candidate carries no authority after failed independent
+					// activation. Delivery opens the ordinary scope picker instead
+					// of silently starting under another Context or Namespace.
+					result.ScopeCandidate = cloneScopeCandidate(&candidate)
+				} else {
+					result.Scope = &UIStartupScope{
+						Context: scope.Context, Namespace: scope.Namespace,
+						Generation: scope.Generation, ReadOnly: true,
+					}
+					if coordinator.saveScopePreference(ctx, scope.Context) != nil {
+						result.ScopePreferenceDegraded = true
+					}
 				}
 			} else {
 				result.ScopeCandidate = cloneScopeCandidate(&candidate)
 			}
 		} else if contextErr := ctx.Err(); contextErr != nil {
 			return UIStartResult{}, contextErr
-		} else if intent.ConfiguredContext != "" ||
-			(intent.ConfiguredNamespace != "" && intent.ConfiguredNamespace != DefaultStartupNamespace) ||
-			intent.ExplicitScope {
-			return UIStartResult{}, ErrScopeUnavailable
+		} else if candidate, ok := configuredStartupCandidate(intent); ok {
+			result.ScopeCandidate = &candidate
 		}
+		result.ScopeGeneration = coordinator.uiScopes.View().Generation
 	}
 	coordinator.setScopePreferenceDegraded(result.ScopePreferenceDegraded)
 	coordinator.mu.Lock()
@@ -413,6 +431,18 @@ func (coordinator *Coordinator) StartUI(
 		return UIStartResult{}, ErrCoordinatorDependency
 	}
 	return result, nil
+}
+
+func configuredStartupCandidate(intent UIStartIntent) (domain.ScopeCandidate, bool) {
+	if intent.ConfiguredContext == "" {
+		return domain.ScopeCandidate{}, false
+	}
+	namespace := intent.ConfiguredNamespace
+	if namespace == "" {
+		namespace = DefaultStartupNamespace
+	}
+	candidate := domain.ScopeCandidate{Context: intent.ConfiguredContext, Namespace: namespace}
+	return candidate, candidate.Validate() == nil
 }
 
 // ConfigureModel owns the single-runtime replacement sequence used by the TUI.
@@ -466,6 +496,7 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 			return ModelSetupResult{}, ErrModelSetupFailed
 		}
 	}
+	coordinator.publishConversationInvalidation(ctx)
 	if err := coordinator.stopRunForModelSetup(ctx); err != nil {
 		replacement.Close()
 		return ModelSetupResult{}, err
@@ -837,12 +868,14 @@ func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRe
 	if err := coordinator.prepareStartup(ctx); err != nil {
 		return UIResumeResult{}, err
 	}
+	explicitStartupScope := false
 	coordinator.mu.Lock()
 	if coordinator.startupResume != nil {
 		if !resumeRequestMatchesStart(request, coordinator.startupResume.intent) {
 			coordinator.mu.Unlock()
 			return UIResumeResult{}, ErrInvalidUIQuery
 		}
+		explicitStartupScope = coordinator.startupResume.intent.ExplicitScope
 		coordinator.startupResume = nil
 	}
 	coordinator.mu.Unlock()
@@ -890,7 +923,7 @@ func (coordinator *Coordinator) ResumeUI(ctx context.Context, request UIResumeRe
 	}
 	if coordinator.pendingResume == nil || request.RequestID > coordinator.pendingResume.request.RequestID {
 		coordinator.pendingResume = &pendingResume{
-			request: request, record: record, projection: projection,
+			request: request, record: record, projection: projection, scopeConfirmed: explicitStartupScope,
 		}
 	}
 	coordinator.mu.Unlock()
@@ -941,6 +974,8 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
 	case UICommandSubmitQuestion:
 		return coordinator.executeQuestionCommand(ctx, command)
+	case UICommandSubmitSteer, UICommandEnqueueFollowUp, UICommandPopFollowUp:
+		return coordinator.executeConversationInputCommand(ctx, command)
 	case UICommandSetPersistenceMode:
 		return coordinator.executePersistenceModeCommand(ctx, command)
 	case UICommandDeleteSession:
@@ -994,6 +1029,9 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return coordinator.executeResumeCancellation(command), nil
 	case UICommandSelectContext, UICommandSelectNamespace, UICommandActivateScope:
 		result := coordinator.executeScopeCommand(ctx, command)
+		if result.Failure == "" {
+			coordinator.confirmPendingResumeScope(command, result)
+		}
 		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Scope: &result}, nil
 	case UICommandSelectResource:
 		result := coordinator.executeResourceCommand(command)
@@ -1044,6 +1082,61 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	default:
 		return UICommandOutcome{}, ErrInvalidUICommand
 	}
+}
+
+func (coordinator *Coordinator) executeConversationInputCommand(
+	ctx context.Context,
+	command UICommand,
+) (UICommandOutcome, error) {
+	coordinator.mu.Lock()
+	var sessionID domain.SessionID
+	if coordinator.currentSession != nil {
+		sessionID = coordinator.currentSession.ID
+	}
+	active := coordinator.active
+	current := active != nil && !active.terminal && active.run.ID == command.RunID &&
+		active.run.SessionID == sessionID && active.run.Scope.Generation == command.ExpectedScopeGeneration &&
+		active.input.PolicyGeneration() == command.ExpectedPolicyGeneration
+	coordinator.mu.Unlock()
+	if !sessionID.Valid() || !current {
+		return UICommandOutcome{}, ErrConversationInputUnavailable
+	}
+
+	var (
+		projection ConversationInputProjection
+		err        error
+	)
+	switch command.Kind {
+	case UICommandSubmitSteer:
+		projection, err = coordinator.SubmitSteer(ctx, SubmitSteerCommand{
+			RunID: command.RunID, SessionID: sessionID,
+			ExpectedScopeGeneration:  command.ExpectedScopeGeneration,
+			ExpectedPolicyGeneration: command.ExpectedPolicyGeneration,
+			Text:                     command.Text,
+		})
+	case UICommandEnqueueFollowUp:
+		projection, err = coordinator.EnqueueFollowUp(ctx, EnqueueFollowUpCommand{
+			RunID: command.RunID, SessionID: sessionID,
+			ExpectedScopeGeneration:  command.ExpectedScopeGeneration,
+			ExpectedPolicyGeneration: command.ExpectedPolicyGeneration,
+			Text:                     command.Text,
+		})
+	case UICommandPopFollowUp:
+		projection, err = coordinator.PopLastConversationInput(ctx, PopConversationInputCommand{
+			SessionID: sessionID, RunID: command.RunID,
+			ExpectedScopeGeneration:  command.ExpectedScopeGeneration,
+			ExpectedPolicyGeneration: command.ExpectedPolicyGeneration,
+		})
+	default:
+		err = ErrInvalidUICommand
+	}
+	if err != nil {
+		return UICommandOutcome{}, err
+	}
+	return UICommandOutcome{
+		Command: command.Kind, RequestID: command.RequestID, RunID: command.RunID,
+		ConversationInput: &projection,
+	}, nil
 }
 
 func (coordinator *Coordinator) executeQuestionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
@@ -1136,18 +1229,7 @@ func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, comma
 		return UICommandOutcome{}, ErrPrivacyReviewStale
 	}
 	coordinator.privacyChallenge = nil
-	var cancel context.CancelFunc
-	if command.Kind == UICommandRejectPrivacy || command.Kind == UICommandRevokePrivacy || command.Kind == UICommandToggleLogs {
-		if coordinator.active != nil {
-			cancel = coordinator.active.cancel
-		} else if coordinator.startingCancel != nil {
-			cancel = coordinator.startingCancel
-		}
-	}
 	coordinator.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
 	if command.Kind == UICommandCancelPrivacy {
 		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}, nil
 	}
@@ -1168,8 +1250,13 @@ func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, comma
 	if err != nil {
 		coordinator.privacy.FailClosed()
 		coordinator.markGlobalPersistenceDegraded()
+		coordinator.publishConversationInvalidation(ctx)
 		coordinator.cancelActiveForPrivacyFailure()
 		return UICommandOutcome{}, err
+	}
+	if command.Kind == UICommandRejectPrivacy || command.Kind == UICommandRevokePrivacy || command.Kind == UICommandToggleLogs {
+		coordinator.publishConversationInvalidation(ctx)
+		coordinator.cancelActiveForPrivacyFailure()
 	}
 	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
 	if command.Kind == UICommandToggleLogs {
@@ -1257,6 +1344,7 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	}
 	record := pending.record
 	projection := pending.projection
+	scopeConfirmed := pending.scopeConfirmed
 	coordinator.mu.Unlock()
 
 	if coordinator.uiScopes == nil {
@@ -1270,12 +1358,23 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	}
 	var scopeResult UIScopeResult
 	if view.State == ScopeStateActive && view.Scope != nil {
+		if !scopeConfirmed && record.Session.LastScope != nil &&
+			(view.Scope.Context != record.Session.LastScope.Context || view.Scope.Namespace != record.Session.LastScope.Namespace) {
+			outcome.Failure = UIQueryUnavailable
+			scopeResult = failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
+			outcome.Scope = &scopeResult
+			return outcome
+		}
 		clearScopeResource(coordinator.uiScopes, *view.Scope)
 		scopeResult = successfulUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, *view.Scope)
 	} else {
 		scopeResult = failedUIScopeResult(command.RequestID, command.ExpectedScopeGeneration, view, UIQueryUnavailable)
+		outcome.Failure = UIQueryUnavailable
 	}
 	outcome.Scope = &scopeResult
+	if outcome.Failure != "" {
+		return outcome
+	}
 
 	coordinator.mu.Lock()
 	if coordinator.pendingResume == nil || coordinator.pendingResume.request.RequestID != command.RequestID {
@@ -1299,6 +1398,7 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	copy := record.Session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = true
+	coordinator.conversationInputs.reset()
 	coordinator.modelContext = newSessionModelContext(copy, false)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
@@ -1315,6 +1415,17 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	projectionCopy := projection
 	outcome.Resumed = &projectionCopy
 	return outcome
+}
+
+func (coordinator *Coordinator) confirmPendingResumeScope(command UICommand, result UIScopeResult) {
+	if coordinator == nil || result.Failure != "" || result.RequestID != command.RequestID {
+		return
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.pendingResume != nil && coordinator.pendingResume.request.RequestID == command.RequestID {
+		coordinator.pendingResume.scopeConfirmed = true
+	}
 }
 
 func resumeRequestMatchesStart(request UIResumeRequest, intent UIStartIntent) bool {
@@ -1573,6 +1684,7 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	}
 	coordinator.mu.Lock()
 	result.PersistenceDegraded = coordinator.persistenceDegraded || coordinator.scopePreferenceDegraded
+	result.ConversationInput = coordinator.conversationInputStatusLocked()
 	if coordinator.active != nil && !coordinator.active.terminal {
 		state := coordinator.active
 		result.RunID = state.run.ID
@@ -1859,6 +1971,7 @@ func (coordinator *Coordinator) createSessionWithinOperation(
 	copy := session
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = false
+	coordinator.conversationInputs.reset()
 	coordinator.modelContext = newSessionModelContext(copy, true)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
@@ -1871,6 +1984,14 @@ func (coordinator *Coordinator) createSessionWithinOperation(
 // StartRun durably binds the safe request and running metadata before starting
 // the sole owned Agent goroutine.
 func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCommand) (domain.AgentRunID, error) {
+	return coordinator.startRun(ctx, command, "")
+}
+
+func (coordinator *Coordinator) startRun(
+	ctx context.Context,
+	command StartRunCommand,
+	reservedMessageID domain.MessageID,
+) (domain.AgentRunID, error) {
 	if coordinator == nil || ctx == nil || command.Validate() != nil {
 		return "", ErrCoordinatorDependency
 	}
@@ -2010,7 +2131,13 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 		}
 	}
 	runID, runErr := coordinator.identifiers.NewAgentRunID()
-	messageID, messageErr := coordinator.identifiers.NewMessageID()
+	messageID := reservedMessageID
+	var messageErr error
+	if messageID == "" {
+		messageID, messageErr = coordinator.identifiers.NewMessageID()
+	} else if !messageID.Valid() {
+		messageErr = ErrConversationInputInvalid
+	}
 	startedAt := coordinator.now()
 	if runErr != nil || messageErr != nil || !runID.Valid() || !messageID.Valid() || !validCoordinatorTime(startedAt) {
 		return "", ErrCoordinatorDependency
@@ -2022,10 +2149,14 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	if err != nil {
 		return "", ErrCoordinatorDependency
 	}
+	input, err = agent.WithRunSteering(input, coordinator)
+	if err != nil {
+		return "", ErrCoordinatorDependency
+	}
 	if !coordinator.runResourcePolicies.CurrentPolicyGeneration(runContext, policyGeneration) {
 		return "", ErrCoordinatorDependency
 	}
-	bridge, err := newEventBridge(runID, scope.Generation, policyGeneration, coordinator.uiEvents)
+	bridge, err := newEventBridge(runID, scope.Generation, policyGeneration, coordinator.uiEvents, processed.Value)
 	if err != nil {
 		return "", ErrCoordinatorDependency
 	}
@@ -2036,7 +2167,8 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	}
 	requestMessage := domain.Message{
 		ID: messageID, SessionID: command.SessionID, RunID: &runID,
-		Role: domain.MessageRoleUser, Content: processed.Value, Format: domain.MessageFormatPlain,
+		RunSequence: intPointer(0),
+		Role:        domain.MessageRoleUser, Content: processed.Value, Format: domain.MessageFormatPlain,
 		Status: domain.MessageStatusCommitted, Scope: scopeSnapshotPointer(scope.Snapshot()),
 		Resource: cloneResource(command.Resource), Hash: domain.MessageContentHash(processed.Value), CreatedAt: startedAt,
 	}
@@ -2485,6 +2617,7 @@ func (coordinator *Coordinator) cancelRunAfterPermissionChange() {
 	if coordinator == nil {
 		return
 	}
+	coordinator.publishConversationInvalidation(context.Background())
 	coordinator.mu.Lock()
 	var cancel context.CancelFunc
 	if coordinator.active != nil && !coordinator.active.terminal {
@@ -2859,7 +2992,8 @@ func (coordinator *Coordinator) persistTerminal(
 	}
 	message := domain.Message{
 		ID: messageID, SessionID: run.SessionID, RunID: &run.ID,
-		Role: domain.MessageRoleAssistant, Content: diagnosis.AnswerMarkdown,
+		RunSequence: intPointer(1 + len(state.committedInputs)),
+		Role:        domain.MessageRoleAssistant, Content: diagnosis.AnswerMarkdown,
 		Format: domain.MessageFormatMarkdown, Status: domain.MessageStatusCommitted,
 		Scope: scopeSnapshotPointer(run.Scope), Resource: cloneResource(run.Resource),
 		Hash: domain.MessageContentHash(diagnosis.AnswerMarkdown), CreatedAt: finishedAt,
@@ -2888,6 +3022,10 @@ func (coordinator *Coordinator) persistTerminal(
 		coordinator.mu.Unlock()
 	}
 	return nil
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func (coordinator *Coordinator) newSessionAudit(
@@ -2994,6 +3132,9 @@ func (coordinator *Coordinator) executeRun(ctx context.Context, state *activeRun
 	}
 	coordinator.scope.UnbindRun(state.run.ID)
 	coordinator.mu.Lock()
+	clean := state.terminal && state.terminalStatus == domain.AgentRunStatusCompleted && !state.persistenceBad &&
+		outcome.Validate(state.input) == nil && outcome.Status == state.terminalStatus
+	inputEvent, successor := coordinator.finishConversationInputRunLocked(state, clean)
 	result := RunResult{
 		RunID: state.run.ID, Status: state.terminalStatus,
 		PersistenceDegraded: state.persistenceBad,
@@ -3025,6 +3166,12 @@ func (coordinator *Coordinator) executeRun(ctx context.Context, state *activeRun
 	}
 	close(state.done)
 	coordinator.mu.Unlock()
+	if inputEvent != nil {
+		_ = coordinator.uiEvents.PublishUIEvent(context.WithoutCancel(ctx), *inputEvent)
+	}
+	if successor != nil {
+		coordinator.startQueuedSuccessor(context.WithoutCancel(ctx), successor)
+	}
 }
 
 func (coordinator *Coordinator) forceFailedTerminal(ctx context.Context, state *activeRun) {

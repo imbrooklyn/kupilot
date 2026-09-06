@@ -184,6 +184,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if err != nil {
 		return state.finishFailure(runCtx, err)
 	}
+	steeringHandler := newSteeringMiddleware(state)
 	productionAgent, err := adk.NewChatModelAgent(runCtx, &adk.ChatModelAgentConfig{
 		Name:        "kupilot-agent",
 		Instruction: initialMessages[0].Content,
@@ -192,7 +193,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 			Tools: tools, ExecuteSequentially: true,
 		}},
 		MaxIterations: input.BudgetLimits().ModelCalls,
-		Handlers:      []adk.ChatModelAgentMiddleware{summaryHandler},
+		Handlers:      []adk.ChatModelAgentMiddleware{summaryHandler, steeringHandler},
 	})
 	if err != nil {
 		return state.finishFailure(runCtx, normalizeFrameworkError(err))

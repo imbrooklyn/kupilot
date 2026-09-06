@@ -705,6 +705,9 @@ type memoryCoordinatorPersistence struct {
 	clearHistoryReady    <-chan struct{}
 	contextMessages      map[domain.SessionID][]domain.Message
 	contextPending       map[domain.AgentRunID]domain.Message
+	contextSteers        map[domain.AgentRunID][]domain.Message
+	runInputCount        int
+	runInputFailure      bool
 	contextSummaries     map[domain.SessionID]domain.SessionContextSummary
 	contextReadFailure   bool
 	contextWriteFailure  bool
@@ -786,6 +789,7 @@ func (persistence *memoryCoordinatorPersistence) DeleteSessionGraph(_ context.Co
 	for runID, message := range persistence.contextPending {
 		if message.SessionID == id {
 			delete(persistence.contextPending, runID)
+			delete(persistence.contextSteers, runID)
 		}
 	}
 	return nil
@@ -809,6 +813,7 @@ func (persistence *memoryCoordinatorPersistence) ClearHistory(_ context.Context)
 	persistence.audits = nil
 	persistence.contextMessages = nil
 	persistence.contextPending = nil
+	persistence.contextSteers = nil
 	persistence.contextSummaries = nil
 	return nil
 }
@@ -884,6 +889,7 @@ func (persistence *memoryCoordinatorPersistence) FinishWithAudit(
 	persistence.finishCount++
 	persistence.finished = append(persistence.finished, run)
 	delete(persistence.contextPending, run.ID)
+	delete(persistence.contextSteers, run.ID)
 	persistence.audits = append(persistence.audits, audit)
 	return nil
 }
@@ -909,10 +915,54 @@ func (persistence *memoryCoordinatorPersistence) CompleteWithAudit(
 			persistence.mu.Unlock()
 			return errors.New("missing pending model-context request")
 		}
-		persistence.contextMessages[run.SessionID] = append(persistence.contextMessages[run.SessionID], request, message)
+		persistence.contextMessages[run.SessionID] = append(
+			persistence.contextMessages[run.SessionID], request,
+		)
+		persistence.contextMessages[run.SessionID] = append(
+			persistence.contextMessages[run.SessionID], persistence.contextSteers[run.ID]...,
+		)
+		persistence.contextMessages[run.SessionID] = append(persistence.contextMessages[run.SessionID], message)
 	}
 	persistence.mu.Unlock()
 	return persistence.FinishWithAudit(ctx, run, audit)
+}
+
+func (persistence *memoryCoordinatorPersistence) AppendRunInput(_ context.Context, message domain.Message) error {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	persistence.runInputCount++
+	if persistence.runInputFailure {
+		return errors.New("generated run-input persistence failure")
+	}
+	if message.Validate() != nil || message.Role != domain.MessageRoleUser || message.RunID == nil ||
+		message.RunSequence == nil || *message.RunSequence < 1 {
+		return errors.New("invalid committed run input")
+	}
+	request, found := persistence.contextPending[*message.RunID]
+	if !found || request.SessionID != message.SessionID {
+		return errors.New("missing active run input")
+	}
+	wantSequence := 1 + len(persistence.contextSteers[*message.RunID])
+	if *message.RunSequence != wantSequence {
+		return errors.New("non-sequential run input")
+	}
+	if persistence.contextSteers == nil {
+		persistence.contextSteers = make(map[domain.AgentRunID][]domain.Message)
+	}
+	persistence.contextSteers[*message.RunID] = append(persistence.contextSteers[*message.RunID], message)
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) setRunInputFailure(value bool) {
+	persistence.mu.Lock()
+	persistence.runInputFailure = value
+	persistence.mu.Unlock()
+}
+
+func (persistence *memoryCoordinatorPersistence) runInputCalls() int {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return persistence.runInputCount
 }
 
 func (persistence *memoryCoordinatorPersistence) ListEligibleModelContext(
@@ -933,20 +983,24 @@ func (persistence *memoryCoordinatorPersistence) ListEligibleModelContext(
 	values := persistence.contextMessages[request.SessionID]
 	start := 0
 	if request.After != nil {
-		for start < len(values) {
-			message := values[start]
-			if message.CreatedAt.After(request.After.CreatedAt) ||
-				message.CreatedAt.Equal(request.After.CreatedAt) && message.ID > request.After.ID {
-				break
-			}
+		for start < len(values) && values[start].ID != request.After.ID {
 			start++
 		}
+		if start == len(values) {
+			return ModelContextPage{}, ErrModelContextUnavailable
+		}
+		start++
 	}
 	end := min(start+request.Limit, len(values))
 	page := ModelContextPage{Messages: append([]domain.Message(nil), values[start:end]...)}
 	if end < len(values) {
 		last := page.Messages[len(page.Messages)-1]
-		page.Next = &ModelContextCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		if last.RunID == nil || last.RunSequence == nil {
+			return ModelContextPage{}, ErrModelContextUnavailable
+		}
+		page.Next = &ModelContextCursor{
+			RunStartedAt: last.CreatedAt, RunID: *last.RunID, RunSequence: *last.RunSequence, ID: last.ID,
+		}
 	}
 	return page, nil
 }
@@ -1132,8 +1186,9 @@ func (scope *coordinatorScope) bound() bool {
 }
 
 type recordingUIEvents struct {
-	mu     sync.Mutex
-	values []UIEvent
+	mu                 sync.Mutex
+	values             []UIEvent
+	rejectConversation func(UIEvent) bool
 }
 
 type coordinatorResourcePolicies struct{}
@@ -1155,8 +1210,17 @@ func (sink *recordingUIEvents) PublishUIEvent(_ context.Context, event UIEvent) 
 	if event.Validate() != nil {
 		return ErrInvalidUIEvent
 	}
+	if sink.rejectConversation != nil && sink.rejectConversation(event) {
+		return errors.New("synthetic UI conversation sink rejection")
+	}
 	sink.values = append(sink.values, event)
 	return nil
+}
+
+func (sink *recordingUIEvents) setConversationRejection(reject func(UIEvent) bool) {
+	sink.mu.Lock()
+	sink.rejectConversation = reject
+	sink.mu.Unlock()
 }
 
 func (sink *recordingUIEvents) events() []UIEvent {
@@ -1178,14 +1242,19 @@ func newCoordinatorHarness(
 	}}
 	ui := new(recordingUIEvents)
 	identifiers := new(coordinatorIDs)
-	coordinator, err := NewCoordinator(CoordinatorConfig{
+	config := CoordinatorConfig{
 		Sessions: persistence, Runs: persistence, Tools: persistence,
 		Audits: persistence, ModelContext: persistence,
 		Scope: scope, Runner: runner, Identifiers: identifiers, AuditIdentifiers: identifiers,
 		Questions: security.NewRedactor(), Privacy: newAcceptedCoordinatorPrivacy(t), UIEvents: ui,
 		RunResourcePolicies: coordinatorResourcePolicies{},
 		Observer:            RunObserverFunc(func(context.Context, RunObservation) {}), Now: clock.Now,
-	})
+	}
+	if runtime, ok := runner.(ModelRuntime); ok {
+		config.Runner = nil
+		config.ModelRuntime = runtime
+	}
+	coordinator, err := NewCoordinator(config)
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
 	}

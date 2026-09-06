@@ -1,7 +1,7 @@
 # Kupilot Scope
 
 - Status: Accepted `v0.5` target
-- Date: 2026-09-03
+- Date: 2026-09-06
 
 The current code includes the named-model and safe Session-context runtime,
 broad read/observability, remote-diagnostic adapters, deterministic permission
@@ -14,6 +14,9 @@ capability may be inferred from it.
 
 - One local process, one local user, one low-chrome Agent-first TUI, one active
   AgentRun, and one verified Kubernetes Context at a time.
+- Application-owned active-run `Enter` steering at the next Eino model
+  invocation, a bounded current-process FIFO follow-up queue on active-run
+  `Tab`, and empty-composer `Alt+Up` LIFO edit-last.
 - One visible working Namespace, one immutable `current` or `all` namespace
   policy, one scope generation, and one policy generation per run.
 - A versioned strict capability catalog for reviewed stable built-in resources
@@ -94,6 +97,10 @@ before cancelling old work. A permission profile, capability policy, Session
 rule, relevant data-source policy, or origin-policy change advances policy
 generation before invalidating old work. Pending reviews, approvals, Session
 rules, ActionEnvelopes, and late results from either old generation are unusable.
+Pending steer and queued follow-up input is likewise bound to the exact scope,
+policy generation, model role and origin, consent, and budget state. A change
+invalidates it before cancellation; it is recovered for explicit editing and
+is never automatically retargeted.
 
 ## Permission and risk scope
 
@@ -190,6 +197,21 @@ inside the sole adapter. The stable implementation path is the existing safe
 SQLite messages through a thin ordered bridge until a stable Eino runner-
 managed Session passes ADR-0047's adoption gate.
 
+The process-local input queue is not Session memory or resumable authority.
+Only a committed steer enters the existing Message history. One completed run
+may therefore contain one initial user Message, zero or more ordered committed
+steer Messages, and one final assistant Message. Pending, committing, queued,
+rejected, and recovered drafts are excluded from replay and export. Unknown
+lifecycle metadata is process-local; its committed Message may be retained or
+exported, but the incomplete or failed run group is excluded from replay.
+
+Queue admission is fixed at eight items, 65,536 UTF-8 bytes per item, and
+262,144 aggregate UTF-8 bytes after safe normalization. Only a clean,
+successfully persisted turn may start one FIFO successor. Failure,
+cancellation, timeout, stale state, degraded persistence, and unknown outcomes
+never auto-send. Eino `TurnLoop`, a second Agent loop, and a second durable
+input store remain out of scope.
+
 ## Finite budgets
 
 Budget profiles remain immutable for a run and include independent Agent,
@@ -238,3 +260,4 @@ untested endpoint or version.
 - [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)

@@ -145,6 +145,14 @@ evidence for the configured endpoint. The fixed byte, message, request, stream,
 timeout, and output ceilings are safety bounds and are not claims about an
 endpoint's token capacity.
 
+Active-run steering and queued follow-up input add no configuration fields.
+Their fixed product controls cannot be widened by YAML, environment, CLI,
+model output, or permission profile: at most eight process-local items, 65,536
+UTF-8 bytes per item, 262,144 aggregate bytes, one steer claim per model
+boundary, and one FIFO auto-drain only after a clean durably completed turn.
+`Enter`, `Tab`, and `Alt+Up` remain fixed TUI behavior; there is no runtime
+keymap or automatic-retry setting.
+
 ## Implemented version 2 fields
 
 The complete YAML schema is shown in

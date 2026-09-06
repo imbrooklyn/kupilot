@@ -495,27 +495,29 @@ func TestAnswerValidationWarningRemainsVisibleWithoutChangingStorageState(t *tes
 	}
 }
 
-func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
+func TestActiveRunEnterSteersAndCancelRemainsAvailable(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "next question"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil || model.composer.Value() != "next question" || !model.dialog.Open() {
-		t.Fatal("active run accepted steer or queue input")
+	steer := applicationCommandFromCmd(t, cmd)
+	if steer.Kind != application.UICommandSubmitSteer || steer.Text != "next question" || model.composer.Value() != "" || model.dialog.Open() {
+		t.Fatalf("active steer command = %#v", steer)
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	model.pendingConversation = nil
+	model.composer.SetValue("draft for later")
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	command := applicationCommandFromCmd(t, cmd)
-	if command.Kind != application.UICommandCancelRun || command.RunID != testRunID || model.composer.Value() != "next question" {
+	if command.Kind != application.UICommandCancelRun || command.RunID != testRunID || model.composer.Value() != "draft for later" {
 		t.Fatalf("cancel command = %#v", command)
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
 		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
-	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "next question" ||
+	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "draft for later" ||
 		!strings.Contains(model.View().Content, "The diagnostic run was cancelled.") {
 		t.Fatal("ordinary cancellation exited or discarded the draft")
 	}

@@ -75,6 +75,12 @@ disk encryption, and backup lifecycle remain the user's controls.
     approval, Reviewer decision, execution state, or retry authority.
 11. Stable Eino ADK owns in-run message state and summarization behavior; SQLite
     stores only project-owned safe projections and never raw framework state.
+12. Active-run and queued input remains current-process state until an exact
+    Application commit barrier creates one ordinary Message. Pending,
+    committing, queued, rejected, and recovered drafts have zero SQLite and
+    export retention. Unknown lifecycle metadata is not persisted, but its
+    already committed Message follows ordinary Message retention and export;
+    its incomplete or failed run group is excluded from model replay.
 
 ## 2. Standard-persistence defaults
 
@@ -144,6 +150,9 @@ Standard persistence may store:
   Namespace, name, and optional UID or resource version.
 - Committed user message content after sensitive-value replacement and explicit
   user opportunity to cancel the submission.
+- A completed run may own one initial user Message and zero or more committed
+  steer user Messages in commit order before its one final assistant Message.
+  The same `messages` table remains the sole durable conversation source.
 - Final locally validated assistant content. Partial streams and invalid model
   drafts are not committed Messages.
 - A bounded safe Session summary and explicit coverage metadata: summary schema
@@ -358,6 +367,11 @@ a crash bundle, or another Kupilot-created durable store:
   the user explicitly enables sensitive diagnostics.
 - Terminal byte streams, escape sequences, clipboard or device-control content,
   and model-selected styling.
+- Process-local follow-up queue items and pending, committing, rejected, or
+  recovered steering drafts, plus unknown lifecycle metadata. Their bounded
+  working preview is a terminal surface, not durable storage. The ordinary
+  committed Message that precedes an unknown lifecycle remains governed by the
+  Message retention contract.
 - Live clients, HTTP transports, process handles, database handles,
   transactions, Contexts, cancellation functions, callbacks, channels,
   goroutines, framework messages, Reviewer responses, Session rules, approval
@@ -394,6 +408,10 @@ safe Session-context summary, 2 KiB for one Evidence fact, and 2 MiB for one
 4,096 eligible Messages and 4 MiB. The Eino compaction working-set resource
 trigger counts UTF-8 content bytes against 128 KiB; it is deliberately not a
 token estimate or a model context-window claim.
+
+The non-durable follow-up queue separately allows at most eight items, 64 KiB
+per item, and 256 KiB in aggregate. These limits describe in-process resource
+ownership and do not make drafts eligible for persistence.
 
 ### 6.1 User-controlled redacted summary export
 
@@ -574,6 +592,9 @@ fake clock, and failure injection:
   minimal mode stores no summary or coverage; corruption, deletion, stale
   generation, or compaction failure never causes an oversized model request or
   restoration of historic authority.
+- Multiple committed user Messages in one completed run preserve their exact
+  commit order; uncommitted queue states never appear in SQLite, resume,
+  summary coverage, retention cleanup, deletion export, or model replay.
 - Picker, exact ID, and `--last` all exclude minimal Sessions according to their
   typed outcomes.
 - Session deletion cascades through model, Tool, Evidence, Diagnosis, approval,
@@ -625,3 +646,4 @@ before:
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	summaryMessageTrigger     = 160
-	summaryRecentTailMessages = 16
+	summaryMessageTrigger      = 160
+	summaryRecentTailMessages  = 16
+	summaryMaximumTailMessages = 25
 )
 
 type summaryPlan struct {
@@ -117,15 +118,14 @@ func (state *runState) summaryModelInput(
 		!matchesInitialContext(original, conversation, state.input.Question()) {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	cutTurns := len(turns) - summaryRecentTailMessages
-	cutTurns -= cutTurns % 2
+	cutTurns := summaryCutTurnCount(turns)
 	if cutTurns < 2 {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	cutIndex := historyStart + cutTurns
 	covered += cutTurns
 	coverage := conversation.Coverage()
-	if covered > len(coverage) || covered%2 != 0 {
+	if covered > len(coverage) || domain.ValidateSessionContextCoverage(coverage[:covered]) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	modelInput := make([]*schema.Message, 0, cutIndex-historyStart+3)
@@ -144,6 +144,36 @@ func (state *runState) summaryModelInput(
 	}
 	state.mu.Unlock()
 	return cloneEinoMessages(modelInput), nil
+}
+
+// summaryCutTurnCount preserves whole completed-run groups while retaining a
+// recent tail between the fixed minimum and maximum whenever compaction is
+// required. A run may now contain adjacent committed user steer messages.
+func summaryCutTurnCount(turns []agent.ConversationTurn) int {
+	if len(turns) <= summaryRecentTailMessages {
+		return 0
+	}
+	tailStart, tailCount := len(turns), 0
+	for tailStart > 0 {
+		runID := turns[tailStart-1].RunID
+		groupStart := tailStart - 1
+		for groupStart > 0 && turns[groupStart-1].RunID == runID {
+			groupStart--
+		}
+		groupSize := tailStart - groupStart
+		if tailCount >= summaryRecentTailMessages && tailCount+groupSize > summaryMaximumTailMessages {
+			break
+		}
+		tailStart = groupStart
+		tailCount += groupSize
+		if tailCount >= summaryRecentTailMessages {
+			break
+		}
+	}
+	if tailCount < summaryRecentTailMessages || tailCount > summaryMaximumTailMessages {
+		return 0
+	}
+	return tailStart
 }
 
 func matchesInitialContext(original []*schema.Message, conversation agent.ConversationContext, question string) bool {

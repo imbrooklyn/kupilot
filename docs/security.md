@@ -256,6 +256,13 @@ state. Working animation messages are local, bounded, correlated to the active
 run and scope generation, and rejected after terminal or stale state. They
 cannot affect budgets, Evidence, authority, or external calls.
 
+Pending, committing, queued, rejected, recovered, and unknown input is
+normalized and bounded before it enters the working preview. Uncommitted input
+is not optimistic scrollback or durable history; an unknown label accompanies
+the one user Message committed earlier. `Alt+Up` can recover only an
+Application-owned editable item into an empty composer; it cannot overwrite an
+IME, selection, modal, approval, Reviewer, or current draft.
+
 Provisional answer text uses a stateful pre-render processor so JSON escapes,
 UTF-8 text, carriage returns, CSI, OSC, control strings, bidirectional controls,
 and sensitive patterns remain safe when their syntax is split across provider
@@ -329,6 +336,18 @@ migrations are checksummed and forward-only. Startup marks running runs
 interrupted and unexecuted approvals terminal. Resume restores safe history and
 unverified candidates only. Retention and deletion use bounded transactional
 operations with visible failures.
+
+The follow-up queue is current-process and current-Session only. Pending,
+committing, queued, rejected, and recovered drafts are absent from SQLite and
+export. Unknown lifecycle metadata is also process-local, while its already
+committed safe Message follows ordinary retention and export and its failed run
+group remains ineligible for model replay. A committed steer becomes one
+ordinary Message only after an atomic Application barrier and before model I/O. Failed precommit
+storage or sink handling makes zero model calls. A failed Message append
+recovers the uncommitted input; a failed notification after a successful append
+leaves a known commit and still blocks model I/O. Only failure after the actual
+model endpoint is entered becomes unknown, and an unknown outcome is never
+automatically requeued or retried.
 
 ### T12: Error-text policy or disclosure
 
@@ -477,6 +496,10 @@ for the durations in [Data Retention](data-retention.md). Minimal persistence
 does not weaken approval audit. `/status` is in-memory and does not create a new
 durable content record merely because it is viewed.
 
+The working preview is an additional terminal retention surface for at most
+four normalized items and two lines per item. `/status` exposes only queue
+counts, aggregate bytes, lifecycle counts, run identity, and generations.
+
 ## 10. Required security tests
 
 Tests must use synthetic canaries and deterministic fake clocks, clients,
@@ -502,6 +525,10 @@ barriers, and temporary databases. Required proof includes:
   Unicode and JSON escapes, exact credentials, sensitive patterns, terminal
   controls, cancellation, timeout, stale scope, Tool-turn reset, event limits,
   final replacement, and scrollback exclusion; and
+- pending/committing/committed/rejected/unknown/recovered steering transitions,
+  exact queue limits plus one-over, FIFO drain, LIFO edit, edit-versus-drain
+  races, zero model calls on precommit failure, and no automatic send after
+  any unsafe terminal result;
 - standard/minimal memory, summary coverage, and explicit resume that never
   restore a run, stream, live generation, Evidence, permission rule,
   ActionEnvelope, approval authority, or execution retry; and
@@ -550,3 +577,4 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)

@@ -85,12 +85,16 @@ type UIStartResult struct {
 	Session                 *UISessionState
 	Scope                   *UIStartupScope
 	ScopeCandidate          *domain.ScopeCandidate
+	ScopeGeneration         int64
 	ScopePreferenceDegraded bool
 }
 
 // Validate checks that only a new start creates a Session immediately.
 func (result UIStartResult) Validate() error {
 	if result.Intent.Validate() != nil {
+		return ErrInvalidUIQueryResult
+	}
+	if result.ScopeGeneration < 0 || result.Scope != nil && result.ScopeGeneration != result.Scope.Generation {
 		return ErrInvalidUIQueryResult
 	}
 	if result.Intent.Kind == UIStartNew {
@@ -111,8 +115,7 @@ func (result UIStartResult) Validate() error {
 		return ErrInvalidUIQueryResult
 	}
 	activatesStartupScope := result.Intent.Kind == UIStartNew || result.Intent.ExplicitScope
-	if result.Scope != nil && !activatesStartupScope || result.ScopeCandidate != nil && activatesStartupScope ||
-		result.Intent.ExplicitScope && result.Scope == nil {
+	if result.Scope != nil && !activatesStartupScope {
 		return ErrInvalidUIQueryResult
 	}
 	return nil

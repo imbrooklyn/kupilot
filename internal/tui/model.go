@@ -82,6 +82,17 @@ type actionPresentation struct {
 	ExecutionIndex int64
 }
 
+// pendingConversationInput correlates one short Application acceptance or
+// edit request. It is delivery state only and never owns queue authority.
+type pendingConversationInput struct {
+	RequestID        uint64
+	Kind             application.UICommandKind
+	RunID            domain.AgentRunID
+	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
+	Draft            string
+}
+
 // Config supplies pure initial UI state; it contains no infrastructure client.
 type Config struct {
 	Width                   int
@@ -140,7 +151,6 @@ type Model struct {
 	dialog           components.ErrorDialog
 	evidenceDialog   components.EvidenceDetailDialog
 	approvalDialog   components.ApprovalDialog
-	scopeConflict    components.ScopeConflictDialog
 	footer           components.Footer
 
 	activePicker           application.UICompletionKind
@@ -148,6 +158,8 @@ type Model struct {
 	pendingResume          application.UIResumeRequest
 	pendingResumed         *application.UIResumedSession
 	resumeOrigin           resumeOrigin
+	resumeScopeSelection   bool
+	scopeSelectionRequired bool
 	nextRequestID          uint64
 	initialQuery           application.UICompletionQuery
 	initialResume          application.UIResumeRequest
@@ -155,6 +167,12 @@ type Model struct {
 	pendingResourceID      uint64
 	pendingResource        ResourceView
 	pendingSubmitID        uint64
+	pendingSubmitDraft     string
+	pendingConversation    *pendingConversationInput
+	conversationRevision   int64
+	conversationStatus     application.ConversationInputStatus
+	conversationPreview    []application.ConversationInputProjection
+	committedConversation  map[domain.MessageID]struct{}
 	pendingPrivacyID       uint64
 	pendingDeleteID        uint64
 	pendingExportID        uint64
@@ -241,16 +259,21 @@ func NewModel(config Config) Model {
 		dialog:           components.NewErrorDialog(styles.dialog),
 		evidenceDialog:   components.NewEvidenceDetailDialog(styles.evidence),
 		approvalDialog:   components.NewApprovalDialog(styles.approval),
-		scopeConflict:    components.NewScopeConflictDialog(styles.scopeConflict),
 		footer:           components.NewFooter(styles.footer),
 		styles:           styles, keymap: DefaultKeyMap(), terminalFocused: true,
 	}
 	model.configureStartup(config.StartIntent)
+	model.scopeSelectionRequired = model.startup.Intent.Kind == application.UIStartNew &&
+		model.startup.Ready && !model.scope.Verified
 	if config.ScopePreferenceDegraded {
 		model.transcript.AppendNotice("The previous Kubernetes Context preference could not be read. Kupilot used current kubeconfig state; a successful Context activation is stored when possible.")
 	}
 	if !model.modelConfigured && model.startup.Ready {
 		model.beginMissingModelSetup()
+	} else if model.scopeSelectionRequired {
+		query := model.beginRequiredScopeSelection()
+		model.initialQuery = model.pendingCompletion
+		_ = query
 	}
 	model.reflow()
 	return model
@@ -346,7 +369,6 @@ func (model *Model) applyStyleSet(styles styleSet) {
 	model.dialog.SetStyles(styles.dialog)
 	model.evidenceDialog.SetStyles(styles.evidence)
 	model.approvalDialog.SetStyles(styles.approval)
-	model.scopeConflict.SetStyles(styles.scopeConflict)
 	model.footer.SetStyles(styles.footer)
 }
 

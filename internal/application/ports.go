@@ -28,6 +28,13 @@ type RunPersistence interface {
 	CompleteWithAudit(context.Context, domain.Diagnosis, domain.Message, domain.AgentRun, domain.AuditEvent) error
 }
 
+// RunInputPersistence atomically appends one committed steer to an exact
+// still-running AgentRun. It is deliberately separate from the general
+// Message store so callers cannot append arbitrary transcript content.
+type RunInputPersistence interface {
+	AppendRunInput(context.Context, domain.Message) error
+}
+
 // ToolEvidencePersistence atomically stores one terminal ToolInvocation and
 // its accepted same-run Evidence and terminal audit record.
 type ToolEvidencePersistence interface {

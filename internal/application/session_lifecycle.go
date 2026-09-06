@@ -424,6 +424,7 @@ func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context,
 	if current && coordinator.currentSession != nil && coordinator.currentSession.ID == intent.SessionID {
 		coordinator.currentSession = nil
 		coordinator.currentResumed = false
+		coordinator.conversationInputs.reset()
 		coordinator.lastDiagnosis = nil
 		coordinator.lastEvidence = nil
 		coordinator.modelContext.clear()
@@ -536,6 +537,7 @@ func (coordinator *Coordinator) clearDeletedHistoryState() {
 	coordinator.mu.Lock()
 	coordinator.currentSession = nil
 	coordinator.currentResumed = false
+	coordinator.conversationInputs.reset()
 	coordinator.pendingResume = nil
 	coordinator.startupResume = nil
 	coordinator.privacyChallenge = nil

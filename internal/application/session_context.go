@@ -18,8 +18,10 @@ var ErrModelContextUnavailable = errors.New("safe Session model context is unava
 
 // ModelContextCursor is an exclusive ascending keyset boundary.
 type ModelContextCursor struct {
-	CreatedAt time.Time
-	ID        domain.MessageID
+	RunStartedAt time.Time
+	RunID        domain.AgentRunID
+	RunSequence  int
+	ID           domain.MessageID
 }
 
 // ModelContextPageRequest selects only messages from successfully completed
@@ -35,7 +37,9 @@ func (request ModelContextPageRequest) Validate() error {
 	if !request.SessionID.Valid() || request.Limit < 1 || request.Limit > modelContextPageSize {
 		return ErrModelContextUnavailable
 	}
-	if request.After != nil && (!request.After.ID.Valid() || !validCoordinatorTime(request.After.CreatedAt)) {
+	if request.After != nil && (!request.After.ID.Valid() || !request.After.RunID.Valid() ||
+		request.After.RunSequence < 0 || request.After.RunSequence > domain.MaxRunConversationSequence ||
+		!validCoordinatorTime(request.After.RunStartedAt)) {
 		return ErrModelContextUnavailable
 	}
 	return nil
@@ -88,39 +92,38 @@ func (state *sessionModelContext) clear() {
 
 func eligibleConversationTurn(message domain.Message) (agent.ConversationTurn, error) {
 	if message.Validate() != nil || message.Status != domain.MessageStatusCommitted ||
+		message.RunID == nil || message.RunSequence == nil ||
 		(message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant) {
 		return agent.ConversationTurn{}, ErrModelContextUnavailable
 	}
 	return agent.ConversationTurn{
-		MessageID: message.ID, Role: message.Role, Content: message.Content, ContentHash: message.Hash,
+		MessageID: message.ID, RunID: *message.RunID, RunSequence: *message.RunSequence,
+		Role: message.Role, Content: message.Content, ContentHash: message.Hash,
 	}, nil
 }
 
 func validateEligibleTurns(messages []domain.Message, sessionID domain.SessionID) error {
-	if len(messages)%2 != 0 || len(messages) > domain.MaxSessionContextMessages {
+	if len(messages) > domain.MaxSessionContextMessages {
 		return ErrModelContextUnavailable
 	}
+	coverage := make([]domain.SessionContextCoverageItem, len(messages))
 	for index, message := range messages {
-		if message.SessionID != sessionID || message.RunID == nil {
-			return ErrModelContextUnavailable
-		}
-		wantRole := domain.MessageRoleUser
-		if index%2 == 1 {
-			wantRole = domain.MessageRoleAssistant
-			if messages[index-1].RunID == nil || *messages[index-1].RunID != *message.RunID {
-				return ErrModelContextUnavailable
-			}
-		}
-		if message.Role != wantRole {
+		if message.SessionID != sessionID || message.RunID == nil || message.RunSequence == nil {
 			return ErrModelContextUnavailable
 		}
 		if index > 0 {
 			previous := messages[index-1]
-			if message.CreatedAt.Before(previous.CreatedAt) ||
-				message.CreatedAt.Equal(previous.CreatedAt) && message.ID <= previous.ID {
+			if *message.RunID == *previous.RunID && *message.RunSequence != *previous.RunSequence+1 {
 				return ErrModelContextUnavailable
 			}
 		}
+		coverage[index] = domain.SessionContextCoverageItem{
+			MessageID: message.ID, RunID: *message.RunID, RunSequence: *message.RunSequence,
+			Role: message.Role, ContentHash: message.Hash, ContentBytes: len(message.Content),
+		}
+	}
+	if len(coverage) > 0 && domain.ValidateSessionContextCoverage(coverage) != nil {
+		return ErrModelContextUnavailable
 	}
 	return nil
 }
@@ -176,11 +179,13 @@ func (coordinator *Coordinator) conversationForRun(
 			cursor = nil
 			break
 		}
-		if len(page.Messages) != modelContextPageSize || page.Next.ID != page.Messages[len(page.Messages)-1].ID ||
-			!page.Next.CreatedAt.Equal(page.Messages[len(page.Messages)-1].CreatedAt) {
+		last := page.Messages[len(page.Messages)-1]
+		if len(page.Messages) != modelContextPageSize || last.RunID == nil || last.RunSequence == nil ||
+			page.Next.ID != last.ID || page.Next.RunID != *last.RunID || page.Next.RunSequence != *last.RunSequence {
 			return agent.ConversationContext{}, ErrModelContextUnavailable
 		}
-		cursor = &ModelContextCursor{CreatedAt: page.Next.CreatedAt, ID: page.Next.ID}
+		value := *page.Next
+		cursor = &value
 	}
 	if cursor != nil || validateEligibleTurns(messages, sessionID) != nil {
 		return agent.ConversationContext{}, ErrModelContextUnavailable
@@ -199,14 +204,16 @@ func (coordinator *Coordinator) conversationForRun(
 			return agent.ConversationContext{}, ErrModelContextUnavailable
 		}
 		coverage[index] = domain.SessionContextCoverageItem{
-			MessageID: message.ID, Role: message.Role, ContentHash: message.Hash, ContentBytes: len(message.Content),
+			MessageID: message.ID, RunID: *message.RunID, RunSequence: *message.RunSequence,
+			Role: message.Role, ContentHash: message.Hash, ContentBytes: len(message.Content),
 		}
 	}
 	covered := 0
 	var selectedSummary *domain.SessionContextSummary
 	if found && summary.AgentProfile == profile && summary.AgentOriginHash == originHash &&
 		summary.PolicyVersion == domain.SafeConversationContextPolicyVersion {
-		if summary.CoveredCount > len(messages) || summary.CoveredCount%2 != 0 {
+		if summary.CoveredCount > len(messages) ||
+			domain.ValidateSessionContextCoverage(coverage[:summary.CoveredCount]) != nil {
 			return agent.ConversationContext{}, ErrModelContextUnavailable
 		}
 		digest, coveredBytes, digestErr := domain.SessionContextCoverageDigestItems(coverage[:summary.CoveredCount])
@@ -277,7 +284,8 @@ func (coordinator *Coordinator) validateSummaryForRunLocked(state *activeRun, su
 	if previous := context.Summary(); previous != nil {
 		previousCovered = previous.CoveredCount
 	}
-	if summary.CoveredCount <= previousCovered || summary.CoveredCount > len(coverage) || summary.CoveredCount%2 != 0 {
+	if summary.CoveredCount <= previousCovered || summary.CoveredCount > len(coverage) ||
+		domain.ValidateSessionContextCoverage(coverage[:summary.CoveredCount]) != nil {
 		return ErrInvalidAgentEvent
 	}
 	digest, bytes, err := domain.SessionContextCoverageDigestItems(coverage[:summary.CoveredCount])
@@ -319,11 +327,13 @@ func (coordinator *Coordinator) recordCompletedConversation(state *activeRun, as
 		return ErrModelContextUnavailable
 	}
 	user := agent.ConversationTurn{
-		MessageID: state.input.RequestMessageID(), Role: domain.MessageRoleUser,
+		MessageID: state.input.RequestMessageID(), RunID: state.run.ID, RunSequence: 0,
+		Role:    domain.MessageRoleUser,
 		Content: state.input.Question(), ContentHash: domain.MessageContentHash(state.input.Question()),
 	}
 	assistant := agent.ConversationTurn{
-		MessageID: assistantID, Role: domain.MessageRoleAssistant,
+		MessageID: assistantID, RunID: state.run.ID, RunSequence: 1 + len(state.committedInputs),
+		Role:    domain.MessageRoleAssistant,
 		Content: answer, ContentHash: domain.MessageContentHash(answer),
 	}
 	coordinator.mu.Lock()
@@ -332,12 +342,22 @@ func (coordinator *Coordinator) recordCompletedConversation(state *activeRun, as
 		return ErrModelContextUnavailable
 	}
 	candidate := coordinator.modelContext
-	candidate.turns = append(append([]agent.ConversationTurn(nil), coordinator.modelContext.turns...), user, assistant)
-	candidate.coverage = append(append([]domain.SessionContextCoverageItem(nil), coordinator.modelContext.coverage...),
-		domain.SessionContextCoverageItem{MessageID: user.MessageID, Role: user.Role, ContentHash: user.ContentHash, ContentBytes: len(user.Content)},
-		domain.SessionContextCoverageItem{MessageID: assistant.MessageID, Role: assistant.Role, ContentHash: assistant.ContentHash, ContentBytes: len(assistant.Content)},
-	)
+	runTurns := make([]agent.ConversationTurn, 0, 2+len(state.committedInputs))
+	runTurns = append(runTurns, user)
+	runTurns = append(runTurns, state.committedInputs...)
+	runTurns = append(runTurns, assistant)
+	candidate.turns = append(append([]agent.ConversationTurn(nil), coordinator.modelContext.turns...), runTurns...)
+	candidate.coverage = append([]domain.SessionContextCoverageItem(nil), coordinator.modelContext.coverage...)
+	for _, turn := range runTurns {
+		candidate.coverage = append(candidate.coverage, domain.SessionContextCoverageItem{
+			MessageID: turn.MessageID, RunID: turn.RunID, RunSequence: turn.RunSequence,
+			Role: turn.Role, ContentHash: turn.ContentHash, ContentBytes: len(turn.Content),
+		})
+	}
 	candidate.eligibleBytes += len(user.Content) + len(assistant.Content)
+	for _, turn := range state.committedInputs {
+		candidate.eligibleBytes += len(turn.Content)
+	}
 	candidate.recentTailCount = len(candidate.turns)
 	if _, err := candidate.conversation(); err != nil {
 		return err

@@ -237,7 +237,7 @@ func TestCoordinatorStartUIOwnsExplicitResumeScopeActivation(t *testing.T) {
 	}
 }
 
-func TestCoordinatorStartUIFailsBeforeCreatingSessionWhenDefaultScopeCannotActivate(t *testing.T) {
+func TestCoordinatorStartUIKeepsFailedDefaultAsUnverifiedPickerCandidate(t *testing.T) {
 	t.Parallel()
 
 	recorder := newUIScopeActionRecorder()
@@ -250,13 +250,34 @@ func TestCoordinatorStartUIFailsBeforeCreatingSessionWhenDefaultScopeCannotActiv
 		UIStartIntent{Kind: UIStartNew},
 		domain.PrivacyModeStandard,
 	)
-	if !errors.Is(err, ErrScopeUnavailable) || result != (UIStartResult{}) || coordinator.CurrentUISession() != nil {
+	if err != nil || result.Validate() != nil || result.Session == nil || result.Scope != nil || result.ScopeCandidate == nil ||
+		result.ScopeCandidate.Context != "current-context" || result.ScopeCandidate.Namespace != DefaultStartupNamespace ||
+		result.ScopeGeneration != 1 || coordinator.CurrentUISession() == nil {
 		t.Fatalf("StartUI() = %#v, error = %v, current Session = %#v", result, err, coordinator.CurrentUISession())
 	}
 	view := manager.View()
 	if view.State != ScopeStateUnavailable || view.Scope != nil || view.Generation != 1 ||
 		recorder.count("create") != 1 || recorder.count("verify") != 1 {
 		t.Fatalf("failed startup scope = %#v, actions = %#v", view, recorder.snapshot())
+	}
+}
+
+func TestCoordinatorStartUIPreservesUnavailableConfiguredCandidateForPicker(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	recorder.missingContext = true
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, newRecordingSessionResumeStore())
+	result, err := coordinator.StartUI(context.Background(), UIStartIntent{
+		Kind: UIStartNew, ConfiguredContext: "missing-context", ConfiguredNamespace: "payments",
+	}, domain.PrivacyModeStandard)
+	if err != nil || result.Validate() != nil || result.Session == nil || result.Scope != nil || result.ScopeCandidate == nil ||
+		*result.ScopeCandidate != (domain.ScopeCandidate{Context: "missing-context", Namespace: "payments"}) {
+		t.Fatalf("StartUI(unavailable configured candidate) = %#v, %v", result, err)
+	}
+	if recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 {
+		t.Fatalf("unavailable configured candidate actions = %#v", recorder.snapshot())
 	}
 }
 
@@ -514,7 +535,7 @@ func TestCoordinatorBindsDirectStartupResumeToItsExactIntent(t *testing.T) {
 	}
 }
 
-func TestCoordinatorResumeAcceptanceUsesOnlyCurrentScopeSnapshot(t *testing.T) {
+func TestCoordinatorResumeConflictRequiresPickerSelectionThenUsesCurrentScope(t *testing.T) {
 	t.Parallel()
 
 	recorder := newUIScopeActionRecorder()
@@ -549,12 +570,27 @@ func TestCoordinatorResumeAcceptanceUsesOnlyCurrentScopeSnapshot(t *testing.T) {
 	if result, err := coordinator.ResumeUI(context.Background(), request); err != nil || result.Failure != "" {
 		t.Fatalf("ResumeUI() = %#v, %v", result, err)
 	}
+	conflict, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandAcceptResume, RequestID: request.RequestID, ExpectedScopeGeneration: current.Generation,
+	})
+	if err != nil || conflict.Failure != UIQueryUnavailable || conflict.Scope == nil ||
+		conflict.Scope.Failure != UIQueryUnavailable || coordinator.CurrentUISession() != nil {
+		t.Fatalf("unconfirmed resume conflict = %#v, %v", conflict, err)
+	}
+	selection, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandSelectContext, RequestID: request.RequestID, Text: current.Context,
+		ExpectedScopeGeneration: current.Generation,
+	})
+	if err != nil || selection.Scope == nil || selection.Scope.Failure != "" ||
+		selection.Scope.Context != current.Context || selection.Scope.Namespace != current.Namespace {
+		t.Fatalf("current picker selection = %#v, %v", selection, err)
+	}
 	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
 		Kind: UICommandAcceptResume, RequestID: request.RequestID, ExpectedScopeGeneration: current.Generation,
 	})
 	if err != nil || outcome.Failure != "" || outcome.Scope == nil || outcome.Scope.Failure != "" ||
 		outcome.Scope.Context != current.Context || outcome.Scope.Namespace != current.Namespace || outcome.Resource != nil {
-		t.Fatalf("resume acceptance = %#v, %v", outcome, err)
+		t.Fatalf("confirmed resume acceptance = %#v, %v", outcome, err)
 	}
 	if actions := recorder.snapshot(); len(actions) != 0 {
 		t.Fatalf("resume performed operational scope actions: %#v", actions)
@@ -565,6 +601,40 @@ func TestCoordinatorResumeAcceptanceUsesOnlyCurrentScopeSnapshot(t *testing.T) {
 	}
 	if selected, selectErr := manager.SelectedResource(current); selectErr != nil || selected != nil {
 		t.Fatalf("resume retained Resource authority: %#v, %v", selected, selectErr)
+	}
+}
+
+func TestCoordinatorResumeReusesIdenticalIndependentlyVerifiedCurrentScope(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	current, err := manager.SwitchContext(context.Background(), "current-context", 0)
+	if err != nil {
+		t.Fatalf("SwitchContext() error = %v", err)
+	}
+	recorder.reset()
+	store := newRecordingSessionResumeStore()
+	resumedID := domain.SessionID(coordinatorUUID(65))
+	saved := domain.ScopeCandidate{Context: current.Context, Namespace: current.Namespace}
+	store.history = resumedRecordWithResource(
+		resumedID, time.Date(2026, 8, 10, 3, 45, 0, 0, time.UTC), saved, "historic-uid",
+	)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, store)
+	request := UIResumeRequest{RequestID: 6, Mode: UIResumeExact, SessionID: resumedID}
+	if result, resumeErr := coordinator.ResumeUI(context.Background(), request); resumeErr != nil || result.Failure != "" {
+		t.Fatalf("ResumeUI() = %#v, %v", result, resumeErr)
+	}
+	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandAcceptResume, RequestID: request.RequestID, ExpectedScopeGeneration: current.Generation,
+	})
+	if err != nil || outcome.Failure != "" || outcome.Scope == nil || outcome.Scope.Failure != "" ||
+		outcome.Scope.Context != current.Context || outcome.Scope.Namespace != current.Namespace ||
+		outcome.Resource != nil || coordinator.CurrentUISession() == nil || coordinator.CurrentUISession().ID != resumedID {
+		t.Fatalf("matching current-scope acceptance = %#v, %v", outcome, err)
+	}
+	if actions := recorder.snapshot(); len(actions) != 0 {
+		t.Fatalf("matching current scope performed Kubernetes actions: %#v", actions)
 	}
 }
 
