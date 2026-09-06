@@ -4,9 +4,9 @@ package executor
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
 )
 
@@ -41,5 +41,5 @@ func platformFileIdentity(info os.FileInfo) string {
 	if !ok {
 		return ""
 	}
-	return strconv.FormatUint(uint64(stat.Dev), 10) + ":" + strconv.FormatUint(stat.Ino, 10)
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
 }
