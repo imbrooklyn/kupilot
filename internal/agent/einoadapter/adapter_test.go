@@ -801,7 +801,7 @@ func TestAdapterRejectsHostileToolSelectionsBeforeHandler(t *testing.T) {
 	}
 }
 
-func TestAdapterRemovesUnregisteredCitationWithoutGrantingAuthority(t *testing.T) {
+func TestAdapterRejectsUnregisteredCitationWithoutGrantingAuthority(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
@@ -814,12 +814,9 @@ func TestAdapterRemovesUnregisteredCitationWithoutGrantingAuthority(t *testing.T
 	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
-	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || outcome.ErrorClass != nil {
+	if outcome.Status != domain.AgentRunStatusFailed || outcome.Diagnosis != nil || outcome.ErrorClass == nil ||
+		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse {
 		t.Fatalf("outcome = %#v", outcome)
-	}
-	if len(outcome.Diagnosis.ConfirmedFacts) != 0 || len(outcome.Diagnosis.ValidationWarnings) != 1 ||
-		len(outcome.Diagnosis.RecommendedActions) != 1 || outcome.Diagnosis.RecommendedActions[0].Executed {
-		t.Fatalf("validated Diagnosis = %#v", outcome.Diagnosis)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
 		t.Fatalf("calls: Tool = %d, Model = %d", len(tool.Calls()), len(model.Requests()))

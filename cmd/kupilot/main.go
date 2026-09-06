@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -487,8 +488,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
 		initialScope.Generation = startResult.ScopeGeneration
 	}
+	terminalTitles := loaded.TerminalStatusTitles && terminalStatusTitlesSupported(stdout, os.Getenv)
 	model := tui.NewModel(tui.Config{
 		NoColor:                 loaded.NoColor,
+		TerminalStatusTitles:    terminalTitles,
+		TerminalClipboard:       terminalClipboardSupported(stdout, os.Getenv),
 		StartIntent:             startIntent,
 		Scope:                   initialScope,
 		ModelEndpoint:           loaded.Models.Agent.Endpoint,
@@ -511,8 +515,19 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}
 
 	requestContext, cancelRequests := context.WithCancel(ctx)
+	defer cancelRequests()
 	eventContext, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
 	requests := make(chan tea.Msg, 32)
+	restoreTitle, err := beginTerminalStatusTitles(stdout, terminalTitles)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if restoreErr := restoreTitle(); returnErr == nil && restoreErr != nil {
+			returnErr = restoreErr
+		}
+	}()
 	program := tea.NewProgram(
 		tui.NewTerminalRuntime(model),
 		tea.WithContext(ctx),
@@ -534,7 +549,73 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	cancelEvents()
 	workers.Wait()
 	restoreErr := restoreTerminalAfterRuntime(stdout, finalState, runErr)
-	return errors.Join(runErr, shutdownErr, restoreErr)
+	titleErr := restoreTitle()
+	return errors.Join(runErr, shutdownErr, restoreErr, titleErr)
+}
+
+const (
+	terminalSaveTitleSlot    = "\x1b[22;0t"
+	terminalRestoreTitleSlot = "\x1b[23;0t"
+)
+
+func beginTerminalStatusTitles(output io.Writer, enabled bool) (func() error, error) {
+	return beginTerminalStatusTitlesOnWriter(output, enabled && terminalWriter(output))
+}
+
+func beginTerminalStatusTitlesOnWriter(output io.Writer, active bool) (func() error, error) {
+	if !active {
+		return func() error { return nil }, nil
+	}
+	if _, err := io.WriteString(output, terminalSaveTitleSlot); err != nil {
+		return nil, fmt.Errorf("save terminal title slot: %w", err)
+	}
+	var once sync.Once
+	var restoreErr error
+	return func() error {
+		once.Do(func() {
+			if _, err := io.WriteString(output, terminalRestoreTitleSlot); err != nil {
+				restoreErr = fmt.Errorf("restore terminal title slot: %w", err)
+			}
+		})
+		return restoreErr
+	}, nil
+}
+
+func terminalWriter(output io.Writer) bool {
+	file, ok := output.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func terminalClipboardSupported(output io.Writer, getenv func(string) string) bool {
+	if !terminalWriter(output) || getenv == nil || getenv("TMUX") != "" || getenv("STY") != "" {
+		return false
+	}
+	switch strings.ToLower(getenv("TERM_PROGRAM")) {
+	case "iterm.app", "wezterm", "ghostty", "vscode", "kitty":
+		return true
+	}
+	term := strings.ToLower(getenv("TERM"))
+	return strings.Contains(term, "kitty") || strings.Contains(term, "wezterm")
+}
+
+func terminalStatusTitlesSupported(output io.Writer, getenv func(string) string) bool {
+	return terminalWriter(output) && terminalStatusTitleEnvironmentSupported(getenv)
+}
+
+func terminalStatusTitleEnvironmentSupported(getenv func(string) string) bool {
+	if getenv == nil || getenv("TMUX") != "" || getenv("STY") != "" {
+		return false
+	}
+	switch strings.ToLower(getenv("TERM_PROGRAM")) {
+	case "apple_terminal", "iterm.app", "wezterm", "ghostty", "vscode", "kitty":
+		return true
+	}
+	term := strings.ToLower(getenv("TERM"))
+	return strings.Contains(term, "xterm") || strings.Contains(term, "kitty") || strings.Contains(term, "wezterm")
 }
 
 func restoreTerminalAfterRuntime(output io.Writer, finalState tea.Model, runErr error) error {
@@ -1023,6 +1104,17 @@ func (runtime *compositionModelRuntime) Run(
 		return agent.RunOutcome{}
 	}
 	return runtime.agent.Run(ctx, input, sink)
+}
+
+func (runtime *compositionModelRuntime) Compact(
+	ctx context.Context,
+	input agent.ManualCompactionInput,
+	sink agent.ManualCompactionEventSink,
+) (agent.ManualCompactionResult, error) {
+	if runtime == nil || runtime.agent == nil {
+		return agent.ManualCompactionResult{}, agent.ErrInvalidManualCompaction
+	}
+	return runtime.agent.Compact(ctx, input, sink)
 }
 
 func (runtime *compositionModelRuntime) Close() {

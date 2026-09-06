@@ -240,6 +240,112 @@ func TestRunInputAllowsOnlyExactFrozenResourcePolicyEvidence(t *testing.T) {
 	}
 }
 
+func TestApplicationDiagnosisEvidenceBindingRequiresAcceptedOrderAndPolicy(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
+		SessionID: session.ID, Question: "Inspect the selected Pod.",
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	first := domain.EvidenceID(coordinatorUUID(950))
+	second := domain.EvidenceID(coordinatorUUID(951))
+	claim := "The projected Pod condition is not Ready."
+	diagnosis := domain.Diagnosis{
+		ID: "00000000-0000-7000-8000-000000000952", RunID: runID, Scope: input.Scope().Snapshot(),
+		AnswerMarkdown: claim, CreatedAt: clock.Now(),
+		ClaimCoverage: []domain.ClaimEvidenceCoverage{{
+			Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+			EvidenceIDs: []domain.EvidenceID{first, second}, RunID: runID, Scope: input.Scope().Snapshot(),
+			PolicyGeneration: input.PolicyGeneration(), State: domain.ClaimCoverageVerified,
+		}},
+	}
+	if diagnosis.Validate() != nil {
+		t.Fatal("Application Evidence binding fixture is not Domain-valid")
+	}
+	coordinator.mu.Lock()
+	state := coordinator.active
+	state.evidenceOrder = []domain.EvidenceID{first, second}
+	coordinator.mu.Unlock()
+	if !diagnosisEvidenceAccepted(state, diagnosis) {
+		t.Fatal("accepted same-run Evidence order was rejected")
+	}
+	for _, current := range []struct {
+		name   string
+		mutate func(*domain.Diagnosis)
+	}{
+		{name: "unknown", mutate: func(value *domain.Diagnosis) {
+			value.ClaimCoverage[0].EvidenceIDs[1] = domain.EvidenceID(coordinatorUUID(953))
+		}},
+		{name: "out of order", mutate: func(value *domain.Diagnosis) {
+			value.ClaimCoverage[0].EvidenceIDs[0], value.ClaimCoverage[0].EvidenceIDs[1] =
+				value.ClaimCoverage[0].EvidenceIDs[1], value.ClaimCoverage[0].EvidenceIDs[0]
+		}},
+		{name: "stale policy", mutate: func(value *domain.Diagnosis) {
+			value.ClaimCoverage[0].PolicyGeneration++
+		}},
+	} {
+		t.Run(current.name, func(t *testing.T) {
+			value := cloneDiagnosis(diagnosis)
+			current.mutate(&value)
+			if value.Validate() != nil {
+				t.Fatal("mutated Application Evidence fixture is not Domain-valid")
+			}
+			if diagnosisEvidenceAccepted(state, value) {
+				t.Fatal("unbound Diagnosis Evidence was accepted")
+			}
+		})
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestCoordinatorRejectsDiagnosisWithUnacceptedEvidenceBeforePersistence(t *testing.T) {
+	clock := newCoordinatorClock()
+	rejected := make(chan agent.EventSinkResult, 1)
+	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+		if err != nil {
+			return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+		}
+		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted})
+		claim := "An unaccepted current-state claim must fail closed."
+		diagnosis := domain.Diagnosis{
+			ID: "00000000-0000-7000-8000-000000000954", RunID: input.RunID(), Scope: input.Scope().Snapshot(),
+			AnswerMarkdown: claim, CreatedAt: clock.Now(),
+			ClaimCoverage: []domain.ClaimEvidenceCoverage{{
+				Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+				EvidenceIDs: []domain.EvidenceID{domain.EvidenceID(coordinatorUUID(955))}, RunID: input.RunID(),
+				Scope: input.Scope().Snapshot(), PolicyGeneration: input.PolicyGeneration(), State: domain.ClaimCoverageVerified,
+			}},
+		}
+		result, _ := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventDiagnosisReady, Diagnosis: &diagnosis})
+		rejected <- result
+		class := domain.SafeErrorClassInvalidExternalResponse
+		_, _ = publisher.Publish(ctx, agent.RunEvent{
+			Kind:    agent.RunEventRunFailed,
+			Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The final answer failed Evidence validation."},
+		})
+		return agent.RunOutcome{Status: domain.AgentRunStatusFailed, ErrorClass: &class, SafeMessage: "The final answer failed Evidence validation."}
+	})
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Inspect the selected Pod."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	result, err := coordinator.WaitRun(context.Background(), runID)
+	if err != nil || result.Status != domain.AgentRunStatusFailed || <-rejected != agent.EventSinkRejected || len(persistence.diagnoses) != 0 {
+		t.Fatalf("unaccepted Diagnosis result = %#v, %v; diagnoses=%d", result, err, len(persistence.diagnoses))
+	}
+}
+
 func TestCoordinatorRejectsCancelledAndStaleStartsBeforePersistence(t *testing.T) {
 	t.Parallel()
 	t.Run("cancelled Context", func(t *testing.T) {
@@ -673,6 +779,9 @@ func (source *coordinatorIDs) NewMessageID() (domain.MessageID, error) {
 }
 func (source *coordinatorIDs) NewAgentRunID() (domain.AgentRunID, error) {
 	return domain.AgentRunID(source.id()), nil
+}
+func (source *coordinatorIDs) NewCompactionID() (domain.CompactionID, error) {
+	return domain.CompactionID(source.id()), nil
 }
 func (source *coordinatorIDs) NewAuditEventID() (domain.AuditEventID, error) {
 	return domain.AuditEventID(source.id()), nil

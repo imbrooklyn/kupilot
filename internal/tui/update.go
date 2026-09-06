@@ -20,6 +20,12 @@ const helpText = `/help                 Show commands and key bindings
 /resource [filter]    Select or clear the target resource
 /permissions          Review or change the permission profile
 /status               Show the current safe status
+/queue cancel ID      Cancel one exact editable queued input
+/queue clear          Confirm and clear all editable queued input
+/copy                 Copy the latest committed assistant final
+/find [query]         Find committed transcript text locally
+/compact              Compact eligible safe Session context
+/plan [off]           Arm or cancel one-shot plan-only mode
 /new                  Start a new Session
 /resume [filter]      Resume a local Session
 /rename [title]       Rename the current Session
@@ -32,6 +38,7 @@ Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up wh
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
 Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
+Ctrl+F reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
 // Update reduces one message into pure UI state. The TerminalRuntime wrapper,
@@ -159,6 +166,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
 		return model, nil
+	case tea.ClipboardMsg:
+		// Kupilot never requests or accepts clipboard reads.
+		return model, nil
 	case tea.PasteMsg:
 		if model.dialog.Open() || model.approvalDialog.Open() ||
 			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || !model.terminalFocused {
@@ -175,6 +185,10 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd, err := model.composer.Update(msg)
 		if err == nil {
 			model.composer = updated
+			if model.searchMode {
+				model.syncTranscriptSearch()
+				model.reflow()
+			}
 		}
 		return model, cmd
 	}
@@ -183,17 +197,35 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
 	if message.Command == application.UICommandSubmitSteer ||
 		message.Command == application.UICommandEnqueueFollowUp ||
-		message.Command == application.UICommandPopFollowUp {
+		message.Command == application.UICommandPopFollowUp ||
+		message.Command == application.UICommandCancelFollowUp ||
+		message.Command == application.UICommandClearFollowUps {
 		pending := model.pendingConversation
 		if pending == nil || message.RequestID != pending.RequestID || message.Command != pending.Kind ||
 			message.RunID != pending.RunID || message.ScopeGeneration != pending.ScopeGeneration ||
 			message.PolicyGeneration != pending.PolicyGeneration {
 			return false
 		}
-		if pending.Kind != application.UICommandPopFollowUp && model.composer.Value() == "" {
+		if pending.Kind != application.UICommandPopFollowUp && pending.Kind != application.UICommandCancelFollowUp &&
+			pending.Kind != application.UICommandClearFollowUps && model.composer.Value() == "" {
 			model.composer.SetValue(pending.Draft)
 		}
 		model.pendingConversation = nil
+		return true
+	}
+	if message.Command == application.UICommandCompactContext {
+		if model.pendingCompactionID == 0 || message.RequestID != model.pendingCompactionID ||
+			message.ScopeGeneration != model.scope.Generation || message.PolicyGeneration != model.permission.PolicyGeneration {
+			return false
+		}
+		model.pendingCompactionID = 0
+		return true
+	}
+	if message.Command == application.UICommandArmPlan || message.Command == application.UICommandCancelPlan {
+		if model.pendingPlanID == 0 || message.RequestID != model.pendingPlanID {
+			return false
+		}
+		model.pendingPlanID = 0
 		return true
 	}
 	if message.Command == application.UICommandApproveAction || message.Command == application.UICommandRejectAction ||
@@ -372,6 +404,17 @@ func (model Model) updatePaste(message tea.PasteMsg) (tea.Model, tea.Cmd) {
 	if model.pendingConversation != nil {
 		return model, nil
 	}
+	if model.searchMode {
+		updated, cmd, err := model.composer.Update(message)
+		if err != nil {
+			model.showDialog("Find limit", "The query exceeds the exact 512-byte search limit.")
+			return model, nil
+		}
+		model.composer = updated
+		model.syncTranscriptSearch()
+		model.reflow()
+		return model, cmd
+	}
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
 		if strings.ContainsRune(message.Content, '\n') || len(model.composer.Value())+len(message.Content) > 4096 {
 			model.showSessionExportTargetError("The export target must be one bounded single-line path.")
@@ -408,6 +451,10 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if command, handled := model.interruptModelSetup(); handled {
 			return model, command
 		}
+		if model.searchMode {
+			model.endTranscriptSearch()
+			return model, nil
+		}
 		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
 			model.cancelSessionExport()
 			return model, nil
@@ -417,6 +464,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		if model.dialog.Open() {
+			if model.queueClearConfirmation != nil {
+				return model.updateQueueClearConfirmationKey(message)
+			}
 			if model.quitAfterLocalDeletion {
 				model.quitAfterLocalDeletion = false
 				model.closeDialog()
@@ -463,6 +513,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	if model.dialog.Open() {
+		if model.queueClearConfirmation != nil {
+			return model.updateQueueClearConfirmationKey(message)
+		}
 		if model.quitAfterLocalDeletion {
 			if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) {
 				model.quitAfterLocalDeletion = false
@@ -501,6 +554,12 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	}
+	if model.searchMode {
+		return model.updateTranscriptSearchKey(message)
+	}
+	if key.Matches(message, model.keymap.Find) {
+		return model.beginTranscriptSearch("", model.composer.Value())
+	}
 	if key.Matches(message, model.keymap.Evidence) {
 		if model.transcript.EvidenceSelecting() {
 			model.closeEvidenceInteraction()
@@ -536,7 +595,6 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	}
-
 	if key.Matches(message, model.keymap.Close) {
 		if model.modelSetup != nil {
 			command, _ := model.interruptModelSetup()
@@ -980,6 +1038,16 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		return model, applicationCommand(application.UICommand{
 			Kind: application.UICommandShowPermissions, RequestID: requestID,
 		})
+	case slashCopy:
+		return model.copyLatestCommittedAnswer()
+	case slashFind:
+		return model.beginTranscriptSearch(argument, "")
+	case slashQueue:
+		return model.executeQueueCommand(argument)
+	case slashCompact:
+		return model.requestManualCompaction()
+	case slashPlan:
+		return model.executePlanCommand(argument)
 	case slashQuit:
 		model.composer.Reset()
 		model.slashMenu.Close()
@@ -1032,6 +1100,24 @@ func (model Model) slashAvailability(command SlashCommand) (bool, string) {
 	case "new", "resume", "quit":
 		if model.run.Active {
 			return false, "Cancel the active diagnostic run first."
+		}
+	case "compact":
+		if model.run.Active || model.pendingApproval != nil || model.actionPresentation != nil {
+			return false, "Finish the active run or supervised action first."
+		}
+		if model.pendingCompactionID != 0 {
+			return false, "Wait for the current manual compaction request to finish."
+		}
+	case "plan":
+		if model.run.Active || model.pendingApproval != nil || model.actionPresentation != nil {
+			return false, "Finish the active run or supervised action first."
+		}
+		if model.pendingPlanID != 0 {
+			return false, "Wait for the current plan-mode change to finish."
+		}
+	case "queue":
+		if model.pendingConversation != nil {
+			return false, "Wait for the current queue change to finish."
 		}
 	}
 	return true, ""
@@ -1421,6 +1507,8 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.session = SessionView{ID: result.Session.ID, Title: result.Session.Title, Resumed: result.Session.Resumed}
 		model.transcript.AppendNotice("The current Session title was updated.")
 	case application.UICommandShowStatus:
+		model.contextPressure = result.Status.ModelContext.Pressure
+		model.planArmed = result.Status.PlanArmed
 		model.transcript.AppendNotice(statusText(*result.Status, model.modelName))
 	case application.UICommandShowPermissions, application.UICommandChangePermission, application.UICommandCreateSessionRule:
 		if model.pendingPermissionID == 0 || result.RequestID != model.pendingPermissionID || result.Permissions == nil {
@@ -1475,7 +1563,10 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			}
 			model.pendingSubmitDraft = ""
 			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
+			return
 		}
+		model.pendingSubmitDraft = ""
+		model.planArmed = false
 	case application.UICommandSubmitSteer, application.UICommandEnqueueFollowUp, application.UICommandPopFollowUp:
 		pending := model.pendingConversation
 		if pending == nil || result.RequestID != pending.RequestID || result.Command != pending.Kind ||
@@ -1491,6 +1582,51 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			return
 		}
 		model.composer.RecordSubmission(pending.Draft)
+	case application.UICommandCancelFollowUp, application.UICommandClearFollowUps:
+		pending := model.pendingConversation
+		if pending == nil || result.RequestID != pending.RequestID || result.Command != pending.Kind ||
+			result.ConversationChange == nil {
+			return
+		}
+		model.pendingConversation = nil
+		change := *result.ConversationChange
+		if change.Status.Revision > model.conversationRevision {
+			model.conversationRevision = change.Status.Revision
+			model.conversationStatus = change.Status
+			filtered := make([]application.ConversationInputProjection, 0, len(model.conversationPreview))
+			for _, item := range model.conversationPreview {
+				remove := result.Command == application.UICommandCancelFollowUp && item.ItemID == change.RemovedItemID ||
+					result.Command == application.UICommandClearFollowUps &&
+						(item.State == application.ConversationInputQueued || item.State == application.ConversationInputRejected ||
+							item.State == application.ConversationInputRecovered)
+				if !remove {
+					filtered = append(filtered, item)
+				}
+			}
+			model.conversationPreview = filtered
+		}
+		model.transcript.AppendNotice(fmt.Sprintf("Editable queue updated at revision %d; %d item(s) removed.", change.Status.Revision, change.Removed))
+	case application.UICommandCompactContext:
+		if model.pendingCompactionID == 0 || result.RequestID != model.pendingCompactionID || result.Compaction == nil {
+			return
+		}
+		model.pendingCompactionID = 0
+		if result.Compaction.Noop {
+			model.transcript.AppendNotice("Manual compaction completed without changing committed context because the eligible history was already within the compaction grammar.")
+		} else {
+			model.transcript.AppendNotice(fmt.Sprintf("Manual compaction committed safe coverage with %d recent tail message(s).", result.Compaction.RecentTailMessages))
+		}
+	case application.UICommandArmPlan, application.UICommandCancelPlan:
+		if model.pendingPlanID == 0 || result.RequestID != model.pendingPlanID || result.PlanArmed == nil {
+			return
+		}
+		model.pendingPlanID = 0
+		model.planArmed = *result.PlanArmed
+		if model.planArmed {
+			model.transcript.AppendNotice("Plan-only mode is armed for the next ordinary input. It cannot create or execute action authority.")
+		} else {
+			model.transcript.AppendNotice("Plan-only mode is off.")
+		}
 	case application.UICommandShowPrivacy, application.UICommandToggleLogs, application.UICommandTightenRetention:
 		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil || result.Lifecycle == nil {
 			return
@@ -1977,7 +2113,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 			model.composer.RecordSubmission(text)
 		case domain.MessageRoleAssistant:
 			model.transcript.StartAgent()
-			model.transcript.FinishAgent(text)
+			model.transcript.FinishCommittedAgent(text)
 			model.appendEvidenceReferences(message.EvidenceReferences)
 		default:
 			model.transcript.AppendNotice(text)
@@ -1996,6 +2132,18 @@ func (model *Model) resetTranscript() {
 	model.evidenceDialog.Close()
 	model.evidenceReferences = nil
 	model.pendingConversation = nil
+	model.queueClearConfirmation = nil
+	model.pendingCompactionID = 0
+	model.pendingPlanID = 0
+	model.planArmed = false
+	model.run = RunView{}
+	model.workingAt = time.Time{}
+	model.workingFrame = 0
+	model.contextPressure = ""
+	model.searchMode = false
+	model.searchReturnDraft = ""
+	model.composer.SetMaxBytes(application.MaxQuestionBytes)
+	model.composer.ResetPlaceholder()
 	model.pendingSubmitDraft = ""
 	model.conversationRevision = 0
 	model.conversationStatus = application.ConversationInputStatus{}
@@ -2190,7 +2338,12 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"",
 		"Model context",
 		statusRow("Mode", string(modelContext.Mode)),
+		statusRow("Pressure", string(modelContext.Pressure)+" · exact messages and bytes; no token estimate"),
 		statusRow("History", fmt.Sprintf("%d messages · %s", modelContext.EligibleMessages, statusBytes(modelContext.EligibleBytes))),
+		statusRow("Working set", fmt.Sprintf("%d/%d messages · %s/%s", modelContext.WorkingMessages,
+			modelContext.MessageLimit, statusBytes(modelContext.WorkingBytes), statusBytes(modelContext.ByteLimit))),
+		statusRow("Compaction trigger", fmt.Sprintf("%d messages · %s", modelContext.SummaryMessageTrigger,
+			statusBytes(modelContext.SummaryByteTrigger))),
 		statusRow("Summary", compression),
 		statusRow("Compacted", compressedAt),
 		statusRow("Recent tail", fmt.Sprintf("%d messages", modelContext.RecentTailMessages)),
@@ -2232,6 +2385,7 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"",
 		"Run",
 		statusRow("State", run),
+		statusRow("Plan-only next", statusEnabled(status.PlanArmed)),
 		statusRow("Conversation input", fmt.Sprintf(
 			"%d items · %s · pending %d · committing %d · committed %d · queued %d · rejected %d · recovered %d · unknown %d · editable %d · revision %d",
 			status.ConversationInput.Items, statusBytes(status.ConversationInput.Bytes),
@@ -2643,7 +2797,11 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		default:
 			model.run.Status = "failed"
 		}
-		model.transcript.FinishAgentWithDuration(text, model.currentRunElapsed())
+		if event.Kind == application.UIEventRunCompleted && !model.run.PersistenceDegraded {
+			model.transcript.FinishCommittedAgentWithDuration(text, model.currentRunElapsed())
+		} else {
+			model.transcript.FinishAgentWithDuration(text, model.currentRunElapsed())
+		}
 		if event.Kind == application.UIEventRunCompleted {
 			model.appendEvidenceReferences(event.EvidenceReferences)
 		}

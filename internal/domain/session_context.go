@@ -29,9 +29,22 @@ const (
 	MaxSessionContextBytes = 128 * 1024
 	// MaxSessionSummaryBytes is the independently bounded durable summary ceiling.
 	MaxSessionSummaryBytes = 16 * 1024
+	// SessionContextMessageTrigger is the exact automatic/manual compaction
+	// message-count trigger; it is not an endpoint token estimate.
+	SessionContextMessageTrigger = 160
+	// SessionContextRecentTailMinimum and Maximum preserve complete run groups.
+	SessionContextRecentTailMinimum = 16
+	SessionContextRecentTailMaximum = 25
 )
 
 var ErrInvalidSessionContextSummary = errors.New("Session context summary data is invalid")
+
+// CompactionID is an opaque current-process UUIDv7 operation identifier. It is
+// never persisted as resumable authority.
+type CompactionID string
+
+// Valid reports whether the identifier is canonical lowercase UUIDv7 text.
+func (id CompactionID) Valid() bool { return validUUIDv7(string(id)) }
 
 // SessionContextSummary is the only durable model-generated context derivative.
 // It contains no framework message, prompt, Tool result, or historic authority.

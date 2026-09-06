@@ -1,6 +1,7 @@
 package components
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -189,6 +190,123 @@ func TestTranscriptRetainsManagedHistoryAndProjectsOnlyCompletedEntries(t *testi
 	if transcript.reviewing || !strings.Contains(transcript.View(), "What changed?") ||
 		strings.Contains(transcript.View(), "Working") {
 		t.Fatalf("new run did not return history review to the live projection: %q", transcript.View())
+	}
+}
+
+func TestTranscriptCopyAndSearchUseOnlyCommittedContent(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.SetSize(32, 12)
+	transcript.AppendUser("Unicode α needle\nsecond line")
+	transcript.AppendNotice("needle in a local notice")
+	transcript.StartAgent()
+	transcript.FinishAgent("needle in a failed final")
+	transcript.StartAgent()
+	transcript.FinishCommittedAgent("first committed needle")
+	transcript.StartAgent()
+	transcript.FinishCommittedAgent("latest committed answer")
+	transcript.StartAgent()
+	transcript.AppendAgent("needle in a provisional answer")
+
+	answer, ok := transcript.LatestCommittedAssistantFinal()
+	if !ok || answer != "latest committed answer" {
+		t.Fatalf("latest committed answer = %q/%t", answer, ok)
+	}
+	count, err := transcript.BeginSearch("needle")
+	if err != nil || count != 2 {
+		t.Fatalf("BeginSearch() = %d, %v", count, err)
+	}
+	current, total, active := transcript.SearchState()
+	view := transcript.View()
+	if !active || current != 1 || total != 2 || !strings.Contains(view, "Search match 1/2") ||
+		!strings.Contains(view, "⟦needle⟧") || len(transcript.search) != 2 ||
+		transcript.search[0].EntryIndex != 0 || transcript.search[1].EntryIndex != 3 {
+		t.Fatalf("committed-only search state/view = %d/%d/%t %q", current, total, active, view)
+	}
+	transcript.MoveSearch(-1)
+	if current, total, active = transcript.SearchState(); !active || current != 2 || total != 2 {
+		t.Fatalf("wrapped previous search = %d/%d/%t", current, total, active)
+	}
+	transcript.MoveSearch(1)
+	if current, _, _ = transcript.SearchState(); current != 1 {
+		t.Fatalf("wrapped next search = %d", current)
+	}
+	transcript.EndSearch()
+	if _, _, active = transcript.SearchState(); active || strings.Contains(transcript.TerminalTranscript(), "Search match") ||
+		strings.Contains(transcript.TerminalTranscript(), "⟦") {
+		t.Fatalf("ephemeral search entered terminal transcript: %q", transcript.TerminalTranscript())
+	}
+}
+
+func TestTranscriptSearchExactLimitsAndOneOver(t *testing.T) {
+	t.Parallel()
+
+	queryTranscript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	queryTranscript.AppendUser("bounded")
+	if _, err := queryTranscript.BeginSearch(strings.Repeat("q", MaxTranscriptSearchQueryBytes)); err != nil {
+		t.Fatalf("exact query limit error = %v", err)
+	}
+	if _, err := queryTranscript.BeginSearch(strings.Repeat("q", MaxTranscriptSearchQueryBytes+1)); !errors.Is(err, ErrTranscriptSearchInvalid) {
+		t.Fatalf("one-over query error = %v", err)
+	}
+	if _, err := queryTranscript.BeginSearch(string([]byte{0xff})); !errors.Is(err, ErrTranscriptSearchInvalid) {
+		t.Fatalf("invalid UTF-8 query error = %v", err)
+	}
+
+	matchTranscript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	matchTranscript.AppendUser(strings.Repeat("x", MaxTranscriptSearchMatches))
+	if count, err := matchTranscript.BeginSearch("x"); err != nil || count != MaxTranscriptSearchMatches {
+		t.Fatalf("exact match limit = %d, %v", count, err)
+	}
+	matchTranscript.AppendUser("x")
+	if _, err := matchTranscript.BeginSearch("x"); !errors.Is(err, ErrTranscriptSearchLimit) {
+		t.Fatalf("one-over match error = %v", err)
+	}
+
+	entryTranscript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	entryTranscript.entries = make([]Entry, MaxTranscriptSearchEntries)
+	for index := range entryTranscript.entries {
+		entryTranscript.entries[index] = Entry{Kind: EntryUser, Text: "a"}
+	}
+	if _, err := entryTranscript.BeginSearch("z"); err != nil {
+		t.Fatalf("exact entry limit error = %v", err)
+	}
+	entryTranscript.entries = append(entryTranscript.entries, Entry{Kind: EntryUser, Text: "a"})
+	if _, err := entryTranscript.BeginSearch("z"); !errors.Is(err, ErrTranscriptSearchLimit) {
+		t.Fatalf("one-over entry error = %v", err)
+	}
+
+	byteTranscript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	byteTranscript.entries = []Entry{{Kind: EntryUser, Text: strings.Repeat("b", MaxTranscriptSearchBytes)}}
+	if _, err := byteTranscript.BeginSearch("z"); err != nil {
+		t.Fatalf("exact byte limit error = %v", err)
+	}
+	byteTranscript.entries = append(byteTranscript.entries, Entry{Kind: EntryUser, Text: "b"})
+	if _, err := byteTranscript.BeginSearch("z"); !errors.Is(err, ErrTranscriptSearchLimit) {
+		t.Fatalf("one-over byte error = %v", err)
+	}
+}
+
+func TestTranscriptSearchTimeLimitIsDeterministicAndRetainsNoPartialResult(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.AppendUser("needle")
+	base := time.Unix(1, 0)
+	calls := 0
+	transcript.searchNow = func() time.Time {
+		calls++
+		if calls == 1 {
+			return base
+		}
+		return base.Add(MaxTranscriptSearchDuration + time.Millisecond)
+	}
+	if _, err := transcript.BeginSearch("needle"); !errors.Is(err, ErrTranscriptSearchLimit) {
+		t.Fatalf("time-bound search error = %v", err)
+	}
+	if current, total, active := transcript.SearchState(); active || current != 0 || total != 0 {
+		t.Fatalf("timed-out search retained state = %d/%d/%t", current, total, active)
 	}
 }
 

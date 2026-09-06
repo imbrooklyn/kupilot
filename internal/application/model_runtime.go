@@ -165,6 +165,7 @@ func (result ModelSetupResult) Validate() error {
 // ModelRuntime owns one constructed Agent runner and all of its model resources.
 type ModelRuntime interface {
 	agent.AgentRunner
+	agent.ContextCompactor
 	Close()
 	ModelName() string
 	Origin() string

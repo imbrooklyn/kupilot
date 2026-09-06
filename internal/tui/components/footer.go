@@ -17,13 +17,15 @@ type FooterStyles struct {
 
 // FooterStatus is the bounded scope and action-state input for the footer.
 type FooterStatus struct {
-	Context        string
-	Namespace      string
-	ReadOnly       bool
-	ScopeSwitching bool
-	Permission     string
-	Supervision    string
-	Approval       string
+	Context         string
+	Namespace       string
+	ReadOnly        bool
+	ScopeSwitching  bool
+	Permission      string
+	Supervision     string
+	Approval        string
+	ContextPressure string
+	Plan            string
 }
 
 // Footer renders scope-first status without owning application state.
@@ -63,6 +65,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if status.ScopeSwitching {
 		access = "scope switching · " + permission
 	}
+	ambient := strings.Trim(strings.Join([]string{status.ContextPressure, status.Plan}, " · "), " ·")
 
 	lineOne, accessOnSecond := requiredFooterLine(width, contextName, namespace, access)
 	lineTwo := ""
@@ -78,6 +81,13 @@ func (footer Footer) View(width int, status FooterStatus) string {
 			// An active approval is more urgent than the repeated permission
 			// detail. Context and Namespace remain continuously visible above.
 			lineTwo = middleElideColumns(status.Approval, width)
+		}
+	}
+	if status.Approval == "" && ambient != "" {
+		if lineTwo == "" {
+			lineTwo = middleElideColumns(ambient, width)
+		} else if candidate := lineTwo + " · " + ambient; lipgloss.Width(candidate) <= width {
+			lineTwo = candidate
 		}
 	}
 

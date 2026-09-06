@@ -12,7 +12,7 @@ integration or release artifact.
   saved-scope conflicts, and ResourceRef revalidation.
 - [Steering and Queued Follow-Ups](conversation-input.md): active-run `Enter`,
   FIFO `Tab` queueing, `Alt+Up` edit-last, commitment states, recovery, and
-  no-auto-send failures.
+  no-auto-send failures, plus exact cancel and confirmed clear.
 - [Privacy and Local Data](privacy-and-local-data.md): cloud categories,
   consent, container output, SQLite, local logs, retention, per-Session
   deletion, redacted export, and cleanup.
@@ -37,3 +37,8 @@ adds no generic model authority, autonomous remediation, or reusable cross-
 Session approval. Remote diagnostics, review-class Pod logs, and optional
 Prometheus/Loki reads use the same inline approval supervision and keep the
 effectful/source attempt blocked until exact authority is durably consumed.
+
+Fixed `/copy`, `/find`, `/compact`, and `/plan` interactions remain on this one
+screen. Copy and search see committed transcript content only. Context pressure
+is a byte/message signal, not a token estimate. A plan is bounded ordinary
+assistant content and never runs automatically.

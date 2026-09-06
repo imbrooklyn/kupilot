@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +50,20 @@ type countingBody struct {
 	reader io.Reader
 	read   atomic.Int64
 	closed atomic.Bool
+}
+
+type disconnectingReader struct {
+	content []byte
+	err     error
+}
+
+func (reader *disconnectingReader) Read(target []byte) (int, error) {
+	if len(reader.content) > 0 {
+		count := copy(target, reader.content)
+		reader.content = reader.content[count:]
+		return count, nil
+	}
+	return 0, reader.err
 }
 
 func (body *countingBody) Read(target []byte) (int, error) {
@@ -257,6 +273,78 @@ func TestModelClientDeliversSSEFragmentBeforeProviderCompletes(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the model stream did not complete after the provider was released")
+	}
+}
+
+func TestProtocolContinuationUnavailableDisconnectMakesOneRequestAndNoReattach(t *testing.T) {
+	t.Parallel()
+
+	disconnectErr := errors.New("synthetic stream disconnect")
+	body := &trackingBody{Reader: &disconnectingReader{
+		content: []byte("data: {\"id\":\"response-without-reattach\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"},\"finish_reason\":null}]}\n\n"),
+		err:     disconnectErr,
+	}}
+	var requests atomic.Int32
+	client, model := newFixtureModelClientWithTransport(
+		t,
+		fixtureConfiguration("https://model.example.test/v1", time.Second),
+		strings.Repeat("d", 43)+"-generated",
+		fixtureLogger(&bytes.Buffer{}),
+		roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			requests.Add(1)
+			if request.Header.Get("Last-Event-ID") != "" || request.Method != http.MethodPost {
+				t.Fatalf("unexpected continuation request headers/method = %#v/%s", request.Header, request.Method)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       body,
+			}, nil
+		}),
+	)
+	var fragments []string
+	message, modelError := client.stream(
+		context.Background(), fixtureRequestID, model, fixtureMessages(),
+		func(fragment string) error {
+			fragments = append(fragments, fragment)
+			return nil
+		},
+	)
+	if message != nil || modelError == nil || requests.Load() != 1 || !body.closed.Load() ||
+		len(fragments) != 1 || fragments[0] != "partial" {
+		t.Fatalf("disconnect result = message %#v error %#v requests %d closed %t fragments %#v",
+			message, modelError, requests.Load(), body.closed.Load(), fragments)
+	}
+}
+
+func TestProtocolContinuationDecisionPinsTheInspectedStableStack(t *testing.T) {
+	t.Parallel()
+
+	repositoryRoot := filepath.Clean(filepath.Join("..", "..", ".."))
+	moduleBytes, moduleError := os.ReadFile(filepath.Join(repositoryRoot, "go.mod"))
+	if moduleError != nil {
+		t.Fatalf("read pinned module graph: %v", moduleError)
+	}
+	checksumBytes, checksumError := os.ReadFile(filepath.Join(repositoryRoot, "go.sum"))
+	if checksumError != nil {
+		t.Fatalf("read pinned module checksums: %v", checksumError)
+	}
+	want := []struct {
+		module   string
+		version  string
+		checksum string
+	}{
+		{"github.com/cloudwego/eino", "v0.9.19", "h1:i71YUBK3nwY4L53dkzRgZpAcPSZ4v4eRponN7W9sDtk="},
+		{"github.com/cloudwego/eino-ext/components/model/openai", "v0.1.13", "h1:5XHRTiTD5bt9KQrMHcfvuWNklEC3tpm3XHejdozt9vM="},
+		{"github.com/cloudwego/eino-ext/libs/acl/openai", "v0.1.17", "h1:EeVcR1TslRA2IdNW1h/2LaGbPlffwGhQm99jM3zWZiI="},
+		{"github.com/meguminnnnnnnnn/go-openai", "v0.1.2", "h1:iXombGGjqjBrmE9WaSidUhhi3YQhf42QTHvHLMkgvCA="},
+	}
+	for _, dependency := range want {
+		moduleLine := dependency.module + " " + dependency.version
+		checksumLine := moduleLine + " " + dependency.checksum
+		if !bytes.Contains(moduleBytes, []byte(moduleLine)) || !bytes.Contains(checksumBytes, []byte(checksumLine)) {
+			t.Fatalf("inspected protocol dependency is not pinned exactly: %s", moduleLine)
+		}
 	}
 }
 

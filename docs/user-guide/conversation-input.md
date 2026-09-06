@@ -67,6 +67,27 @@ The current limits are eight process-local conversation-input lifecycle items,
 steers per active run. The queue ends with the current process or Session and
 is not resumable.
 
+Use `/queue cancel <item-id>` to remove one exact `queued`, `rejected`, or
+`recovered` item. The item ID is shown only in the bounded working projection.
+Use `/queue clear` to open a local confirmation and remove all currently
+editable items. A stale revision or a race with edit, commitment, or drain
+changes nothing. Pending, committing, committed, draining, and unknown items
+cannot be removed. The command must match the current scope and policy
+generations; once it does, a recovered draft may be discarded even though its
+preserved provenance names an earlier invalidated generation.
+
+`/copy` copies only the latest committed successful assistant final answer
+when terminal-native clipboard support is known. `/find` or `Ctrl+F` reuses the
+composer to search the current committed transcript; fixed next/previous keys
+navigate and Escape restores the prior draft. Neither interaction includes
+queue, composer, streaming, failed, or recovered content.
+
+`/plan` arms the next ordinary input as a one-shot plan-only run; `/plan off`
+cancels before start. The plan may use safe reads, has at most twelve steps,
+cannot propose or execute actions, and never continues automatically.
+`/compact` requests a one-attempt compaction only while the interaction is
+idle.
+
 ## Scope and resume
 
 Every item is bound to the exact Session, run when applicable, verified scope,

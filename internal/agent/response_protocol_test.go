@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,6 +63,10 @@ func TestDiagnosticResponseProtocolRejectsMalformedRepresentations(t *testing.T)
 		"missing parameters":   `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[{"operation":"restart_deployment","reason":"reason","risk":"risk","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api"}}]}`,
 		"unknown target field": `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[{"operation":"restart_deployment","reason":"reason","risk":"risk","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api","uid":"forbidden"},"parameters":null}]}`,
 	}
+	tests["missing Evidence ID array"] = fmt.Sprintf(
+		`{"answer_markdown":"answer","evidence_citations":[{"sequence":1,"claim":"Current state is unknown.","claim_type":"uncertainty","claim_hash":%q,"coverage_state":"limited"}],"proposed_actions":[]}`,
+		domain.SHA256Hex("Current state is unknown."),
+	)
 	for name, content := range tests {
 		name, content := name, content
 		t.Run(name, func(t *testing.T) {

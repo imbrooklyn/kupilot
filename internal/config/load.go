@@ -323,16 +323,17 @@ type legacyModelConfig struct {
 }
 
 type configV2Document struct {
-	Version        int                    `yaml:"version"`
-	Context        *string                `yaml:"context,omitempty"`
-	Namespace      *string                `yaml:"namespace,omitempty"`
-	NoColor        *bool                  `yaml:"no_color,omitempty"`
-	Runtime        *runtimeDocument       `yaml:"runtime,omitempty"`
-	Models         *modelsDocument        `yaml:"models"`
-	Kubernetes     *kubernetesDocument    `yaml:"kubernetes,omitempty"`
-	LocalExecution *LocalExecutionConfig  `yaml:"local_execution,omitempty"`
-	Observability  *observabilityDocument `yaml:"observability,omitempty"`
-	Logging        *loggingDocument       `yaml:"logging,omitempty"`
+	Version              int                    `yaml:"version"`
+	Context              *string                `yaml:"context,omitempty"`
+	Namespace            *string                `yaml:"namespace,omitempty"`
+	NoColor              *bool                  `yaml:"no_color,omitempty"`
+	TerminalStatusTitles *bool                  `yaml:"terminal_status_titles,omitempty"`
+	Runtime              *runtimeDocument       `yaml:"runtime,omitempty"`
+	Models               *modelsDocument        `yaml:"models"`
+	Kubernetes           *kubernetesDocument    `yaml:"kubernetes,omitempty"`
+	LocalExecution       *LocalExecutionConfig  `yaml:"local_execution,omitempty"`
+	Observability        *observabilityDocument `yaml:"observability,omitempty"`
+	Logging              *loggingDocument       `yaml:"logging,omitempty"`
 }
 
 type observabilityDocument struct {
@@ -404,7 +405,8 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 		}
 		config := Config{
 			Version: CurrentVersion, Context: document.Context, Namespace: document.Namespace, NoColor: document.NoColor,
-			Runtime: document.Runtime,
+			TerminalStatusTitles: defaults.TerminalStatusTitles,
+			Runtime:              document.Runtime,
 			Models: ModelProfilesConfig{Agent: ModelProfileConfig{
 				Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
 				ProviderKind: document.Model.ProviderKind, Endpoint: document.Model.Endpoint, Model: document.Model.Model,
@@ -467,6 +469,9 @@ func applyRootDocument(config *Config, document configV2Document) {
 	}
 	if document.NoColor != nil {
 		config.NoColor = *document.NoColor
+	}
+	if document.TerminalStatusTitles != nil {
+		config.TerminalStatusTitles = *document.TerminalStatusTitles
 	}
 	if document.Runtime != nil && document.Runtime.BudgetProfile != nil {
 		config.Runtime.BudgetProfile = *document.Runtime.BudgetProfile
@@ -759,6 +764,10 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 			}
 		case "no_color":
 			if !yamlScalar(value, "!!bool") {
+				return false
+			}
+		case "terminal_status_titles":
+			if version != CurrentVersion || !yamlScalar(value, "!!bool") {
 				return false
 			}
 		case "runtime":

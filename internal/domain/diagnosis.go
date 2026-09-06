@@ -63,6 +63,78 @@ const (
 	maxDiagnosisWarningBytes = 4096
 )
 
+// ClaimKind separates current observation from reasoning and explicit limits.
+// Model prose cannot change the validation rules attached to these values.
+type ClaimKind string
+
+const (
+	ClaimCurrentObservation     ClaimKind = "current_observation"
+	ClaimInference              ClaimKind = "inference"
+	ClaimRecommendation         ClaimKind = "recommendation"
+	ClaimUncertainty            ClaimKind = "uncertainty"
+	ClaimUnsupportedObservation ClaimKind = "unsupported_observation"
+)
+
+func (kind ClaimKind) valid() bool {
+	switch kind {
+	case ClaimCurrentObservation, ClaimInference, ClaimRecommendation, ClaimUncertainty, ClaimUnsupportedObservation:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClaimCoverageState records structural support. It is not a semantic score.
+type ClaimCoverageState string
+
+const (
+	ClaimCoverageVerified    ClaimCoverageState = "verified"
+	ClaimCoverageSupported   ClaimCoverageState = "supported"
+	ClaimCoverageLimited     ClaimCoverageState = "limited"
+	ClaimCoverageUnsupported ClaimCoverageState = "unsupported"
+)
+
+func (state ClaimCoverageState) valid() bool {
+	return state == ClaimCoverageVerified || state == ClaimCoverageSupported ||
+		state == ClaimCoverageLimited || state == ClaimCoverageUnsupported
+}
+
+// ClaimEvidenceCoverage is the durable safe manifest bound locally to the
+// exact run and generations. It contains Evidence identifiers, never payloads.
+type ClaimEvidenceCoverage struct {
+	Sequence         int                `json:"sequence"`
+	Kind             ClaimKind          `json:"kind"`
+	Text             string             `json:"text"`
+	TextHash         string             `json:"text_hash"`
+	EvidenceIDs      []EvidenceID       `json:"evidence_ids"`
+	RunID            AgentRunID         `json:"run_id"`
+	Scope            ScopeSnapshot      `json:"scope"`
+	PolicyGeneration PolicyGeneration   `json:"policy_generation"`
+	State            ClaimCoverageState `json:"state"`
+}
+
+func (coverage ClaimEvidenceCoverage) valid() bool {
+	if coverage.Sequence < 1 || coverage.Sequence > maxDiagnosisItems || !coverage.Kind.valid() ||
+		!coverage.State.valid() || !validDiagnosisText(coverage.Text, 1, maxDiagnosisTextBytes) ||
+		coverage.TextHash != SHA256Hex(coverage.Text) || !coverage.RunID.Valid() ||
+		coverage.Scope.Validate() != nil || !coverage.PolicyGeneration.Valid() ||
+		!validEvidenceIDs(coverage.EvidenceIDs, coverage.Kind == ClaimCurrentObservation) {
+		return false
+	}
+	switch coverage.Kind {
+	case ClaimCurrentObservation:
+		return coverage.State == ClaimCoverageVerified
+	case ClaimInference, ClaimRecommendation:
+		return coverage.State == ClaimCoverageSupported || coverage.State == ClaimCoverageLimited
+	case ClaimUncertainty:
+		return coverage.State == ClaimCoverageLimited && len(coverage.EvidenceIDs) == 0
+	case ClaimUnsupportedObservation:
+		return coverage.State == ClaimCoverageUnsupported && len(coverage.EvidenceIDs) == 0
+	default:
+		return false
+	}
+}
+
 // ErrInvalidDiagnosis reports an invalid structured Diagnosis derivative.
 var ErrInvalidDiagnosis = errors.New("Diagnosis data is invalid")
 
@@ -166,6 +238,8 @@ type Diagnosis struct {
 	ObservedTo           *time.Time
 	CreatedAt            time.Time
 	EvidenceDetailsState EvidenceDetailState
+	ClaimCoverage        []ClaimEvidenceCoverage
+	Plan                 *Plan
 }
 
 // Validate checks structure, bounded text, evidence references, and proposed
@@ -175,10 +249,16 @@ func (diagnosis Diagnosis) Validate() error {
 		len(diagnosis.ConfirmedFacts) > maxDiagnosisItems || len(diagnosis.Hypotheses) > maxDiagnosisItems ||
 		len(diagnosis.MissingInformation) > maxDiagnosisItems || len(diagnosis.RecommendedActions) > maxDiagnosisItems ||
 		len(diagnosis.ValidationWarnings) > maxDiagnosisItems ||
+		len(diagnosis.ClaimCoverage) > maxDiagnosisItems ||
 		!validDiagnosisText(diagnosis.AnswerMarkdown, 1, maxDiagnosisBytes) ||
 		!validPersistenceTime(diagnosis.CreatedAt) ||
 		diagnosis.EvidenceDetailsState != "" && !diagnosis.EvidenceDetailsState.Valid() {
 		return ErrInvalidDiagnosis
+	}
+	if diagnosis.Plan != nil {
+		if diagnosis.Plan.Validate() != nil || len(diagnosis.RecommendedActions) != 0 {
+			return ErrInvalidDiagnosis
+		}
 	}
 	if (diagnosis.ObservedFrom == nil) != (diagnosis.ObservedTo == nil) {
 		return ErrInvalidDiagnosis
@@ -237,6 +317,23 @@ func (diagnosis Diagnosis) Validate() error {
 			return ErrInvalidDiagnosis
 		}
 	}
+	seenClaims := make(map[string]struct{}, len(diagnosis.ClaimCoverage))
+	var claimPolicyGeneration PolicyGeneration
+	for index, coverage := range diagnosis.ClaimCoverage {
+		if !coverage.valid() || coverage.Sequence != index+1 || coverage.RunID != diagnosis.RunID ||
+			coverage.Scope != diagnosis.Scope {
+			return ErrInvalidDiagnosis
+		}
+		if index == 0 {
+			claimPolicyGeneration = coverage.PolicyGeneration
+		} else if coverage.PolicyGeneration != claimPolicyGeneration {
+			return ErrInvalidDiagnosis
+		}
+		if _, duplicate := seenClaims[coverage.TextHash]; duplicate {
+			return ErrInvalidDiagnosis
+		}
+		seenClaims[coverage.TextHash] = struct{}{}
+	}
 	if len(diagnosis.ReferencedEvidenceIDs()) > maxEvidencePerInvocation {
 		return ErrInvalidDiagnosis
 	}
@@ -287,6 +384,11 @@ func (diagnosis Diagnosis) ReferencedEvidenceIDs() []EvidenceID {
 			set[id] = struct{}{}
 		}
 	}
+	for _, coverage := range diagnosis.ClaimCoverage {
+		for _, id := range coverage.EvidenceIDs {
+			set[id] = struct{}{}
+		}
+	}
 	result := make([]EvidenceID, 0, len(set))
 	for id := range set {
 		result = append(result, id)
@@ -319,6 +421,8 @@ func diagnosisPayloadBytes(diagnosis Diagnosis) (int, error) {
 		diagnosis.MissingInformation,
 		diagnosis.RecommendedActions,
 		diagnosis.ValidationWarnings,
+		diagnosis.ClaimCoverage,
+		diagnosis.Plan,
 	}
 	total := len(diagnosis.AnswerMarkdown)
 	for _, collection := range collections {

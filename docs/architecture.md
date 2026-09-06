@@ -703,9 +703,30 @@ Required deterministic checks include:
    `/status` zero-I/O checks;
    and
 10. temporary-file SQLite migration, summary coverage, explicit resume,
-    retention, deletion, export, and degraded-storage tests.
+    retention, deletion, export, and degraded-storage tests;
+11. atomic queue cancel/clear races, committed-only copy/search, content-free
+    title teardown, and exact context-pressure tests; and
+12. same-Agent plan-only restrictions, manual use of the existing Eino
+    summarizer, strict claim/Evidence coverage, deterministic offline quality
+    scoring, and proof that unsupported stream continuation adds no retry or
+    checkpoint path.
 
-## 14. Decision references
+## 14. Bounded planning and local observability
+
+Application owns the one-shot plan arm, queue revision mutations, manual
+compaction intent, and pressure projection. Delivery owns only the single-
+composer search interaction, explicit clipboard gesture, and rendering of
+fixed title states. `internal/agent/einoadapter` invokes the same Eino
+summarization middleware for automatic and manual compaction and freezes plan
+mode into the existing `RunInput`. It remains the only Eino/provider boundary.
+
+The claim manifest is a concrete Domain value bound to the accepting Run,
+scope snapshot, and policy generation. SQLite retains it with a completed
+Diagnosis in standard mode; historic replay strips Evidence authority. No
+queue, search, clipboard, notification, compaction, plan-arm, or response-
+handle state is durable.
+
+## 15. Decision references
 
 - [ADR-0012: Require Digest-Bound Approval for Writes](adr/0012-require-digest-bound-write-approval.md)
 - [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](adr/0013-layered-architecture-and-consumer-owned-ports.md)
@@ -724,3 +745,4 @@ Required deterministic checks include:
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

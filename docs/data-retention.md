@@ -93,7 +93,7 @@ disk encryption, and backup lifecycle remain the user's controls.
 | Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. The public control may only shorten the current value, including to 0 days, which keeps detail only in process memory. |
 | Ordinary read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
 | Terminal permission and decision records, and ActionEnvelope, pre-operation intent, execution-attempt, cleanup, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because Kupilot is not a compliance ledger. Pending authority is first made terminal by its owning lifecycle, never by retention cleanup. |
-| Explicit `kupilot.export-summary.v2` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
+| Explicit `kupilot.export-summary.v3` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
 | Optional plaintext model profile in `KUPILOT_HOME/config.yaml` | Until the user overwrites or removes the local configuration | This user-selected credential copy is outside SQLite and Session retention. Process-only setup and environment loading do not create it. |
 | Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, model role, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any profile, role, origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
@@ -404,7 +404,7 @@ generic payload.
 The current implementation uses 64 KiB for one user or system-notice Message,
 128 KiB for one final assistant Message or complete Diagnosis, 16 KiB for one
 safe Session-context summary, 2 KiB for one Evidence fact, and 2 MiB for one
-`kupilot.export-summary.v2` document. Safe model-context selection is capped at
+`kupilot.export-summary.v3` document. Safe model-context selection is capped at
 4,096 eligible Messages and 4 MiB. The Eino compaction working-set resource
 trigger counts UTF-8 content bytes against 128 KiB; it is deliberately not a
 token estimate or a model context-window claim.
@@ -420,8 +420,9 @@ versioned Markdown summary of the current resumable standard-persistence
 Session. Application projects a consistent SQLite snapshot through an explicit
 allowlist. Only safe Session display metadata, the versioned safe summary and
 coverage explanation, committed user and final assistant text, validated answer
-metadata and legacy compatible Diagnosis fields, and referenced Evidence
-summaries or expired markers are eligible.
+metadata and legacy compatible Diagnosis fields, bounded claim/Evidence
+coverage metadata, and referenced Evidence summaries or expired markers are
+eligible.
 Every eligible free-text field is redacted and bounded before rendering, and
 the complete document is processed and capped again.
 
@@ -614,7 +615,22 @@ fake clock, and failure injection:
 The pure-Go driver, PRAGMA, sqlx bind type, checkpoint, sidecar, and permission
 behavior must satisfy ADR-0018 and ADR-0030.
 
-## 11. Revisit triggers
+## 11. S07 local interaction and coverage data
+
+Editable queue items, search query and matches, clipboard state, terminal title
+state, plan arm, compaction intent, and any stream handle are process-local and
+never enter SQLite or export. A successful plan is an ordinary assistant
+Message. Validated claim coverage is safe Diagnosis metadata in standard mode,
+contains identifiers rather than Evidence payloads, and follows the same
+retention, export explanation, and Session cascade deletion as its Diagnosis.
+Minimal mode persists neither the plan answer nor coverage.
+
+Manual compaction replaces the committed summary only after the complete
+summary and coverage transaction succeeds. Failure preserves the previous
+summary and all Messages. Clipboard and terminal scrollback are external
+surfaces and are not deleted by Kupilot.
+
+## 12. Revisit triggers
 
 An Accepted ADR and updates to the threat model and this contract are required
 before:
@@ -647,3 +663,4 @@ before:
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

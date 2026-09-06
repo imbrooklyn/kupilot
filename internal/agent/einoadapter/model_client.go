@@ -239,7 +239,7 @@ func (client *modelClient) close() {
 }
 
 func (client *modelClient) withTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if client == nil || client.model == nil || validateBoundToolInfos(tools) != nil {
+	if client == nil || client.model == nil || validateAnyBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	bound, err := client.model.WithTools(tools)

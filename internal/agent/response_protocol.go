@@ -34,8 +34,12 @@ type diagnosticResponseWire struct {
 }
 
 type evidenceCitationWire struct {
-	Claim       string              `json:"claim"`
-	EvidenceIDs []domain.EvidenceID `json:"evidence_ids"`
+	Sequence      *int                       `json:"sequence"`
+	Claim         string                     `json:"claim"`
+	ClaimType     *domain.ClaimKind          `json:"claim_type"`
+	ClaimHash     *string                    `json:"claim_hash"`
+	EvidenceIDs   *[]domain.EvidenceID       `json:"evidence_ids"`
+	CoverageState *domain.ClaimCoverageState `json:"coverage_state"`
 }
 
 type proposedActionTargetWire struct {
@@ -100,12 +104,9 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 	if wire.AnswerMarkdown == nil || wire.EvidenceCitations == nil || wire.ProposedActions == nil {
 		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
 	}
-	citations := make([]domain.ConfirmedFact, len(*wire.EvidenceCitations))
-	for index, citation := range *wire.EvidenceCitations {
-		citations[index] = domain.ConfirmedFact{
-			Statement:   citation.Claim,
-			EvidenceIDs: append([]domain.EvidenceID(nil), citation.EvidenceIDs...),
-		}
+	citations, coverage, err := decodeClaimCoverage(*wire.EvidenceCitations)
+	if err != nil {
+		return DiagnosisDraft{}, err
 	}
 	actions := make([]domain.RecommendedAction, len(*wire.ProposedActions))
 	for index, action := range *wire.ProposedActions {
@@ -132,7 +133,30 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 		AnswerMarkdown:     *wire.AnswerMarkdown,
 		ConfirmedFacts:     citations,
 		RecommendedActions: actions,
+		ClaimCoverage:      coverage,
 	}, nil
+}
+
+func decodeClaimCoverage(wire []evidenceCitationWire) ([]domain.ConfirmedFact, []ClaimCoverageDraft, error) {
+	citations := make([]domain.ConfirmedFact, 0, len(wire))
+	coverage := make([]ClaimCoverageDraft, len(wire))
+	for index, citation := range wire {
+		if citation.Sequence == nil || citation.ClaimType == nil || citation.ClaimHash == nil || citation.EvidenceIDs == nil ||
+			citation.CoverageState == nil {
+			return nil, nil, ErrInvalidDiagnosticResponse
+		}
+		coverage[index] = ClaimCoverageDraft{
+			Sequence: *citation.Sequence, Kind: *citation.ClaimType, Text: citation.Claim,
+			TextHash: *citation.ClaimHash, EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...),
+			State: *citation.CoverageState,
+		}
+		if *citation.ClaimType == domain.ClaimCurrentObservation {
+			citations = append(citations, domain.ConfirmedFact{
+				Statement: citation.Claim, EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...),
+			})
+		}
+	}
+	return citations, coverage, nil
 }
 
 func decodeProposedActionParameters(raw json.RawMessage) (*domain.ProposedActionParameters, error) {

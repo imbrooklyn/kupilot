@@ -17,9 +17,9 @@ const (
 	insertDiagnosisSQL = `
 		INSERT INTO diagnoses (
 			id, run_id, confirmed_json, hypotheses_json, missing_json,
-			actions_json, answer_markdown, validation_warnings_json,
+			actions_json, answer_markdown, validation_warnings_json, claim_coverage_json, plan_json,
 			observed_from_ms, observed_to_ms, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getDiagnosisByRunIDSQL = `
 		SELECT
@@ -27,6 +27,7 @@ const (
 			d.hypotheses_json AS hypotheses_json, d.missing_json AS missing_json,
 			d.actions_json AS actions_json, d.answer_markdown AS answer_markdown,
 			d.validation_warnings_json AS validation_warnings_json,
+			d.claim_coverage_json AS claim_coverage_json, d.plan_json AS plan_json,
 			d.observed_from_ms AS observed_from_ms,
 			d.observed_to_ms AS observed_to_ms, d.created_at_ms AS created_at_ms,
 			r.scope_context AS scope_context,
@@ -37,7 +38,8 @@ const (
 		WHERE d.run_id = ?
 	`
 	getDiagnosisEvidenceStateSQL = `
-		SELECT run_id, CASE WHEN truncated = 1 OR partial = 1 THEN 1 ELSE 0 END AS truncated, observed_at_ms
+		SELECT run_id, CASE WHEN truncated = 1 OR partial = 1 THEN 1 ELSE 0 END AS truncated,
+			observed_at_ms, policy_generation
 		FROM evidence_items
 		WHERE id = ?
 	`
@@ -75,6 +77,8 @@ type diagnosisRow struct {
 	ActionsJSON            string         `db:"actions_json"`
 	AnswerMarkdown         string         `db:"answer_markdown"`
 	ValidationWarningsJSON sql.NullString `db:"validation_warnings_json"`
+	ClaimCoverageJSON      sql.NullString `db:"claim_coverage_json"`
+	PlanJSON               sql.NullString `db:"plan_json"`
 	ObservedFromMS         sql.NullInt64  `db:"observed_from_ms"`
 	ObservedToMS           sql.NullInt64  `db:"observed_to_ms"`
 	CreatedAtMS            int64          `db:"created_at_ms"`
@@ -84,9 +88,10 @@ type diagnosisRow struct {
 }
 
 type diagnosisEvidenceStateRow struct {
-	RunID        string `db:"run_id"`
-	Truncated    int64  `db:"truncated"`
-	ObservedAtMS int64  `db:"observed_at_ms"`
+	RunID            string        `db:"run_id"`
+	Truncated        int64         `db:"truncated"`
+	ObservedAtMS     int64         `db:"observed_at_ms"`
+	PolicyGeneration sql.NullInt64 `db:"policy_generation"`
 }
 
 type diagnosisEvidenceWindowRow struct {
@@ -123,7 +128,7 @@ func (repository *DiagnosisRepository) Save(ctx context.Context, diagnosis domai
 	if err := diagnosis.Validate(); err != nil {
 		return err
 	}
-	confirmedJSON, hypothesesJSON, missingJSON, actionsJSON, warningsJSON, err := encodeDiagnosis(diagnosis)
+	confirmedJSON, hypothesesJSON, missingJSON, actionsJSON, warningsJSON, coverageJSON, planJSON, err := encodeDiagnosis(diagnosis)
 	if err != nil {
 		return domain.ErrInvalidDiagnosis
 	}
@@ -160,6 +165,8 @@ func (repository *DiagnosisRepository) Save(ctx context.Context, diagnosis domai
 			actionsJSON,
 			diagnosis.AnswerMarkdown,
 			nullableString(warningsJSON),
+			nullableString(coverageJSON),
+			nullableString(planJSON),
 			nullableTime(diagnosis.ObservedFrom),
 			nullableTime(diagnosis.ObservedTo),
 			diagnosis.CreatedAt.UTC().UnixMilli(),
@@ -204,32 +211,48 @@ func (repository *DiagnosisRepository) GetByRunID(ctx context.Context, runID dom
 	return diagnosis, nil
 }
 
-func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string, string, error) {
+func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string, string, string, string, error) {
 	confirmed, err := json.Marshal(diagnosis.ConfirmedFacts)
 	if err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", "", "", "", err
 	}
 	hypotheses, err := json.Marshal(diagnosis.Hypotheses)
 	if err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", "", "", "", err
 	}
 	missing, err := json.Marshal(diagnosis.MissingInformation)
 	if err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", "", "", "", err
 	}
 	actions, err := json.Marshal(diagnosis.RecommendedActions)
 	if err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", "", "", "", err
 	}
 	warnings := ""
 	if diagnosis.ValidationWarnings != nil {
 		encoded, err := json.Marshal(diagnosis.ValidationWarnings)
 		if err != nil {
-			return "", "", "", "", "", err
+			return "", "", "", "", "", "", "", err
 		}
 		warnings = string(encoded)
 	}
-	return string(confirmed), string(hypotheses), string(missing), string(actions), warnings, nil
+	coverage := ""
+	if diagnosis.ClaimCoverage != nil {
+		encoded, err := json.Marshal(diagnosis.ClaimCoverage)
+		if err != nil {
+			return "", "", "", "", "", "", "", err
+		}
+		coverage = string(encoded)
+	}
+	plan := ""
+	if diagnosis.Plan != nil {
+		encoded, err := json.Marshal(diagnosis.Plan)
+		if err != nil {
+			return "", "", "", "", "", "", "", err
+		}
+		plan = string(encoded)
+	}
+	return string(confirmed), string(hypotheses), string(missing), string(actions), warnings, coverage, plan, nil
 }
 
 func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
@@ -255,6 +278,20 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 			return domain.Diagnosis{}, err
 		}
 	}
+	var coverage []domain.ClaimEvidenceCoverage
+	if row.ClaimCoverageJSON.Valid {
+		if err := decodeStrictJSON(row.ClaimCoverageJSON.String, &coverage); err != nil {
+			return domain.Diagnosis{}, err
+		}
+	}
+	var plan *domain.Plan
+	if row.PlanJSON.Valid {
+		var value domain.Plan
+		if err := decodeStrictJSON(row.PlanJSON.String, &value); err != nil {
+			return domain.Diagnosis{}, err
+		}
+		plan = &value
+	}
 	value := domain.Diagnosis{
 		ID:                 domain.DiagnosisID(row.ID),
 		RunID:              domain.AgentRunID(row.RunID),
@@ -265,6 +302,8 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 		RecommendedActions: actions,
 		AnswerMarkdown:     row.AnswerMarkdown,
 		ValidationWarnings: warnings,
+		ClaimCoverage:      coverage,
+		Plan:               plan,
 		ObservedFrom:       timePointerFromNull(row.ObservedFromMS),
 		ObservedTo:         timePointerFromNull(row.ObservedToMS),
 		CreatedAt:          time.UnixMilli(row.CreatedAtMS).UTC(),
@@ -277,6 +316,12 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 
 func summarizeDiagnosisEvidence(ctx context.Context, getter strictGetter, diagnosis domain.Diagnosis) (diagnosisEvidenceSummary, error) {
 	ids := diagnosis.ReferencedEvidenceIDs()
+	claimGenerations := make(map[domain.EvidenceID]domain.PolicyGeneration)
+	for _, coverage := range diagnosis.ClaimCoverage {
+		for _, id := range coverage.EvidenceIDs {
+			claimGenerations[id] = coverage.PolicyGeneration
+		}
+	}
 	var window diagnosisEvidenceWindowRow
 	if err := getter.GetContext(ctx, &window, getDiagnosisEvidenceWindowSQL, diagnosis.RunID, diagnosis.RunID); err != nil {
 		return diagnosisEvidenceSummary{}, err
@@ -309,6 +354,10 @@ func summarizeDiagnosisEvidence(ctx context.Context, getter strictGetter, diagno
 			return diagnosisEvidenceSummary{}, err
 		}
 		if domain.AgentRunID(row.RunID) != diagnosis.RunID || row.Truncated != 0 && row.Truncated != 1 || row.ObservedAtMS < 0 {
+			return diagnosisEvidenceSummary{}, ErrDiagnosisEvidenceInvalid
+		}
+		if generation, covered := claimGenerations[id]; covered &&
+			(!row.PolicyGeneration.Valid || domain.PolicyGeneration(row.PolicyGeneration.Int64) != generation) {
 			return diagnosisEvidenceSummary{}, ErrDiagnosisEvidenceInvalid
 		}
 		summary.Found++

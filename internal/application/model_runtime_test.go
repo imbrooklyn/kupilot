@@ -244,6 +244,14 @@ func (runtime *recordingModelRuntime) Run(ctx context.Context, input agent.RunIn
 	return agent.RunOutcome{}
 }
 
+func (*recordingModelRuntime) Compact(
+	context.Context,
+	agent.ManualCompactionInput,
+	agent.ManualCompactionEventSink,
+) (agent.ManualCompactionResult, error) {
+	return agent.ManualCompactionResult{}, agent.ErrInvalidManualCompaction
+}
+
 func (runtime *recordingModelRuntime) Close()            { runtime.closed.Add(1) }
 func (runtime *recordingModelRuntime) ModelName() string { return runtime.name }
 func (runtime *recordingModelRuntime) Origin() string    { return runtime.origin }

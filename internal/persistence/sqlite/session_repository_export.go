@@ -37,6 +37,8 @@ const (
 			d.missing_json AS missing_json,
 			d.actions_json AS actions_json,
 			d.answer_markdown AS answer_markdown,
+			d.claim_coverage_json AS claim_coverage_json,
+			d.plan_json AS plan_json,
 			d.created_at_ms AS created_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -91,17 +93,19 @@ type exportMessageRow struct {
 }
 
 type exportDiagnosisRow struct {
-	ID              string `db:"id"`
-	RunID           string `db:"run_id"`
-	ConfirmedJSON   string `db:"confirmed_json"`
-	HypothesesJSON  string `db:"hypotheses_json"`
-	MissingJSON     string `db:"missing_json"`
-	ActionsJSON     string `db:"actions_json"`
-	AnswerMarkdown  string `db:"answer_markdown"`
-	CreatedAtMS     int64  `db:"created_at_ms"`
-	ScopeContext    string `db:"scope_context"`
-	ScopeNamespace  string `db:"scope_namespace"`
-	ScopeGeneration int64  `db:"scope_generation"`
+	ID                string         `db:"id"`
+	RunID             string         `db:"run_id"`
+	ConfirmedJSON     string         `db:"confirmed_json"`
+	HypothesesJSON    string         `db:"hypotheses_json"`
+	MissingJSON       string         `db:"missing_json"`
+	ActionsJSON       string         `db:"actions_json"`
+	AnswerMarkdown    string         `db:"answer_markdown"`
+	ClaimCoverageJSON sql.NullString `db:"claim_coverage_json"`
+	PlanJSON          sql.NullString `db:"plan_json"`
+	CreatedAtMS       int64          `db:"created_at_ms"`
+	ScopeContext      string         `db:"scope_context"`
+	ScopeNamespace    string         `db:"scope_namespace"`
+	ScopeGeneration   int64          `db:"scope_generation"`
 }
 
 // ReadExportSnapshot loads one consistent, bounded, explicit export projection.
@@ -291,12 +295,26 @@ func (row exportDiagnosisRow) exportRecord() (application.ExportDiagnosisRecord,
 	if err := decodeStrictJSON(row.ActionsJSON, &actions); err != nil {
 		return application.ExportDiagnosisRecord{}, err
 	}
+	var coverage []domain.ClaimEvidenceCoverage
+	if row.ClaimCoverageJSON.Valid {
+		if err := decodeStrictJSON(row.ClaimCoverageJSON.String, &coverage); err != nil {
+			return application.ExportDiagnosisRecord{}, err
+		}
+	}
+	var plan *domain.Plan
+	if row.PlanJSON.Valid {
+		var value domain.Plan
+		if err := decodeStrictJSON(row.PlanJSON.String, &value); err != nil {
+			return application.ExportDiagnosisRecord{}, err
+		}
+		plan = &value
+	}
 	createdAt := time.UnixMilli(row.CreatedAtMS).UTC()
 	validation := domain.Diagnosis{
 		ID: domain.DiagnosisID(row.ID), RunID: domain.AgentRunID(row.RunID),
 		Scope:          domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing, RecommendedActions: actions,
-		AnswerMarkdown: row.AnswerMarkdown, CreatedAt: createdAt,
+		AnswerMarkdown: row.AnswerMarkdown, ClaimCoverage: coverage, Plan: plan, CreatedAt: createdAt,
 	}
 	if validation.Validate() != nil {
 		return application.ExportDiagnosisRecord{}, domain.ErrInvalidDiagnosis
@@ -304,7 +322,7 @@ func (row exportDiagnosisRow) exportRecord() (application.ExportDiagnosisRecord,
 	return application.ExportDiagnosisRecord{
 		AnswerMarkdown: row.AnswerMarkdown,
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing,
-		RecommendedActions: actions, CreatedAt: createdAt,
+		RecommendedActions: actions, ClaimCoverage: coverage, CreatedAt: createdAt,
 	}, nil
 }
 

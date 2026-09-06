@@ -70,6 +70,11 @@ const (
 	UICommandSubmitSteer       UICommandKind = "submit_steer"
 	UICommandEnqueueFollowUp   UICommandKind = "enqueue_follow_up"
 	UICommandPopFollowUp       UICommandKind = "pop_follow_up"
+	UICommandCancelFollowUp    UICommandKind = "cancel_follow_up"
+	UICommandClearFollowUps    UICommandKind = "clear_follow_ups"
+	UICommandArmPlan           UICommandKind = "arm_plan"
+	UICommandCancelPlan        UICommandKind = "cancel_plan"
+	UICommandCompactContext    UICommandKind = "compact_context"
 	UICommandSelectContext     UICommandKind = "select_context"
 	UICommandSelectNamespace   UICommandKind = "select_namespace"
 	UICommandSelectResource    UICommandKind = "select_resource"
@@ -104,7 +109,9 @@ type UICommand struct {
 	RequestID                uint64
 	Text                     string
 	RunID                    domain.AgentRunID
+	ItemID                   domain.MessageID
 	ExpectedScopeGeneration  int64
+	ExpectedQueueRevision    int64
 	Scope                    *domain.ScopeCandidate
 	Resource                 *domain.ResourceRef
 	PrivacyRevision          string
@@ -122,7 +129,7 @@ type UICommand struct {
 
 // Validate checks payload exclusivity and bounded delivery data.
 func (command UICommand) Validate() error {
-	if command.ExpectedScopeGeneration < 0 {
+	if command.ExpectedScopeGeneration < 0 || command.ExpectedQueueRevision < 0 {
 		return ErrInvalidUICommand
 	}
 	approvalCommand := command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
@@ -135,8 +142,13 @@ func (command UICommand) Validate() error {
 		command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
 		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction ||
 		command.Kind == UICommandSubmitSteer || command.Kind == UICommandEnqueueFollowUp ||
-		command.Kind == UICommandPopFollowUp
+		command.Kind == UICommandPopFollowUp || command.Kind == UICommandCancelFollowUp ||
+		command.Kind == UICommandClearFollowUps || command.Kind == UICommandCompactContext
 	if !permissionCommand && command.hasPermissionPayload() {
+		return ErrInvalidUICommand
+	}
+	queueMutationCommand := command.Kind == UICommandCancelFollowUp || command.Kind == UICommandClearFollowUps
+	if !queueMutationCommand && command.hasQueueMutationPayload() {
 		return ErrInvalidUICommand
 	}
 	lifecycleCommand := command.Kind == UICommandTightenRetention || command.Kind == UICommandSetPersistenceMode ||
@@ -167,6 +179,27 @@ func (command UICommand) Validate() error {
 		if command.RequestID == 0 || !command.RunID.Valid() || command.ExpectedScopeGeneration < 1 ||
 			!command.ExpectedPolicyGeneration.Valid() || command.Text != "" || command.Scope != nil ||
 			command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.PermissionProfile != "" || command.HighRiskAcknowledged {
+			return ErrInvalidUICommand
+		}
+	case UICommandCancelFollowUp:
+		if command.RequestID == 0 || command.RunID != "" || !command.ItemID.Valid() || command.ExpectedQueueRevision < 1 ||
+			command.ExpectedScopeGeneration < 1 || !command.ExpectedPolicyGeneration.Valid() || command.Text != "" ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.PermissionProfile != "" || command.HighRiskAcknowledged {
+			return ErrInvalidUICommand
+		}
+	case UICommandClearFollowUps:
+		if command.RequestID == 0 || command.RunID != "" || command.ItemID != "" || command.ExpectedQueueRevision < 1 ||
+			command.ExpectedScopeGeneration < 1 || !command.ExpectedPolicyGeneration.Valid() || command.Text != "" ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.PermissionProfile != "" || command.HighRiskAcknowledged {
+			return ErrInvalidUICommand
+		}
+	case UICommandCompactContext:
+		if command.RequestID == 0 || command.RunID != "" || command.ItemID != "" || command.ExpectedQueueRevision != 0 ||
+			command.ExpectedScopeGeneration < 1 || !command.ExpectedPolicyGeneration.Valid() || command.Text != "" ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
 			command.PermissionProfile != "" || command.HighRiskAcknowledged {
 			return ErrInvalidUICommand
 		}
@@ -252,6 +285,12 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
+	case UICommandArmPlan, UICommandCancelPlan:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.hasPermissionPayload() || command.hasQueueMutationPayload() {
+			return ErrInvalidUICommand
+		}
 	case UICommandShowPermissions:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
@@ -295,6 +334,10 @@ func (command UICommand) hasApprovalPayload() bool {
 
 func (command UICommand) hasPermissionPayload() bool {
 	return command.ExpectedPolicyGeneration != 0 || command.PermissionProfile != "" || command.HighRiskAcknowledged
+}
+
+func (command UICommand) hasQueueMutationPayload() bool {
+	return command.ItemID != "" || command.ExpectedQueueRevision != 0
 }
 
 func validUICommandText(value string, limit int) bool {

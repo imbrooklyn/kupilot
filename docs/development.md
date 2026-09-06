@@ -301,6 +301,15 @@ The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
 a future `v0.5` release requires a fresh review of the actually reachable
 composition; Accepted documentation alone is not release evidence.
 
+The S07 deterministic quality harness uses only synthetic response and
+Evidence fixtures. It reports reference validity, unsupported current-state
+claims, stale/cross-run rejection, uncertainty/limitation handling, and
+response/citation bounds. It must not open a network connection, construct a
+model client, or be reported as live model quality. Stream continuation
+compatibility tests are source/loopback checks; with the pinned protocol they
+assert unavailable, unknown/recovered, and zero retry rather than simulating a
+nonexistent resume API.
+
 ## References
 
 - [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
@@ -308,3 +317,4 @@ composition; Accepted documentation alone is not release evidence.
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

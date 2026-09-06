@@ -162,7 +162,7 @@ without sending an export command. To export a historical Session, resume it
 explicitly first and then use `/privacy`. Minimal Sessions have no retained
 conversation to export and do not offer this action.
 
-The deterministic `kupilot.export-summary.v2` Markdown projection may contain:
+The deterministic `kupilot.export-summary.v3` Markdown projection may contain:
 
 - The schema version, export and truncation state, Session ID, sanitized title,
   timestamps, standard persistence mode, and historic display-only Context and
@@ -173,6 +173,9 @@ The deterministic `kupilot.export-summary.v2` Markdown projection may contain:
 - The escaped final free-form answer Markdown, citation-backed compatibility
   metadata, validation warnings, and typed proposed operation/target display
   fields. Proposed actions contain no execution authority.
+- Bounded processed claim text and hashes, claim and coverage types, same-run
+  and generation metadata, and Evidence IDs. These prove structural provenance,
+  not semantic correctness or execution authority.
 - Bounded, redacted summaries of referenced accepted Evidence while retained,
   or an explicit expired marker after its detail was removed.
 

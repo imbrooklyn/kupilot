@@ -1,9 +1,11 @@
 package components
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
@@ -23,6 +25,7 @@ type Entry struct {
 	Kind               EntryKind
 	Text               string
 	Streaming          bool
+	CommittedFinal     bool
 	ToolSteps          []ToolStep
 	EvidenceReferences []EvidenceReference
 	WorkedFor          time.Duration
@@ -68,11 +71,35 @@ type Transcript struct {
 	toolSteps   ToolSteps
 	selecting   bool
 	selected    int
+	searching   bool
+	search      []SearchMatch
+	searchIndex int
+	searchNow   func() time.Time
 	reviewing   bool
 	visible     bool
 }
 
-const terminalHistorySeparatorRows = 1
+const (
+	terminalHistorySeparatorRows  = 1
+	MaxTranscriptSearchQueryBytes = 512
+	MaxTranscriptSearchMatches    = 100
+	MaxTranscriptSearchEntries    = 4096
+	MaxTranscriptSearchBytes      = 4 * 1024 * 1024
+	MaxTranscriptSearchDuration   = 50 * time.Millisecond
+)
+
+var (
+	ErrTranscriptSearchInvalid = errors.New("transcript search query is invalid")
+	ErrTranscriptSearchLimit   = errors.New("transcript search limit was reached")
+)
+
+// SearchMatch identifies one exact byte range in a committed transcript entry.
+// It is current-process display state and never carries authority or persistence.
+type SearchMatch struct {
+	EntryIndex int
+	StartByte  int
+	EndByte    int
+}
 
 // NewTranscript creates an empty viewport. The root reducer owns mouse routing.
 func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcript {
@@ -82,6 +109,7 @@ func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcrip
 	view.MouseWheelEnabled = false
 	return Transcript{
 		activeAgent: -1,
+		searchNow:   time.Now,
 		viewport:    view,
 		width:       80,
 		height:      12,
@@ -183,16 +211,29 @@ func (transcript *Transcript) ClearAgent() {
 
 // FinishAgent replaces provisional text with one terminal safe result.
 func (transcript *Transcript) FinishAgent(text string) {
-	transcript.finishAgent(text, 0, false)
+	transcript.finishAgent(text, 0, false, false)
 }
 
 // FinishAgentWithDuration replaces provisional text and records display-only
 // local elapsed time for a newly completed run.
 func (transcript *Transcript) FinishAgentWithDuration(text string, workedFor time.Duration) {
-	transcript.finishAgent(text, workedFor, true)
+	transcript.finishAgent(text, workedFor, true, false)
 }
 
-func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, showWorkedFor bool) {
+// FinishCommittedAgent records one persisted or persistable successful final
+// answer. Only entries finished through this path are eligible for /copy and
+// assistant-side transcript search.
+func (transcript *Transcript) FinishCommittedAgent(text string) {
+	transcript.finishAgent(text, 0, false, true)
+}
+
+// FinishCommittedAgentWithDuration records a successful final answer and its
+// local display-only elapsed duration.
+func (transcript *Transcript) FinishCommittedAgentWithDuration(text string, workedFor time.Duration) {
+	transcript.finishAgent(text, workedFor, true, true)
+}
+
+func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, showWorkedFor, committedFinal bool) {
 	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
 		!transcript.entries[transcript.activeAgent].Streaming {
 		return
@@ -203,6 +244,7 @@ func (transcript *Transcript) finishAgent(text string, workedFor time.Duration, 
 	transcript.entries[transcript.activeAgent].Text = text
 	transcript.entries[transcript.activeAgent].markdownCacheValid = false
 	transcript.entries[transcript.activeAgent].Streaming = false
+	transcript.entries[transcript.activeAgent].CommittedFinal = committedFinal
 	transcript.entries[transcript.activeAgent].WorkedFor = workedFor
 	transcript.entries[transcript.activeAgent].ShowWorkedFor = showWorkedFor
 	transcript.refresh(true)
@@ -302,6 +344,104 @@ func (transcript Transcript) Entries() []Entry {
 
 // ToolSteps returns a defensive copy of inline step state.
 func (transcript Transcript) ToolSteps() []ToolStep { return transcript.toolSteps.Items() }
+
+// LatestCommittedAssistantFinal returns only the newest successful committed
+// assistant final. Provisional, failed, cancelled, and notice entries are
+// deliberately ineligible.
+func (transcript Transcript) LatestCommittedAssistantFinal() (string, bool) {
+	for index := len(transcript.entries) - 1; index >= 0; index-- {
+		entry := transcript.entries[index]
+		if entry.Kind == EntryAgent && entry.CommittedFinal && !entry.Streaming && entry.Text != "" {
+			return entry.Text, true
+		}
+	}
+	return "", false
+}
+
+// BeginSearch scans only committed user messages and successful assistant
+// finals. It rejects rather than truncates at every bound.
+func (transcript *Transcript) BeginSearch(query string) (int, error) {
+	if query == "" || !utf8.ValidString(query) || len(query) > MaxTranscriptSearchQueryBytes {
+		return 0, ErrTranscriptSearchInvalid
+	}
+	now := transcript.searchNow
+	if now == nil {
+		now = time.Now
+	}
+	deadline := now().Add(MaxTranscriptSearchDuration)
+	matches := make([]SearchMatch, 0, min(8, MaxTranscriptSearchMatches))
+	eligibleEntries := 0
+	eligibleBytes := 0
+	for entryIndex, entry := range transcript.entries {
+		if now().After(deadline) {
+			return 0, ErrTranscriptSearchLimit
+		}
+		eligible := entry.Kind == EntryUser || entry.Kind == EntryAgent && entry.CommittedFinal && !entry.Streaming
+		if !eligible {
+			continue
+		}
+		eligibleEntries++
+		eligibleBytes += len(entry.Text)
+		if eligibleEntries > MaxTranscriptSearchEntries || eligibleBytes > MaxTranscriptSearchBytes {
+			return 0, ErrTranscriptSearchLimit
+		}
+		for offset := 0; offset <= len(entry.Text)-len(query); {
+			if now().After(deadline) {
+				return 0, ErrTranscriptSearchLimit
+			}
+			relative := strings.Index(entry.Text[offset:], query)
+			if now().After(deadline) {
+				return 0, ErrTranscriptSearchLimit
+			}
+			if relative < 0 {
+				break
+			}
+			start := offset + relative
+			matches = append(matches, SearchMatch{EntryIndex: entryIndex, StartByte: start, EndByte: start + len(query)})
+			if len(matches) > MaxTranscriptSearchMatches {
+				return 0, ErrTranscriptSearchLimit
+			}
+			offset = start + len(query)
+		}
+	}
+	transcript.searching = true
+	transcript.search = matches
+	transcript.searchIndex = 0
+	transcript.reviewing = true
+	transcript.refresh(false)
+	transcript.revealSearchMatch()
+	return len(matches), nil
+}
+
+// MoveSearch selects the next or previous exact match with deterministic wrap.
+func (transcript *Transcript) MoveSearch(delta int) {
+	if !transcript.searching || len(transcript.search) == 0 {
+		return
+	}
+	transcript.searchIndex = (transcript.searchIndex + delta%len(transcript.search) + len(transcript.search)) % len(transcript.search)
+	transcript.refresh(false)
+	transcript.revealSearchMatch()
+}
+
+// EndSearch removes every ephemeral query result and marker.
+func (transcript *Transcript) EndSearch() {
+	transcript.searching = false
+	transcript.search = nil
+	transcript.searchIndex = 0
+	transcript.reviewing = false
+	transcript.refresh(true)
+}
+
+// SearchState reports bounded display-only navigation state.
+func (transcript Transcript) SearchState() (current, total int, active bool) {
+	if !transcript.searching {
+		return 0, 0, false
+	}
+	if len(transcript.search) == 0 {
+		return 0, 0, true
+	}
+	return transcript.searchIndex + 1, len(transcript.search), true
+}
 
 // TerminalTranscript returns every completed terminal-safe entry. A streaming
 // Agent entry stops the projection so a provisional model draft cannot enter
@@ -477,8 +617,8 @@ func (transcript *Transcript) renderContent() string {
 }
 
 func (transcript *Transcript) renderVisibleContent() string {
-	if transcript.reviewing || transcript.selecting {
-		return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
+	if transcript.reviewing || transcript.selecting || transcript.searching {
+		return transcript.renderRange(0, len(transcript.entries), transcript.selecting || transcript.searching)
 	}
 	return transcript.renderRange(max(transcript.committed, transcript.prepared), len(transcript.entries), false)
 }
@@ -489,6 +629,15 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 	parts := make([]string, 0, end-start)
 	for entryIndex := start; entryIndex < end; entryIndex++ {
 		entry := &transcript.entries[entryIndex]
+		entryText := entry.Text
+		searchLabel := ""
+		if includeSelection && transcript.searching && len(transcript.search) > 0 {
+			match := transcript.search[transcript.searchIndex]
+			if match.EntryIndex == entryIndex && match.StartByte >= 0 && match.EndByte <= len(entryText) && match.StartByte < match.EndByte {
+				entryText = entryText[:match.StartByte] + "⟦" + entryText[match.StartByte:match.EndByte] + "⟧" + entryText[match.EndByte:]
+				searchLabel = transcript.styles.Selected.Render(fmt.Sprintf("Search match %d/%d", transcript.searchIndex+1, len(transcript.search)))
+			}
+		}
 		var rendered string
 		switch entry.Kind {
 		case EntryUser:
@@ -496,7 +645,7 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 			// resets SGR state after the styled prompt, so leaving the body raw
 			// would make only the historic message text fall back to the terminal
 			// background inside the otherwise continuous user surface.
-			content := transcript.renderUserEntry(entry.Text)
+			content := transcript.renderUserEntry(entryText)
 			rendered = transcript.styles.UserSurface.Width(transcript.width).Render(content)
 		case EntryAgent:
 			blocks := make([]string, 0, 5)
@@ -506,11 +655,18 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 			if steps != "" {
 				blocks = append(blocks, steps)
 			}
-			if entry.Text != "" {
+			if entryText != "" {
 				if steps != "" && !entry.Streaming {
 					blocks = append(blocks, transcript.styles.Separator.Render(strings.Repeat("─", max(1, transcript.width))))
 				}
-				blocks = append(blocks, transcript.renderMarkdown(entry))
+				if entryText == entry.Text {
+					blocks = append(blocks, transcript.renderMarkdown(entry))
+				} else {
+					selected := *entry
+					selected.Text = entryText
+					selected.markdownCacheValid = false
+					blocks = append(blocks, transcript.renderMarkdown(&selected))
+				}
 			}
 			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences, includeSelection); references != "" {
 				blocks = append(blocks, references)
@@ -522,11 +678,28 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 		case EntryNotice:
 			rendered = transcript.styles.NoticeText.Render(entry.Text)
 		}
+		if searchLabel != "" && rendered != "" {
+			rendered = searchLabel + "\n" + rendered
+		}
 		if rendered != "" {
 			parts = append(parts, rendered)
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func (transcript *Transcript) revealSearchMatch() {
+	if !transcript.searching || len(transcript.search) == 0 {
+		transcript.viewport.GotoTop()
+		return
+	}
+	entryIndex := transcript.search[transcript.searchIndex].EntryIndex
+	prefix := transcript.renderRange(0, entryIndex, true)
+	line := lipgloss.Height(prefix)
+	if entryIndex > 0 && prefix != "" {
+		line++
+	}
+	transcript.viewport.SetYOffset(max(0, line-1))
 }
 
 func (transcript Transcript) renderUserEntry(text string) string {

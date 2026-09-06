@@ -44,7 +44,7 @@ func preparedModelCallFromContext(ctx context.Context) *preparedModelCall {
 var _ einomodel.ToolCallingChatModel = (*guardedChatModel)(nil)
 
 func (model *guardedChatModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if model == nil || model.state == nil || model.state.client == nil || validateBoundToolInfos(tools) != nil {
+	if model == nil || model.state == nil || model.state.client == nil || validateBoundToolInfosForMode(tools, model.state.input.Mode()) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	bound, err := model.state.client.withTools(tools)
@@ -76,7 +76,7 @@ func (model *guardedChatModel) Stream(ctx context.Context, input []*schema.Messa
 		if len(options) == 0 || parsed.Temperature != nil || parsed.Model != nil || parsed.TopP != nil ||
 			parsed.MaxTokens != nil || len(parsed.Stop) != 0 || parsed.ToolChoice != nil ||
 			len(parsed.AllowedToolNames) != 0 || len(parsed.DeferredTools) != 0 || parsed.ToolSearchTool != nil ||
-			parsed.AgenticToolChoice != nil || validateBoundToolInfos(parsed.Tools) != nil {
+			parsed.AgenticToolChoice != nil || validateBoundToolInfosForMode(parsed.Tools, model.state.input.Mode()) != nil {
 			return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 		}
 		var err error

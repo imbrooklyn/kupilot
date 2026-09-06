@@ -9,12 +9,24 @@ import (
 )
 
 func diagnosisDraft(message *schema.Message) (agent.DiagnosisDraft, error) {
+	return diagnosisDraftForMode(message, agent.RunModeOrdinary)
+}
+
+func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.DiagnosisDraft, error) {
 	if message == nil || message.Role != schema.Assistant || message.Content == "" ||
 		message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 ||
 		unsupportedMessageFields(message) {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 	}
-	draft, err := agent.DecodeDiagnosticResponse(message.Content)
+	var (
+		draft agent.DiagnosisDraft
+		err   error
+	)
+	if mode == agent.RunModePlanOnly {
+		draft, err = agent.DecodePlanResponse(message.Content)
+	} else {
+		draft, err = agent.DecodeDiagnosticResponse(message.Content)
+	}
 	if err != nil {
 		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
 	}
@@ -45,6 +57,16 @@ func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agen
 		if action.Parameters != nil {
 			values = append(values, string(action.Parameters.Kind), action.Parameters.Value)
 		}
+	}
+	for _, coverage := range draft.ClaimCoverage {
+		values = append(values, coverage.Text, coverage.TextHash, string(coverage.Kind), string(coverage.State))
+	}
+	if draft.Plan != nil {
+		values = append(values, draft.Plan.Title)
+		for _, step := range draft.Plan.Steps {
+			values = append(values, step.Description)
+		}
+		values = append(values, draft.Plan.Limitations...)
 	}
 	return credentialAppearsInStrings(credential, values...)
 }

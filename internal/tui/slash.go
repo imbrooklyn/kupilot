@@ -17,6 +17,11 @@ const (
 	slashModel
 	slashPermissions
 	slashStatus
+	slashCopy
+	slashFind
+	slashQueue
+	slashCompact
+	slashPlan
 	slashQuit
 )
 
@@ -39,6 +44,11 @@ var fixedSlashCommands = [...]SlashCommand{
 	{Name: "resource", Aliases: []string{"res"}, Usage: "[filter]", Summary: "Select or clear the target resource", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectResource},
 	{Name: "permissions", Summary: "Review or change the permission profile", action: slashPermissions},
 	{Name: "status", Summary: "Show the current safe status", action: slashStatus},
+	{Name: "queue", Usage: "cancel <item-id> | clear", Summary: "Cancel or clear editable queued input", AcceptsArgument: true, action: slashQueue},
+	{Name: "copy", Summary: "Copy the latest committed assistant answer", action: slashCopy},
+	{Name: "find", Usage: "[query]", Summary: "Find committed transcript text locally", AcceptsArgument: true, action: slashFind},
+	{Name: "compact", Summary: "Compact eligible safe Session context", action: slashCompact},
+	{Name: "plan", Usage: "[off]", Summary: "Arm or cancel one-shot plan-only mode", AcceptsArgument: true, action: slashPlan},
 	{Name: "new", Summary: "Start a new Session", action: slashApplication, commandKind: application.UICommandNewSession},
 	{Name: "resume", Usage: "[filter]", Summary: "Resume a local Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandResumeSession},
 	{Name: "rename", Usage: "[title]", Summary: "Rename the current Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandRenameSession},

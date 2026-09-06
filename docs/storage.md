@@ -145,6 +145,20 @@ query/window parameters, source responses, raw logs, and credentials are not
 stored; the approval row retains only the existing parameter and origin
 digests. All prior rows and constraints are preserved.
 
+Migration 13 adds the bounded `run_sequence` column to committed Message rows.
+It distinguishes the initial user question, committed in-run steers, and the
+terminal assistant answer without persisting pending, queued, rejected, or
+recovered drafts. Legacy rows retain their established ordering and remain
+readable as historic conversation content without restoring active-run
+authority.
+
+Migration 14 adds bounded purpose-specific `claim_coverage_json` and
+`plan_json` columns to Diagnosis rows. New writes decode these columns only
+through the fixed claim/Evidence and plan DTOs; legacy `NULL` values remain
+readable. The columns contain no Evidence payload, model response object,
+queue state, executable input, ActionEnvelope, approval, or resumable plan
+authority.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
 `approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
@@ -230,7 +244,7 @@ bounded the source data:
 | Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
 | ToolInvocation | One of the 14 admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
 | Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-, observability-, or remote-diagnostics-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. Raw remote output and remote-output excerpts are never stored; those facts contain only safe target metadata, counts, and a fingerprint. |
-| Diagnosis | Validated free-form Markdown, claim-to-Evidence citations, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete serialized record is at most 128 KiB. Every retained confirmed fact cites same-run Evidence when written. |
+| Diagnosis | Validated free-form Markdown, typed claim/Evidence coverage, an optional inert bounded plan, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete validated Domain record is at most 128 KiB. Every retained current observation and confirmed fact cites same-run Evidence when written. |
 | AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, approval, and write-safety event types. |
 | Setting | `retention.operational_detail_days` is a schema-version-1 integer from 0 through 3,650. `scope.last_context` is a schema-version-1 strict JSON object containing one Context display name. Both use injected UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |
 

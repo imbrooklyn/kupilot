@@ -13,7 +13,7 @@ const (
 	MaxConversationInputItems          = 8
 	MaxConversationInputItemBytes      = MaxQuestionBytes
 	MaxConversationInputAggregateBytes = 256 * 1024
-	MaxConversationInputPreviewItems   = 4
+	MaxConversationInputPreviewItems   = MaxConversationInputItems
 )
 
 var (
@@ -90,6 +90,60 @@ func (command PopConversationInputCommand) Validate() error {
 		return ErrConversationInputInvalid
 	}
 	return nil
+}
+
+// CancelConversationInputCommand atomically removes one exact editable item
+// only when delivery still observes the current queue revision and binding.
+type CancelConversationInputCommand struct {
+	SessionID                domain.SessionID
+	ItemID                   domain.MessageID
+	ExpectedScopeGeneration  int64
+	ExpectedPolicyGeneration domain.PolicyGeneration
+	ExpectedQueueRevision    int64
+}
+
+func (command CancelConversationInputCommand) Validate() error {
+	if !command.SessionID.Valid() || !command.ItemID.Valid() || command.ExpectedScopeGeneration < 1 ||
+		!command.ExpectedPolicyGeneration.Valid() || command.ExpectedQueueRevision < 1 {
+		return ErrConversationInputInvalid
+	}
+	return nil
+}
+
+// ClearConversationInputsCommand atomically removes the complete editable set
+// for one current Session and observed revision. Confirmation is a delivery
+// concern and must precede this Application command.
+type ClearConversationInputsCommand struct {
+	SessionID                domain.SessionID
+	ExpectedScopeGeneration  int64
+	ExpectedPolicyGeneration domain.PolicyGeneration
+	ExpectedQueueRevision    int64
+}
+
+func (command ClearConversationInputsCommand) Validate() error {
+	if !command.SessionID.Valid() || command.ExpectedScopeGeneration < 1 ||
+		!command.ExpectedPolicyGeneration.Valid() || command.ExpectedQueueRevision < 1 {
+		return ErrConversationInputInvalid
+	}
+	return nil
+}
+
+// ConversationInputMutationResult is content-free. RemovedItemID is set only
+// for exact cancellation; clear reports only the number removed.
+type ConversationInputMutationResult struct {
+	RemovedItemID domain.MessageID
+	Removed       int
+	Status        ConversationInputStatus
+}
+
+func (result ConversationInputMutationResult) validate(exact bool) bool {
+	if result.Removed < 0 || !result.Status.valid() {
+		return false
+	}
+	if exact {
+		return result.Removed == 1 && result.RemovedItemID.Valid()
+	}
+	return result.RemovedItemID == ""
 }
 
 // ConversationInputProjection is the only content-bearing draft projection.
@@ -333,6 +387,104 @@ func (coordinator *Coordinator) PopLastConversationInput(
 	}
 	coordinator.mu.Unlock()
 	return ConversationInputProjection{}, ErrConversationInputConflict
+}
+
+// CancelConversationInput wins atomically against edit, commit, and drain or
+// leaves the queue untouched. It performs no persistence or external work.
+func (coordinator *Coordinator) CancelConversationInput(
+	ctx context.Context,
+	command CancelConversationInputCommand,
+) (ConversationInputMutationResult, error) {
+	if coordinator == nil || ctx == nil || command.Validate() != nil {
+		return ConversationInputMutationResult{}, ErrConversationInputInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return ConversationInputMutationResult{}, err
+	}
+	coordinator.mu.Lock()
+	queue := &coordinator.conversationInputs
+	item := queue.items[command.ItemID]
+	if !coordinator.conversationInputMutationCurrentLocked(
+		ctx, command.SessionID, command.ExpectedScopeGeneration, command.ExpectedPolicyGeneration,
+	) || queue.revision != command.ExpectedQueueRevision || item == nil || item.sessionID != command.SessionID ||
+		!item.state.editable() {
+		coordinator.mu.Unlock()
+		return ConversationInputMutationResult{}, ErrConversationInputConflict
+	}
+	queue.remove(item.id)
+	queue.nextRevision()
+	result := ConversationInputMutationResult{
+		RemovedItemID: item.id,
+		Removed:       1,
+		Status:        coordinator.conversationInputStatusLocked(),
+	}
+	event := coordinator.conversationInputEventLocked(nil)
+	coordinator.mu.Unlock()
+	_ = coordinator.uiEvents.PublishUIEvent(ctx, event)
+	return result, nil
+}
+
+// ClearConversationInputs removes every and only editable item at one observed
+// revision after the command proves its current Session and generations. A
+// concurrent transition makes the complete operation fail without partial
+// removal; prior draft bindings are discarded, never reactivated.
+func (coordinator *Coordinator) ClearConversationInputs(
+	ctx context.Context,
+	command ClearConversationInputsCommand,
+) (ConversationInputMutationResult, error) {
+	if coordinator == nil || ctx == nil || command.Validate() != nil {
+		return ConversationInputMutationResult{}, ErrConversationInputInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return ConversationInputMutationResult{}, err
+	}
+	coordinator.mu.Lock()
+	queue := &coordinator.conversationInputs
+	if !coordinator.conversationInputMutationCurrentLocked(
+		ctx, command.SessionID, command.ExpectedScopeGeneration, command.ExpectedPolicyGeneration,
+	) || queue.revision != command.ExpectedQueueRevision {
+		coordinator.mu.Unlock()
+		return ConversationInputMutationResult{}, ErrConversationInputConflict
+	}
+	ids := make([]domain.MessageID, 0, len(queue.order))
+	for _, id := range queue.order {
+		item := queue.items[id]
+		if item == nil || item.sessionID != command.SessionID || !item.state.editable() {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		coordinator.mu.Unlock()
+		return ConversationInputMutationResult{}, ErrConversationInputConflict
+	}
+	for _, id := range ids {
+		queue.remove(id)
+	}
+	queue.nextRevision()
+	result := ConversationInputMutationResult{Removed: len(ids), Status: coordinator.conversationInputStatusLocked()}
+	event := coordinator.conversationInputEventLocked(nil)
+	coordinator.mu.Unlock()
+	_ = coordinator.uiEvents.PublishUIEvent(ctx, event)
+	return result, nil
+}
+
+// conversationInputMutationCurrentLocked requires the mutation command to be
+// current without treating an editable draft's prior run generations as live
+// authority. This lets a user discard recovered drafts after invalidation,
+// while a command carrying the invalidated generation changes nothing.
+func (coordinator *Coordinator) conversationInputMutationCurrentLocked(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	scopeGeneration int64,
+	policyGeneration domain.PolicyGeneration,
+) bool {
+	if coordinator.closed || coordinator.currentSession == nil || coordinator.currentSession.ID != sessionID {
+		return false
+	}
+	scope, current := coordinator.scope.CurrentScope()
+	return current && scope.Validate() == nil && scope.Generation == scopeGeneration &&
+		coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, policyGeneration)
 }
 
 func (coordinator *Coordinator) conversationInputStatusLocked() ConversationInputStatus {
@@ -762,7 +914,7 @@ func (coordinator *Coordinator) startQueuedSuccessor(ctx context.Context, item *
 	}
 	_, err := coordinator.startRun(ctx, StartRunCommand{
 		SessionID: item.sessionID, Question: item.text, Resource: cloneResource(item.resource),
-	}, item.id)
+	}, item.id, nil)
 	if err != nil {
 		coordinator.recoverRemovedSuccessor(ctx, item, index)
 	}

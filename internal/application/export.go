@@ -16,7 +16,7 @@ import (
 
 const (
 	// ExportSummarySchemaVersion identifies the only admitted local export projection.
-	ExportSummarySchemaVersion = "kupilot.export-summary.v2"
+	ExportSummarySchemaVersion = "kupilot.export-summary.v3"
 	// MaxExportSummaryBytes is the complete post-redaction Markdown ceiling.
 	MaxExportSummaryBytes = 2 * 1024 * 1024
 	// MaxExportMessages bounds committed conversation records in one export.
@@ -141,6 +141,7 @@ type ExportDiagnosisRecord struct {
 	Hypotheses         []domain.Hypothesis
 	MissingInformation []domain.MissingInformation
 	RecommendedActions []domain.RecommendedAction
+	ClaimCoverage      []domain.ClaimEvidenceCoverage
 	CreatedAt          time.Time
 }
 
@@ -232,6 +233,7 @@ type ExportSummaryDiagnosis struct {
 	Hypotheses         []domain.Hypothesis
 	MissingInformation []domain.MissingInformation
 	RecommendedActions []domain.RecommendedAction
+	ClaimCoverage      []domain.ClaimEvidenceCoverage
 	CreatedAt          time.Time
 }
 
@@ -485,6 +487,7 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 		writeHypotheses(&builder, diagnosis.Hypotheses)
 		writeMissingInformation(&builder, diagnosis.MissingInformation)
 		writeRecommendedActions(&builder, diagnosis.RecommendedActions)
+		writeClaimCoverage(&builder, diagnosis.ClaimCoverage)
 	}
 
 	builder.WriteString("\n## Evidence references\n")
@@ -761,6 +764,45 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 		result.RecommendedActions = append(result.RecommendedActions, projectedAction)
 		truncated = truncated || actionText.Truncated || risk.Truncated || prerequisitesChanged
 	}
+
+	coverageLimit := min(len(record.ClaimCoverage), maxExportDiagnosisItems)
+	truncated = truncated || len(record.ClaimCoverage) > coverageLimit
+	if len(record.ClaimCoverage) > 0 {
+		validation := domain.Diagnosis{
+			ID: "00000000-0000-7000-8000-000000009999", RunID: record.ClaimCoverage[0].RunID,
+			Scope: record.ClaimCoverage[0].Scope, AnswerMarkdown: record.AnswerMarkdown,
+			ClaimCoverage: record.ClaimCoverage, CreatedAt: record.CreatedAt,
+		}
+		if validation.Validate() != nil {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+	}
+	for _, coverage := range record.ClaimCoverage[:coverageLimit] {
+		claim, processErr := processExportText(processor, coverage.Text, maxExportDiagnosisTextBytes)
+		if processErr != nil || claim.Value == "" {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+		ids, idsTruncated, idsErr := boundedEvidenceIDs(coverage.EvidenceIDs, coverage.Kind == domain.ClaimCurrentObservation)
+		if idsErr != nil {
+			return ExportSummaryDiagnosis{}, false, idsErr
+		}
+		projectedCoverage := coverage
+		projectedCoverage.Text = claim.Value
+		projectedCoverage.TextHash = domain.SHA256Hex(claim.Value)
+		projectedCoverage.EvidenceIDs = ids
+		result.ClaimCoverage = append(result.ClaimCoverage, projectedCoverage)
+		truncated = truncated || claim.Truncated || idsTruncated
+	}
+	if len(result.ClaimCoverage) > 0 {
+		validation := domain.Diagnosis{
+			ID: "00000000-0000-7000-8000-000000009999", RunID: result.ClaimCoverage[0].RunID,
+			Scope: result.ClaimCoverage[0].Scope, AnswerMarkdown: result.AnswerMarkdown,
+			ClaimCoverage: result.ClaimCoverage, CreatedAt: result.CreatedAt,
+		}
+		if validation.Validate() != nil {
+			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
+		}
+	}
 	return result, truncated, nil
 }
 
@@ -808,6 +850,11 @@ func exportReferencedEvidence(diagnoses []ExportSummaryDiagnosis) []domain.Evide
 				set[id] = struct{}{}
 			}
 		}
+		for _, coverage := range diagnosis.ClaimCoverage {
+			for _, id := range coverage.EvidenceIDs {
+				set[id] = struct{}{}
+			}
+		}
 	}
 	result := make([]domain.EvidenceID, 0, len(set))
 	for id := range set {
@@ -840,6 +887,18 @@ func ExportEvidenceReferences(diagnoses []ExportDiagnosisRecord) ([]domain.Evide
 		truncated = truncated || len(diagnosis.Hypotheses) > hypothesisLimit
 		for _, hypothesis := range diagnosis.Hypotheses[:hypothesisLimit] {
 			ids, idsTruncated, err := boundedEvidenceIDs(hypothesis.SupportingEvidenceIDs, false)
+			if err != nil {
+				return nil, false, err
+			}
+			truncated = truncated || idsTruncated
+			for _, id := range ids {
+				set[id] = struct{}{}
+			}
+		}
+		coverageLimit := min(len(diagnosis.ClaimCoverage), maxExportDiagnosisItems)
+		truncated = truncated || len(diagnosis.ClaimCoverage) > coverageLimit
+		for _, coverage := range diagnosis.ClaimCoverage[:coverageLimit] {
+			ids, idsTruncated, err := boundedEvidenceIDs(coverage.EvidenceIDs, coverage.Kind == domain.ClaimCurrentObservation)
 			if err != nil {
 				return nil, false, err
 			}
@@ -935,6 +994,23 @@ func writeRecommendedActions(builder *strings.Builder, values []domain.Recommend
 		for _, prerequisite := range action.Prerequisites {
 			fmt.Fprintf(builder, "   - Prerequisite: %s\n", escapeExportMarkdown(prerequisite))
 		}
+	}
+}
+
+func writeClaimCoverage(builder *strings.Builder, values []domain.ClaimEvidenceCoverage) {
+	builder.WriteString("\n#### Claim coverage\n")
+	if len(values) == 0 {
+		builder.WriteString("\n_None retained._\n")
+		return
+	}
+	for _, coverage := range values {
+		fmt.Fprintf(builder, "\n%d. `%s` · `%s`\n", coverage.Sequence, coverage.Kind, coverage.State)
+		fmt.Fprintf(builder, "   - Claim hash: `%s`\n", coverage.TextHash)
+		fmt.Fprintf(builder, "   - Source run: `%s`\n", coverage.RunID)
+		fmt.Fprintf(builder, "   - Scope generation: `%d`\n", coverage.Scope.Generation)
+		fmt.Fprintf(builder, "   - Policy generation: `%d`\n", coverage.PolicyGeneration)
+		writeEvidenceIDs(builder, "Evidence", coverage.EvidenceIDs)
+		writeExportQuote(builder, coverage.Text)
 	}
 }
 

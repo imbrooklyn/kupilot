@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0048 and the canonical docs. It is unreleased. Passing
+> by ADR-0044 through ADR-0049 and the canonical docs. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 
@@ -182,6 +182,15 @@ dependency, endpoint, cluster, data source, or local tool. Model evaluation is
 separate evidence for Agent quality and Reviewer approval/denial/escalation,
 latency, and cost. Neither replaces deterministic CI or generalizes to an
 untested target.
+
+The single-screen TUI also supports exact editable-queue cancellation and
+confirmed clear, committed-answer copy, bounded local transcript search,
+content-free context pressure, explicit safe-history compaction, fixed terminal
+status titles, and a one-shot plan-only run. Plans do not execute
+automatically. Final claim/Evidence manifests are checked for same-run
+provenance, but that structural check is not proof that model reasoning is
+correct. The pinned streaming protocol has no safe same-response continuation;
+disconnects are never retried automatically.
 
 ## Documentation
 

@@ -438,7 +438,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
 		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
 		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
-		"settings": 2, "privacy_consents": 1, "schema_migrations": 13,
+		"settings": 2, "privacy_consents": 1, "schema_migrations": 14,
 	} {
 		var got int
 		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {

@@ -34,6 +34,13 @@ type controlledConversationRunner struct {
 func (*controlledConversationRunner) Close()            {}
 func (*controlledConversationRunner) ModelName() string { return "scripted-model" }
 func (*controlledConversationRunner) Origin() string    { return "https://model.example" }
+func (*controlledConversationRunner) Compact(
+	context.Context,
+	agent.ManualCompactionInput,
+	agent.ManualCompactionEventSink,
+) (agent.ManualCompactionResult, error) {
+	return agent.ManualCompactionResult{}, agent.ErrInvalidManualCompaction
+}
 func (runner *controlledConversationRunner) ProfileName() string {
 	value, _ := runner.profile.Load().(string)
 	return value
@@ -89,9 +96,23 @@ func (runner *controlledConversationRunner) Run(
 	}
 	answerNumber := runner.answers.Add(1)
 	answer := "Scripted final answer."
+	var plan *domain.Plan
+	if input.Mode() == agent.RunModePlanOnly {
+		value := domain.Plan{
+			SchemaVersion: domain.PlanSchemaVersion, Title: "Bounded diagnostic plan",
+			Steps:       []domain.PlanStep{{Sequence: 1, Description: "Collect one policy-admitted observation."}},
+			Limitations: []string{"The plan carries no execution authority."},
+		}
+		var renderErr error
+		answer, renderErr = agent.RenderPlanMarkdown(value)
+		if renderErr != nil {
+			return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
+		}
+		plan = &value
+	}
 	diagnosis := domain.Diagnosis{
 		ID:    domain.DiagnosisID(coordinatorUUID(70_000 + int(answerNumber))),
-		RunID: input.RunID(), Scope: input.Scope().Snapshot(), AnswerMarkdown: answer, CreatedAt: runner.clock.Now(),
+		RunID: input.RunID(), Scope: input.Scope().Snapshot(), AnswerMarkdown: answer, Plan: plan, CreatedAt: runner.clock.Now(),
 	}
 	if diagnosis.Validate() != nil {
 		return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
@@ -598,7 +619,7 @@ func TestPendingAndUnknownSteersNeverAutoSendAfterUnsafeTerminal(t *testing.T) {
 func TestQueuedFollowUpCountLimitIsExactAndOneOverFailsClosed(t *testing.T) {
 	clock := newCoordinatorClock()
 	runner := newControlledConversationRunner(clock)
-	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+	coordinator, _, _, ui := newCoordinatorHarness(t, clock, runner)
 	session := createCoordinatorSession(t, coordinator)
 	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
 		SessionID: session.ID, Question: "Initial question.",
@@ -621,6 +642,16 @@ func TestQueuedFollowUpCountLimitIsExactAndOneOverFailsClosed(t *testing.T) {
 	coordinator.mu.Unlock()
 	if status.Items != MaxConversationInputItems || status.Queued != MaxConversationInputItems || !status.valid() {
 		t.Fatalf("exact item-count status = %#v", status)
+	}
+	events := ui.events()
+	latest := events[len(events)-1]
+	if latest.ConversationInput == nil || len(latest.ConversationInput.Preview) != MaxConversationInputItems {
+		t.Fatalf("exact queue IDs were not all discoverable in the bounded projection: %#v", latest.ConversationInput)
+	}
+	for _, projection := range latest.ConversationInput.Preview {
+		if !projection.ItemID.Valid() {
+			t.Fatalf("queue projection lacks an exact selectable item ID: %#v", projection)
+		}
 	}
 	runner.outcomes <- controlledConversationFail
 	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
@@ -1016,5 +1047,466 @@ func TestConversationInputSafetyPipelineBlocksAndRedactsBeforeQueueOwnership(t *
 	runner.outcomes <- controlledConversationFail
 	if _, err := coordinator.WaitRun(context.Background(), runID); err != nil {
 		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestCancelConversationInputRequiresExactEditableItemAndRevision(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	queued, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Editable queued input."))
+	if err != nil {
+		t.Fatalf("EnqueueFollowUp() error = %v", err)
+	}
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	base := CancelConversationInputCommand{
+		SessionID: session.ID, ItemID: queued.ItemID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	}
+	for name, mutate := range map[string]func(*CancelConversationInputCommand){
+		"foreign item": func(command *CancelConversationInputCommand) {
+			command.ItemID = domain.MessageID(coordinatorUUID(99_001))
+		},
+		"foreign session": func(command *CancelConversationInputCommand) {
+			command.SessionID = domain.SessionID(coordinatorUUID(99_002))
+		},
+		"stale revision":    func(command *CancelConversationInputCommand) { command.ExpectedQueueRevision-- },
+		"scope generation":  func(command *CancelConversationInputCommand) { command.ExpectedScopeGeneration++ },
+		"policy generation": func(command *CancelConversationInputCommand) { command.ExpectedPolicyGeneration++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			command := base
+			mutate(&command)
+			if _, cancelErr := coordinator.CancelConversationInput(context.Background(), command); !errors.Is(cancelErr, ErrConversationInputConflict) {
+				t.Fatalf("CancelConversationInput() error = %v", cancelErr)
+			}
+		})
+	}
+	beginBefore, inputWritesBefore := persistence.beginCalls(), persistence.runInputCalls()
+	result, err := coordinator.CancelConversationInput(context.Background(), base)
+	if err != nil || result.Removed != 1 || result.RemovedItemID != queued.ItemID || result.Status.Items != 0 ||
+		result.Status.Bytes != 0 || runner.calls.Load() != 1 || persistence.beginCalls() != beginBefore ||
+		persistence.runInputCalls() != inputWritesBefore {
+		t.Fatalf("exact cancel = %#v, %v; runner=%d begin=%d input-writes=%d", result, err,
+			runner.calls.Load(), persistence.beginCalls(), persistence.runInputCalls())
+	}
+	if _, err = coordinator.CancelConversationInput(context.Background(), base); !errors.Is(err, ErrConversationInputConflict) {
+		t.Fatalf("empty repeated cancel error = %v", err)
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestCancelRecoveredConversationInputUsesCurrentGenerationBinding(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, persistence, scope, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	queued, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Recovered input."))
+	if err != nil {
+		t.Fatalf("EnqueueFollowUp() error = %v", err)
+	}
+	scope.mu.Lock()
+	scope.scope.Generation++
+	currentGeneration := scope.scope.Generation
+	scope.mu.Unlock()
+	coordinator.publishConversationInvalidation(context.Background())
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	item := coordinator.conversationInputs.items[queued.ItemID]
+	coordinator.mu.Unlock()
+	if item == nil || item.state != ConversationInputRecovered {
+		t.Fatalf("invalidated item = %#v", item)
+	}
+	stale := CancelConversationInputCommand{
+		SessionID: session.ID, ItemID: queued.ItemID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	}
+	if _, err = coordinator.CancelConversationInput(context.Background(), stale); !errors.Is(err, ErrConversationInputConflict) {
+		t.Fatalf("stale-generation cancel error = %v", err)
+	}
+	current := stale
+	current.ExpectedScopeGeneration = currentGeneration
+	result, err := coordinator.CancelConversationInput(context.Background(), current)
+	if err != nil || result.Removed != 1 || result.RemovedItemID != queued.ItemID || result.Status.Items != 0 ||
+		persistence.runInputCalls() != 0 || runner.calls.Load() != 1 {
+		t.Fatalf("current-generation recovered cancel = %#v, %v; writes=%d runs=%d", result, err,
+			persistence.runInputCalls(), runner.calls.Load())
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestClearConversationInputsRemovesOneEditableItem(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	if _, err = coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Only editable input.")); err != nil {
+		t.Fatalf("EnqueueFollowUp() error = %v", err)
+	}
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	result, err := coordinator.ClearConversationInputs(context.Background(), ClearConversationInputsCommand{
+		SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	})
+	if err != nil || result.Removed != 1 || result.Status.Items != 0 || result.Status.Bytes != 0 ||
+		persistence.runInputCalls() != 0 || runner.calls.Load() != 1 {
+		t.Fatalf("single clear = %#v, %v; writes=%d runs=%d", result, err, persistence.runInputCalls(), runner.calls.Load())
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestClearConversationInputsRemovesOnlyEditableItemsAtomically(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	if _, err = coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "First editable input.")); err != nil {
+		t.Fatalf("EnqueueFollowUp(first) error = %v", err)
+	}
+	if _, err = coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Second editable input.")); err != nil {
+		t.Fatalf("EnqueueFollowUp(second) error = %v", err)
+	}
+	pending, err := coordinator.SubmitSteer(context.Background(), conversationInputCommand(input, "Pending steer is not editable."))
+	if err != nil {
+		t.Fatalf("SubmitSteer() error = %v", err)
+	}
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	command := ClearConversationInputsCommand{
+		SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	}
+	beginBefore, inputWritesBefore := persistence.beginCalls(), persistence.runInputCalls()
+	result, err := coordinator.ClearConversationInputs(context.Background(), command)
+	if err != nil || result.Removed != 2 || result.RemovedItemID != "" || result.Status.Items != 1 ||
+		result.Status.Pending != 1 || result.Status.Editable != 0 || runner.calls.Load() != 1 ||
+		persistence.beginCalls() != beginBefore || persistence.runInputCalls() != inputWritesBefore {
+		t.Fatalf("ClearConversationInputs() = %#v, %v", result, err)
+	}
+	coordinator.mu.Lock()
+	remaining := coordinator.conversationInputs.items[pending.ItemID]
+	coordinator.mu.Unlock()
+	if remaining == nil || remaining.state != ConversationInputPending {
+		t.Fatalf("non-editable pending item changed: %#v", remaining)
+	}
+	empty := command
+	empty.ExpectedQueueRevision = result.Status.Revision
+	if _, err = coordinator.ClearConversationInputs(context.Background(), empty); !errors.Is(err, ErrConversationInputConflict) {
+		t.Fatalf("empty clear error = %v", err)
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestClearConversationInputsRemovesEditableItemsFromPriorScopeGeneration(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	prior, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Prior-generation recovered input."))
+	if err != nil {
+		t.Fatalf("EnqueueFollowUp(prior) error = %v", err)
+	}
+	current, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Current-generation queued input."))
+	if err != nil {
+		t.Fatalf("EnqueueFollowUp(current) error = %v", err)
+	}
+	coordinator.mu.Lock()
+	priorItem := coordinator.conversationInputs.items[prior.ItemID]
+	currentItem := coordinator.conversationInputs.items[current.ItemID]
+	priorItem.state = ConversationInputRecovered
+	priorItem.scope.Generation--
+	priorItem.revision = coordinator.conversationInputs.nextRevision()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	result, err := coordinator.ClearConversationInputs(context.Background(), ClearConversationInputsCommand{
+		SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	})
+	if err != nil || result.Removed != 2 || result.Status.Items != 0 || priorItem.state != ConversationInputRecovered ||
+		currentItem.state != ConversationInputQueued || persistence.runInputCalls() != 0 || runner.calls.Load() != 1 {
+		t.Fatalf("mixed-generation clear = %#v, %v; prior=%q current=%q writes=%d runs=%d", result, err,
+			priorItem.state, currentItem.state, persistence.runInputCalls(), runner.calls.Load())
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestCancelAndEditRaceHasExactlyOneWinner(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	queued, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Race input."))
+	if err != nil {
+		t.Fatalf("EnqueueFollowUp() error = %v", err)
+	}
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	cancelCommand := CancelConversationInputCommand{
+		SessionID: session.ID, ItemID: queued.ItemID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	}
+	popCommand := PopConversationInputCommand{
+		SessionID: session.ID, RunID: runID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(),
+	}
+	start := make(chan struct{})
+	var cancelErr, popErr error
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(2)
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		_, cancelErr = coordinator.CancelConversationInput(context.Background(), cancelCommand)
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		_, popErr = coordinator.PopLastConversationInput(context.Background(), popCommand)
+	}()
+	close(start)
+	waitGroup.Wait()
+	if (cancelErr == nil) == (popErr == nil) {
+		t.Fatalf("cancel/edit race errors = %v/%v, want exactly one winner", cancelErr, popErr)
+	}
+	coordinator.mu.Lock()
+	status := coordinator.conversationInputStatusLocked()
+	coordinator.mu.Unlock()
+	if status.Items != 0 {
+		t.Fatalf("cancel/edit race status = %#v", status)
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestClearAndEditRaceHasExactlyOneWinner(t *testing.T) {
+	clock := newCoordinatorClock()
+	runner := newControlledConversationRunner(clock)
+	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	input := waitConversationRunInput(t, runner)
+	if _, err = coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Race input.")); err != nil {
+		t.Fatalf("EnqueueFollowUp() error = %v", err)
+	}
+	coordinator.mu.Lock()
+	revision := coordinator.conversationInputs.revision
+	coordinator.mu.Unlock()
+	clearCommand := ClearConversationInputsCommand{
+		SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+	}
+	popCommand := PopConversationInputCommand{
+		SessionID: session.ID, RunID: runID, ExpectedScopeGeneration: input.Scope().Generation,
+		ExpectedPolicyGeneration: input.PolicyGeneration(),
+	}
+	start := make(chan struct{})
+	var clearErr, popErr error
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(2)
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		_, clearErr = coordinator.ClearConversationInputs(context.Background(), clearCommand)
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		_, popErr = coordinator.PopLastConversationInput(context.Background(), popCommand)
+	}()
+	close(start)
+	waitGroup.Wait()
+	if (clearErr == nil) == (popErr == nil) {
+		t.Fatalf("clear/edit race errors = %v/%v, want exactly one winner", clearErr, popErr)
+	}
+	coordinator.mu.Lock()
+	status := coordinator.conversationInputStatusLocked()
+	coordinator.mu.Unlock()
+	if status.Items != 0 {
+		t.Fatalf("clear/edit race status = %#v", status)
+	}
+	runner.outcomes <- controlledConversationFail
+	if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+		t.Fatalf("WaitRun() error = %v", err)
+	}
+}
+
+func TestCancelAndClearRaceWithAutoDrainHasExactlyOneWinner(t *testing.T) {
+	for _, operation := range []string{"cancel", "clear"} {
+		t.Run(operation, func(t *testing.T) {
+			clock := newCoordinatorClock()
+			runner := newControlledConversationRunner(clock)
+			coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			input := waitConversationRunInput(t, runner)
+			queued, err := coordinator.EnqueueFollowUp(context.Background(), conversationInputCommand(input, "Race follow-up."))
+			if err != nil {
+				t.Fatalf("EnqueueFollowUp() error = %v", err)
+			}
+			coordinator.mu.Lock()
+			revision := coordinator.conversationInputs.revision
+			coordinator.mu.Unlock()
+			start := make(chan struct{})
+			var mutationErr error
+			var mutationResult ConversationInputMutationResult
+			var waitGroup sync.WaitGroup
+			waitGroup.Add(2)
+			go func() {
+				defer waitGroup.Done()
+				<-start
+				if operation == "cancel" {
+					mutationResult, mutationErr = coordinator.CancelConversationInput(context.Background(), CancelConversationInputCommand{
+						SessionID: session.ID, ItemID: queued.ItemID, ExpectedScopeGeneration: input.Scope().Generation,
+						ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+					})
+					return
+				}
+				mutationResult, mutationErr = coordinator.ClearConversationInputs(context.Background(), ClearConversationInputsCommand{
+					SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+					ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+				})
+			}()
+			go func() {
+				defer waitGroup.Done()
+				<-start
+				runner.outcomes <- controlledConversationComplete
+			}()
+			close(start)
+			if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+				t.Fatalf("WaitRun() error = %v", err)
+			}
+			waitGroup.Wait()
+			if mutationErr == nil {
+				if mutationResult.Removed != 1 || runner.calls.Load() != 1 {
+					t.Fatalf("mutation winner = %#v, calls=%d", mutationResult, runner.calls.Load())
+				}
+				return
+			}
+			if !errors.Is(mutationErr, ErrConversationInputConflict) {
+				t.Fatalf("mutation race error = %v", mutationErr)
+			}
+			second := waitConversationRunInput(t, runner)
+			if second.Question() != queued.Text || runner.calls.Load() != 2 {
+				t.Fatalf("drain winner question/calls = %q/%d", second.Question(), runner.calls.Load())
+			}
+			runner.outcomes <- controlledConversationFail
+			if _, err = coordinator.WaitRun(context.Background(), second.RunID()); err != nil {
+				t.Fatalf("successor WaitRun() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCancelAndClearNeverRemoveCommittingOrCommittedSteer(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "committing"
+		if commit {
+			name = "committed"
+		}
+		t.Run(name, func(t *testing.T) {
+			clock := newCoordinatorClock()
+			runner := newControlledConversationRunner(clock)
+			coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Initial question."})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			input := waitConversationRunInput(t, runner)
+			steer, err := coordinator.SubmitSteer(context.Background(), conversationInputCommand(input, "Immutable steer."))
+			if err != nil {
+				t.Fatalf("SubmitSteer() error = %v", err)
+			}
+			claim, found, err := input.Steering().ClaimSteer(context.Background(), conversationBoundary(input))
+			if err != nil || !found {
+				t.Fatalf("ClaimSteer() = %#v, %t, %v", claim, found, err)
+			}
+			if commit {
+				if err = input.Steering().CommitSteer(context.Background(), claim); err != nil {
+					t.Fatalf("CommitSteer() error = %v", err)
+				}
+			}
+			coordinator.mu.Lock()
+			revision := coordinator.conversationInputs.revision
+			coordinator.mu.Unlock()
+			cancel := CancelConversationInputCommand{
+				SessionID: session.ID, ItemID: steer.ItemID, ExpectedScopeGeneration: input.Scope().Generation,
+				ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+			}
+			if _, err = coordinator.CancelConversationInput(context.Background(), cancel); !errors.Is(err, ErrConversationInputConflict) {
+				t.Fatalf("CancelConversationInput() error = %v", err)
+			}
+			clear := ClearConversationInputsCommand{
+				SessionID: session.ID, ExpectedScopeGeneration: input.Scope().Generation,
+				ExpectedPolicyGeneration: input.PolicyGeneration(), ExpectedQueueRevision: revision,
+			}
+			if _, err = coordinator.ClearConversationInputs(context.Background(), clear); !errors.Is(err, ErrConversationInputConflict) {
+				t.Fatalf("ClearConversationInputs() error = %v", err)
+			}
+			runner.outcomes <- controlledConversationFail
+			if _, err = coordinator.WaitRun(context.Background(), runID); err != nil {
+				t.Fatalf("WaitRun() error = %v", err)
+			}
+		})
 	}
 }

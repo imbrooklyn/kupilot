@@ -450,6 +450,12 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 		strings.Contains(model.footerView(), "storage") || strings.Contains(model.footerView(), "diagnosis") {
 		t.Fatalf("degraded terminal run = %#v; footer=%q", model.run, model.footerView())
 	}
+	if _, copied := model.transcript.LatestCommittedAssistantFinal(); copied {
+		t.Fatal("degraded in-memory answer became eligible for committed-answer copy")
+	}
+	if matches, err := model.transcript.BeginSearch("In-memory diagnosis."); err != nil || matches != 0 {
+		t.Fatalf("degraded in-memory answer entered committed transcript search: matches=%d error=%v", matches, err)
+	}
 	entries := model.transcript.Entries()
 	found := false
 	for _, entry := range entries {

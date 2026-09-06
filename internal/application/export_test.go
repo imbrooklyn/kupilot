@@ -15,6 +15,7 @@ import (
 const (
 	exportTestSessionID  domain.SessionID  = "0198a46e-7d2a-7d34-9b6f-2df5f45a3201"
 	exportTestEvidenceID domain.EvidenceID = "0198a46e-7d2a-7d34-9b6f-2df5f45a3202"
+	exportTestRunID      domain.AgentRunID = "0198a46e-7d2a-7d34-9b6f-2df5f45a3203"
 )
 
 func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testing.T) {
@@ -53,6 +54,13 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 			}},
 			MissingInformation: []domain.MissingInformation{{Kind: domain.MissingInformationTruncated, Detail: "More detail is unavailable.", Impact: "Confidence remains limited."}},
 			RecommendedActions: []domain.RecommendedAction{{Action: "Review the workload.", Risk: "Read-only review.", Prerequisites: []string{"Verify scope."}}},
+			ClaimCoverage: []domain.ClaimEvidenceCoverage{{
+				Sequence: 1, Kind: domain.ClaimCurrentObservation,
+				Text: "A safe claim " + credentialCanary, TextHash: domain.SHA256Hex("A safe claim " + credentialCanary),
+				EvidenceIDs: []domain.EvidenceID{exportTestEvidenceID}, RunID: exportTestRunID,
+				Scope:            domain.ScopeSnapshot{Context: "production", Namespace: "payments", Generation: 7},
+				PolicyGeneration: 7, State: domain.ClaimCoverageVerified,
+			}},
 		}},
 		Evidence: []ExportEvidenceRecord{{
 			ID: exportTestEvidenceID, Category: domain.EvidenceCategoryCondition,
@@ -78,7 +86,9 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 	}
 	if summary.ContextSummary == nil || !summary.ContextSummary.Redacted ||
 		!bytes.Contains(content, []byte("## Model context")) ||
-		!bytes.Contains(content, []byte("untrusted historic conversation context only")) {
+		!bytes.Contains(content, []byte("untrusted historic conversation context only")) ||
+		!bytes.Contains(content, []byte("#### Claim coverage")) ||
+		!bytes.Contains(content, []byte("`current_observation` · `verified`")) {
 		t.Fatalf("safe model-context export missing: %#v\n%s", summary.ContextSummary, content)
 	}
 	for _, deniedLabel := range []string{"Tool input", "Tool result", "Model payload", "Approval digest"} {
@@ -139,7 +149,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderExportSummary() error = %v", err)
 	}
-	for _, want := range []string{"Schema: `kupilot.export-summary.v2`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
+	for _, want := range []string{"Schema: `kupilot.export-summary.v3`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
 		if !bytes.Contains(content, []byte(want)) {
 			t.Fatalf("export missing %q:\n%s", want, content)
 		}

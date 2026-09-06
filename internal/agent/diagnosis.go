@@ -26,8 +26,10 @@ type EvidenceRegistry struct {
 
 	runID       domain.AgentRunID
 	scope       domain.ClusterScope
+	policy      domain.PolicyGeneration
 	invocations map[domain.ToolInvocationID]struct{}
 	items       map[domain.EvidenceID]domain.Evidence
+	order       []domain.EvidenceID
 	gaps        []domain.MissingInformation
 	truncated   bool
 	sealed      bool
@@ -36,13 +38,21 @@ type EvidenceRegistry struct {
 
 // NewEvidenceRegistry creates an empty runtime-owned registry for one run and
 // one immutable scope.
-func NewEvidenceRegistry(runID domain.AgentRunID, scope domain.ClusterScope) (*EvidenceRegistry, error) {
+func NewEvidenceRegistry(runID domain.AgentRunID, scope domain.ClusterScope, policies ...domain.PolicyGeneration) (*EvidenceRegistry, error) {
 	if !runID.Valid() || scope.Validate() != nil {
 		return nil, ErrInvalidEvidenceRegistry
+	}
+	policy := domain.PolicyGeneration(0)
+	if len(policies) > 1 || len(policies) == 1 && !policies[0].Valid() {
+		return nil, ErrInvalidEvidenceRegistry
+	}
+	if len(policies) == 1 {
+		policy = policies[0]
 	}
 	return &EvidenceRegistry{
 		runID:       runID,
 		scope:       scope,
+		policy:      policy,
 		invocations: make(map[domain.ToolInvocationID]struct{}),
 		items:       make(map[domain.EvidenceID]domain.Evidence),
 	}, nil
@@ -66,7 +76,8 @@ func (registry *EvidenceRegistry) AcceptToolResult(call BoundToolCall, result do
 	}
 	for _, evidence := range result.Evidence {
 		if evidence.RunID != registry.runID || evidence.InvocationID != call.InvocationID() ||
-			evidence.Scope != registry.scope.Snapshot() || evidence.ObservedAt.Before(registry.scope.ActivatedAt) {
+			evidence.Scope != registry.scope.Snapshot() || evidence.ObservedAt.Before(registry.scope.ActivatedAt) ||
+			registry.policy.Valid() && evidence.PolicyGeneration != registry.policy {
 			return 0, ErrInvalidEvidenceRegistry
 		}
 		if _, exists := registry.items[evidence.ID]; exists {
@@ -75,6 +86,7 @@ func (registry *EvidenceRegistry) AcceptToolResult(call BoundToolCall, result do
 	}
 	for _, evidence := range result.Evidence {
 		registry.items[evidence.ID] = cloneEvidence(evidence)
+		registry.order = append(registry.order, evidence.ID)
 	}
 	registry.invocations[result.InvocationID] = struct{}{}
 	gapAdded := false
@@ -103,6 +115,7 @@ func (registry *EvidenceRegistry) Len() int {
 
 type evidenceSnapshot struct {
 	items     map[domain.EvidenceID]domain.Evidence
+	order     []domain.EvidenceID
 	gaps      []domain.MissingInformation
 	truncated bool
 	revision  uint64
@@ -122,7 +135,8 @@ func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
 		items[id] = cloneEvidence(evidence)
 	}
 	return evidenceSnapshot{
-		items: items, gaps: append([]domain.MissingInformation(nil), registry.gaps...),
+		items: items, order: append([]domain.EvidenceID(nil), registry.order...),
+		gaps:      append([]domain.MissingInformation(nil), registry.gaps...),
 		truncated: registry.truncated, revision: registry.revision,
 	}, nil
 }
@@ -167,20 +181,32 @@ type DiagnosisDraft struct {
 	Hypotheses         []domain.Hypothesis
 	MissingInformation []domain.MissingInformation
 	RecommendedActions []domain.RecommendedAction
+	ClaimCoverage      []ClaimCoverageDraft
+	Plan               *domain.Plan
+}
+
+// ClaimCoverageDraft is untrusted model metadata before runtime provenance is
+// attached. Run, scope, and policy fields are always supplied locally.
+type ClaimCoverageDraft struct {
+	Sequence    int
+	Kind        domain.ClaimKind
+	Text        string
+	TextHash    string
+	EvidenceIDs []domain.EvidenceID
+	State       domain.ClaimCoverageState
 }
 
 // DiagnosisMetadata contains the two Application-generated fields needed to
 // finalize a Diagnosis.
 type DiagnosisMetadata struct {
-	ID        domain.DiagnosisID
-	CreatedAt time.Time
+	ID               domain.DiagnosisID
+	CreatedAt        time.Time
+	PolicyGeneration domain.PolicyGeneration
 }
 
 const (
-	warningConfirmedFactRemoved = "A confirmed fact was removed because it did not cite an accepted observation from this diagnostic run."
-	warningHypothesisReference  = "Invalid or duplicate observation references were removed from a hypothesis."
-	warningExecutionRejected    = "An execution claim was rejected; a proposed action is not an executed action."
-	maxDiagnosisDraftTextBytes  = 16 * 1024
+	warningExecutionRejected   = "An execution claim was rejected; a proposed action is not an executed action."
+	maxDiagnosisDraftTextBytes = 16 * 1024
 	// MaxAnswerMarkdownBytes is the pre-envelope ceiling for one model answer.
 	// The complete Domain Diagnosis, including metadata, has its own ceiling.
 	MaxAnswerMarkdownBytes = 128 * 1024
@@ -188,9 +214,8 @@ const (
 
 // ValidateDiagnosis binds citations to accepted Evidence, forces proposed
 // actions to unexecuted, derives the Evidence window, and accepts free-form
-// Markdown only after local safety processing. Markdown is required; invalid
-// citation metadata is removed and recorded as a warning rather than changing
-// or rejecting the otherwise safe visible answer.
+// Markdown only after local safety processing. Markdown is required and
+// invalid claim or Evidence coverage rejects the terminal answer.
 func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registry *EvidenceRegistry) (domain.Diagnosis, error) {
 	if !metadata.ID.Valid() || metadata.CreatedAt.IsZero() || metadata.CreatedAt.Location() != time.UTC ||
 		metadata.CreatedAt.Nanosecond()%int(time.Millisecond) != 0 {
@@ -204,50 +229,37 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	if draft.AnswerMarkdown == "" {
 		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 	}
+	if draft.Plan != nil {
+		rendered, renderErr := RenderPlanMarkdown(*draft.Plan)
+		if renderErr != nil || rendered != draft.AnswerMarkdown || len(draft.RecommendedActions) != 0 {
+			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		}
+	}
 	snapshot, err := registry.snapshot()
 	if err != nil {
 		return domain.Diagnosis{}, err
 	}
-	warnings := make([]string, 0, 4)
+	warnings := make([]string, 0, 2)
 	confirmed := make([]domain.ConfirmedFact, 0, len(draft.ConfirmedFacts))
-	removedConfirmed := false
 	for _, fact := range draft.ConfirmedFacts {
 		if len(fact.EvidenceIDs) == 0 || !allEvidenceRegistered(fact.EvidenceIDs, snapshot.items) {
-			warnings = appendUnique(warnings, warningConfirmedFactRemoved)
-			removedConfirmed = true
-			continue
+			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 		}
-		fact.EvidenceIDs = sortedEvidenceIDs(fact.EvidenceIDs)
+		if hasDuplicateEvidenceIDs(fact.EvidenceIDs) {
+			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		}
 		confirmed = append(confirmed, fact)
 	}
 	hypotheses := make([]domain.Hypothesis, len(draft.Hypotheses))
-	removedHypothesisReference := false
 	for index, hypothesis := range draft.Hypotheses {
 		hypotheses[index] = hypothesis
-		filtered := make([]domain.EvidenceID, 0, len(hypothesis.SupportingEvidenceIDs))
-		seen := make(map[domain.EvidenceID]struct{}, len(hypothesis.SupportingEvidenceIDs))
-		removedReference := false
 		for _, id := range hypothesis.SupportingEvidenceIDs {
 			if _, exists := snapshot.items[id]; !exists {
-				warnings = appendUnique(warnings, warningHypothesisReference)
-				removedReference = true
-				continue
+				return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 			}
-			if _, duplicate := seen[id]; duplicate {
-				warnings = appendUnique(warnings, warningHypothesisReference)
-				removedReference = true
-				continue
-			}
-			seen[id] = struct{}{}
-			filtered = append(filtered, id)
 		}
-		hypotheses[index].SupportingEvidenceIDs = sortedEvidenceIDs(filtered)
-		if removedReference {
-			removedHypothesisReference = true
-			switch hypotheses[index].Confidence {
-			case domain.DiagnosisConfidenceMedium, domain.DiagnosisConfidenceHigh:
-				hypotheses[index].Confidence = domain.DiagnosisConfidenceLow
-			}
+		if hasDuplicateEvidenceIDs(hypothesis.SupportingEvidenceIDs) {
+			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 		}
 	}
 	missing := append([]domain.MissingInformation(nil), draft.MissingInformation...)
@@ -286,19 +298,9 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 			Impact: "The diagnosis cannot account for content outside the admitted result.",
 		})
 	}
-	if removedConfirmed && !hasMissingKind(missing, domain.MissingInformationUnsupported) {
-		missing = append(missing, domain.MissingInformation{
-			Kind:   domain.MissingInformationUnsupported,
-			Detail: "At least one draft confirmed fact did not reference an accepted observation from this diagnostic run.",
-			Impact: "The rejected draft entry was excluded from the final diagnosis.",
-		})
-	}
-	if removedHypothesisReference && !hasMissingKind(missing, domain.MissingInformationUnsupported) {
-		missing = append(missing, domain.MissingInformation{
-			Kind:   domain.MissingInformationUnsupported,
-			Detail: "At least one hypothesis source reference was invalid or duplicated after binding to accepted observations from this diagnostic run.",
-			Impact: "The citation was removed and the affected hypothesis confidence was reduced.",
-		})
+	coverage, err := bindClaimCoverage(draft.ClaimCoverage, metadata.PolicyGeneration, registry, snapshot)
+	if err != nil {
+		return domain.Diagnosis{}, err
 	}
 	if observedTo != nil && metadata.CreatedAt.Before(*observedTo) {
 		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
@@ -317,6 +319,8 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		ObservedTo:           observedTo,
 		CreatedAt:            metadata.CreatedAt,
 		EvidenceDetailsState: detailState,
+		ClaimCoverage:        coverage,
+		Plan:                 clonePlan(draft.Plan),
 	}
 	diagnosis.AnswerMarkdown = draft.AnswerMarkdown
 	if diagnosis.Validate() != nil {
@@ -335,6 +339,13 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 		Hypotheses:         make([]domain.Hypothesis, len(draft.Hypotheses)),
 		MissingInformation: make([]domain.MissingInformation, len(draft.MissingInformation)),
 		RecommendedActions: make([]domain.RecommendedAction, len(draft.RecommendedActions)),
+		ClaimCoverage:      make([]ClaimCoverageDraft, len(draft.ClaimCoverage)),
+	}
+	if draft.Plan != nil {
+		result.Plan = clonePlan(draft.Plan)
+		if result.Plan == nil || result.Plan.Validate() != nil {
+			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+		}
 	}
 	if draft.AnswerMarkdown != "" {
 		answer, err := processModelMarkdown(draft.AnswerMarkdown, MaxAnswerMarkdownBytes)
@@ -406,7 +417,73 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 			Action:     actionText, Risk: risk, Prerequisites: prerequisites, Executed: action.Executed,
 		}
 	}
+	for index, coverage := range draft.ClaimCoverage {
+		if coverage.TextHash != domain.SHA256Hex(coverage.Text) {
+			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+		}
+		text, err := sanitizeDiagnosisText(coverage.Text)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+		result.ClaimCoverage[index] = ClaimCoverageDraft{
+			Sequence: coverage.Sequence, Kind: coverage.Kind, Text: text, TextHash: domain.SHA256Hex(text),
+			EvidenceIDs: append([]domain.EvidenceID(nil), coverage.EvidenceIDs...), State: coverage.State,
+		}
+	}
 	return result, nil
+}
+
+func bindClaimCoverage(
+	drafts []ClaimCoverageDraft,
+	policy domain.PolicyGeneration,
+	registry *EvidenceRegistry,
+	snapshot evidenceSnapshot,
+) ([]domain.ClaimEvidenceCoverage, error) {
+	if len(drafts) > 100 || len(drafts) > 0 && !policy.Valid() {
+		return nil, ErrInvalidDiagnosisDraft
+	}
+	positions := make(map[domain.EvidenceID]int, len(snapshot.order))
+	for index, id := range snapshot.order {
+		positions[id] = index
+	}
+	seenClaims := make(map[string]struct{}, len(drafts))
+	result := make([]domain.ClaimEvidenceCoverage, len(drafts))
+	for index, draft := range drafts {
+		if draft.Sequence != index+1 || draft.TextHash != domain.SHA256Hex(draft.Text) {
+			return nil, ErrInvalidDiagnosisDraft
+		}
+		if _, duplicate := seenClaims[draft.TextHash]; duplicate {
+			return nil, ErrInvalidDiagnosisDraft
+		}
+		seenClaims[draft.TextHash] = struct{}{}
+		lastPosition := -1
+		for _, id := range draft.EvidenceIDs {
+			evidence, exists := snapshot.items[id]
+			position, ordered := positions[id]
+			if !exists || !ordered || evidence.RunID != registry.runID || evidence.Scope != registry.scope.Snapshot() ||
+				evidence.PolicyGeneration != policy || position <= lastPosition {
+				return nil, ErrInvalidDiagnosisDraft
+			}
+			lastPosition = position
+		}
+		result[index] = domain.ClaimEvidenceCoverage{
+			Sequence: draft.Sequence, Kind: draft.Kind, Text: draft.Text, TextHash: draft.TextHash,
+			EvidenceIDs: append([]domain.EvidenceID(nil), draft.EvidenceIDs...), RunID: registry.runID,
+			Scope: registry.scope.Snapshot(), PolicyGeneration: policy, State: draft.State,
+		}
+	}
+	return result, nil
+}
+
+func hasDuplicateEvidenceIDs(ids []domain.EvidenceID) bool {
+	seen := make(map[domain.EvidenceID]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			return true
+		}
+		seen[id] = struct{}{}
+	}
+	return false
 }
 
 func cloneProposedParameters(parameters *domain.ProposedActionParameters) *domain.ProposedActionParameters {
@@ -414,6 +491,16 @@ func cloneProposedParameters(parameters *domain.ProposedActionParameters) *domai
 		return nil
 	}
 	copy := *parameters
+	return &copy
+}
+
+func clonePlan(plan *domain.Plan) *domain.Plan {
+	if plan == nil {
+		return nil
+	}
+	copy := *plan
+	copy.Steps = append([]domain.PlanStep(nil), plan.Steps...)
+	copy.Limitations = append([]string(nil), plan.Limitations...)
 	return &copy
 }
 

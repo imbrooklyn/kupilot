@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -134,6 +135,33 @@ func TestDiagnosisValidatesEveryAdmittedTypedProposalWithoutExecutionAuthority(t
 		if diagnosis.Validate() == nil {
 			t.Errorf("invalid proposal %d was accepted", index)
 		}
+	}
+}
+
+func TestDiagnosisRejectsMixedClaimPolicyGenerations(t *testing.T) {
+	runID := AgentRunID("00000000-0000-7000-8000-000000001401")
+	scope := ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 4}
+	first := "The current Pod readiness condition is false."
+	second := "The readiness probe may be failing."
+	diagnosis := Diagnosis{
+		ID: "00000000-0000-7000-8000-000000001402", RunID: runID, Scope: scope,
+		AnswerMarkdown: "The observation supports one bounded inference.",
+		ClaimCoverage: []ClaimEvidenceCoverage{
+			{
+				Sequence: 1, Kind: ClaimCurrentObservation, Text: first, TextHash: SHA256Hex(first),
+				EvidenceIDs: []EvidenceID{"00000000-0000-7000-8000-000000001403"},
+				RunID:       runID, Scope: scope, PolicyGeneration: 7, State: ClaimCoverageVerified,
+			},
+			{
+				Sequence: 2, Kind: ClaimInference, Text: second, TextHash: SHA256Hex(second),
+				EvidenceIDs: []EvidenceID{"00000000-0000-7000-8000-000000001404"},
+				RunID:       runID, Scope: scope, PolicyGeneration: 8, State: ClaimCoverageSupported,
+			},
+		},
+		CreatedAt: time.UnixMilli(42).UTC(),
+	}
+	if err := diagnosis.Validate(); !errors.Is(err, ErrInvalidDiagnosis) {
+		t.Fatalf("Validate(mixed claim policy generations) error = %v, want ErrInvalidDiagnosis", err)
 	}
 }
 

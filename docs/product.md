@@ -254,6 +254,25 @@ and framework objects never become generic model, history, log, audit, SQLite,
 or child-environment data. Specific sensitive sources may be admitted only by
 an explicit policy and category; credentials remain a hard denial.
 
+## Bounded supervision utilities
+
+The one conversational screen includes exact cancellation and confirmed clear
+for editable follow-ups, committed-answer-only copy, bounded local committed
+transcript search, content-free context pressure, explicit compaction, and
+fixed content-free terminal status titles. These are delivery and Application
+operations, not new model capabilities or data sources.
+
+`/plan` arms one plan-only AgentRun. It uses the existing Eino Agent and may use
+only policy-admitted safe reads. Its validated bounded plan is ordinary
+assistant content and cannot create an ActionEnvelope, approval, execution, or
+automatic follow-on action. New final answers carry a strict typed
+claim/Evidence coverage manifest. That manifest proves citation structure and
+same-run provenance, not semantic correctness.
+
+Same-response stream continuation is unavailable with the pinned protocol.
+Kupilot does not retry, poll, checkpoint, or reissue content after an ambiguous
+disconnect.
+
 ## Product identity and non-goals
 
 Kupilot remains intentionally not:
@@ -283,3 +302,4 @@ needed for daily operations.
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

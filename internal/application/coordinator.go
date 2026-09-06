@@ -55,6 +55,7 @@ type CoordinatorConfig struct {
 	Privacy             *PrivacyManager
 	RunResourcePolicies RunResourcePolicySource
 	ModelContext        ModelContextPersistence
+	Compactor           agent.ContextCompactor
 	UIEvents            UIEventSink
 	Observer            RunObserver
 	Now                 func() time.Time
@@ -112,6 +113,7 @@ type Coordinator struct {
 	privacy              *PrivacyManager
 	runResourcePolicies  RunResourcePolicySource
 	modelContextStore    ModelContextPersistence
+	compactor            agent.ContextCompactor
 	uiEvents             UIEventSink
 	observer             RunObserver
 	now                  func() time.Time
@@ -154,6 +156,8 @@ type Coordinator struct {
 	lastDiagnosis           *domain.Diagnosis
 	lastEvidence            map[domain.EvidenceID]domain.Evidence
 	conversationInputs      conversationInputQueue
+	planArmed               bool
+	manualCompaction        *activeManualCompaction
 }
 
 type activeRun struct {
@@ -175,6 +179,7 @@ type activeRun struct {
 	localProcessCalls        int
 	summaryCalls             int
 	committedInputs          []agent.ConversationTurn
+	evidenceOrder            []domain.EvidenceID
 
 	lastAgentSequence int64
 	publishing        bool
@@ -252,6 +257,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 			return nil, ErrCoordinatorDependency
 		}
 		runner = config.ModelRuntime
+	}
+	compactor := config.Compactor
+	if compactor == nil && config.ModelRuntime != nil {
+		compactor = config.ModelRuntime
 	}
 	if (config.ModelFactory == nil) != (config.ModelProfiles == nil) {
 		return nil, ErrCoordinatorDependency
@@ -337,7 +346,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		identifiers:      config.Identifiers,
 		auditIdentifiers: config.AuditIdentifiers, questions: config.Questions,
 		privacy: config.Privacy, runResourcePolicies: config.RunResourcePolicies, modelContextStore: config.ModelContext,
-		uiEvents: config.UIEvents, observer: config.Observer, now: config.Now,
+		compactor: compactor,
+		uiEvents:  config.UIEvents, observer: config.Observer, now: config.Now,
 		budgetLimits: limits, persistenceLimit: persistenceLimit,
 		resumeSessions: resumeSessions, sessionSearch: sessionSearch, titles: titles, startup: startup,
 		uiScopes:             uiScopes,
@@ -539,6 +549,7 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 	}
 	coordinator.modelRuntime = replacement
 	coordinator.runner = replacement
+	coordinator.compactor = replacement
 	coordinator.privacyChallenge = nil
 	replacementProfile := "agent"
 	if named, ok := replacement.(namedModelRuntime); ok {
@@ -972,10 +983,25 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	case UICommandCancelRun:
 		err := coordinator.CancelRun(ctx, CancelRunCommand{RunID: command.RunID, ScopeGeneration: command.ExpectedScopeGeneration})
 		return UICommandOutcome{Command: command.Kind, RunID: command.RunID}, err
+	case UICommandArmPlan, UICommandCancelPlan:
+		coordinator.mu.Lock()
+		if coordinator.closed || coordinator.currentSession == nil || coordinator.starting ||
+			coordinator.active != nil && !coordinator.active.terminal || coordinator.operations != 0 {
+			coordinator.mu.Unlock()
+			return UICommandOutcome{}, ErrCoordinatorBusy
+		}
+		coordinator.planArmed = command.Kind == UICommandArmPlan
+		armed := coordinator.planArmed
+		coordinator.mu.Unlock()
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, PlanArmed: &armed}, nil
+	case UICommandCompactContext:
+		return coordinator.executeManualCompactionCommand(ctx, command)
 	case UICommandSubmitQuestion:
 		return coordinator.executeQuestionCommand(ctx, command)
 	case UICommandSubmitSteer, UICommandEnqueueFollowUp, UICommandPopFollowUp:
 		return coordinator.executeConversationInputCommand(ctx, command)
+	case UICommandCancelFollowUp, UICommandClearFollowUps:
+		return coordinator.executeConversationInputMutationCommand(ctx, command)
 	case UICommandSetPersistenceMode:
 		return coordinator.executePersistenceModeCommand(ctx, command)
 	case UICommandDeleteSession:
@@ -1084,6 +1110,47 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	}
 }
 
+func (coordinator *Coordinator) executeConversationInputMutationCommand(
+	ctx context.Context,
+	command UICommand,
+) (UICommandOutcome, error) {
+	coordinator.mu.Lock()
+	var sessionID domain.SessionID
+	if coordinator.currentSession != nil {
+		sessionID = coordinator.currentSession.ID
+	}
+	coordinator.mu.Unlock()
+	if !sessionID.Valid() {
+		return UICommandOutcome{}, ErrConversationInputUnavailable
+	}
+	var (
+		result ConversationInputMutationResult
+		err    error
+	)
+	switch command.Kind {
+	case UICommandCancelFollowUp:
+		result, err = coordinator.CancelConversationInput(ctx, CancelConversationInputCommand{
+			SessionID: sessionID, ItemID: command.ItemID,
+			ExpectedScopeGeneration:  command.ExpectedScopeGeneration,
+			ExpectedPolicyGeneration: command.ExpectedPolicyGeneration,
+			ExpectedQueueRevision:    command.ExpectedQueueRevision,
+		})
+	case UICommandClearFollowUps:
+		result, err = coordinator.ClearConversationInputs(ctx, ClearConversationInputsCommand{
+			SessionID:                sessionID,
+			ExpectedScopeGeneration:  command.ExpectedScopeGeneration,
+			ExpectedPolicyGeneration: command.ExpectedPolicyGeneration,
+			ExpectedQueueRevision:    command.ExpectedQueueRevision,
+		})
+	default:
+		err = ErrInvalidUICommand
+	}
+	if err != nil {
+		return UICommandOutcome{}, err
+	}
+	return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, ConversationChange: &result}, nil
+}
+
 func (coordinator *Coordinator) executeConversationInputCommand(
 	ctx context.Context,
 	command UICommand,
@@ -1161,7 +1228,13 @@ func (coordinator *Coordinator) executeQuestionCommand(ctx context.Context, comm
 		}
 		resource = selected
 	}
-	runID, err := coordinator.StartRun(ctx, StartRunCommand{SessionID: sessionID, Question: command.Text, Resource: resource})
+	runMode := agent.RunModeOrdinary
+	runID, err := coordinator.startRun(
+		ctx,
+		StartRunCommand{SessionID: sessionID, Question: command.Text, Resource: resource},
+		"",
+		&runMode,
+	)
 	if errors.Is(err, ErrModelUnconfigured) {
 		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Failure: UIQueryModelRequired}, nil
 	}
@@ -1181,7 +1254,7 @@ func (coordinator *Coordinator) executeQuestionCommand(ctx context.Context, comm
 	if err != nil {
 		return UICommandOutcome{}, err
 	}
-	return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, RunID: runID}, nil
+	return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, RunID: runID, RunMode: runMode}, nil
 }
 
 func (coordinator *Coordinator) executePrivacyCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
@@ -1399,6 +1472,7 @@ func (coordinator *Coordinator) executeResumeAcceptance(ctx context.Context, com
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = true
 	coordinator.conversationInputs.reset()
+	coordinator.planArmed = false
 	coordinator.modelContext = newSessionModelContext(copy, false)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
@@ -1685,6 +1759,7 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	coordinator.mu.Lock()
 	result.PersistenceDegraded = coordinator.persistenceDegraded || coordinator.scopePreferenceDegraded
 	result.ConversationInput = coordinator.conversationInputStatusLocked()
+	result.PlanArmed = coordinator.planArmed
 	if coordinator.active != nil && !coordinator.active.terminal {
 		state := coordinator.active
 		result.RunID = state.run.ID
@@ -1716,11 +1791,23 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	}
 	if coordinator.currentSession != nil {
 		contextState := coordinator.modelContext
+		covered := 0
+		if contextState.summary != nil {
+			covered = contextState.summary.CoveredCount
+		}
+		workingBytes := 0
+		for index := covered; index < len(contextState.coverage); index++ {
+			workingBytes += contextState.coverage[index].ContentBytes
+		}
+		workingMessages := len(contextState.coverage) - covered
 		result.ModelContext = UIModelContextStatus{
 			Mode: contextState.mode, EligibleMessages: len(contextState.coverage), EligibleBytes: contextState.eligibleBytes,
 			RecentTailMessages: contextState.recentTailCount, SummaryCallsMaximum: limits.SummaryCalls,
-			StorageHealthy: contextState.storageHealthy,
+			StorageHealthy: contextState.storageHealthy, WorkingMessages: workingMessages, WorkingBytes: workingBytes,
+			MessageLimit: domain.MaxSessionContextMessages, ByteLimit: domain.MaxSessionHistoryBytes,
+			SummaryMessageTrigger: domain.SessionContextMessageTrigger, SummaryByteTrigger: domain.MaxSessionContextBytes,
 		}
+		result.ModelContext.Pressure = projectContextPressure(result.ModelContext)
 		if contextState.summary != nil {
 			result.ModelContext.Compressed = true
 			result.ModelContext.CompressedAtUnixMillis = contextState.summary.GeneratedAt.UnixMilli()
@@ -1753,6 +1840,27 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	}
 	coordinator.mu.Unlock()
 	return result
+}
+
+func projectContextPressure(status UIModelContextStatus) ContextPressureState {
+	if !status.StorageHealthy {
+		return ContextPressureDegraded
+	}
+	critical := status.WorkingMessages >= domain.SessionContextMessageTrigger ||
+		status.WorkingBytes >= domain.MaxSessionContextBytes ||
+		status.EligibleMessages*100 >= domain.MaxSessionContextMessages*80 ||
+		status.EligibleBytes*100 >= domain.MaxSessionHistoryBytes*80
+	if critical {
+		return ContextPressureCritical
+	}
+	elevated := status.WorkingMessages*100 >= domain.SessionContextMessageTrigger*50 ||
+		status.WorkingBytes*100 >= domain.MaxSessionContextBytes*50 ||
+		status.EligibleMessages*100 >= domain.MaxSessionContextMessages*50 ||
+		status.EligibleBytes*100 >= domain.MaxSessionHistoryBytes*50
+	if elevated {
+		return ContextPressureElevated
+	}
+	return ContextPressureNormal
 }
 
 func projectSessionCandidate(record ResumeSessionRecord) UISessionCandidate {
@@ -1972,6 +2080,7 @@ func (coordinator *Coordinator) createSessionWithinOperation(
 	coordinator.currentSession = &copy
 	coordinator.currentResumed = false
 	coordinator.conversationInputs.reset()
+	coordinator.planArmed = false
 	coordinator.modelContext = newSessionModelContext(copy, true)
 	coordinator.lastDiagnosis = nil
 	coordinator.lastEvidence = nil
@@ -1984,13 +2093,14 @@ func (coordinator *Coordinator) createSessionWithinOperation(
 // StartRun durably binds the safe request and running metadata before starting
 // the sole owned Agent goroutine.
 func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCommand) (domain.AgentRunID, error) {
-	return coordinator.startRun(ctx, command, "")
+	return coordinator.startRun(ctx, command, "", nil)
 }
 
 func (coordinator *Coordinator) startRun(
 	ctx context.Context,
 	command StartRunCommand,
 	reservedMessageID domain.MessageID,
+	frozenMode *agent.RunMode,
 ) (domain.AgentRunID, error) {
 	if coordinator == nil || ctx == nil || command.Validate() != nil {
 		return "", ErrCoordinatorDependency
@@ -2034,6 +2144,13 @@ func (coordinator *Coordinator) startRun(
 			return "", ErrCoordinatorDependency
 		}
 		minimalPersistence = coordinator.currentSession.PrivacyMode == domain.PrivacyModeMinimal
+	}
+	runMode := agent.RunModeOrdinary
+	if coordinator.planArmed {
+		runMode = agent.RunModePlanOnly
+	}
+	if frozenMode != nil {
+		*frozenMode = runMode
 	}
 	coordinator.starting = true
 	coordinator.startingCancel = cancelRun
@@ -2149,6 +2266,10 @@ func (coordinator *Coordinator) startRun(
 	if err != nil {
 		return "", ErrCoordinatorDependency
 	}
+	input, err = agent.WithRunMode(input, runMode)
+	if err != nil {
+		return "", ErrCoordinatorDependency
+	}
 	input, err = agent.WithRunSteering(input, coordinator)
 	if err != nil {
 		return "", ErrCoordinatorDependency
@@ -2207,6 +2328,9 @@ func (coordinator *Coordinator) startRun(
 
 	coordinator.mu.Lock()
 	coordinator.active = state
+	if runMode == agent.RunModePlanOnly {
+		coordinator.planArmed = false
+	}
 	coordinator.starting = false
 	coordinator.startingCancel = nil
 	coordinator.startingDone = nil
@@ -2420,6 +2544,9 @@ func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, stat
 func (coordinator *Coordinator) prepareActionProposal(ctx context.Context, state *activeRun) error {
 	if coordinator == nil || state == nil || state.diagnosis == nil {
 		return nil
+	}
+	if state.input.Mode() == agent.RunModePlanOnly {
+		return ErrApprovalUnavailable
 	}
 	var proposed *domain.RecommendedAction
 	for index := range state.diagnosis.RecommendedActions {
@@ -2856,7 +2983,8 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 		if event.Evidence.Scope != state.run.Scope || pending == nil || pending.terminal == nil || pending.persisted ||
 			len(pending.evidence) >= pending.terminal.EvidenceCount ||
 			event.Evidence.PolicyGeneration != state.input.PolicyGeneration() ||
-			!runInputAllowsEvidence(state.input, *event.Evidence) {
+			!runInputAllowsEvidence(state.input, *event.Evidence) ||
+			evidenceIDAccepted(state.evidenceOrder, event.Evidence.ID) {
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		for _, existing := range pending.evidence {
@@ -2865,6 +2993,7 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			}
 		}
 		pending.evidence = append(pending.evidence, cloneEvidence(*event.Evidence))
+		state.evidenceOrder = append(state.evidenceOrder, event.Evidence.ID)
 		if len(pending.evidence) != pending.terminal.EvidenceCount {
 			return persistenceAction{}, nil
 		}
@@ -2874,7 +3003,10 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 			evidence: cloneEvidenceItems(pending.evidence), audit: pending.audit,
 		}, nil
 	case agent.RunEventDiagnosisReady:
-		if event.Diagnosis.Scope != state.run.Scope || state.diagnosis != nil || !allToolsPersisted(state.tools) {
+		planOnly := state.input.Mode() == agent.RunModePlanOnly
+		if event.Diagnosis.Scope != state.run.Scope || state.diagnosis != nil || !allToolsPersisted(state.tools) ||
+			!diagnosisEvidenceAccepted(state, *event.Diagnosis) || planOnly != (event.Diagnosis.Plan != nil) ||
+			planOnly && len(event.Diagnosis.RecommendedActions) != 0 {
 			return persistenceAction{}, ErrInvalidAgentEvent
 		}
 		diagnosis := cloneDiagnosis(*event.Diagnosis)
@@ -2892,6 +3024,45 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 	default:
 		return persistenceAction{}, ErrInvalidAgentEvent
 	}
+}
+
+func evidenceIDAccepted(order []domain.EvidenceID, id domain.EvidenceID) bool {
+	for _, accepted := range order {
+		if accepted == id {
+			return true
+		}
+	}
+	return false
+}
+
+func diagnosisEvidenceAccepted(state *activeRun, diagnosis domain.Diagnosis) bool {
+	if state == nil || diagnosis.RunID != state.run.ID || diagnosis.Scope != state.run.Scope {
+		return false
+	}
+	positions := make(map[domain.EvidenceID]int, len(state.evidenceOrder))
+	for index, id := range state.evidenceOrder {
+		positions[id] = index
+	}
+	for _, id := range diagnosis.ReferencedEvidenceIDs() {
+		if _, accepted := positions[id]; !accepted {
+			return false
+		}
+	}
+	for _, coverage := range diagnosis.ClaimCoverage {
+		if coverage.RunID != state.run.ID || coverage.Scope != state.run.Scope ||
+			coverage.PolicyGeneration != state.input.PolicyGeneration() {
+			return false
+		}
+		lastPosition := -1
+		for _, id := range coverage.EvidenceIDs {
+			position, accepted := positions[id]
+			if !accepted || position <= lastPosition {
+				return false
+			}
+			lastPosition = position
+		}
+	}
+	return true
 }
 
 func runInputAllowsEvidence(input agent.RunInput, evidence domain.Evidence) bool {
@@ -3456,6 +3627,16 @@ func cloneDiagnosis(value domain.Diagnosis) domain.Diagnosis {
 		}
 	}
 	copy.ValidationWarnings = append([]string(nil), value.ValidationWarnings...)
+	copy.ClaimCoverage = append([]domain.ClaimEvidenceCoverage(nil), value.ClaimCoverage...)
+	for index := range copy.ClaimCoverage {
+		copy.ClaimCoverage[index].EvidenceIDs = append([]domain.EvidenceID(nil), value.ClaimCoverage[index].EvidenceIDs...)
+	}
+	if value.Plan != nil {
+		plan := *value.Plan
+		plan.Steps = append([]domain.PlanStep(nil), value.Plan.Steps...)
+		plan.Limitations = append([]string(nil), value.Plan.Limitations...)
+		copy.Plan = &plan
+	}
 	if value.ObservedFrom != nil {
 		current := *value.ObservedFrom
 		copy.ObservedFrom = &current

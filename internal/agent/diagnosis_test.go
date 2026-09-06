@@ -10,7 +10,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestDiagnosisValidatorRemovesUnregisteredEvidenceAndExecutionClaims(t *testing.T) {
+func TestDiagnosisValidatorRejectsUnregisteredEvidence(t *testing.T) {
 	input := testRunInput(t, "Why is this Pod not Ready?")
 	call := testBoundCall(t, input, testInvocationID, "sample-pod")
 	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(1_000).UTC())
@@ -22,7 +22,7 @@ func TestDiagnosisValidatorRemovesUnregisteredEvidenceAndExecutionClaims(t *test
 		t.Fatalf("AcceptToolResult() error = %v", err)
 	}
 	forgedID := domain.EvidenceID("00000000-0000-7000-8000-000000004099")
-	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+	_, err = ValidateDiagnosis(DiagnosisDraft{
 		AnswerMarkdown: "The Pod is not Ready. Review its readiness probe before changing the workload.",
 		ConfirmedFacts: []domain.ConfirmedFact{
 			{Statement: "A fabricated observation claims a restart occurred.", EvidenceIDs: []domain.EvidenceID{forgedID}},
@@ -40,30 +40,12 @@ func TestDiagnosisValidatorRemovesUnregisteredEvidenceAndExecutionClaims(t *test
 			Executed: true,
 		}},
 	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC()}, registry)
-	if err != nil {
+	if !errors.Is(err, ErrInvalidDiagnosisDraft) {
 		t.Fatalf("ValidateDiagnosis() error = %v", err)
-	}
-	if len(diagnosis.ConfirmedFacts) != 1 || diagnosis.ConfirmedFacts[0].Statement != "The projected Pod condition is not Ready." ||
-		len(diagnosis.ConfirmedFacts[0].EvidenceIDs) != 1 || diagnosis.ConfirmedFacts[0].EvidenceIDs[0] != testEvidenceID {
-		t.Fatalf("confirmed facts = %#v", diagnosis.ConfirmedFacts)
-	}
-	if got := diagnosis.Hypotheses[0].SupportingEvidenceIDs; len(got) != 1 || got[0] != testEvidenceID {
-		t.Fatalf("hypothesis Evidence IDs = %#v", got)
-	}
-	if diagnosis.RecommendedActions[0].Executed {
-		t.Fatal("execution claim survived validation")
-	}
-	if len(diagnosis.ValidationWarnings) != 2 || !hasMissingKind(diagnosis.MissingInformation, domain.MissingInformationUnsupported) {
-		t.Fatalf("validation warnings = %#v", diagnosis.ValidationWarnings)
-	}
-	if diagnosis.AnswerMarkdown != "The Pod is not Ready. Review its readiness probe before changing the workload." ||
-		strings.Contains(diagnosis.AnswerMarkdown, string(testEvidenceID)) ||
-		strings.Contains(diagnosis.AnswerMarkdown, "## Confirmed facts") {
-		t.Fatalf("free-form answer = %s", diagnosis.AnswerMarkdown)
 	}
 }
 
-func TestDiagnosisValidatorRemovesInvalidHypothesisReferences(t *testing.T) {
+func TestDiagnosisValidatorRejectsInvalidHypothesisReferences(t *testing.T) {
 	input := testRunInput(t, "Why is this Pod not Ready?")
 	call := testBoundCall(t, input, testInvocationID, "sample-pod")
 	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(1_000).UTC())
@@ -75,7 +57,7 @@ func TestDiagnosisValidatorRemovesInvalidHypothesisReferences(t *testing.T) {
 		t.Fatalf("AcceptToolResult() error = %v", err)
 	}
 	forgedID := domain.EvidenceID("00000000-0000-7000-8000-000000004099")
-	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+	_, err = ValidateDiagnosis(DiagnosisDraft{
 		AnswerMarkdown: "The application may still be starting.",
 		ConfirmedFacts: []domain.ConfirmedFact{{
 			Statement: "The projected Pod condition is not Ready.", EvidenceIDs: []domain.EvidenceID{testEvidenceID},
@@ -87,13 +69,8 @@ func TestDiagnosisValidatorRemovesInvalidHypothesisReferences(t *testing.T) {
 			Falsifier:             "A later bounded observation reports the Pod Ready.",
 		}},
 	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC()}, registry)
-	if err != nil {
+	if !errors.Is(err, ErrInvalidDiagnosisDraft) {
 		t.Fatalf("ValidateDiagnosis(invalid hypothesis citation) error = %v", err)
-	}
-	if len(diagnosis.Hypotheses) != 1 || diagnosis.Hypotheses[0].Confidence != domain.DiagnosisConfidenceLow ||
-		len(diagnosis.Hypotheses[0].SupportingEvidenceIDs) != 1 || diagnosis.Hypotheses[0].SupportingEvidenceIDs[0] != testEvidenceID ||
-		len(diagnosis.ValidationWarnings) != 1 || !hasMissingKind(diagnosis.MissingInformation, domain.MissingInformationUnsupported) {
-		t.Fatalf("filtered hypothesis diagnosis = %#v", diagnosis)
 	}
 }
 
@@ -346,4 +323,181 @@ func TestDiagnosisRecordsToolResultLevelTruncationWithoutEvidence(t *testing.T) 
 
 func evidenceID(index int) domain.EvidenceID {
 	return domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 4_300+index))
+}
+
+func claimCoverageRegistry(t *testing.T) (*EvidenceRegistry, RunInput, domain.EvidenceID, domain.EvidenceID) {
+	t.Helper()
+	input := testRunInput(t, "Inspect the selected Pod.")
+	call := testBoundCall(t, input, testInvocationID, "sample-pod")
+	firstID := testEvidenceID
+	secondID := domain.EvidenceID("00000000-0000-7000-8000-000000004098")
+	result := testToolResult(t, call, firstID, time.UnixMilli(1_000).UTC())
+	result.Evidence[0].PolicyVersion = domain.ResourcePolicyVersion
+	result.Evidence[0].PolicyGeneration = input.PolicyGeneration()
+	second := result.Evidence[0]
+	second.ID = secondID
+	second.Fact = "The projected Pod restart count is one."
+	second.Fingerprint = domain.SHA256Hex(string(secondID))
+	result.Evidence = append(result.Evidence, second)
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if _, err = registry.AcceptToolResult(call, result); err != nil {
+		t.Fatalf("AcceptToolResult() error = %v", err)
+	}
+	return registry, input, firstID, secondID
+}
+
+func validCoverageDraft(sequence int, kind domain.ClaimKind, text string, state domain.ClaimCoverageState, ids ...domain.EvidenceID) ClaimCoverageDraft {
+	return ClaimCoverageDraft{
+		Sequence: sequence, Kind: kind, Text: text, TextHash: domain.SHA256Hex(text),
+		EvidenceIDs: append([]domain.EvidenceID(nil), ids...), State: state,
+	}
+}
+
+func TestClaimCoverageBindsObservationInferenceUncertaintyAndUnsupportedState(t *testing.T) {
+	registry, input, firstID, secondID := claimCoverageRegistry(t)
+	coverage := []ClaimCoverageDraft{
+		validCoverageDraft(1, domain.ClaimCurrentObservation, "The Pod is not Ready.", domain.ClaimCoverageVerified, firstID),
+		validCoverageDraft(2, domain.ClaimInference, "The readiness probe may be failing.", domain.ClaimCoverageSupported, secondID),
+		validCoverageDraft(3, domain.ClaimUncertainty, "The probe configuration was not collected.", domain.ClaimCoverageLimited),
+		validCoverageDraft(4, domain.ClaimUnsupportedObservation, "No current configuration observation supports a precise cause.", domain.ClaimCoverageUnsupported),
+	}
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		AnswerMarkdown: "The Pod is not Ready. The exact cause remains uncertain.",
+		ConfirmedFacts: []domain.ConfirmedFact{{Statement: coverage[0].Text, EvidenceIDs: []domain.EvidenceID{firstID}}},
+		ClaimCoverage:  coverage,
+	}, DiagnosisMetadata{
+		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration(),
+	}, registry)
+	if err != nil || len(diagnosis.ClaimCoverage) != 4 {
+		t.Fatalf("ValidateDiagnosis(valid coverage) = %#v, %v", diagnosis, err)
+	}
+	for index, item := range diagnosis.ClaimCoverage {
+		if item.Sequence != index+1 || item.RunID != input.RunID() || item.Scope != input.Scope().Snapshot() ||
+			item.PolicyGeneration != input.PolicyGeneration() {
+			t.Fatalf("bound coverage[%d] = %#v", index, item)
+		}
+	}
+}
+
+func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*EvidenceRegistry, RunInput, domain.EvidenceID, domain.EvidenceID, *[]ClaimCoverageDraft, *DiagnosisMetadata)
+	}{
+		{
+			name: "missing Evidence",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].EvidenceIDs = nil
+			},
+		},
+		{
+			name: "unknown Evidence",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].EvidenceIDs[0] = "00000000-0000-7000-8000-000000004097"
+			},
+		},
+		{
+			name: "duplicate Evidence",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, first, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].EvidenceIDs = []domain.EvidenceID{first, first}
+			},
+		},
+		{
+			name: "out of order Evidence",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, first, second domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].EvidenceIDs = []domain.EvidenceID{second, first}
+			},
+		},
+		{
+			name: "hash mismatch",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].TextHash = domain.SHA256Hex("different text")
+			},
+		},
+		{
+			name: "sequence gap",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				(*coverage)[0].Sequence = 2
+			},
+		},
+		{
+			name: "stale policy generation",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, _ *[]ClaimCoverageDraft, metadata *DiagnosisMetadata) {
+				metadata.PolicyGeneration++
+			},
+		},
+		{
+			name: "cross run Evidence",
+			mutate: func(registry *EvidenceRegistry, _ RunInput, first, _ domain.EvidenceID, _ *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				registry.mu.Lock()
+				value := registry.items[first]
+				value.RunID = "00000000-0000-7000-8000-000000004096"
+				registry.items[first] = value
+				registry.mu.Unlock()
+			},
+		},
+		{
+			name: "cross scope Evidence",
+			mutate: func(registry *EvidenceRegistry, _ RunInput, first, _ domain.EvidenceID, _ *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				registry.mu.Lock()
+				value := registry.items[first]
+				value.Scope.Generation++
+				registry.items[first] = value
+				registry.mu.Unlock()
+			},
+		},
+		{
+			name: "unowned policy Evidence",
+			mutate: func(registry *EvidenceRegistry, _ RunInput, first, _ domain.EvidenceID, _ *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				registry.mu.Lock()
+				value := registry.items[first]
+				value.PolicyGeneration = 2
+				registry.items[first] = value
+				registry.mu.Unlock()
+			},
+		},
+	}
+	for _, current := range tests {
+		t.Run(current.name, func(t *testing.T) {
+			registry, input, firstID, secondID := claimCoverageRegistry(t)
+			coverage := []ClaimCoverageDraft{
+				validCoverageDraft(1, domain.ClaimCurrentObservation, "The Pod is not Ready.", domain.ClaimCoverageVerified, firstID),
+			}
+			metadata := DiagnosisMetadata{
+				ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration(),
+			}
+			current.mutate(registry, input, firstID, secondID, &coverage, &metadata)
+			_, err := ValidateDiagnosis(DiagnosisDraft{
+				AnswerMarkdown: "The Pod is not Ready.", ClaimCoverage: coverage,
+			}, metadata, registry)
+			if !errors.Is(err, ErrInvalidDiagnosisDraft) {
+				t.Fatalf("ValidateDiagnosis() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestClaimCoverageLimitsAreExactAndOneOverFailsClosed(t *testing.T) {
+	registry, input, firstID, _ := claimCoverageRegistry(t)
+	coverage := make([]ClaimCoverageDraft, 100)
+	for index := range coverage {
+		text := fmt.Sprintf("Unsupported synthetic observation %03d.", index)
+		coverage[index] = validCoverageDraft(index+1, domain.ClaimUnsupportedObservation, text, domain.ClaimCoverageUnsupported)
+	}
+	coverage[0] = validCoverageDraft(1, domain.ClaimCurrentObservation, "The Pod is not Ready.", domain.ClaimCoverageVerified, firstID)
+	metadata := DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration()}
+	if _, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "Bounded response.", ClaimCoverage: coverage}, metadata, registry); err != nil {
+		t.Fatalf("ValidateDiagnosis(exact claim ceiling) error = %v", err)
+	}
+
+	registry, input, firstID, _ = claimCoverageRegistry(t)
+	over := append(append([]ClaimCoverageDraft(nil), coverage...),
+		validCoverageDraft(101, domain.ClaimUnsupportedObservation, "One over.", domain.ClaimCoverageUnsupported))
+	metadata.PolicyGeneration = input.PolicyGeneration()
+	if _, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "Bounded response.", ClaimCoverage: over}, metadata, registry); !errors.Is(err, ErrInvalidDiagnosisDraft) {
+		t.Fatalf("ValidateDiagnosis(one-over claim ceiling) error = %v", err)
+	}
 }

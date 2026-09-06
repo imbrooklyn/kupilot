@@ -16,16 +16,17 @@ type ModelProfile struct {
 }
 
 type writableConfig struct {
-	Version        int                         `yaml:"version"`
-	Context        string                      `yaml:"context,omitempty"`
-	Namespace      string                      `yaml:"namespace,omitempty"`
-	NoColor        bool                        `yaml:"no_color"`
-	Runtime        RuntimeConfig               `yaml:"runtime"`
-	Models         writableModelProfiles       `yaml:"models"`
-	Kubernetes     KubernetesConfig            `yaml:"kubernetes"`
-	LocalExecution LocalExecutionConfig        `yaml:"local_execution,omitempty"`
-	Observability  writableObservabilityConfig `yaml:"observability,omitempty"`
-	Logging        LoggingConfig               `yaml:"logging"`
+	Version              int                         `yaml:"version"`
+	Context              string                      `yaml:"context,omitempty"`
+	Namespace            string                      `yaml:"namespace,omitempty"`
+	NoColor              bool                        `yaml:"no_color"`
+	TerminalStatusTitles bool                        `yaml:"terminal_status_titles"`
+	Runtime              RuntimeConfig               `yaml:"runtime"`
+	Models               writableModelProfiles       `yaml:"models"`
+	Kubernetes           KubernetesConfig            `yaml:"kubernetes"`
+	LocalExecution       LocalExecutionConfig        `yaml:"local_execution,omitempty"`
+	Observability        writableObservabilityConfig `yaml:"observability,omitempty"`
+	Logging              LoggingConfig               `yaml:"logging"`
 }
 
 type writableObservabilityConfig struct {
@@ -111,7 +112,8 @@ func SaveModelProfilesWithDataSources(
 		return err
 	}
 	document := writableConfig{
-		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor, Runtime: base.Runtime,
+		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor,
+		TerminalStatusTitles: base.TerminalStatusTitles, Runtime: base.Runtime,
 		Models: writableModelProfiles{Agent: writableProfile(base.Models.Agent)}, Kubernetes: base.Kubernetes,
 		LocalExecution: cloneLocalExecutionConfig(base.LocalExecution),
 		Observability: writableObservabilityConfig{

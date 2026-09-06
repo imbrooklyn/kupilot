@@ -153,6 +153,14 @@ boundary, and one FIFO auto-drain only after a clean durably completed turn.
 `Enter`, `Tab`, and `Alt+Up` remain fixed TUI behavior; there is no runtime
 keymap or automatic-retry setting.
 
+Manual compaction, plan mode, queue cancel/clear, copy, and search use fixed
+limits and add no configurable authority. `terminal_status_titles` is the sole
+new local presentation setting. It defaults to `true`; `false` disables all
+title changes. Its fixed title allowlist and teardown behavior cannot be
+expanded by configuration. There is no notification command, clipboard
+command, continuation, automatic-retry, plan Tool, or compaction-profile
+setting.
+
 ## Implemented version 2 fields
 
 The complete YAML schema is shown in
@@ -167,6 +175,7 @@ an actual key so it remains safe to copy and inspect.
 | `context` | Empty; when set, at most 253 UTF-8 bytes with no control or bidirectional-control characters. When empty, startup uses the last successfully verified local Context, then kubeconfig `current-context`. |
 | `namespace` | `default`; when set, one working-Namespace DNS label of at most 63 bytes. It is never an all-Namespace marker. |
 | `no_color` | `false`; `--no-color` overrides it, while the presence of `NO_COLOR` supplies `true` at environment priority. |
+| `terminal_status_titles` | `true`; when enabled on a directly attached, conservatively recognized title-capable terminal, only the fixed `Kupilot`, `Working`, `Approval needed`, `Complete`, and `Failed` titles are emitted through terminal-native control and the prior title slot is restored on teardown. Multiplexers and unknown terminals receive no title sequence. |
 | `runtime.budget_profile` | `balanced`; accepted values are `compact`, `balanced`, and `extended`. The profile is frozen into each run and cannot be expanded by model output. |
 | `models.agent.name` | Required unique profile name; lowercase letters and digits with internal hyphens, at most 128 bytes. |
 | `models.agent.role` | Required fixed value `agent`. |

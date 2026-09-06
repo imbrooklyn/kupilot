@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -21,6 +22,10 @@ func TestDiagnosisRepositoryRoundTripsTypedCollectionsAndEvidenceState(t *testin
 		testEvidence("00000000-0000-7000-8000-000000004005", invocation, time.UnixMilli(302).UTC()),
 		testEvidence("00000000-0000-7000-8000-000000004006", invocation, time.UnixMilli(303).UTC()),
 	}
+	for index := range evidence {
+		evidence[index].PolicyVersion = domain.ResourcePolicyVersion
+		evidence[index].PolicyGeneration = 1
+	}
 	evidence[1].Truncated = true
 	evidence[1].Fingerprint = domain.SHA256Hex("truncated-diagnosis-evidence")
 	invocation.EvidenceCount = len(evidence)
@@ -30,6 +35,12 @@ func TestDiagnosisRepositoryRoundTripsTypedCollectionsAndEvidenceState(t *testin
 
 	repository := NewDiagnosisRepository(db)
 	diagnosis := testDiagnosis("00000000-0000-7000-8000-000000004007", run, evidence)
+	claim := "The current readiness condition is not healthy."
+	diagnosis.ClaimCoverage = []domain.ClaimEvidenceCoverage{{
+		Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+		EvidenceIDs: []domain.EvidenceID{evidence[0].ID, evidence[1].ID}, RunID: run.ID, Scope: run.Scope,
+		PolicyGeneration: 1, State: domain.ClaimCoverageVerified,
+	}}
 	if err := repository.Save(context.Background(), diagnosis); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -65,6 +76,122 @@ func TestDiagnosisRepositoryRoundTripsTypedCollectionsAndEvidenceState(t *testin
 	}
 	if !reflect.DeepEqual(expired.ConfirmedFacts, diagnosis.ConfirmedFacts) {
 		t.Fatal("historic fact text or references were fabricated or rewritten after expiry")
+	}
+}
+
+func TestDiagnosisRepositoryRejectsClaimCoverageWithStaleEvidencePolicyGeneration(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-stale-coverage")
+	run := seedStandardRun(t, db,
+		"00000000-0000-7000-8000-000000004021",
+		"00000000-0000-7000-8000-000000004022",
+		"00000000-0000-7000-8000-000000004023",
+		time.UnixMilli(360).UTC(),
+	)
+	invocation := testToolInvocation("00000000-0000-7000-8000-000000004024", run, 1, time.UnixMilli(361).UTC())
+	evidence := testEvidence("00000000-0000-7000-8000-000000004025", invocation, time.UnixMilli(362).UTC())
+	evidence.PolicyVersion = domain.ResourcePolicyVersion
+	evidence.PolicyGeneration = 1
+	invocation.EvidenceCount = 1
+	if err := NewToolInvocationRepository(db).Save(context.Background(), invocation, []domain.Evidence{evidence}); err != nil {
+		t.Fatalf("Save(ToolInvocation) error = %v", err)
+	}
+
+	diagnosis := testDiagnosis("00000000-0000-7000-8000-000000004026", run, []domain.Evidence{evidence})
+	claim := "The current readiness condition is not healthy."
+	diagnosis.ClaimCoverage = []domain.ClaimEvidenceCoverage{{
+		Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+		EvidenceIDs: []domain.EvidenceID{evidence.ID}, RunID: run.ID, Scope: run.Scope,
+		PolicyGeneration: 2, State: domain.ClaimCoverageVerified,
+	}}
+	repository := NewDiagnosisRepository(db)
+	if err := repository.Save(context.Background(), diagnosis); !errors.Is(err, ErrDiagnosisEvidenceInvalid) {
+		t.Fatalf("Save(stale Evidence policy generation) error = %v, want ErrDiagnosisEvidenceInvalid", err)
+	}
+	if _, err := repository.GetByRunID(context.Background(), run.ID); !errors.Is(err, ErrDiagnosisNotFound) {
+		t.Fatalf("stale coverage left Diagnosis: %v", err)
+	}
+}
+
+func TestDiagnosisRepositoryRoundTripsPlanWithoutCreatingAuthority(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-plan-round-trip")
+	run := seedStandardRun(t, db,
+		"00000000-0000-7000-8000-000000004011",
+		"00000000-0000-7000-8000-000000004012",
+		"00000000-0000-7000-8000-000000004013",
+		time.UnixMilli(350).UTC(),
+	)
+	plan := domain.Plan{
+		SchemaVersion: domain.PlanSchemaVersion, Title: "Bounded inspection plan",
+		Steps: []domain.PlanStep{
+			{Sequence: 1, Description: "Collect one policy-admitted readiness observation."},
+			{Sequence: 2, Description: "Explain the supported inference and remaining limitation."},
+		},
+		Limitations: []string{"This plan carries no execution authority."},
+	}
+	diagnosis := domain.Diagnosis{
+		ID: "00000000-0000-7000-8000-000000004014", RunID: run.ID, Scope: run.Scope,
+		AnswerMarkdown: "## Bounded inspection plan\n\n1. Collect one policy-admitted readiness observation.\n2. Explain the supported inference and remaining limitation.",
+		Plan:           &plan, CreatedAt: time.UnixMilli(351).UTC(),
+	}
+	repository := NewDiagnosisRepository(db)
+	if err := repository.Save(context.Background(), diagnosis); err != nil {
+		t.Fatalf("Save(plan) error = %v", err)
+	}
+	got, err := repository.GetByRunID(context.Background(), run.ID)
+	if err != nil || got.Plan == nil || !reflect.DeepEqual(*got.Plan, plan) || len(got.RecommendedActions) != 0 {
+		t.Fatalf("GetByRunID(plan) = %#v, %v", got, err)
+	}
+}
+
+func TestDiagnosisRepositoryRoundTripsPlanWhoseEscapedJSONExceeds64KiB(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "diagnosis-plan-escaped-json")
+	run := seedStandardRun(t, db,
+		"00000000-0000-7000-8000-000000004031",
+		"00000000-0000-7000-8000-000000004032",
+		"00000000-0000-7000-8000-000000004033",
+		time.UnixMilli(370).UTC(),
+	)
+	plan := domain.Plan{
+		SchemaVersion: domain.PlanSchemaVersion,
+		Title:         strings.Repeat("<", domain.MaxPlanTitleBytes),
+		Steps: []domain.PlanStep{{
+			Sequence: 1, Description: strings.Repeat("<", domain.MaxPlanStepBytes),
+		}},
+		Limitations: make([]string, 7),
+	}
+	for index := range plan.Limitations {
+		plan.Limitations[index] = strings.Repeat("<", domain.MaxPlanStepBytes)
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil || len(encoded) <= 64*1024 {
+		t.Fatalf("escaped plan fixture = %d bytes, %v", len(encoded), err)
+	}
+	var answer strings.Builder
+	answer.WriteString("## ")
+	answer.WriteString(plan.Title)
+	answer.WriteString("\n\n1. ")
+	answer.WriteString(plan.Steps[0].Description)
+	answer.WriteString("\n\nLimitations:\n\n")
+	for _, limitation := range plan.Limitations {
+		answer.WriteString("- ")
+		answer.WriteString(limitation)
+		answer.WriteByte('\n')
+	}
+	diagnosis := domain.Diagnosis{
+		ID: "00000000-0000-7000-8000-000000004034", RunID: run.ID, Scope: run.Scope,
+		AnswerMarkdown: strings.TrimSuffix(answer.String(), "\n"), Plan: &plan,
+		CreatedAt: time.UnixMilli(371).UTC(),
+	}
+	if err = diagnosis.Validate(); err != nil {
+		t.Fatalf("escaped plan fixture is not Domain-valid: %v", err)
+	}
+	repository := NewDiagnosisRepository(db)
+	if err = repository.Save(context.Background(), diagnosis); err != nil {
+		t.Fatalf("Save(escaped plan) error = %v", err)
+	}
+	got, err := repository.GetByRunID(context.Background(), run.ID)
+	if err != nil || got.Plan == nil || !reflect.DeepEqual(*got.Plan, plan) || got.AnswerMarkdown != diagnosis.AnswerMarkdown {
+		t.Fatalf("GetByRunID(escaped plan) = %#v, %v", got, err)
 	}
 }
 

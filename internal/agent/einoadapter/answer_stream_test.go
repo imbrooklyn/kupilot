@@ -194,8 +194,9 @@ func TestAdapterBlocksJSONEscapedCredentialFromEveryDiagnosisSink(t *testing.T) 
 		},
 		{
 			name: "citation metadata",
-			diagnosis: `{"answer_markdown":"Safe provisional answer.","evidence_citations":[{"claim":"` + escaped +
-				`","evidence_ids":["` + string(testEvidenceID) + `"]}],"proposed_actions":[]}`,
+			diagnosis: `{"answer_markdown":"Safe provisional answer.","evidence_citations":[{"sequence":1,"claim":"` + escaped +
+				`","claim_type":"unsupported_observation","claim_hash":"661a251f9fde14b9e426d1bbb3d8cad0786d9a0129aa806810d0880df1de0426",` +
+				`"evidence_ids":[],"coverage_state":"unsupported"}],"proposed_actions":[]}`,
 		},
 		{
 			name: "proposed action metadata",

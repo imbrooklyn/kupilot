@@ -24,7 +24,10 @@ type toolBridge struct {
 var _ einotool.InvokableTool = (*toolBridge)(nil)
 
 func newEinoTools(state *runState) ([]einotool.BaseTool, error) {
-	specifications := agent.ToolSpecifications()
+	if state == nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	specifications := toolSpecificationsForMode(state.input.Mode())
 	tools := make([]einotool.BaseTool, len(specifications))
 	for index, specification := range specifications {
 		info, err := toolInfo(specification)
@@ -34,6 +37,31 @@ func newEinoTools(state *runState) ([]einotool.BaseTool, error) {
 		tools[index] = &toolBridge{state: state, name: specification.Name, info: info}
 	}
 	return tools, nil
+}
+
+func toolSpecificationsForMode(mode agent.RunMode) []agent.ToolSpecification {
+	specifications := agent.ToolSpecifications()
+	if mode != agent.RunModePlanOnly {
+		return specifications
+	}
+	result := make([]agent.ToolSpecification, 0, len(specifications))
+	for _, specification := range specifications {
+		if planSafeTool(specification.Name) {
+			result = append(result, specification)
+		}
+	}
+	return result
+}
+
+func planSafeTool(name domain.ToolName) bool {
+	switch name {
+	case domain.ToolNameGetResource, domain.ToolNameListResources, domain.ToolNameGetEvents,
+		domain.ToolNameGetPodMetrics, domain.ToolNameGetNodeMetrics,
+		domain.ToolNameGetRelatedResources, domain.ToolNameGetClusterOverview:
+		return true
+	default:
+		return false
+	}
 }
 
 func (bridge *toolBridge) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -107,7 +135,21 @@ func toolInfo(specification agent.ToolSpecification) (*schema.ToolInfo, error) {
 }
 
 func validateBoundToolInfos(infos []*schema.ToolInfo) error {
-	specifications := agent.ToolSpecifications()
+	return validateToolInfos(infos, agent.ToolSpecifications())
+}
+
+func validateBoundToolInfosForMode(infos []*schema.ToolInfo, mode agent.RunMode) error {
+	return validateToolInfos(infos, toolSpecificationsForMode(mode))
+}
+
+func validateAnyBoundToolInfos(infos []*schema.ToolInfo) error {
+	if validateBoundToolInfos(infos) == nil || validateBoundToolInfosForMode(infos, agent.RunModePlanOnly) == nil {
+		return nil
+	}
+	return agent.ErrToolPolicyDenied
+}
+
+func validateToolInfos(infos []*schema.ToolInfo, specifications []agent.ToolSpecification) error {
 	if len(infos) != len(specifications) {
 		return agent.ErrToolPolicyDenied
 	}
@@ -164,6 +206,9 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 	seen := make(map[string]struct{}, len(selections))
 	seenInvocationIDs := make(map[domain.ToolInvocationID]struct{}, len(selections))
 	for index, selection := range selections {
+		if state.input.Mode() == agent.RunModePlanOnly && !planSafeTool(selection.Name) {
+			return failedRuntime(domain.SafeErrorClassPolicyDenied, "Plan-only mode permits only the fixed safe-read Tool subset.", nil)
+		}
 		if _, duplicate := seen[selection.ID]; duplicate {
 			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
 		}

@@ -556,6 +556,12 @@ barriers, and temporary databases. Required proof includes:
 - A Kubernetes mutation can have workload impact even after correct approval.
 - Kubeconfig exec programs and the configured model provider have behavior
   outside Kupilot's full control.
+- A clipboard and terminal emulator are external retention surfaces. Copy is
+  explicit and committed-answer-only; title output is fixed and content-free.
+- Deterministic claim coverage proves reference integrity, not that an
+  inference, recommendation, or answer is semantically correct.
+- The pinned streaming protocol cannot prove same-response continuation.
+  Ambiguous disconnects therefore remain unknown and are never retried.
 
 ## References
 
@@ -578,3 +584,4 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

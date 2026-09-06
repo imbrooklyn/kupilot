@@ -239,6 +239,19 @@ they require tagged dependency source/tests and selected-endpoint evidence.
 
 ## Evidence levels
 
+The current scope also includes deterministic claim/Evidence manifest
+validation and a synthetic offline quality harness. The harness measures
+reference validity, unsupported current-state claims, stale/cross-run
+rejection, limitation handling, and response bounds. It exercises local code
+only and is not evidence of live model quality.
+
+Plan-only mode, manual compaction, queue mutation, committed transcript search,
+clipboard output, and fixed terminal status titles stay within the existing
+single-process and single-AgentRun boundary. Images, Web search, external
+retrieval, durable drafts/goals, side conversations, plugins, MCP, subagents,
+parallel Tool fan-out, runtime answer critics, and generic checkpoints remain
+out of scope.
+
 Deterministic CI with scripted models, request-recording Kubernetes fixtures,
 local HTTP servers, direct process fixtures, and real temporary SQLite files is
 the required correctness and security proof. It uses no real cluster, model,
@@ -261,3 +274,4 @@ untested endpoint or version.
 - [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

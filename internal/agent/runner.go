@@ -17,6 +17,20 @@ var (
 	ErrInvalidRunOutcome = errors.New("Agent RunOutcome data is invalid")
 )
 
+// RunMode is frozen by Application before a run starts. It changes only the
+// admitted Tool subset and terminal response grammar, never the Agent loop.
+type RunMode string
+
+const (
+	RunModeOrdinary RunMode = "ordinary"
+	RunModePlanOnly RunMode = "plan_only"
+)
+
+// Valid reports whether the mode is one of the two fixed product modes.
+func (mode RunMode) Valid() bool {
+	return mode == RunModeOrdinary || mode == RunModePlanOnly
+}
+
 // RunInput is the immutable project-owned input for one AgentRun. Its fields
 // are private so collection and pointer aliases cannot mutate active authority.
 type RunInput struct {
@@ -37,6 +51,7 @@ type RunInput struct {
 	catalogVersion    string
 	conversation      ConversationContext
 	steering          RunSteeringBridge
+	mode              RunMode
 }
 
 // ConversationTurn is the minimal safe prior-turn projection supplied to
@@ -305,6 +320,7 @@ func NewRunInputWithExecutionPolicyContext(
 		promptVersion:     SystemPromptVersion,
 		catalogVersion:    ToolCatalogVersion,
 		conversation:      conversation,
+		mode:              RunModeOrdinary,
 	}
 	if resource != nil {
 		copied := *resource
@@ -323,6 +339,7 @@ func (input RunInput) Validate() error {
 		input.resourcePolicies.Validate() != nil || input.observability.Validate() != nil || input.remoteDiagnostics.Validate() != nil ||
 		input.localCommands.Validate() != nil || input.localShells.Validate() != nil ||
 		!input.policyGeneration.Valid() || input.budgetLimits.Validate() != nil ||
+		!input.mode.Valid() ||
 		input.promptVersion != SystemPromptVersion || input.catalogVersion != ToolCatalogVersion {
 		return ErrInvalidRunInput
 	}
@@ -357,6 +374,9 @@ func (input RunInput) RequestMessageID() domain.MessageID { return input.request
 
 // Question returns the already-safe current user question.
 func (input RunInput) Question() string { return input.question }
+
+// Mode returns the immutable ordinary or plan-only execution mode.
+func (input RunInput) Mode() RunMode { return input.mode }
 
 // Scope returns the immutable live scope value copied for this run.
 func (input RunInput) Scope() domain.ClusterScope { return input.scope }
@@ -435,6 +455,16 @@ func WithRunSteering(input RunInput, bridge RunSteeringBridge) (RunInput, error)
 		return RunInput{}, ErrInvalidRunInput
 	}
 	input.steering = bridge
+	return input, nil
+}
+
+// WithRunMode freezes one fixed execution mode before Application starts the
+// owning goroutine. It does not add a second runner or endpoint.
+func WithRunMode(input RunInput, mode RunMode) (RunInput, error) {
+	if input.Validate() != nil || !mode.Valid() {
+		return RunInput{}, ErrInvalidRunInput
+	}
+	input.mode = mode
 	return input, nil
 }
 

@@ -82,3 +82,16 @@ Action acceptance, ambiguous outcome, progress, cleanup, and verification are
 typed runtime states, not Evidence fabricated from model prose. A later
 verification observation cannot rewrite whether an external attempt may have
 occurred.
+
+## Claim coverage
+
+New model answers classify each declared claim as a current observation,
+inference, recommendation, uncertainty, or unsupported observation. A current
+observation must cite accepted Evidence from the same run, scope, and policy
+generation in acceptance order. The runtime checks the claim text hash,
+identity, ordering, uniqueness, and bounds before committing the answer.
+
+This proves reference integrity for the declared manifest. It does not prove
+that the prose matches the manifest or that model reasoning is correct. The
+offline synthetic quality scores exercise this validator only; no live model
+quality evaluation is implied.

@@ -188,6 +188,15 @@ fails, Kupilot preserves the last committed state and sends no oversized or
 silently truncated request. Runner-managed durable Session support is not used
 until a stable non-prerelease Eino tag passes ADR-0047's adoption gate.
 
+`/compact` invokes that same summarization path explicitly. It preserves the
+old committed summary and Messages on every failure and does not submit a
+question or drain the queue. `/status` reports context pressure from exact safe
+Message/byte/coverage limits, not estimated tokens. Plan arm, queue drafts,
+search and clipboard state, title state, compaction intent, and active stream
+state do not survive resume. A committed plan answer and safe claim coverage
+follow the ordinary standard/minimal retention rules without restoring
+Evidence or execution authority.
+
 Session titles and historic scope names may themselves be sensitive local
 metadata. Picker rows are deliberately limited to a safe title, last activity,
 privacy mode, and historic scope candidate; they do not show Message previews,

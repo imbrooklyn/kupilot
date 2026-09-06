@@ -60,7 +60,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 13 {
+	if err != nil || len(migrations) != 14 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -364,7 +364,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 13 {
+	if err != nil || len(migrations) != 14 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -419,7 +419,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 13 {
+	if err != nil || len(migrations) != 14 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -505,7 +505,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 13 {
+	if err != nil || len(migrations) != 14 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -570,7 +570,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 13 {
+		if err != nil || len(migrations) != 14 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -651,7 +651,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 13 {
+		if err != nil || len(migrations) != 14 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -832,6 +832,32 @@ func TestRunConversationSequenceMigrationRollsBackConflictingReleasedRows(t *tes
 	}
 }
 
+func TestClaimCoverageAndPlanMigrationRollsBackBothColumnsOnFailure(t *testing.T) {
+	db, migrations := openMigrationV12Fixture(t, "claim-coverage-rollback")
+	if err := applyMigration(context.Background(), db, migrations[12], "v13-claim-coverage-rollback", false); err != nil {
+		t.Fatalf("apply migration 13: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `ALTER TABLE diagnoses ADD COLUMN plan_json TEXT`); err != nil {
+		t.Fatalf("prepare conflicting plan column: %v", err)
+	}
+	if err := applyMigration(context.Background(), db, migrations[13], "v14-claim-coverage-rollback", false); err == nil {
+		t.Fatal("conflicting claim coverage migration error = nil")
+	}
+	var claimColumnCount, planColumnCount, migrationCount int
+	if err := db.GetContext(context.Background(), &claimColumnCount, `SELECT count(name) FROM pragma_table_info('diagnoses') WHERE name = 'claim_coverage_json'`); err != nil {
+		t.Fatalf("claim column count: %v", err)
+	}
+	if err := db.GetContext(context.Background(), &planColumnCount, `SELECT count(name) FROM pragma_table_info('diagnoses') WHERE name = 'plan_json'`); err != nil {
+		t.Fatalf("plan column count: %v", err)
+	}
+	if err := db.GetContext(context.Background(), &migrationCount, `SELECT count(version) FROM schema_migrations WHERE version = 14`); err != nil {
+		t.Fatalf("migration count: %v", err)
+	}
+	if claimColumnCount != 0 || planColumnCount != 1 || migrationCount != 0 {
+		t.Fatalf("rolled-back migration = claim %d plan %d record %d, want 0/1/0", claimColumnCount, planColumnCount, migrationCount)
+	}
+}
+
 func openMigrationV12Fixture(t *testing.T, name string) (*sqlx.DB, []migration) {
 	t.Helper()
 	stateDir := testStateDir(t)
@@ -843,7 +869,7 @@ func openMigrationV12Fixture(t *testing.T, name string) (*sqlx.DB, []migration) 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 13 {
+	if err != nil || len(migrations) != 14 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 12; index++ {
@@ -919,7 +945,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 14, "000014_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 15, "000015_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -1174,6 +1200,7 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000011_local_execution_and_remediation.sql",
 		"000012_observation_action_parameters.sql",
 		"000013_run_conversation_sequence.sql",
+		"000014_claim_coverage_and_plan.sql",
 	}
 	count := 0
 	for rows.Next() {

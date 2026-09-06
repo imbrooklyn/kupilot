@@ -512,6 +512,24 @@ model, dependency, and profile tested. Model evaluation separately measures
 Agent answer quality and Reviewer approval, denial, escalation, latency, and
 cost; neither evidence level replaces deterministic CI.
 
+## Manual compaction, plan mode, and continuation evidence
+
+Manual compaction calls the same Eino v0.9.19 summarization handler used by
+`BeforeModelRewriteState`; it remains non-streaming, Tool-free, one-attempt,
+and bound to the `agent` profile's independent summary budget. Plan-only mode
+freezes a run mode but uses the same `ChatModelAgent`, `Runner`, ReAct state,
+Tool pairing, summary-before-steer handler ordering, and streaming transport.
+The adapter supplies only a fixed safe-read Tool subset and validates a strict
+bounded plan response.
+
+Protocol continuation is unavailable with the pinned stack. The OpenAI
+extension `v0.1.13` and ACL `v0.1.17` issue a complete Chat Completions POST;
+the `go-openai` `v0.1.2` SSE reader consumes `data:` records and `[DONE]` but
+has no replay event ID, sequence/offset, `Last-Event-ID`, or same-response
+reattach operation. Chunk response IDs and `X-Request-ID` do not establish
+replay order. Kupilot therefore retains unknown/recovered handling and adds no
+continuation, retry, polling, checkpoint, or dependency change.
+
 ## References
 
 - [Configuration](configuration.md)
@@ -520,4 +538,5 @@ cost; neither evidence level replaces deterministic CI.
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)

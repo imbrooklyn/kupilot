@@ -682,6 +682,9 @@ func (source *integrationIDs) NewMessageID() (domain.MessageID, error) {
 func (source *integrationIDs) NewAgentRunID() (domain.AgentRunID, error) {
 	return domain.AgentRunID(source.next(&source.applicationID, 100)), nil
 }
+func (source *integrationIDs) NewCompactionID() (domain.CompactionID, error) {
+	return domain.CompactionID(source.next(&source.applicationID, 100)), nil
+}
 func (source *integrationIDs) NewAuditEventID() (domain.AuditEventID, error) {
 	return domain.AuditEventID(source.next(&source.auditID, 200)), nil
 }
@@ -861,18 +864,18 @@ func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) 
 }
 
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
+	const claim = "The Pod is not Ready."
 	return fmt.Sprintf(
-		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"claim":"The Pod is not Ready.","evidence_ids":[%q]}],"proposed_actions":[]}`,
-		evidenceID,
+		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[]}`,
+		claim, domain.SHA256Hex(claim), evidenceID,
 	)
 }
 
 func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
+	claim := "The projected condition includes token=" + canary
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[{"claim":%q,"evidence_ids":[%q]}],"proposed_actions":[]}`,
-		"The projected condition includes token="+canary,
-		"The projected condition includes token="+canary,
-		evidenceID,
+		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[]}`,
+		claim, claim, domain.SHA256Hex(claim), evidenceID,
 	)
 }
 

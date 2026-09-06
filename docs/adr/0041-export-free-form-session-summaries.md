@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-30
 - Supersedes: ADR-0034
-- Amended by: ADR-0047
+- Amended by: ADR-0047, ADR-0049
 
 ADR-0047 permits the `v0.5` export to include the versioned safe Session
 summary and coverage explanation while retaining all existing source
@@ -11,6 +11,10 @@ allowlists, escaping, bounds, explicit confirmation, no-overwrite publication,
 and zero external operational I/O. Raw Eino state, prompts, model traffic,
 Tool/Exec/log output, Session rules, Reviewer response bytes, and execution
 authority remain excluded.
+
+ADR-0049 advances new documents to `kupilot.export-summary.v3` and adds only
+bounded processed claim/Evidence coverage metadata. Existing v1 and v2 files
+remain standalone and are never imported or rewritten.
 
 ## Context
 

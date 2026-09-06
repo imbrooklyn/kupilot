@@ -54,12 +54,13 @@ type ActiveScope interface {
 	UnbindRun(domain.AgentRunID)
 }
 
-// ApplicationIdentifierSource supplies the three durable IDs created directly
-// by Application use cases.
+// ApplicationIdentifierSource supplies the durable IDs and one process-local
+// compaction correlation ID created directly by Application use cases.
 type ApplicationIdentifierSource interface {
 	NewSessionID() (domain.SessionID, error)
 	NewMessageID() (domain.MessageID, error)
 	NewAgentRunID() (domain.AgentRunID, error)
+	NewCompactionID() (domain.CompactionID, error)
 }
 
 // AuditIdentifierSource supplies IDs for structured audit records.
@@ -126,6 +127,13 @@ func (generator *IdentifierGenerator) NewMessageID() (domain.MessageID, error) {
 func (generator *IdentifierGenerator) NewAgentRunID() (domain.AgentRunID, error) {
 	value, err := generator.next()
 	return domain.AgentRunID(value), err
+}
+
+// NewCompactionID creates a current-process identifier for one explicit
+// compaction operation. It is never persisted as resumable authority.
+func (generator *IdentifierGenerator) NewCompactionID() (domain.CompactionID, error) {
+	value, err := generator.next()
+	return domain.CompactionID(value), err
 }
 
 func (generator *IdentifierGenerator) NewAuditEventID() (domain.AuditEventID, error) {

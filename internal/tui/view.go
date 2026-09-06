@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -39,7 +40,25 @@ func (model Model) configureView(view tea.View) tea.View {
 	view.DisableBracketedPasteMode = false
 	view.MouseMode = tea.MouseModeNone
 	view.OnMouse = nil
+	if model.terminalStatusTitles {
+		view.WindowTitle = model.terminalTitle()
+	}
 	return view
+}
+
+func (model Model) terminalTitle() string {
+	switch {
+	case model.pendingApproval != nil:
+		return "Kupilot — Approval needed"
+	case model.run.Active && !model.run.Terminal:
+		return "Kupilot — Working"
+	case model.run.Terminal && model.run.Status == "completed":
+		return "Kupilot — Complete"
+	case model.run.Terminal:
+		return "Kupilot — Failed"
+	default:
+		return "Kupilot"
+	}
 }
 
 func (model Model) render() string {
@@ -181,6 +200,10 @@ func (model Model) inputLabelView() string {
 	label := ""
 	hint := ""
 	switch {
+	case model.searchMode:
+		label = "Find"
+		current, total, _ := model.transcript.SearchState()
+		hint = fmt.Sprintf("committed transcript · %d/%d · Enter next · Shift+Tab previous · Esc close", current, total)
 	case model.modelSetup != nil:
 		parts := strings.SplitN(model.modelSetupView(), " · ", 2)
 		label = parts[0]
@@ -255,7 +278,7 @@ func (model Model) workingView() string {
 			continue
 		}
 		label := conversationInputLabel(item.State)
-		line := model.styles.working.Muted.Render("↳ "+label+" · ") + model.styles.working.Normal.Render(text)
+		line := model.styles.working.Muted.Render("↳ "+label+" · "+string(item.ItemID)+" · ") + model.styles.working.Normal.Render(text)
 		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
@@ -351,11 +374,20 @@ func (model Model) footerView() string {
 		permission = "permission degraded"
 		supervision = "no authority"
 	}
+	pressure := ""
+	if model.contextPressure != "" {
+		pressure = "context " + string(model.contextPressure)
+	}
+	plan := ""
+	if model.planArmed {
+		plan = "plan-only next"
+	}
 	return model.footer.View(model.contentWidth(), components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
 		Permission: permission, Supervision: supervision,
-		Approval: approvalStatus,
+		Approval:        approvalStatus,
+		ContextPressure: pressure, Plan: plan,
 	})
 }
 

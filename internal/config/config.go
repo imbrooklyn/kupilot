@@ -65,16 +65,17 @@ func (reference ModelCredentialReference) valid() bool {
 // Config is the complete serializable, non-sensitive startup configuration.
 // Paths and transport credentials are intentionally absent.
 type Config struct {
-	Version        int                  `yaml:"version" json:"version"`
-	Context        string               `yaml:"context,omitempty" json:"context,omitempty"`
-	Namespace      string               `yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	NoColor        bool                 `yaml:"no_color" json:"no_color"`
-	Runtime        RuntimeConfig        `yaml:"runtime" json:"runtime"`
-	Models         ModelProfilesConfig  `yaml:"models" json:"models"`
-	Kubernetes     KubernetesConfig     `yaml:"kubernetes" json:"kubernetes"`
-	LocalExecution LocalExecutionConfig `yaml:"local_execution,omitempty" json:"local_execution,omitempty"`
-	Observability  ObservabilityConfig  `yaml:"observability" json:"observability"`
-	Logging        LoggingConfig        `yaml:"logging" json:"logging"`
+	Version              int                  `yaml:"version" json:"version"`
+	Context              string               `yaml:"context,omitempty" json:"context,omitempty"`
+	Namespace            string               `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	NoColor              bool                 `yaml:"no_color" json:"no_color"`
+	TerminalStatusTitles bool                 `yaml:"terminal_status_titles" json:"terminal_status_titles"`
+	Runtime              RuntimeConfig        `yaml:"runtime" json:"runtime"`
+	Models               ModelProfilesConfig  `yaml:"models" json:"models"`
+	Kubernetes           KubernetesConfig     `yaml:"kubernetes" json:"kubernetes"`
+	LocalExecution       LocalExecutionConfig `yaml:"local_execution,omitempty" json:"local_execution,omitempty"`
+	Observability        ObservabilityConfig  `yaml:"observability" json:"observability"`
+	Logging              LoggingConfig        `yaml:"logging" json:"logging"`
 }
 
 // LocalExecutionConfig contains exact default-off direct-argv and separate
@@ -599,7 +600,7 @@ func defaultReviewerProfile() ModelProfileConfig {
 // Defaults returns the code-defined configuration defaults.
 func Defaults() Config {
 	return Config{
-		Version: CurrentVersion, Namespace: DefaultNamespace,
+		Version: CurrentVersion, Namespace: DefaultNamespace, TerminalStatusTitles: true,
 		Runtime:       RuntimeConfig{BudgetProfile: DefaultBudgetProfile},
 		Models:        ModelProfilesConfig{Agent: defaultAgentProfile()},
 		Kubernetes:    KubernetesConfig{ExecCredentials: ExecCredentialsAllow, NamespaceAccess: DefaultNamespaceAccess},

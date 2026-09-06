@@ -75,6 +75,7 @@ type UIStatusResult struct {
 	ReviewerModel                  UIModelRoleStatus
 	Permission                     UIPermissionStatus
 	Action                         *UIActionStatus
+	PlanArmed                      bool
 }
 
 // UIPermissionStatus is a content-free local policy snapshot.
@@ -205,6 +206,28 @@ type UIModelContextStatus struct {
 	SummaryCallsUsed        int
 	SummaryCallsMaximum     int
 	StorageHealthy          bool
+	Pressure                ContextPressureState
+	WorkingMessages         int
+	WorkingBytes            int
+	MessageLimit            int
+	ByteLimit               int
+	SummaryMessageTrigger   int
+	SummaryByteTrigger      int
+}
+
+// ContextPressureState is based only on exact retained message/byte state.
+type ContextPressureState string
+
+const (
+	ContextPressureNormal   ContextPressureState = "normal"
+	ContextPressureElevated ContextPressureState = "elevated"
+	ContextPressureCritical ContextPressureState = "critical"
+	ContextPressureDegraded ContextPressureState = "degraded"
+)
+
+func (state ContextPressureState) valid() bool {
+	return state == ContextPressureNormal || state == ContextPressureElevated ||
+		state == ContextPressureCritical || state == ContextPressureDegraded
 }
 
 // UIModelRoleStatus is one role-bound, content-free model status.
@@ -295,6 +318,10 @@ type UICommandOutcome struct {
 	Approval           *UIApprovalResult
 	Permissions        *UIPermissionsResult
 	ConversationInput  *ConversationInputProjection
+	ConversationChange *ConversationInputMutationResult
+	Compaction         *UIManualCompactionResult
+	PlanArmed          *bool
+	RunMode            agent.RunMode
 	RunID              domain.AgentRunID
 	Failure            UIQueryFailureCode
 }
@@ -313,6 +340,10 @@ func (result UICommandOutcome) Validate() error {
 	}
 	if result.Failure != "" && (!result.Failure.valid() ||
 		result.Failure == UIQueryNotResumable && result.Command != UICommandResumeSession) {
+		return ErrInvalidUIEvent
+	}
+	planCommand := result.Command == UICommandArmPlan || result.Command == UICommandCancelPlan
+	if planCommand != (result.PlanArmed != nil) {
 		return ErrInvalidUIEvent
 	}
 	if result.Privacy != nil {
@@ -346,6 +377,15 @@ func (result UICommandOutcome) Validate() error {
 		result.Command == UICommandPopFollowUp
 	if conversationCommand != (result.ConversationInput != nil) ||
 		result.ConversationInput != nil && !result.ConversationInput.validate() {
+		return ErrInvalidUIEvent
+	}
+	queueMutationCommand := result.Command == UICommandCancelFollowUp || result.Command == UICommandClearFollowUps
+	if queueMutationCommand != (result.ConversationChange != nil) || result.ConversationChange != nil &&
+		!result.ConversationChange.validate(result.Command == UICommandCancelFollowUp) {
+		return ErrInvalidUIEvent
+	}
+	if (result.Command == UICommandCompactContext) != (result.Compaction != nil) ||
+		result.Compaction != nil && result.Compaction.Validate() != nil {
 		return ErrInvalidUIEvent
 	}
 	switch result.Command {
@@ -426,12 +466,12 @@ func (result UICommandOutcome) Validate() error {
 			return ErrInvalidUIEvent
 		}
 		if result.Failure == "" {
-			if !result.RunID.Valid() || result.Privacy != nil {
+			if !result.RunID.Valid() || result.Privacy != nil || !result.RunMode.Valid() {
 				return ErrInvalidUIEvent
 			}
 			return nil
 		}
-		if result.RunID != "" || result.Failure != UIQueryConsentRequired && result.Failure != UIQueryUnavailable ||
+		if result.RunID != "" || result.RunMode != "" || result.Failure != UIQueryConsentRequired && result.Failure != UIQueryUnavailable ||
 			result.Failure == UIQueryConsentRequired && result.Privacy == nil ||
 			result.Failure != UIQueryConsentRequired && result.Privacy != nil {
 			return ErrInvalidUIEvent
@@ -452,9 +492,35 @@ func (result UICommandOutcome) Validate() error {
 			result.Command == UICommandPopFollowUp && !result.ConversationInput.State.editable() {
 			return ErrInvalidUIEvent
 		}
+	case UICommandCancelFollowUp, UICommandClearFollowUps:
+		if result.RequestID == 0 || result.Failure != "" || result.RunID != "" || result.ConversationInput != nil ||
+			result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+			result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.Deletion != nil ||
+			result.HistoryDeletion != nil || result.LocalStateDeletion != nil || result.Export != nil ||
+			result.Approval != nil || result.Permissions != nil {
+			return ErrInvalidUIEvent
+		}
+	case UICommandCompactContext:
+		if result.RequestID == 0 || result.Failure != "" || result.RunID != "" || result.RunMode != "" ||
+			result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+			result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.Deletion != nil ||
+			result.HistoryDeletion != nil || result.LocalStateDeletion != nil || result.Export != nil ||
+			result.Approval != nil || result.Permissions != nil || result.ConversationInput != nil ||
+			result.ConversationChange != nil || result.PlanArmed != nil {
+			return ErrInvalidUIEvent
+		}
 	case UICommandCancelRun:
 		if result.RequestID != 0 || !result.RunID.Valid() || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
 			result.Resource != nil || result.Status != nil || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandArmPlan, UICommandCancelPlan:
+		if result.RequestID == 0 || result.Failure != "" || result.RunID != "" || result.RunMode != "" ||
+			result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+			result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.Deletion != nil ||
+			result.HistoryDeletion != nil || result.LocalStateDeletion != nil || result.Export != nil ||
+			result.Approval != nil || result.Permissions != nil || result.ConversationInput != nil ||
+			result.ConversationChange != nil || *result.PlanArmed != (result.Command == UICommandArmPlan) {
 			return ErrInvalidUIEvent
 		}
 	case UICommandShowPrivacy:
@@ -720,7 +786,13 @@ func (status UIModelContextStatus) valid(hasSession bool) bool {
 		status.EligibleMessages < 0 || status.EligibleMessages > domain.MaxSessionContextMessages ||
 		status.EligibleBytes < 0 || status.EligibleBytes > domain.MaxSessionHistoryBytes ||
 		status.RecentTailMessages < 0 || status.RecentTailMessages > status.EligibleMessages ||
-		!validBudgetCounter(status.SummaryCallsUsed, status.SummaryCallsMaximum) {
+		!validBudgetCounter(status.SummaryCallsUsed, status.SummaryCallsMaximum) || !status.Pressure.valid() ||
+		status.WorkingMessages < 0 || status.WorkingMessages > status.EligibleMessages ||
+		status.WorkingBytes < 0 || status.WorkingBytes > status.EligibleBytes ||
+		status.MessageLimit != domain.MaxSessionContextMessages || status.ByteLimit != domain.MaxSessionHistoryBytes ||
+		status.SummaryMessageTrigger != domain.SessionContextMessageTrigger ||
+		status.SummaryByteTrigger != domain.MaxSessionContextBytes ||
+		(status.Pressure == ContextPressureDegraded) == status.StorageHealthy {
 		return false
 	}
 	return status.Compressed == status.CoveredThroughMessageID.Valid() &&

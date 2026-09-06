@@ -182,7 +182,9 @@ func (state *runState) validateDiagnosis(draft agent.DiagnosisDraft, modelDraft 
 	if !validRuntimeTime(createdAt) {
 		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	diagnosis, err := agent.ValidateDiagnosis(draft, agent.DiagnosisMetadata{ID: id, CreatedAt: createdAt}, state.registry)
+	diagnosis, err := agent.ValidateDiagnosis(draft, agent.DiagnosisMetadata{
+		ID: id, CreatedAt: createdAt, PolicyGeneration: state.input.PolicyGeneration(),
+	}, state.registry)
 	if err != nil {
 		if !modelDraft {
 			return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)

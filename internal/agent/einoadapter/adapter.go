@@ -135,7 +135,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if err != nil {
 		return internalOutcome()
 	}
-	registry, err := agent.NewEvidenceRegistry(input.RunID(), input.Scope())
+	registry, err := agent.NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
 	if err != nil {
 		return internalOutcome()
 	}
@@ -242,7 +242,7 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 	if err := state.checkScope(runCtx); err != nil {
 		return state.finishFailure(runCtx, err)
 	}
-	draft, err := diagnosisDraft(finalMessage)
+	draft, err := diagnosisDraftForMode(finalMessage, input.Mode())
 	if err != nil {
 		return state.finishFailure(runCtx, err)
 	}

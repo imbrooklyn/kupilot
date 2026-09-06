@@ -311,12 +311,13 @@ swap, or storage media.
 ## Redacted summary export
 
 A current standard Session may be exported only through `/privacy` as
-`kupilot.export-summary.v2`, with an
+`kupilot.export-summary.v3`, with an
 explicit absolute Markdown destination and second confirmation. The versioned
 allowlist contains safe Session display metadata, bounded processed committed
 user and assistant text, the bounded safe Session-context summary and its
-content-free coverage explanation, free-form validated answer metadata, and
-referenced Evidence summaries or expired markers.
+content-free coverage explanation, free-form validated answer metadata,
+bounded claim/Evidence coverage metadata, and referenced Evidence summaries or
+expired markers.
 
 It excludes raw Tool input/output, raw logs or Events, Kubernetes objects, full
 prompts, model traffic, credentials, Secrets, kubeconfig data, approval nonce,
@@ -343,6 +344,21 @@ disabled independently from the container-output consent category.
 
 ## No product telemetry
 
+Queue cancel/clear, transcript search, context-pressure projection, plan arm,
+and title selection are local and content-free outside the single visible TUI.
+Search queries and match state, clipboard state, plan authority, compaction
+intent, and terminal title state are not logged, exported, or persisted.
+`/copy` may send one sanitized committed assistant answer to the terminal's
+OSC 52 clipboard sink after explicit user action; the terminal and clipboard
+then control retention. Fixed title states contain no Session, input, answer,
+scope, resource, Evidence, command, error, or credential data.
+
+Validated claim coverage stores only bounded claim text/hash, classification,
+Evidence identifiers, and run/generation provenance with the Diagnosis. It
+stores no raw Evidence payload or raw model response. A plan is retained only
+as an ordinary committed assistant Message. Neither restores authority on
+resume.
+
 Kupilot has no usage analytics, remote crash reporting, Kupilot-operated
 account, update checker, hosted control plane, or telemetry endpoint. Normal
 network paths are the selected Kubernetes API, the explicit model origins, and
@@ -364,3 +380,4 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

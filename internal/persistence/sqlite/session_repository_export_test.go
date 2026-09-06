@@ -42,6 +42,8 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	invocation.ResultSummary = &rawToolCanary
 	invocation.Purpose = &rawLogCanary
 	evidence := testEvidence("00000000-0000-7000-8000-000000008005", invocation, startedAt.Add(5*time.Millisecond))
+	evidence.PolicyVersion = domain.ResourcePolicyVersion
+	evidence.PolicyGeneration = 1
 	invocation.EvidenceCount = 1
 	if err := NewToolInvocationRepository(db).Save(context.Background(), invocation, []domain.Evidence{evidence}); err != nil {
 		t.Fatalf("Save(ToolInvocation) error = %v", err)
@@ -81,6 +83,12 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 
 	diagnosis := testDiagnosis("00000000-0000-7000-8000-000000008007", run, []domain.Evidence{evidence})
 	diagnosis.ValidationWarnings = []string{fullModelCanary}
+	claim := "A current readiness problem was structurally cited."
+	diagnosis.ClaimCoverage = []domain.ClaimEvidenceCoverage{{
+		Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+		EvidenceIDs: []domain.EvidenceID{evidence.ID}, RunID: run.ID, Scope: run.Scope,
+		PolicyGeneration: 1, State: domain.ClaimCoverageVerified,
+	}}
 	if err := NewDiagnosisRepository(db).Save(context.Background(), diagnosis); err != nil {
 		t.Fatalf("Save(Diagnosis) error = %v", err)
 	}
@@ -156,7 +164,8 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 	}
 	if snapshot.Session.ID != run.SessionID || snapshot.Session.PrivacyMode != domain.PrivacyModeStandard ||
 		len(snapshot.Messages) != 3 || snapshot.Messages[1].Role != domain.MessageRoleUser ||
-		snapshot.Messages[1].Content != steer.Content || len(snapshot.Diagnoses) != 1 || len(snapshot.Evidence) != 1 ||
+		snapshot.Messages[1].Content != steer.Content || len(snapshot.Diagnoses) != 1 ||
+		len(snapshot.Diagnoses[0].ClaimCoverage) != 1 || len(snapshot.Evidence) != 1 ||
 		snapshot.ContextSummary == nil || snapshot.ContextSummary.CoverageDigest != coverageDigest {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
@@ -176,7 +185,8 @@ func TestSessionRepositoryExportSnapshotIsAllowlistedAndExcludesRawSourceCanarie
 		t.Fatalf("credential canary result:\n%s", content)
 	}
 	if !bytes.Contains(content, []byte("## Model context")) ||
-		!bytes.Contains(content, []byte(coverageDigest)) {
+		!bytes.Contains(content, []byte(coverageDigest)) ||
+		!bytes.Contains(content, []byte("#### Claim coverage")) || !bytes.Contains(content, []byte(claim)) {
 		t.Fatalf("model-context coverage missing:\n%s", content)
 	}
 	for _, canary := range []string{

@@ -131,6 +131,53 @@ type scenarioRun struct {
 	requests  int
 }
 
+// strictCoverageFixture keeps the scenario corpus focused on semantic claims
+// while making the scripted model emit the current strict response protocol.
+func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
+	t.Helper()
+	var source struct {
+		AnswerMarkdown    string `json:"answer_markdown"`
+		EvidenceCitations []struct {
+			Claim       string              `json:"claim"`
+			EvidenceIDs []domain.EvidenceID `json:"evidence_ids"`
+		} `json:"evidence_citations"`
+		ProposedActions []json.RawMessage `json:"proposed_actions"`
+	}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		t.Fatalf("decode semantic diagnosis fixture: %v", err)
+	}
+	type citation struct {
+		Sequence      int                       `json:"sequence"`
+		ClaimType     domain.ClaimKind          `json:"claim_type"`
+		Claim         string                    `json:"claim"`
+		ClaimHash     string                    `json:"claim_hash"`
+		EvidenceIDs   []domain.EvidenceID       `json:"evidence_ids"`
+		CoverageState domain.ClaimCoverageState `json:"coverage_state"`
+	}
+	result := struct {
+		AnswerMarkdown    string            `json:"answer_markdown"`
+		EvidenceCitations []citation        `json:"evidence_citations"`
+		ProposedActions   []json.RawMessage `json:"proposed_actions"`
+	}{
+		AnswerMarkdown:  source.AnswerMarkdown,
+		ProposedActions: source.ProposedActions,
+	}
+	result.EvidenceCitations = make([]citation, len(source.EvidenceCitations))
+	for index, item := range source.EvidenceCitations {
+		result.EvidenceCitations[index] = citation{
+			Sequence: index + 1, ClaimType: domain.ClaimCurrentObservation,
+			Claim: item.Claim, ClaimHash: domain.SHA256Hex(item.Claim),
+			EvidenceIDs:   append([]domain.EvidenceID(nil), item.EvidenceIDs...),
+			CoverageState: domain.ClaimCoverageVerified,
+		}
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("encode strict diagnosis fixture: %v", err)
+	}
+	return encoded
+}
+
 func TestDiagnosisScenarioFixtures(t *testing.T) {
 	for _, expectation := range diagnosisScenarioExpectations() {
 		t.Run(expectation.name, func(t *testing.T) {
@@ -515,7 +562,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	if err != nil {
 		t.Fatalf("NewRunInput() error = %v", err)
 	}
-	model := &scriptedConversationModel{t: t, steps: fixture.Steps, diagnosis: fixture.Diagnosis}
+	model := &scriptedConversationModel{t: t, steps: fixture.Steps, diagnosis: strictCoverageFixture(t, fixture.Diagnosis)}
 	modelServer := httptest.NewServer(model)
 	defer modelServer.Close()
 	credential, err := config.NewSecretValue("eval-model-credential-9100")
@@ -838,15 +885,22 @@ func (tool *scriptedKubeTool) Execute(_ context.Context, call agentcore.BoundToo
 			through := tool.base.Add(time.Duration(*definition.ObservedThroughOffsetMS) * time.Millisecond)
 			observedFrom, observedThrough = &from, &through
 		}
-		policyVersion := ""
-		var policyGeneration domain.PolicyGeneration
+		policyVersion := domain.ResourcePolicyVersion
+		policyGeneration := call.PolicyGeneration()
 		sourceOriginHash := ""
 		switch definition.Category {
 		case domain.EvidenceCategoryMetricSnapshot:
 			policyVersion, policyGeneration = domain.ObservabilityPolicyVersion, call.PolicyGeneration()
+			if observedFrom == nil || observedThrough == nil {
+				from, through := observedAt, observedAt
+				observedFrom, observedThrough = &from, &through
+			}
 		case domain.EvidenceCategoryPrometheus, domain.EvidenceCategoryLoki:
 			policyVersion, policyGeneration = domain.ObservabilityPolicyVersion, call.PolicyGeneration()
 			sourceOriginHash = call.SourcePolicy().OriginHash
+		case domain.EvidenceCategoryContainerFile, domain.EvidenceCategoryRemoteCommand,
+			domain.EvidenceCategoryDiagnosticPod:
+			policyVersion = domain.RemoteDiagnosticsPolicyVersion
 		}
 		evidence[evidenceIndex] = domain.Evidence{
 			ID:            definition.ID,

@@ -15,9 +15,8 @@ import (
 )
 
 const (
-	summaryMessageTrigger      = 160
-	summaryRecentTailMessages  = 16
-	summaryMaximumTailMessages = 25
+	summaryRecentTailMessages  = domain.SessionContextRecentTailMinimum
+	summaryMaximumTailMessages = domain.SessionContextRecentTailMaximum
 )
 
 type summaryPlan struct {
@@ -58,7 +57,7 @@ func (state *runState) newSummarizationMiddleware(ctx context.Context) (adk.Chat
 	handler, err := summarization.New(ctx, &summarization.Config{
 		Model: &summaryChatModel{state: state},
 		Trigger: &summarization.TriggerCondition{
-			ContextMessages: summaryMessageTrigger,
+			ContextMessages: domain.SessionContextMessageTrigger,
 			ContextTokens:   domain.MaxSessionContextBytes,
 		},
 		// Exact endpoint tokenization is not available. This counter deliberately
@@ -114,7 +113,7 @@ func (state *runState) summaryModelInput(
 		covered = prior.CoveredCount
 		historyStart++
 	}
-	if len(turns) <= summaryRecentTailMessages || len(original) < historyStart+len(turns)+1 ||
+	if len(turns) <= domain.SessionContextRecentTailMinimum || len(original) < historyStart+len(turns)+1 ||
 		!matchesInitialContext(original, conversation, state.input.Question()) {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
@@ -150,7 +149,7 @@ func (state *runState) summaryModelInput(
 // recent tail between the fixed minimum and maximum whenever compaction is
 // required. A run may now contain adjacent committed user steer messages.
 func summaryCutTurnCount(turns []agent.ConversationTurn) int {
-	if len(turns) <= summaryRecentTailMessages {
+	if len(turns) <= domain.SessionContextRecentTailMinimum {
 		return 0
 	}
 	tailStart, tailCount := len(turns), 0
@@ -161,16 +160,16 @@ func summaryCutTurnCount(turns []agent.ConversationTurn) int {
 			groupStart--
 		}
 		groupSize := tailStart - groupStart
-		if tailCount >= summaryRecentTailMessages && tailCount+groupSize > summaryMaximumTailMessages {
+		if tailCount >= domain.SessionContextRecentTailMinimum && tailCount+groupSize > domain.SessionContextRecentTailMaximum {
 			break
 		}
 		tailStart = groupStart
 		tailCount += groupSize
-		if tailCount >= summaryRecentTailMessages {
+		if tailCount >= domain.SessionContextRecentTailMinimum {
 			break
 		}
 	}
-	if tailCount < summaryRecentTailMessages || tailCount > summaryMaximumTailMessages {
+	if tailCount < domain.SessionContextRecentTailMinimum || tailCount > domain.SessionContextRecentTailMaximum {
 		return 0
 	}
 	return tailStart

@@ -483,12 +483,15 @@ type coordinatedDiagnosisJSON struct {
 	missing    string
 	actions    string
 	warnings   string
+	coverage   string
+	plan       string
 }
 
 func encodeCoordinatedDiagnosis(diagnosis domain.Diagnosis) (coordinatedDiagnosisJSON, error) {
-	confirmed, hypotheses, missing, actions, warnings, err := encodeDiagnosis(diagnosis)
+	confirmed, hypotheses, missing, actions, warnings, coverage, plan, err := encodeDiagnosis(diagnosis)
 	return coordinatedDiagnosisJSON{
 		confirmed: confirmed, hypotheses: hypotheses, missing: missing, actions: actions, warnings: warnings,
+		coverage: coverage, plan: plan,
 	}, err
 }
 
@@ -519,6 +522,8 @@ func insertCoordinatedDiagnosis(
 		encoded.actions,
 		diagnosis.AnswerMarkdown,
 		nullableString(encoded.warnings),
+		nullableString(encoded.coverage),
+		nullableString(encoded.plan),
 		nullableTime(diagnosis.ObservedFrom),
 		nullableTime(diagnosis.ObservedTo),
 		diagnosis.CreatedAt.UTC().UnixMilli(),

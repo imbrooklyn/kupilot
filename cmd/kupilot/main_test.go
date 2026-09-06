@@ -187,6 +187,69 @@ type terminalErrorWriter struct{ err error }
 
 func (writer terminalErrorWriter) Write([]byte) (int, error) { return 0, writer.err }
 
+func TestTerminalStatusTitleSlotIsBoundedAndRestoredExactlyOnce(t *testing.T) {
+	var output bytes.Buffer
+	restore, err := beginTerminalStatusTitlesOnWriter(&output, true)
+	if err != nil || output.String() != terminalSaveTitleSlot {
+		t.Fatalf("begin title slot = %q, %v", output.String(), err)
+	}
+	if err = restore(); err != nil {
+		t.Fatalf("restore title slot error = %v", err)
+	}
+	if err = restore(); err != nil {
+		t.Fatalf("duplicate restore title slot error = %v", err)
+	}
+	if output.String() != terminalSaveTitleSlot+terminalRestoreTitleSlot {
+		t.Fatalf("title slot bytes = %q", output.String())
+	}
+	for _, forbidden := range []string{"Session", "resource", "Evidence", "error detail", "credential"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("dynamic content %q reached title slot bytes", forbidden)
+		}
+	}
+}
+
+func TestTerminalStatusTitleSlotDisabledNonTerminalAndWriteFailure(t *testing.T) {
+	var output bytes.Buffer
+	restore, err := beginTerminalStatusTitlesOnWriter(&output, false)
+	if err != nil || restore == nil || restore() != nil || output.Len() != 0 {
+		t.Fatalf("disabled title slot = bytes %q restore %v error %v", output.String(), restore != nil, err)
+	}
+	writeErr := errors.New("synthetic title write failure")
+	if _, err = beginTerminalStatusTitlesOnWriter(terminalErrorWriter{err: writeErr}, true); !errors.Is(err, writeErr) {
+		t.Fatalf("title save failure = %v", err)
+	}
+	if supported := terminalClipboardSupported(&output, func(string) string { return "kitty" }); supported {
+		t.Fatal("non-terminal writer was treated as clipboard-capable")
+	}
+	if supported := terminalStatusTitlesSupported(&output, func(string) string { return "xterm-256color" }); supported {
+		t.Fatal("non-terminal writer was treated as title-capable")
+	}
+}
+
+func TestTerminalStatusTitleEnvironmentSupportIsConservative(t *testing.T) {
+	lookup := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	for _, current := range []struct {
+		name   string
+		values map[string]string
+		want   bool
+	}{
+		{name: "xterm", values: map[string]string{"TERM": "xterm-256color"}, want: true},
+		{name: "known program", values: map[string]string{"TERM_PROGRAM": "WezTerm"}, want: true},
+		{name: "tmux denied", values: map[string]string{"TERM": "xterm-256color", "TMUX": "active"}},
+		{name: "screen denied", values: map[string]string{"TERM_PROGRAM": "iTerm.app", "STY": "active"}},
+		{name: "unknown", values: map[string]string{"TERM": "vt100"}},
+	} {
+		t.Run(current.name, func(t *testing.T) {
+			if got := terminalStatusTitleEnvironmentSupported(lookup(current.values)); got != current.want {
+				t.Fatalf("terminal title support = %t, want %t", got, current.want)
+			}
+		})
+	}
+}
+
 func updateTUIModel(t *testing.T, model tui.Model, message tea.Msg) tui.Model {
 	t.Helper()
 	next, _ := model.Update(message)

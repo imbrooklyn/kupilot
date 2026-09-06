@@ -17,11 +17,20 @@ This file records notable user-visible changes to Kupilot.
   approval/reviewer state, narrow Session rules, and one-attempt action
   supervision.
 - Added strict version 2 configuration, forward-only SQLite migrations through
-  migration 13, split least-privilege RBAC fixtures, and opt-in tagged model,
+  migration 14, split least-privilege RBAC fixtures, and opt-in tagged model,
   Reviewer, Session, and disposable-cluster integration harnesses.
 - Added active-run `Enter` steering at the next model boundary, a bounded
   process-local FIFO follow-up queue on active-run `Tab`, and empty-composer
   `Alt+Up` edit-last for queued or recovered ordinary input.
+- Added exact cancellation and confirmed clear for editable follow-ups,
+  committed-answer-only terminal clipboard copy, and bounded local committed
+  transcript search.
+- Added content-free context pressure, explicit compaction through the existing
+  Eino summarization handler, optional fixed terminal status titles, and a
+  one-shot plan-only AgentRun with no action authority.
+- Added strict typed claim/Evidence coverage and deterministic synthetic
+  quality metrics. These are structural validator tests, not live model
+  quality evidence.
 
 ### Changed
 
@@ -38,6 +47,14 @@ This file records notable user-visible changes to Kupilot.
 - Reconstruct retained final assistant answers in the strict response envelope
   during Session replay so follow-up turns keep the structured protocol while
   historic Evidence and action proposals remain non-authoritative.
+- Invalid, stale, duplicate, cross-run, out-of-order, or hash-mismatched claim
+  coverage now fails the final response instead of silently deleting
+  citations. The pinned Chat Completions stack has no provable same-response
+  continuation, so disconnects retain unknown/recovered handling and receive
+  no automatic retry.
+- Advanced new redacted Session exports to `kupilot.export-summary.v3` so the
+  bounded structural claim/Evidence coverage manifest accompanies the
+  validated answer without adding raw Evidence or authority.
 - Give each new Session the configured default Context/Namespace candidate and
   verify it through normal scope activation. Resume reuses an exact independently
   verified current scope, while unavailable or conflicting historic candidates

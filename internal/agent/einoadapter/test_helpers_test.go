@@ -109,17 +109,25 @@ type recordedModelRequest struct {
 type modelScript func(context.Context, recordedModelRequest) ([]*schema.Message, error)
 
 type recordingModel struct {
-	mu        sync.Mutex
-	scripts   []modelScript
-	requests  []recordedModelRequest
-	active    int
-	maxActive int
+	mu         sync.Mutex
+	scripts    []modelScript
+	requests   []recordedModelRequest
+	boundTools [][]string
+	active     int
+	maxActive  int
 }
 
 func (model *recordingModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if validateBoundToolInfos(tools) != nil {
+	if validateAnyBoundToolInfos(tools) != nil {
 		return nil, agent.ErrToolPolicyDenied
 	}
+	names := make([]string, len(tools))
+	for index, tool := range tools {
+		names[index] = tool.Name
+	}
+	model.mu.Lock()
+	model.boundTools = append(model.boundTools, names)
+	model.mu.Unlock()
 	return model, nil
 }
 
@@ -178,6 +186,16 @@ func (model *recordingModel) MaxActive() int {
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	return model.maxActive
+}
+
+func (model *recordingModel) BoundToolNames() [][]string {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	result := make([][]string, len(model.boundTools))
+	for index := range model.boundTools {
+		result[index] = append([]string(nil), model.boundTools[index]...)
+	}
+	return result
 }
 
 type recordingTool struct {
@@ -392,11 +410,13 @@ func eventsCall(id, podName string) agent.ToolSelection {
 func successfulToolResult(t *testing.T, call agent.BoundToolCall, evidenceID domain.EvidenceID, observedAt time.Time, data string) domain.ToolResult {
 	t.Helper()
 	evidence := domain.Evidence{
-		ID:           evidenceID,
-		RunID:        call.RunID(),
-		InvocationID: call.InvocationID(),
-		Category:     domain.EvidenceCategoryCondition,
-		Scope:        call.Scope().Snapshot(),
+		ID:               evidenceID,
+		RunID:            call.RunID(),
+		InvocationID:     call.InvocationID(),
+		Category:         domain.EvidenceCategoryCondition,
+		Scope:            call.Scope().Snapshot(),
+		PolicyVersion:    domain.ResourcePolicyVersion,
+		PolicyGeneration: call.PolicyGeneration(),
 		Resource: domain.ResourceRef{
 			APIVersion: "v1",
 			Kind:       "Pod",

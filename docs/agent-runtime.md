@@ -455,6 +455,21 @@ executor activity. `/permissions` uses the same local status projection, a
 fixed five-profile picker, and a typed Application command; it performs no
 business I/O from Bubble Tea `Update` or `View`.
 
+## Local supervision and run modes
+
+Application exposes exact queue cancel and confirmed clear, content-free
+context pressure, manual compaction, and one-shot plan arm as concrete local
+commands and queries. Queue mutation and plan arm perform no business I/O.
+Manual compaction is refused while a run, review, approval, or execution owns
+the interaction and never starts an ordinary Agent run after completion.
+
+`ordinary` and `plan_only` are the only frozen run modes. A plan-only run has
+the same Session context and Eino lifecycle but a fixed safe-read Tool subset
+and a strict twelve-step result limit. It cannot propose or dispatch an action.
+New final responses use a typed claim manifest; invalid provenance prevents
+success rather than silently removing citations. Context pressure uses exact
+UTF-8 bytes/messages and published limits, never inferred tokens.
+
 ## Failure classes
 
 Vendor, transport, Kubernetes, parsing, and persistence failures are translated
@@ -481,3 +496,4 @@ executor calls.
 - [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0049](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)

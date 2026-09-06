@@ -93,6 +93,13 @@ type pendingConversationInput struct {
 	Draft            string
 }
 
+type queueClearConfirmation struct {
+	Revision         int64
+	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
+	Editable         int
+}
+
 // Config supplies pure initial UI state; it contains no infrastructure client.
 type Config struct {
 	Width                   int
@@ -110,6 +117,8 @@ type Config struct {
 	ScopePreferenceDegraded bool
 	PrivacyMode             domain.PrivacyMode
 	Permission              application.UIPermissionStatus
+	TerminalStatusTitles    bool
+	TerminalClipboard       bool
 	Now                     func() time.Time
 }
 
@@ -173,6 +182,15 @@ type Model struct {
 	conversationStatus     application.ConversationInputStatus
 	conversationPreview    []application.ConversationInputProjection
 	committedConversation  map[domain.MessageID]struct{}
+	queueClearConfirmation *queueClearConfirmation
+	pendingCompactionID    uint64
+	pendingPlanID          uint64
+	planArmed              bool
+	contextPressure        application.ContextPressureState
+	searchMode             bool
+	searchReturnDraft      string
+	terminalStatusTitles   bool
+	terminalClipboard      bool
 	pendingPrivacyID       uint64
 	pendingDeleteID        uint64
 	pendingExportID        uint64
@@ -248,19 +266,21 @@ func NewModel(config Config) Model {
 		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
 		modelConfigured: modelConfigured,
 		privacyMode:     privacy, permission: permission, now: now,
-		composer:         components.NewComposer(styles.composer, application.MaxQuestionBytes),
-		transcript:       components.NewTranscript(styles.transcript, styles.toolSteps),
-		slashMenu:        components.NewSlashMenu(styles.slashMenu),
-		contextPicker:    components.NewContextPicker(styles.picker),
-		namespacePicker:  components.NewNamespacePicker(styles.picker),
-		resourcePicker:   components.NewResourcePicker(styles.picker),
-		sessionPicker:    components.NewSessionPicker(styles.picker),
-		permissionPicker: components.NewPermissionPicker(styles.picker),
-		dialog:           components.NewErrorDialog(styles.dialog),
-		evidenceDialog:   components.NewEvidenceDetailDialog(styles.evidence),
-		approvalDialog:   components.NewApprovalDialog(styles.approval),
-		footer:           components.NewFooter(styles.footer),
-		styles:           styles, keymap: DefaultKeyMap(), terminalFocused: true,
+		terminalStatusTitles: config.TerminalStatusTitles,
+		terminalClipboard:    config.TerminalClipboard,
+		composer:             components.NewComposer(styles.composer, application.MaxQuestionBytes),
+		transcript:           components.NewTranscript(styles.transcript, styles.toolSteps),
+		slashMenu:            components.NewSlashMenu(styles.slashMenu),
+		contextPicker:        components.NewContextPicker(styles.picker),
+		namespacePicker:      components.NewNamespacePicker(styles.picker),
+		resourcePicker:       components.NewResourcePicker(styles.picker),
+		sessionPicker:        components.NewSessionPicker(styles.picker),
+		permissionPicker:     components.NewPermissionPicker(styles.picker),
+		dialog:               components.NewErrorDialog(styles.dialog),
+		evidenceDialog:       components.NewEvidenceDetailDialog(styles.evidence),
+		approvalDialog:       components.NewApprovalDialog(styles.approval),
+		footer:               components.NewFooter(styles.footer),
+		styles:               styles, keymap: DefaultKeyMap(), terminalFocused: true,
 	}
 	model.configureStartup(config.StartIntent)
 	model.scopeSelectionRequired = model.startup.Intent.Kind == application.UIStartNew &&
