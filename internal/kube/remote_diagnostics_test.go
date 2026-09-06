@@ -419,13 +419,14 @@ func TestExecuteRemoteCommandCancelsAndBoundsOneSPDYAttempt(t *testing.T) {
 		defer server.Close()
 		reader, client := newRemoteHTTPReader(t, server.URL, testServerCAData(server))
 		defer client.Close()
+		defer close(release)
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
 			_, err := reader.ExecuteRemoteCommand(ctx, remoteCommandRequest(t, pod))
 			result <- err
 		}()
-		<-ready
+		waitForRemoteStream(t, ready, result)
 		cancel()
 		var err error
 		select {
@@ -433,7 +434,6 @@ func TestExecuteRemoteCommandCancelsAndBoundsOneSPDYAttempt(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("ExecuteRemoteCommand did not return after cancellation")
 		}
-		close(release)
 		assertRemoteKubeClass(t, err, domain.SafeErrorClassCancelled)
 		if capture.postCount() != 1 {
 			t.Fatalf("cancelled SPDY posts = %d", capture.postCount())
@@ -453,21 +453,21 @@ func TestExecuteRemoteCommandCancelsAndBoundsOneSPDYAttempt(t *testing.T) {
 		defer server.Close()
 		reader, client := newRemoteHTTPReader(t, server.URL, testServerCAData(server))
 		defer client.Close()
+		defer close(release)
 		request := remoteCommandRequest(t, pod)
-		request.Timeout = 25 * time.Millisecond
+		request.Timeout = 2 * time.Second
 		result := make(chan error, 1)
 		go func() {
 			_, err := reader.ExecuteRemoteCommand(context.Background(), request)
 			result <- err
 		}()
-		<-ready
+		waitForRemoteStream(t, ready, result)
 		var err error
 		select {
 		case err = <-result:
 		case <-time.After(5 * time.Second):
 			t.Fatal("ExecuteRemoteCommand did not return after its deadline")
 		}
-		close(release)
 		assertRemoteKubeClass(t, err, domain.SafeErrorClassTimeout)
 		if capture.postCount() != 1 {
 			t.Fatalf("timed out SPDY posts = %d", capture.postCount())
@@ -486,12 +486,13 @@ func TestExecuteRemoteCommandCancelsAndBoundsOneSPDYAttempt(t *testing.T) {
 		}))
 		defer server.Close()
 		reader, client := newRemoteHTTPReader(t, server.URL, testServerCAData(server))
+		defer close(release)
 		result := make(chan error, 1)
 		go func() {
 			_, err := reader.ExecuteRemoteCommand(context.Background(), remoteCommandRequest(t, pod))
 			result <- err
 		}()
-		<-ready
+		waitForRemoteStream(t, ready, result)
 		closed := make(chan struct{})
 		go func() {
 			client.Close()
@@ -508,12 +509,22 @@ func TestExecuteRemoteCommandCancelsAndBoundsOneSPDYAttempt(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("ClientBundle.Close did not join the remote stream")
 		}
-		close(release)
 		assertRemoteKubeClass(t, err, domain.SafeErrorClassCancelled)
 		if capture.postCount() != 1 {
 			t.Fatalf("closed-client SPDY posts = %d", capture.postCount())
 		}
 	})
+}
+
+func waitForRemoteStream(t *testing.T, ready <-chan struct{}, result <-chan error) {
+	t.Helper()
+	select {
+	case <-ready:
+	case err := <-result:
+		t.Fatalf("ExecuteRemoteCommand returned before the test stream was ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the remote test stream did not become ready")
+	}
 }
 
 func TestExecuteRemoteCommandRejectsRedirectWithoutSecondAttempt(t *testing.T) {
@@ -1165,16 +1176,28 @@ func upgradeRemoteTestStreams(writer http.ResponseWriter, request *http.Request)
 	if _, err := httpstream.Handshake(request, writer, []string{remotecommandconsts.StreamProtocolV4Name}); err != nil {
 		return nil, err
 	}
-	streamChannel := make(chan remoteTestStreamAndReply)
+	streamChannel := make(chan remoteTestStreamAndReply, 3)
 	upgrader := serverstream.NewResponseUpgrader()
 	connection := upgrader.UpgradeResponse(writer, request, func(stream httpstream.Stream, replySent <-chan struct{}) error {
 		streamChannel <- remoteTestStreamAndReply{Stream: stream, replySent: replySent}
 		return nil
 	})
+	if connection == nil {
+		return nil, errors.New("remote test stream upgrade failed")
+	}
 	result := &remoteTestStreams{connection: connection}
 	for received := 0; received < 3; received++ {
-		stream := <-streamChannel
-		<-stream.replySent
+		var stream remoteTestStreamAndReply
+		select {
+		case stream = <-streamChannel:
+		case <-connection.CloseChan():
+			return nil, errors.New("remote test connection closed before all streams arrived")
+		}
+		select {
+		case <-stream.replySent:
+		case <-connection.CloseChan():
+			return nil, errors.New("remote test connection closed before a stream reply")
+		}
 		switch stream.Headers().Get(corev1.StreamType) {
 		case corev1.StreamTypeError:
 			result.writeStatus = func(status *apierrors.StatusError) error {
