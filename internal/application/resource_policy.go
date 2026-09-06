@@ -106,7 +106,11 @@ func (authority *ResourceReadAuthority) ObservabilityPolicySnapshot(ctx context.
 }
 
 func (authority *ResourceReadAuthority) CurrentPolicyGeneration(ctx context.Context, generation domain.PolicyGeneration) bool {
-	if ctx == nil || ctx.Err() != nil || authority == nil || authority.permissions == nil || !generation.Valid() {
+	// This no-I/O freshness query deliberately remains usable after the
+	// operation context is cancelled. Adapters must be able to distinguish an
+	// actual generation change from cancellation when they recheck authority
+	// after an external call returns.
+	if ctx == nil || authority == nil || authority.permissions == nil || !generation.Valid() {
 		return false
 	}
 	policy, healthy := authority.permissions.Policy()

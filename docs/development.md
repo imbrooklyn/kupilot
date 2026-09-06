@@ -10,9 +10,12 @@ foundation now have deterministic tests. Restart, scale, rollback, one
 controller-owned Pod delete, cordon, uncordon, drain, exact local direct argv,
 and the separate shell operation are composed through one Application-owned
 dispatcher. Pod Exec, container-file, and diagnostic-Pod handlers retain their
-default-off gate; its default `ask` human-delivery route remains fail-closed.
-All execution evidence is synthetic or loopback-only and does not claim a live
-cluster, host tool, or sandbox integration.
+default-off gate and use the same Application supervision for human and
+Reviewer routes. All execution evidence is synthetic or loopback-only and does
+not by itself claim a live cluster, endpoint, host tool, or sandbox
+integration. Opt-in, integration-tagged model, Reviewer-evaluation, Session,
+and Kubernetes harnesses are available below; only an observed non-skipped run
+is evidence for its exact configured target.
 
 Kupilot's local and hosted gates use the repository `Makefile` as their single
 command source. The hosted workflow invokes the same targets contributors run
@@ -57,6 +60,111 @@ The component targets `workflow-lint`, `test-security`, `import-guard`,
 `test-race`, `vuln`, and `cross-build` are available for focused diagnosis.
 `make bootstrap-tools` installs all pinned development tools without running a
 gate.
+
+## Opt-in integration and Reviewer evaluation
+
+Every live Go test uses `//go:build integration`. None is selected by ordinary
+`go test ./...`, `make check`, `make check-slow`, or GitHub Actions. The tagged
+Session contract and offline Reviewer evaluation are repeatable and do not
+need a real endpoint, credential, kubeconfig, cluster, or public network:
+
+```sh
+GOTOOLCHAIN=go1.25.13 make test-integration-session
+GOTOOLCHAIN=go1.25.13 make test-integration-contracts
+GOTOOLCHAIN=go1.25.13 make test-reviewer-eval-offline
+```
+
+The contracts target covers named Agent/Reviewer profile topology, consent,
+absence, strict parsing, timeout/error, budget exhaustion, and stale-policy
+fail-closed behavior without making an external call.
+
+Set `KUPILOT_INTEGRATION_PREFLIGHT_ONLY=1` on any live command to load and
+validate only its non-secret profile, budgets, Context, and exact RBAC. The
+summary explicitly says `NOT RUN`; a preflight-only success is never live
+`PASS` evidence.
+
+`test-integration-model` always runs the request-recording protocol contract.
+Its live case reports `BLOCKED` unless the caller selects exactly one profile,
+acknowledges external calls, and supplies a cost ceiling. `preferred` reads the
+Agent endpoint, model, and opaque credential from the process-default Kupilot
+configuration. It ignores API-key environment variables and requires the
+credential source to be that configuration file. No endpoint or credential is
+printed.
+
+```sh
+KUPILOT_INTEGRATION_LIVE=authorized \
+KUPILOT_INTEGRATION_MAX_COST_USD=1.00 \
+KUPILOT_INTEGRATION_PREFERRED_MODEL=gpt-4o-mini \
+GOTOOLCHAIN=go1.25.13 \
+make test-integration-model-preferred
+```
+
+`KUPILOT_INTEGRATION_PREFERRED_MODEL` is an optional exact test-only model
+override on the configured preferred endpoint. It performs no discovery or
+fallback; an unsupported model fails that exact run.
+
+The Ollama target performs no discovery, installation, server start, or model
+download. Supply its exact loopback endpoint and already-available model. The
+test uses a non-secret, test-owned opaque bearer value because the local
+OpenAI-compatible route still exercises the same transport contract.
+
+```sh
+KUPILOT_INTEGRATION_LIVE=authorized \
+KUPILOT_INTEGRATION_MAX_COST_USD=0 \
+KUPILOT_INTEGRATION_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1 \
+KUPILOT_INTEGRATION_OLLAMA_MODEL=gpt-oss:20b \
+GOTOOLCHAIN=go1.25.13 \
+make test-integration-model-ollama
+```
+
+The model API harness permits at most three calls, 768 requested output tokens,
+1 MiB of aggregate request payload, and three minutes. It distinguishes a
+transport/protocol failure from a `MODEL_CAPABILITY_FAIL`; it never relaxes the
+fragmented-Tool, finish-reason, optional-usage, cancellation, timeout,
+authentication, safe-error, or body-close contract based on model quality.
+Choose the least expensive endpoint-supported model suitable for these
+protocol checks. Do not select a high-cost reasoning model when a small model
+such as `gpt-4o-mini` is available on that exact endpoint.
+
+The live Reviewer evaluation is a separate quality command. It sends eleven
+bounded, Tool-free, non-streaming cases and records false approvals, false
+denials, escalations, fail-closed results, latency, available usage, and the
+operator-authorized cost ceiling. It creates no approval or execution
+authority. A model must not be recommended for `auto-review` until an Accepted
+gate exists and the recorded evidence satisfies it.
+
+```sh
+KUPILOT_INTEGRATION_LIVE=authorized \
+KUPILOT_INTEGRATION_REVIEWER_EVAL=authorized \
+KUPILOT_INTEGRATION_MODEL_TARGET=preferred \
+KUPILOT_INTEGRATION_MAX_COST_USD=2.00 \
+KUPILOT_INTEGRATION_PREFERRED_MODEL=gpt-4o-mini \
+GOTOOLCHAIN=go1.25.13 \
+make test-reviewer-eval-live
+```
+
+Kubernetes integration requires one explicitly selected current disposable
+`k3d-` or `kind-` Context, mutation authorization, and a digest-pinned fixture
+image already suitable for `/bin/sh`, `/bin/sleep`, `/bin/echo`, and `/bin/nc`
+under a non-root diagnostic security context. Preflight checks the exact RBAC
+set before creating the fixed `kupilot-integration-v05` Namespace. A Namespace
+with that name but without the suite ownership label blocks the run. The suite
+allows at most 224 operational HTTP calls, reserves 32 calls for bounded
+cleanup, permits two Pod Exec attempts, runs for at most eight minutes, and
+always attempts Namespace deletion.
+
+```sh
+KUPILOT_INTEGRATION_KUBE_CONTEXT=k3d-example \
+KUPILOT_INTEGRATION_KUBE_MUTATION=authorized \
+KUPILOT_INTEGRATION_KUBE_IMAGE=registry.example/fixture@sha256:REPLACE_WITH_64_HEX_DIGEST \
+GOTOOLCHAIN=go1.25.13 \
+make test-integration-kubernetes
+```
+
+`GOTOOLCHAIN=go1.25.13 make test-integration` runs every tagged surface and the
+offline Reviewer fixtures. Missing live prerequisites remain visible as
+`SKIP`/`BLOCKED`; they are never counted as release `PASS` evidence. No target
+uploads configuration, databases, logs, responses, or output artifacts.
 
 Security-denial behavior remains asserted in repository tests, including zero
 external action or sink counts. The security target selects the documented

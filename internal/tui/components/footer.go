@@ -21,6 +21,8 @@ type FooterStatus struct {
 	Namespace      string
 	ReadOnly       bool
 	ScopeSwitching bool
+	Permission     string
+	Supervision    string
 	Approval       string
 }
 
@@ -47,12 +49,19 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if namespace == "" {
 		namespace = "unavailable"
 	}
-	access := "scope unverified"
+	permission := status.Permission
+	if permission == "" {
+		permission = "permission unavailable"
+	}
+	if status.Supervision != "" {
+		permission += " · " + status.Supervision
+	}
+	access := "scope unverified · " + permission
 	if status.ReadOnly {
-		access = "supervised"
+		access = permission
 	}
 	if status.ScopeSwitching {
-		access = "scope switching"
+		access = "scope switching · " + permission
 	}
 
 	lineOne, accessOnSecond := requiredFooterLine(width, contextName, namespace, access)
@@ -65,6 +74,10 @@ func (footer Footer) View(width int, status FooterStatus) string {
 			lineTwo = middleElideColumns(status.Approval, width)
 		} else if candidate := lineTwo + " · " + status.Approval; lipgloss.Width(candidate) <= width {
 			lineTwo = candidate
+		} else {
+			// An active approval is more urgent than the repeated permission
+			// detail. Context and Namespace remain continuously visible above.
+			lineTwo = middleElideColumns(status.Approval, width)
 		}
 	}
 

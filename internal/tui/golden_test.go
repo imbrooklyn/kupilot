@@ -178,10 +178,10 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 	model.acceptApplicationEvent(runStartedEvent(1))
 	model.acceptApplicationEvent(application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "Inspecting the current workload.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Inspecting the current workload.",
 	})
 	model.acceptApplicationEvent(application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID, Name: domain.ToolNameGetResource,
 			Purpose: "Inspect the selected Deployment.", Status: application.ToolStepSucceeded,
@@ -191,7 +191,7 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 	now = now.Add(20 * time.Second)
 	model.acceptApplicationEvent(application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 4, Text: "The Deployment has no available replicas.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "The Deployment has no available replicas.",
 		EvidenceReferences: []application.UIEvidenceReference{{
 			EvidenceID: testEvidenceID, RunID: testRunID,
 			Scope:    domain.ScopeSnapshot{Context: "development", Namespace: "payments", Generation: 7},

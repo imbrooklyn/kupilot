@@ -62,7 +62,7 @@ func TestApplicationTextAndScopeAreSanitizedBeforeRenderState(t *testing.T) {
 	}
 	model.acceptApplicationEvent(runStartedEvent(1))
 	model.acceptApplicationEvent(application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2,
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 		Text: "safe\x1b[31m text\x1b[0m\x1b]8;;ignored\x07",
 	})
 	if model.run.StreamedText != "safe text" || containsUnsafeTerminalText(model.run.StreamedText) {

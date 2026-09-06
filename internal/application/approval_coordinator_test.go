@@ -41,6 +41,221 @@ func TestApprovalCoordinatorPersistsProposalBeforePublishingDialog(t *testing.T)
 	}
 }
 
+func TestCoordinatorPermissionCommandsAreLocalTypedAndGenerationBound(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	outer := &Coordinator{
+		approvals: fixture.coordinator, runResourcePolicies: coordinatorResourcePolicies{},
+		budgetLimits: agent.DefaultRunBudgetLimits(), now: fixture.clock.Now,
+	}
+	changedContext, cancelChanged := context.WithCancel(context.Background())
+	defer cancelChanged()
+	outer.active = &activeRun{cancel: cancelChanged}
+	before := struct {
+		creates, resolves, closes, consumes, reviews, revalidates, executes int
+	}{
+		fixture.persistence.creates, fixture.persistence.resolves, fixture.persistence.closes,
+		fixture.persistence.consumes, fixture.persistence.actionReviewCalls,
+		fixture.executor.revalidates, fixture.executor.calls,
+	}
+	shown, err := outer.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandShowPermissions, RequestID: 901,
+	})
+	after := struct {
+		creates, resolves, closes, consumes, reviews, revalidates, executes int
+	}{
+		fixture.persistence.creates, fixture.persistence.resolves, fixture.persistence.closes,
+		fixture.persistence.consumes, fixture.persistence.actionReviewCalls,
+		fixture.executor.revalidates, fixture.executor.calls,
+	}
+	if err != nil || shown.Validate() != nil || before != after || shown.Permissions == nil ||
+		shown.Permissions.Permission.Profile != domain.PermissionProfileAsk ||
+		shown.Permissions.Permission.PolicyGeneration != 1 || shown.Permissions.Changed || shown.Permissions.RuleCreated {
+		t.Fatalf("show permissions = %#v/%v, effects %#v/%#v", shown, err, before, after)
+	}
+
+	changed, err := outer.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandChangePermission, RequestID: 902, ExpectedPolicyGeneration: 1,
+		PermissionProfile: domain.PermissionProfileReadOnly,
+	})
+	if err != nil || changed.Validate() != nil || changed.Permissions == nil || !changed.Permissions.Changed ||
+		changed.Permissions.RuleCreated || changed.Permissions.Permission.Profile != domain.PermissionProfileReadOnly ||
+		changed.Permissions.Permission.PolicyGeneration != 2 {
+		t.Fatalf("change permission = %#v/%v", changed, err)
+	}
+	if fixture.persistence.creates != before.creates || fixture.persistence.resolves != before.resolves ||
+		fixture.persistence.consumes != before.consumes || fixture.persistence.actionReviewCalls != before.reviews ||
+		fixture.executor.revalidates != before.revalidates || fixture.executor.calls != before.executes {
+		t.Fatal("permission change invoked a proposal, Reviewer, target validation, or executor")
+	}
+	select {
+	case <-changedContext.Done():
+	default:
+		t.Fatal("successful permission change did not cancel the old run")
+	}
+	staleContext, cancelStale := context.WithCancel(context.Background())
+	defer cancelStale()
+	outer.active = &activeRun{cancel: cancelStale}
+	if _, err := outer.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandChangePermission, RequestID: 903, ExpectedPolicyGeneration: 1,
+		PermissionProfile: domain.PermissionProfileAsk,
+	}); !errors.Is(err, ErrPermissionStale) {
+		t.Fatalf("stale permission change error = %v", err)
+	}
+	select {
+	case <-staleContext.Done():
+		t.Fatal("stale permission change cancelled current-generation work")
+	default:
+	}
+	if snapshot := fixture.coordinator.UIPermissionSnapshot(); snapshot.Profile != domain.PermissionProfileReadOnly ||
+		snapshot.PolicyGeneration != 2 || !snapshot.Healthy {
+		t.Fatalf("permission snapshot = %#v", snapshot)
+	}
+}
+
+func TestCoordinatorPermissionPostCommitFailureStillCancelsOldRun(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	fixture.submit(t, 17)
+	fixture.persistence.closeErr = errors.New("synthetic policy invalidation persistence failure")
+	outer := &Coordinator{
+		approvals: fixture.coordinator, runResourcePolicies: coordinatorResourcePolicies{},
+		budgetLimits: agent.DefaultRunBudgetLimits(), now: fixture.clock.Now,
+	}
+	runContext, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	outer.active = &activeRun{cancel: cancelRun}
+
+	_, err := outer.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandChangePermission, RequestID: 903, ExpectedPolicyGeneration: 1,
+		PermissionProfile: domain.PermissionProfileReadOnly,
+	})
+	if !errors.Is(err, ErrPermissionUnavailable) {
+		t.Fatalf("post-commit permission change error = %v", err)
+	}
+	select {
+	case <-runContext.Done():
+	default:
+		t.Fatal("post-commit permission failure did not cancel old-generation work")
+	}
+	status, action := fixture.coordinator.Status()
+	if status.PolicyGeneration != 2 || status.Healthy || action != nil || fixture.executor.calls != 0 {
+		t.Fatalf("post-commit status/action/executor = %#v/%#v/%d", status, action, fixture.executor.calls)
+	}
+}
+
+func TestCoordinatorSessionRuleCommandInvalidatesCurrentActionBeforeFutureMatch(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 18)
+	outer := &Coordinator{
+		approvals: fixture.coordinator, runResourcePolicies: coordinatorResourcePolicies{},
+		budgetLimits: agent.DefaultRunBudgetLimits(), now: fixture.clock.Now,
+	}
+	runContext, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	outer.active = &activeRun{cancel: cancelRun}
+	command := approvalDecisionCommand(UICommandCreateSessionRule, request, 18, 904)
+	outcome, err := outer.ExecuteUICommand(context.Background(), command)
+	if err != nil || outcome.Validate() != nil || outcome.Permissions == nil || !outcome.Permissions.RuleCreated ||
+		outcome.Permissions.Changed || outcome.Permissions.Permission.PolicyGeneration != 2 ||
+		len(outcome.Permissions.Permission.SessionRules) != 1 || outcome.Permissions.Action != nil {
+		t.Fatalf("create Session rule = %#v/%v", outcome, err)
+	}
+	if fixture.persistence.closes != 1 || fixture.persistence.lastClosed.ID != request.ID ||
+		fixture.persistence.lastClosed.State != domain.ApprovalStateInvalidated ||
+		fixture.persistence.lastClosed.StateReason != domain.ApprovalReasonPolicyChanged || fixture.executor.calls != 0 {
+		t.Fatalf("source action close/executor = %#v/%d", fixture.persistence.lastClosed, fixture.executor.calls)
+	}
+	select {
+	case <-runContext.Done():
+	default:
+		t.Fatal("successful Session rule creation did not cancel old-generation work")
+	}
+	statusRule := outcome.Permissions.Permission.SessionRules[0]
+	if statusRule.Scope != request.Intent.Scope || statusRule.NamespaceAccess != request.Intent.NamespaceAccess ||
+		statusRule.PolicyGeneration != 2 || statusRule.ParameterSummary == "" ||
+		statusRule.Effect != request.Intent.Effect || statusRule.Risk != domain.RiskReview ||
+		statusRule.DataCategories != request.Intent.DataCategories || statusRule.AllowedSinks != request.Intent.AllowedSinks ||
+		statusRule.NetworkEffects != request.Intent.NetworkEffects || statusRule.Limits != request.Intent.Limits ||
+		statusRule.CreatedAtMillis <= 0 || statusRule.ExpiresAtMillis <= statusRule.CreatedAtMillis {
+		t.Fatalf("Session rule status omitted an exact binding: %#v", statusRule)
+	}
+
+	fixture.intent.PolicyGeneration = 2
+	future, err := fixture.coordinator.SubmitRestartDeploymentProposal(
+		context.Background(), fixture.runID, fixture.sessionID, 19, fixture.intent,
+	)
+	if err != nil || future.State != domain.ApprovalStatePending || fixture.persistence.lastDecision.Actor != domain.ApprovalActorSessionRule ||
+		fixture.persistence.lastDecision.Disposition != domain.ReviewDispositionAutomatic || fixture.executor.calls != 1 {
+		t.Fatalf("future exact Session-rule match = %#v/%v decision=%#v executor=%d", future, err, fixture.persistence.lastDecision, fixture.executor.calls)
+	}
+}
+
+func TestSessionRuleCreationExcludesConcurrentActionDecision(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 20)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	fixture.identifiers.permissionRuleStarted = started
+	fixture.identifiers.permissionRuleRelease = release
+	ruleResult := make(chan error, 1)
+	go func() {
+		ruleResult <- fixture.coordinator.CreateSessionRule(
+			context.Background(), approvalDecisionCommand(UICommandCreateSessionRule, request, 20, 905),
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Session rule reservation")
+	}
+	if result, err := fixture.coordinator.Decide(
+		context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 20, 906),
+	); !errors.Is(err, ErrApprovalUnavailable) || result != (UIApprovalResult{}) {
+		t.Fatalf("concurrent action decision = %#v/%v", result, err)
+	}
+	if fixture.persistence.resolves != 0 || fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("concurrent decision side effects = resolves %d consumes %d executor %d",
+			fixture.persistence.resolves, fixture.persistence.consumes, fixture.executor.calls)
+	}
+	close(release)
+	released = true
+	select {
+	case err := <-ruleResult:
+		if err != nil {
+			t.Fatalf("CreateSessionRule() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Session rule creation")
+	}
+	if fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("Session rule creation executed source action: consumes %d executor %d",
+			fixture.persistence.consumes, fixture.executor.calls)
+	}
+}
+
+func TestFailedSessionRulePreparationReleasesLocalReservation(t *testing.T) {
+	fixture := newApprovalCoordinatorFixture(t)
+	request := fixture.submit(t, 21)
+	fixture.identifiers.permissionRuleErr = errors.New("synthetic permission rule identifier failure")
+	if err := fixture.coordinator.CreateSessionRule(
+		context.Background(), approvalDecisionCommand(UICommandCreateSessionRule, request, 21, 907),
+	); !errors.Is(err, ErrPermissionRuleInvalid) {
+		t.Fatalf("CreateSessionRule() error = %v", err)
+	}
+	result, err := fixture.coordinator.Decide(
+		context.Background(), approvalDecisionCommand(UICommandRejectAction, request, 21, 908),
+	)
+	if err != nil || result.State != domain.ApprovalStateRejected || fixture.persistence.consumes != 0 || fixture.executor.calls != 0 {
+		t.Fatalf("decision after failed rule preparation = %#v/%v consumes=%d executor=%d",
+			result, err, fixture.persistence.consumes, fixture.executor.calls)
+	}
+}
+
 func TestApprovalCoordinatorApprovalPersistsDecisionWithoutExecutionAndRejectsReplay(t *testing.T) {
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 20)
@@ -275,7 +490,7 @@ func TestCoordinatorProposalBridgeRequiresExactActiveRunBinding(t *testing.T) {
 	); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Fatalf("inactive proposal error = %v", err)
 	}
-	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.ui)
+	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.intent.PolicyGeneration, fixture.ui)
 	if err != nil {
 		t.Fatalf("newEventBridge() error = %v", err)
 	}
@@ -332,7 +547,7 @@ func TestCoordinatorTurnsTypedSuggestionIntoApprovalOnlyAfterTrustedPreparation(
 	preparer := &fakeRestartProposalPreparer{prepared: fixture.intent.Target}
 	outer.approvals = fixture.coordinator
 	outer.restartProposals = preparer
-	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.ui)
+	bridge, err := newEventBridge(fixture.runID, fixture.intent.Scope.Generation, fixture.intent.PolicyGeneration, fixture.ui)
 	if err != nil {
 		t.Fatalf("newEventBridge() error = %v", err)
 	}
@@ -603,6 +818,7 @@ type approvalCoordinatorFixture struct {
 	rollout     *fakeApprovalRolloutObserver
 	clock       *approvalCoordinatorClock
 	scope       *fakeApprovalCurrentScope
+	identifiers *approvalCoordinatorIDs
 	runID       domain.AgentRunID
 	sessionID   domain.SessionID
 	intent      domain.OperationIntent
@@ -662,7 +878,8 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	coordinator, err := NewApprovalCoordinator(ApprovalCoordinatorConfig{
 		Service: service, Persistence: persistence, ResultAudits: persistence, Scope: scope,
 		ApprovalIDs: ids, AuditIDs: ids, UIEvents: ui, Rollout: rollout, Now: clock.Now,
-		RestartRevalidator: executor, RestartExecutor: executor, Permissions: permissions, Reviews: persistence,
+		RestartRevalidator: executor, RestartExecutor: executor, Observations: fakeObservationRevalidator{},
+		ObservationPolicy: domain.DisabledObservabilityPolicyCatalog(), Permissions: permissions, Reviews: persistence,
 	})
 	if err != nil {
 		t.Fatalf("NewApprovalCoordinator() error = %v", err)
@@ -682,9 +899,15 @@ func newApprovalCoordinatorFixture(t *testing.T) *approvalCoordinatorFixture {
 	}
 	return &approvalCoordinatorFixture{
 		coordinator: coordinator, service: service, persistence: persistence, ui: ui,
-		executor: executor, rollout: rollout, clock: clock, scope: scope,
+		executor: executor, rollout: rollout, clock: clock, scope: scope, identifiers: ids,
 		runID: runID, sessionID: sessionID, intent: intent,
 	}
+}
+
+type fakeObservationRevalidator struct{}
+
+func (fakeObservationRevalidator) RevalidateObservationAction(context.Context, domain.ObservationActionPlan) error {
+	return nil
 }
 
 func (fixture *approvalCoordinatorFixture) submit(t *testing.T, sequence int64) domain.ApprovalRequest {
@@ -710,8 +933,9 @@ func (fixture *approvalCoordinatorFixture) bindSession(t *testing.T, sessionID d
 func approvalDecisionCommand(kind UICommandKind, request domain.ApprovalRequest, sequence int64, requestID uint64) UICommand {
 	return UICommand{
 		Kind: kind, RequestID: requestID, RunID: request.RunID,
-		ExpectedScopeGeneration: request.Intent.Scope.Generation,
-		ApprovalID:              request.ID, ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce,
+		ExpectedScopeGeneration:  request.Intent.Scope.Generation,
+		ExpectedPolicyGeneration: request.Intent.PolicyGeneration,
+		ApprovalID:               request.ID, ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce,
 		ApprovalSequence: sequence,
 	}
 }
@@ -914,7 +1138,12 @@ func (executor *fakeApprovalExecutor) ExecuteApprovedRestart(
 	}, nil
 }
 
-type approvalCoordinatorIDs struct{ next int }
+type approvalCoordinatorIDs struct {
+	next                  int
+	permissionRuleStarted chan<- struct{}
+	permissionRuleRelease <-chan struct{}
+	permissionRuleErr     error
+}
 
 func (source *approvalCoordinatorIDs) nextID() string {
 	source.next++
@@ -931,6 +1160,19 @@ func (source *approvalCoordinatorIDs) NewAuditEventID() (domain.AuditEventID, er
 
 func (source *approvalCoordinatorIDs) NewModelRequestID() (domain.ModelRequestID, error) {
 	return domain.ModelRequestID(source.nextID()), nil
+}
+
+func (source *approvalCoordinatorIDs) NewPermissionRuleID() (domain.PermissionRuleID, error) {
+	if source.permissionRuleStarted != nil {
+		close(source.permissionRuleStarted)
+	}
+	if source.permissionRuleRelease != nil {
+		<-source.permissionRuleRelease
+	}
+	if source.permissionRuleErr != nil {
+		return "", source.permissionRuleErr
+	}
+	return domain.PermissionRuleID(source.nextID()), nil
 }
 
 type fakeApprovalCurrentScope struct{ scope domain.ClusterScope }

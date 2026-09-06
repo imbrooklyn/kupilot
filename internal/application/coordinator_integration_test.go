@@ -83,14 +83,16 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
 		},
 		Logs: tools.LogToolDependencies{
-			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Text: redactor,
+			Reader: kubernetes, Targets: deniedIntegrationObservationTargets{}, Actions: deniedIntegrationObservationActions{},
+			ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Text: redactor,
 			Policy: deniedIntegrationLogPolicy{}, Now: clock.Now,
 		},
 		Metrics: tools.MetricToolDependencies{
 			Reader: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies, EvidenceIDs: identifiers, Now: clock.Now,
 		},
 		Sources: tools.DataSourceToolDependencies{
-			Prometheus: kubernetes, Loki: kubernetes, ScopeGuard: scope, PolicyGuard: resourcePolicies,
+			Prometheus: kubernetes, Loki: kubernetes, Targets: deniedIntegrationObservationTargets{}, Actions: deniedIntegrationObservationActions{},
+			ScopeGuard: scope, PolicyGuard: resourcePolicies,
 			Policy: deniedIntegrationObservationPolicy{}, EvidenceIDs: identifiers, Text: redactor, Now: clock.Now,
 		},
 		Related: tools.RelatedToolDependencies{
@@ -572,6 +574,26 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 			}
 		}
 	}
+}
+
+type deniedIntegrationObservationTargets struct{}
+
+func (deniedIntegrationObservationTargets) ResolveObservationTarget(context.Context, tools.ObservationTargetRequest) (tools.ResolvedObservationTarget, error) {
+	return tools.ResolvedObservationTarget{}, errors.New("observation target access was not expected")
+}
+
+type deniedIntegrationObservationActions struct{}
+
+func (deniedIntegrationObservationActions) PrepareObservationAction(context.Context, domain.ObservationActionPreflight) error {
+	return errors.New("observation action access was not expected")
+}
+
+func (deniedIntegrationObservationActions) AuthorizeObservationAction(context.Context, domain.ObservationActionPlan) (domain.ActionEnvelope, error) {
+	return domain.ActionEnvelope{}, errors.New("observation action access was not expected")
+}
+
+func (deniedIntegrationObservationActions) RecordObservationOutcome(context.Context, domain.ActionEnvelope, domain.ObservationActionOutcome) error {
+	return errors.New("observation action access was not expected")
 }
 
 func renderIntegrationUI(events []application.UIEvent) string {

@@ -150,6 +150,11 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 		strings.Count(mainSource, "approval.NewService(") != 1 ||
 		strings.Count(mainSource, "application.NewApprovalCoordinator(") != 1 ||
 		strings.Count(mainSource, "application.NewRemoteDiagnosticActionGate(") != 1 ||
+		strings.Count(mainSource, "Supervisor: approvalCoordinator") != 1 ||
+		strings.Count(mainSource, "RemoteDiagnostics:  runtimeGateway") != 1 ||
+		strings.Count(mainSource, "Observations:       runtimeGateway") != 1 ||
+		strings.Count(mainSource, "ObservationPolicy:  observabilityPolicies") != 1 ||
+		strings.Count(mainSource, "Targets: runtimeGateway, Actions: approvalCoordinator") != 2 ||
 		strings.Count(mainSource, "Remote: &tools.RemoteDiagnosticToolDependencies{") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRestarter(") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRolloutObserver(") != 1 {
@@ -163,16 +168,20 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 			t.Fatalf("composition contains forbidden capability %q", forbidden)
 		}
 	}
+	logPolicyStart := strings.Index(mainSource, "func (policy compositionObservationPolicy) AuthorizeLogRead")
 	remotePolicyStart := strings.Index(mainSource, "func (policy compositionObservationPolicy) AuthorizeRemoteOutput")
 	observationPolicyStart := strings.Index(mainSource, "func (policy compositionObservationPolicy) AuthorizeObservation")
-	logAllowed := strings.Index(mainSource, "return tools.LogPolicyAllowed")
-	if strings.Count(mainSource, "return tools.LogPolicyAllowed") != 1 || remotePolicyStart < 0 || observationPolicyStart < 0 || logAllowed < remotePolicyStart || logAllowed > observationPolicyStart {
-		t.Fatal("composition may allow sanitized container output only inside the separately ActionEnvelope-gated remote-output policy")
+	policyEnd := strings.Index(mainSource, "func configuredDataSourceOrigin")
+	if logPolicyStart < 0 || remotePolicyStart <= logPolicyStart || observationPolicyStart <= remotePolicyStart || policyEnd <= observationPolicyStart {
+		t.Fatal("composition observation privacy-policy functions are incomplete")
 	}
-	for _, forbiddenAuthority := range []string{"return tools.ObservationPolicyAllowed"} {
-		if strings.Contains(mainSource, forbiddenAuthority) {
-			t.Fatalf("composition grants review-class read authority without an ActionEnvelope: %q", forbiddenAuthority)
-		}
+	logPolicy, remotePolicy := mainSource[logPolicyStart:remotePolicyStart], mainSource[remotePolicyStart:observationPolicyStart]
+	observationPolicy := mainSource[observationPolicyStart:policyEnd]
+	if !strings.Contains(logPolicy, "privacy.AuthorizeLogs(ctx)") || !strings.Contains(logPolicy, "return tools.LogPolicyAllowed") ||
+		!strings.Contains(remotePolicy, "privacy.AuthorizeContainerOutput(ctx)") || !strings.Contains(remotePolicy, "return tools.LogPolicyAllowed") ||
+		!strings.Contains(observationPolicy, "privacy.AuthorizeDataSource(ctx, request.Kind, request.OriginHash)") ||
+		!strings.Contains(observationPolicy, "return tools.ObservationPolicyAllowed") {
+		t.Fatal("composition privacy policy does not preserve the three distinct, ActionEnvelope-gated observation categories")
 	}
 
 	providerConstructors := 0

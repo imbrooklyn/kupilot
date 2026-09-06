@@ -138,14 +138,21 @@ directory identity, argv, shell command, environment, external origin, process
 output, mutation bodies, and Kubernetes response bytes remain represented only
 by bounded identities or digests where eligible and never by raw content.
 
+Migration 12 rebuilds the same approval/decision/Reviewer foreign-key graph to
+add only the closed `observation` parameter kind used by supervised Pod-log and
+optional Prometheus/Loki actions. It adds no payload column. Search text,
+query/window parameters, source responses, raw logs, and credentials are not
+stored; the approval row retains only the existing parameter and origin
+digests. All prior rows and constraints are preserved.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
 `approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
 common approval schema remains bound to fixed typed state rather than a generic
 payload or write command. Restart, typed remediation, and default-off local
 process actions use its shared dispatcher. Remote-diagnostic handlers use the
-same envelope schema but their default `ask` human-delivery route remains fail-
-closed in this slice.
+same envelope schema and inline Application supervision; their Tool call stays
+blocked until the exact approval is consumed or safely closed.
 
 The `settings` table admits only code-owned typed records. In addition to the
 retention setting, `scope.last_context` schema version 1 stores one strict,
@@ -263,7 +270,7 @@ rows from each category using these inclusive boundaries:
 | --- | --- |
 | Evidence, ToolInvocations, and model-request metadata | The configured operational-detail cutoff, 30 days by default. Evidence uses `observed_at_ms`; Tool and model metadata use completion time when present and otherwise use start time as a conservative expiry fallback. |
 | Ordinary read and lifecycle AuditEvents | 90 days from `occurred_at_ms`. |
-| Dormant `approval_*` and future `write_*` AuditEvents | 180 days from `occurred_at_ms`. |
+| Approval and supervised-action `write_*` AuditEvents | 180 days from `occurred_at_ms`. |
 
 <!-- markdownlint-enable MD013 -->
 

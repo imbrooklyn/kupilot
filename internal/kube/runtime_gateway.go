@@ -190,6 +190,17 @@ func (gateway *ToolScopeBinding) ReadPodLogs(ctx context.Context, request toolco
 	return reader.ReadPodLogs(ctx, request)
 }
 
+func (gateway *ToolScopeBinding) ResolveObservationTarget(
+	ctx context.Context,
+	request toolcontract.ObservationTargetRequest,
+) (toolcontract.ResolvedObservationTarget, error) {
+	reader, err := gateway.readerFor(request.Scope)
+	if err != nil {
+		return toolcontract.ResolvedObservationTarget{}, err
+	}
+	return reader.ResolveObservationTarget(ctx, request)
+}
+
 // ReadMetrics delegates one exact typed Metrics API snapshot.
 func (gateway *ToolScopeBinding) ReadMetrics(
 	ctx context.Context,
@@ -252,6 +263,14 @@ func (gateway *ToolScopeBinding) RevalidateRemoteDiagnosticAction(ctx context.Co
 		return err
 	}
 	return reader.RevalidateRemoteDiagnosticAction(ctx, plan)
+}
+
+func (gateway *ToolScopeBinding) RevalidateObservationAction(ctx context.Context, plan domain.ObservationActionPlan) error {
+	reader, err := gateway.readerFor(plan.Scope)
+	if err != nil {
+		return err
+	}
+	return reader.RevalidateObservationAction(ctx, plan)
 }
 
 func (gateway *ToolScopeBinding) readerFor(scope domain.ClusterScope) (*ToolResourceReader, error) {

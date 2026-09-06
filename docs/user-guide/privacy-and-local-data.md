@@ -1,12 +1,13 @@
 # Privacy and Local Data
 
 This page distinguishes current behavior from the Accepted `v0.5` privacy
-target. The checked-in binary now exposes named model roles, role-scoped
+target. The checked-in source now exposes named model roles, role-scoped
 consent, safe Session context and summarization, bounded data-source and remote-
-diagnostic pipelines, and default-off local execution. Remote-diagnostic human/
-Reviewer delivery remains fail-closed in this slice. Local process output has
-no model-transfer category: bounded sanitized output may be shown only in the
-local terminal and cannot become model content or Evidence.
+diagnostic pipelines, and default-off local execution. Human and Reviewer
+routes for remote diagnostics, Pod logs, and optional sources use the same
+inline supervision and receive no output while deciding. Local process output
+has no model-transfer category: bounded sanitized output may be shown only in
+the local terminal and cannot become model content or Evidence.
 
 Kupilot orchestrates locally and connects directly to the selected Kubernetes
 API and configured model endpoint. Local orchestration does not mean all

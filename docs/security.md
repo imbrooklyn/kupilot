@@ -9,9 +9,10 @@ the common ActionEnvelope/approval foundation, broad policy-bound built-in and
 exact CRD resource reads, and deterministic read-only observability adapters.
 The typed Deployment restart and the default-off Pod Exec, container-file, and
 diagnostic-Pod handlers are composed through the action foundation. Review-
-class log, optional data-source, and remote-diagnostic operations remain fail-
-closed in the default `ask` composition until permission delivery can own their
-human decision; no live cluster execution has been claimed. Exact default-off
+class Pod logs, optional data-source reads, and remote-diagnostic operations
+use the same human/Reviewer/automatic supervision and release no attempt
+authority until durable consume and exact target revalidation; no universal
+live cluster compatibility is claimed. Exact default-off
 local direct argv and shell plus typed scale/rollback/controller-owned-Pod
 delete/cordon/uncordon/drain now use the shared Application dispatcher. No live
 host-tool execution or operating-system sandbox claim is made.
@@ -421,8 +422,10 @@ Secret metadata, bounded Events and logs, typed Pod/Node metrics, and explicit
 Prometheus/Loki source adapters, plus the exact remote-diagnostic rows behind
 default-off configuration. Review-class operations still require the separate
 permission, consent, sink, and ActionEnvelope path described below. Exact local
-process policies and typed remediation use that path; remote-diagnostic human
-and Reviewer delivery remains fail-closed in this slice.
+process policies, typed remediation, and remote-diagnostic human or Reviewer
+routes use that path. A remote Tool attempt remains blocked until Application
+durably consumes the exact authority; every denial or stale result releases no
+execution authority.
 
 ## 8. Permission and execution safety
 
@@ -448,18 +451,17 @@ scripts and known wrappers/interpreters are denied, and the shell command string
 is accepted only by the shell-tagged `critical` operation. No decision for one
 envelope authorizes a different target, parameter, command, attempt, or cleanup.
 
-The current deterministic evaluator covers every profile/effect/risk
-combination and rejects disabled, unadmitted, incompatible, and hard-deny
-inputs before Reviewer or executor access. Its process-local Session-rule APIs
-and generalized durable approval state do not make a new capability reachable.
-The composition root retains the default `ask` profile and wires the three
-remote-diagnostic handlers. Their automatic and matching Session-rule gate is
-deterministic, but a human or Reviewer route fails closed before remote
-execution until its delivery integration is complete. The shared dispatcher
-does own human, Reviewer, Session-rule, and automatic routes for typed
-remediation and local execution, always after operation-specific preparation
-and before the matching executor. Full `/permissions` management remains later
-work.
+The deterministic evaluator covers every profile/effect/risk combination and
+rejects disabled, unadmitted, incompatible, and hard-deny inputs before
+Reviewer or executor access. Its process-local Session-rule APIs and durable
+approval state do not create a capability. The composition root retains the
+default `ask` profile and wires remote diagnostics, review-class Pod logs, and
+optional data-source reads through the same inline human, Reviewer, Session-
+rule, and automatic supervision. It performs operation-specific preparation,
+target revalidation, durable consume, final generation/expiry checks, one
+bounded attempt, and content-free outcome audit. `/permissions` changes this
+routing only through a typed Application command and cannot enable a disabled
+catalog entry or bypass consent, RBAC, risk, or `deny`.
 
 ## 9. Privacy and retention interactions
 

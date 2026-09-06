@@ -9,10 +9,9 @@ budget and status foundations. The broad read/observability catalog, existing
 typed Deployment restart, and default-off Pod Exec, container-file, and
 diagnostic-Pod handlers are composed. The shared Application dispatcher also
 composes typed scale, rollback, controller-owned Pod delete, cordon, uncordon,
-drain, exact local direct argv, and the separate shell operation. Remote-
-diagnostic human/Reviewer delivery remains fail-closed in this slice; this
-document does not claim live cluster or local-tool execution or release
-readiness.
+drain, exact local direct argv, the separate shell operation, and supervised
+remote diagnostics. This document does not claim live cluster or local-tool
+execution or release readiness.
 
 This document is normative for package ownership, dependency direction, scope
 and run isolation, capability dispatch, action approval, data ownership, and
@@ -429,10 +428,11 @@ Agent/summary/Reviewer budgets, remote-diagnostic policy version/counts, local-
 execution policy version/counts, run state, and storage health. Application also
 provides content-free local permission-policy, Session-rule, and active-action
 status queries. These queries perform no model, Kubernetes, Tool, Reviewer,
-process, or executor I/O and expose no credentials or content. The complete
-`/permissions` management interaction remains later delivery work; the one
-conversation already renders bounded generic approval, attempt, ambiguity,
-and verification state for composed actions.
+process, or executor I/O and expose no credentials or content. The
+`/permissions` management interaction uses a fixed local picker and typed
+Application command; it advances policy generation and invalidates dependent
+work before cancellation. The one conversation renders bounded approval,
+Reviewer, attempt, ambiguity, and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
@@ -500,14 +500,14 @@ Session-rule creation/list/revocation APIs, strict Reviewer routing, durable
 decision and single-use consumption, final generation checks, and content-free
 status. The composition root enables restart and the six additional typed
 remediation operations, plus exact local direct argv and the separate shell,
-through one dispatcher. That dispatcher requires a fresh operation-specific
-plan, routes human/Reviewer/automatic decisions, consumes authority only with a
-durable pre-operation audit, and reaches only the matching executor. The
-default-off Pod Exec, container-file, and diagnostic-Pod handlers retain their
-independent catalog-matching gate; its automatic and Session-rule routes are
-implemented, while its human/Reviewer delivery remains fail-closed pending the
-next integration slice. Merely naming or configuring any operation does not
-grant RBAC, process authority, or approval.
+through one dispatcher. Remote diagnostics, Pod logs, and optional
+Prometheus/Loki reads retain operation-specific catalog/privacy gates while
+using the same Application-owned supervision lifecycle. Each path requires a
+fresh exact target plan, routes human/Reviewer/automatic decisions, consumes
+authority only with durable pre-operation audit, and reaches only its matching
+narrow port. The Tool call stays blocked until exact authority is durably
+consumed or safely closed. Merely naming or configuring any operation does not
+grant RBAC, process authority, source access, or approval.
 
 `ask` is the default permission profile. Reviewer delegation applies only to
 `review`; `critical` remains human-routed under `ask` and `auto-review`.

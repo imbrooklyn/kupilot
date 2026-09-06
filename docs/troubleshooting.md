@@ -1,9 +1,11 @@
 # Troubleshooting
 
-The checked-in binary now implements strict version 2 named model profiles and
-safe Session context/summarization. Permission profiles, optional data sources,
-Pod Exec, diagnostic Pods, local argv, shell, and the expanded remediation
-catalog remain Accepted `v0.5` targets and are not yet reachable.
+The checked-in source now implements strict version 2 named model profiles,
+safe Session context/summarization, the five permission profiles, optional
+data sources, default-off Pod Exec/diagnostic Pod/local argv/shell policies,
+and the typed remediation catalog. These capabilities remain bounded by their
+configuration, consent, permission, ActionEnvelope, RBAC, and audit gates. No
+release archive or universal endpoint/cluster compatibility is implied.
 
 Kupilot fails closed when configuration, credential, scope, consent, storage,
 model, or Kubernetes safety checks cannot be completed. A safe error may omit a

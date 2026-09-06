@@ -19,7 +19,7 @@ func TestEventBridgeCoalescesDeltasAndPreservesStructuralOrdering(t *testing.T) 
 		requestID domain.ModelRequestID = "00000000-0000-7000-8000-000000000102"
 	)
 	var events []UIEvent
-	bridge, err := newEventBridge(runID, 7, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 7, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		events = append(events, event)
 		return nil
 	}))
@@ -76,7 +76,7 @@ func TestEventBridgeDoesNotConsumeSequenceOrDeltaOnSinkFailure(t *testing.T) {
 	now := time.UnixMilli(2_000).UTC()
 	failedDelta := false
 	var accepted []UIEvent
-	bridge, err := newEventBridge(runID, 9, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 9, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		if event.Kind == UIEventTextDelta && !failedDelta {
 			failedDelta = true
 			return errors.New("generated UI sink failure")
@@ -113,7 +113,7 @@ func TestEventBridgeFlushesByTimeAndBytesAndDropsFailedTail(t *testing.T) {
 	const runID domain.AgentRunID = "00000000-0000-7000-8000-000000000113"
 	start := time.UnixMilli(2_500).UTC()
 	var events []UIEvent
-	bridge, err := newEventBridge(runID, 9, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 9, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		events = append(events, event)
 		return nil
 	}))
@@ -153,7 +153,7 @@ func TestEventBridgeCapsProvisionalEventsWithoutLosingTerminal(t *testing.T) {
 	const runID domain.AgentRunID = "00000000-0000-7000-8000-000000000114"
 	now := time.UnixMilli(2_600).UTC()
 	var events []UIEvent
-	bridge, err := newEventBridge(runID, 9, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 9, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		events = append(events, event)
 		return nil
 	}))
@@ -202,7 +202,7 @@ func TestEventBridgeCapsProvisionalBytesBeforeDelivery(t *testing.T) {
 	const runID domain.AgentRunID = "00000000-0000-7000-8000-000000000115"
 	now := time.UnixMilli(2_700).UTC()
 	var events []UIEvent
-	bridge, err := newEventBridge(runID, 9, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 9, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		events = append(events, event)
 		return nil
 	}))
@@ -250,7 +250,7 @@ func TestEventBridgePublishesValidationWarningBeforeFinalAnswer(t *testing.T) {
 	const runID domain.AgentRunID = "00000000-0000-7000-8000-000000000131"
 	now := time.UnixMilli(3_000).UTC()
 	var events []UIEvent
-	bridge, err := newEventBridge(runID, 7, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+	bridge, err := newEventBridge(runID, 7, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 		events = append(events, event)
 		return nil
 	}))
@@ -293,7 +293,7 @@ func TestCompletedUIEventAcceptsAnswerAboveQuestionLimit(t *testing.T) {
 	answer := strings.Repeat("a", MaxQuestionBytes+1)
 	event := UIEvent{
 		Kind: UIEventRunCompleted, RunID: "00000000-0000-7000-8000-000000000141",
-		ScopeGeneration: 7, Sequence: 2, Text: answer,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: answer,
 	}
 	if len(answer) > MaxAnswerMarkdownBytes || event.Validate() != nil {
 		t.Fatalf("validated final answer length = %d; event error = %v", len(answer), event.Validate())
@@ -305,7 +305,7 @@ func TestTextDeltaUIEventAcceptsContentAboveQuestionLimit(t *testing.T) {
 	text := strings.Repeat("a", MaxQuestionBytes+1)
 	event := UIEvent{
 		Kind: UIEventTextDelta, RunID: "00000000-0000-7000-8000-000000000141",
-		ScopeGeneration: 7, Sequence: 2, Text: text,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: text,
 	}
 	if len(text) > MaxAnswerMarkdownBytes || event.Validate() != nil {
 		t.Fatalf("validated streamed answer length = %d; event error = %v", len(text), event.Validate())

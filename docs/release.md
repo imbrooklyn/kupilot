@@ -2,9 +2,10 @@
 
 > [!NOTE]
 > This runbook describes the historical `v0.3.0` artifact matrix. It has not
-> been requalified for the current `v0.4` candidate and does not authorize a
-> release or publication. A `v0.4` release requires an updated matrix and fresh
-> security, compatibility, migration, RBAC, and artifact evidence.
+> been requalified for the current unreleased `v0.5` implementation and does
+> not authorize a release or publication. A `v0.5` release requires an updated
+> matrix and fresh security, compatibility, migration, RBAC, and artifact
+> evidence.
 
 Kupilot releases are built locally from the repository `Makefile`. The release
 configuration produces versioned, CGO-free archives for the four supported

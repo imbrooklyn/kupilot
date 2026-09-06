@@ -72,6 +72,7 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 	if !ok || tracked.request.State != domain.ApprovalStateApproved || tracked.request.RunID != command.RunID ||
 		tracked.consuming || tracked.sequence != command.ApprovalSequence ||
 		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		tracked.request.Intent.PolicyGeneration != command.ExpectedPolicyGeneration ||
 		tracked.action.kind != trackedActionRestart || !tracked.action.matches(tracked.request.Intent) {
 		coordinator.mu.Unlock()
 		return UIApprovalResult{}, ErrApprovalUnavailable
@@ -222,13 +223,22 @@ func (coordinator *ApprovalCoordinator) finishClaimFailure(
 		updated.State == domain.ApprovalStateExpired {
 		if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
 			delete(coordinator.active, tracked.request.ID)
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
 			return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
 		}
 	}
 	delete(coordinator.active, tracked.request.ID)
 	result := projectUIApprovalResult(updated, tracked.sequence)
 	if result.Validate() != nil {
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
 		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if tracked.action.toolAuthorization() {
+		if coordinator.publishClosedRequired(ctx, result) != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+			return result, ErrApprovalUnavailable
+		}
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
 	}
 	if errors.Is(cause, approval.ErrPreWritePersistenceUnavailable) {
 		return result, ErrApprovalPersistenceUnavailable
@@ -255,6 +265,7 @@ type ApprovalResultAudits interface {
 type ApprovalIdentifierSource interface {
 	NewApprovalID() (domain.ApprovalID, error)
 	NewModelRequestID() (domain.ModelRequestID, error)
+	NewPermissionRuleID() (domain.PermissionRuleID, error)
 }
 
 // ApprovalCurrentScope supplies the exact currently verified scope.
@@ -277,6 +288,9 @@ type ApprovalCoordinatorConfig struct {
 	RestartExecutor    approval.RestartDeploymentExecutor
 	Remediation        RemediationActionExecutor
 	LocalProcesses     LocalProcessExecutor
+	RemoteDiagnostics  RemoteDiagnosticActionRevalidator
+	Observations       ObservationActionRevalidator
+	ObservationPolicy  domain.ObservabilityPolicyCatalog
 	Permissions        *PermissionManager
 	Reviewer           *ReviewerModelBinding
 	Reviews            ActionReviewPersistence
@@ -289,24 +303,29 @@ type ApprovalCoordinatorConfig struct {
 type ApprovalCoordinator struct {
 	mu sync.Mutex
 
-	service          ApprovalLifecycle
-	persistence      ApprovalPersistence
-	resultAudits     ApprovalResultAudits
-	scope            ApprovalCurrentScope
-	approvalIDs      ApprovalIdentifierSource
-	auditIDs         AuditIdentifierSource
-	uiEvents         UIEventSink
-	rollout          RestartRolloutObserver
-	restartValidator approval.RestartDeploymentRevalidator
-	restartExecutor  approval.RestartDeploymentExecutor
-	remediation      RemediationActionExecutor
-	localProcesses   LocalProcessExecutor
-	permissions      *PermissionManager
-	reviewer         *ReviewerModelBinding
-	reviews          ActionReviewPersistence
-	now              func() time.Time
-	persistenceLimit time.Duration
-	active           map[domain.ApprovalID]trackedApproval
+	service           ApprovalLifecycle
+	persistence       ApprovalPersistence
+	resultAudits      ApprovalResultAudits
+	scope             ApprovalCurrentScope
+	approvalIDs       ApprovalIdentifierSource
+	auditIDs          AuditIdentifierSource
+	uiEvents          UIEventSink
+	rollout           RestartRolloutObserver
+	restartValidator  approval.RestartDeploymentRevalidator
+	restartExecutor   approval.RestartDeploymentExecutor
+	remediation       RemediationActionExecutor
+	localProcesses    LocalProcessExecutor
+	remoteDiagnostics RemoteDiagnosticActionRevalidator
+	observations      ObservationActionRevalidator
+	observationPolicy domain.ObservabilityPolicyCatalog
+	permissions       *PermissionManager
+	reviewer          *ReviewerModelBinding
+	reviews           ActionReviewPersistence
+	now               func() time.Time
+	persistenceLimit  time.Duration
+	active            map[domain.ApprovalID]trackedApproval
+	toolSequenceRun   domain.AgentRunID
+	toolSequence      int64
 }
 
 type trackedApproval struct {
@@ -316,6 +335,8 @@ type trackedApproval struct {
 	route        PermissionEvaluation
 	reviewing    bool
 	reviewCancel context.CancelFunc
+	reviewer     *UIReviewerStatus
+	reviewIndex  int64
 	action       trackedAction
 }
 
@@ -326,16 +347,21 @@ const (
 	trackedActionRemediation
 	trackedActionLocalCommand
 	trackedActionLocalShell
+	trackedActionRemoteDiagnostic
+	trackedActionObservation
 )
 
 // trackedAction retains the complete project-owned execution plan only for
 // the current process. Persistence receives the canonical parameter digest,
 // never raw argv, paths, environment values, or a shell command.
 type trackedAction struct {
-	kind        trackedActionKind
-	remediation domain.RemediationActionPlan
-	command     domain.LocalCommandActionPlan
-	shell       domain.LocalShellActionPlan
+	kind                    trackedActionKind
+	remediation             domain.RemediationActionPlan
+	command                 domain.LocalCommandActionPlan
+	shell                   domain.LocalShellActionPlan
+	remote                  domain.RemoteDiagnosticActionPlan
+	observation             domain.ObservationActionPlan
+	authorizationCompletion chan toolAuthorizationResult
 }
 
 func (action trackedAction) matches(intent domain.ActionIntent) bool {
@@ -348,8 +374,26 @@ func (action trackedAction) matches(intent domain.ActionIntent) bool {
 		return action.command.MatchesIntent(intent)
 	case trackedActionLocalShell:
 		return action.shell.MatchesIntent(intent)
+	case trackedActionRemoteDiagnostic:
+		return action.remote.MatchesIntent(intent) && action.authorizationCompletion != nil
+	case trackedActionObservation:
+		return action.observation.MatchesIntent(intent) && action.authorizationCompletion != nil
 	default:
 		return false
+	}
+}
+
+func (action trackedAction) toolAuthorization() bool {
+	return action.kind == trackedActionRemoteDiagnostic || action.kind == trackedActionObservation
+}
+
+func (action trackedAction) completeAuthorization(envelope domain.ActionEnvelope, err error) {
+	if !action.toolAuthorization() || action.authorizationCompletion == nil {
+		return
+	}
+	select {
+	case action.authorizationCompletion <- toolAuthorizationResult{envelope: envelope, err: err}:
+	default:
 	}
 }
 
@@ -361,7 +405,8 @@ func NewApprovalCoordinator(config ApprovalCoordinatorConfig) (*ApprovalCoordina
 	}
 	if config.Service == nil || config.Persistence == nil || config.ResultAudits == nil || config.Scope == nil || config.ApprovalIDs == nil ||
 		config.AuditIDs == nil || config.UIEvents == nil || config.Rollout == nil || config.RestartRevalidator == nil ||
-		config.RestartExecutor == nil || config.Permissions == nil || config.Reviews == nil ||
+		config.RestartExecutor == nil || config.Observations == nil || config.ObservationPolicy.Validate() != nil ||
+		config.Permissions == nil || config.Reviews == nil ||
 		config.Now == nil || !validCoordinatorTime(config.Now()) ||
 		limit <= 0 || limit > MaxPersistenceTimeout {
 		return nil, ErrApprovalCoordinatorDependency
@@ -371,7 +416,8 @@ func NewApprovalCoordinator(config ApprovalCoordinatorConfig) (*ApprovalCoordina
 		approvalIDs: config.ApprovalIDs, auditIDs: config.AuditIDs, uiEvents: config.UIEvents,
 		rollout: config.Rollout, restartValidator: config.RestartRevalidator,
 		restartExecutor: config.RestartExecutor, remediation: config.Remediation,
-		localProcesses: config.LocalProcesses, permissions: config.Permissions,
+		localProcesses: config.LocalProcesses, remoteDiagnostics: config.RemoteDiagnostics,
+		observations: config.Observations, observationPolicy: config.ObservationPolicy, permissions: config.Permissions,
 		reviewer: config.Reviewer, reviews: config.Reviews, now: config.Now,
 		persistenceLimit: limit, active: make(map[domain.ApprovalID]trackedApproval),
 	}
@@ -510,15 +556,21 @@ func (coordinator *ApprovalCoordinator) submitPreparedAction(
 func (coordinator *ApprovalCoordinator) publishApprovalDialog(ctx context.Context, tracked trackedApproval) error {
 	request, sequence := tracked.request, tracked.sequence
 	projection := projectUIApprovalRequest(request, sequence)
+	if tracked.reviewer != nil {
+		reviewer := *tracked.reviewer
+		projection.Reviewer = &reviewer
+	}
 	event := UIEvent{
 		Kind: UIEventApprovalRequested, RunID: request.RunID,
-		ScopeGeneration: request.Intent.Scope.Generation, Sequence: sequence, Approval: &projection,
+		ScopeGeneration: request.Intent.Scope.Generation, PolicyGeneration: request.Intent.PolicyGeneration,
+		Sequence: sequence, Approval: &projection,
 	}
 	if projection.Validate() != nil || event.Validate() != nil || coordinator.uiEvents.PublishUIEvent(ctx, event) != nil {
 		coordinator.mu.Lock()
 		delete(coordinator.active, request.ID)
 		coordinator.mu.Unlock()
 		coordinator.closeAfterDeliveryFailure(ctx, request)
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
 		return ErrApprovalUnavailable
 	}
 	return nil
@@ -538,7 +590,9 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	defer coordinator.mu.Unlock()
 	tracked, ok := coordinator.active[command.ApprovalID]
 	if !ok || tracked.request.RunID != command.RunID || tracked.sequence != command.ApprovalSequence ||
+		tracked.consuming ||
 		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		tracked.request.Intent.PolicyGeneration != command.ExpectedPolicyGeneration ||
 		tracked.route.Disposition != domain.ReviewDispositionHuman {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
@@ -563,10 +617,18 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 		}
 		if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
 			delete(coordinator.active, command.ApprovalID)
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
 			return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
 		}
 		delete(coordinator.active, command.ApprovalID)
 		result := projectUIApprovalResult(updated, tracked.sequence)
+		if tracked.action.toolAuthorization() {
+			if coordinator.publishClosedRequired(ctx, result) != nil {
+				tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+				return result, ErrApprovalUnavailable
+			}
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
+		}
 		if updated.State == domain.ApprovalStateExpired {
 			return result, ErrApprovalExpired
 		}
@@ -578,6 +640,7 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	}) != nil {
 		coordinator.cancelInMemory(updated.ID)
 		delete(coordinator.active, command.ApprovalID)
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
 		return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
 	}
 	if updated.State == domain.ApprovalStateApproved {
@@ -588,9 +651,148 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	}
 	result := projectUIApprovalResult(updated, tracked.sequence)
 	if result.Validate() != nil {
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
+	if updated.State != domain.ApprovalStateApproved && tracked.action.toolAuthorization() {
+		if coordinator.publishClosedRequired(ctx, result) != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+			return result, ErrApprovalUnavailable
+		}
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
+	}
 	return result, nil
+}
+
+// CancelAction closes one exact pending human decision without converting the
+// cancellation into a denial or an execution decision.
+func (coordinator *ApprovalCoordinator) CancelAction(ctx context.Context, command UICommand) (UIApprovalResult, error) {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandCancelAction || command.Validate() != nil {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return UIApprovalResult{}, err
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	tracked, ok := coordinator.active[command.ApprovalID]
+	if !ok || tracked.request.RunID != command.RunID || tracked.sequence != command.ApprovalSequence ||
+		tracked.consuming ||
+		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		tracked.request.Intent.PolicyGeneration != command.ExpectedPolicyGeneration ||
+		tracked.route.Disposition != domain.ReviewDispositionHuman ||
+		!tracked.request.Digest.Equal(command.ApprovalDigest) || !tracked.request.Nonce.Equal(command.ApprovalNonce) {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	updated, err := coordinator.service.Cancel(ctx, command.ApprovalID, domain.ApprovalReasonUserCancelled)
+	if err != nil || updated.ID != tracked.request.ID || updated.State != domain.ApprovalStateCancelled {
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
+		delete(coordinator.active, command.ApprovalID)
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
+		return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
+	}
+	delete(coordinator.active, command.ApprovalID)
+	result := projectUIApprovalResult(updated, tracked.sequence)
+	if result.Validate() != nil {
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+		return UIApprovalResult{}, ErrApprovalUnavailable
+	}
+	if tracked.action.toolAuthorization() {
+		if coordinator.publishClosedRequired(ctx, result) != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+			return result, ErrApprovalUnavailable
+		}
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
+	}
+	return result, nil
+}
+
+// ReconfigurePermission applies one of the five fixed profile selections.
+// Profile selection routes work only; it never enables a capability, grants
+// RBAC, changes scope, or creates consent.
+func (coordinator *ApprovalCoordinator) ReconfigurePermission(ctx context.Context, command UICommand) error {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandChangePermission || command.Validate() != nil {
+		return ErrPermissionConfiguration
+	}
+	next := PermissionPolicy{Profile: command.PermissionProfile}
+	if command.PermissionProfile == domain.PermissionProfileFullAccess {
+		next.FullAccessAllowed = true
+		next.HighRiskAcknowledged = true
+	}
+	if command.PermissionProfile == domain.PermissionProfileCustom {
+		current, ok := coordinator.permissions.Policy()
+		if !ok {
+			return ErrPermissionUnavailable
+		}
+		if current.Profile == domain.PermissionProfileCustom {
+			next.CustomRoutes = append([]CustomPermissionRoute(nil), current.CustomRoutes...)
+			next.HighRiskAcknowledged = current.HighRiskAcknowledged
+		}
+	}
+	return coordinator.permissions.ReconfigureAtGeneration(
+		ctx, PermissionChangeActorLocalUser, command.ExpectedPolicyGeneration, next,
+	)
+}
+
+// CreateSessionRule creates the narrowest rule representable by the accepted
+// rule contract: the displayed review operation, scope, target-name prefix,
+// complete typed parameter/argv binding, effects, limits, and a one-hour TTL.
+// Creating it advances policy generation and invalidates this source request;
+// the current action is never executed by this command.
+func (coordinator *ApprovalCoordinator) CreateSessionRule(ctx context.Context, command UICommand) error {
+	if coordinator == nil || ctx == nil || command.Kind != UICommandCreateSessionRule || command.Validate() != nil {
+		return ErrPermissionRuleInvalid
+	}
+	coordinator.mu.Lock()
+	tracked, ok := coordinator.active[command.ApprovalID]
+	valid := ok && !tracked.consuming && tracked.request.RunID == command.RunID && tracked.sequence == command.ApprovalSequence &&
+		tracked.request.State == domain.ApprovalStatePending && tracked.request.Intent.Risk == domain.RiskReview &&
+		tracked.request.Intent.Scope.Generation == command.ExpectedScopeGeneration &&
+		tracked.request.Intent.PolicyGeneration == command.ExpectedPolicyGeneration &&
+		tracked.route.Disposition == domain.ReviewDispositionHuman &&
+		tracked.request.Digest.Equal(command.ApprovalDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
+	if valid {
+		tracked.consuming = true
+		coordinator.active[command.ApprovalID] = tracked
+	}
+	coordinator.mu.Unlock()
+	if !valid {
+		return ErrPermissionRuleInvalid
+	}
+	ruleID, err := coordinator.approvalIDs.NewPermissionRuleID()
+	if err != nil || !ruleID.Valid() {
+		coordinator.releaseSessionRuleReservation(tracked)
+		return ErrPermissionRuleInvalid
+	}
+	createdAt := coordinator.now()
+	expiresAt := createdAt.Add(time.Hour)
+	argumentCount := 0
+	if kind := tracked.request.Intent.Parameters.Kind; kind == domain.ActionParametersRemoteArgv || kind == domain.ActionParametersLocalArgv {
+		argumentCount = len(tracked.request.Intent.Parameters.Arguments.Values())
+	}
+	_, err = coordinator.permissions.CreateSessionRule(ctx, CreateSessionPermissionRuleCommand{
+		Actor: PermissionChangeActorLocalUser, RuleID: ruleID, SessionID: tracked.request.SessionID,
+		Envelope: tracked.request.ActionEnvelope(), TargetNamePrefix: tracked.request.Intent.Target.Resource.Name,
+		ArgumentPrefixCount: argumentCount, CreatedAt: createdAt, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		coordinator.releaseSessionRuleReservation(tracked)
+	}
+	return err
+}
+
+func (coordinator *ApprovalCoordinator) releaseSessionRuleReservation(tracked trackedApproval) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	current, ok := coordinator.active[tracked.request.ID]
+	if !ok || !current.consuming || current.request.State != domain.ApprovalStatePending ||
+		current.sequence != tracked.sequence || !current.request.Digest.Equal(tracked.request.Digest) {
+		return
+	}
+	current.consuming = false
+	coordinator.active[tracked.request.ID] = current
 }
 
 // Expire closes one tracked request at the exact half-open TTL boundary.
@@ -601,7 +803,7 @@ func (coordinator *ApprovalCoordinator) Expire(ctx context.Context, requestID do
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	tracked, ok := coordinator.active[requestID]
-	if !ok {
+	if !ok || tracked.consuming {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	updated, err := coordinator.service.Expire(ctx, requestID)
@@ -610,11 +812,16 @@ func (coordinator *ApprovalCoordinator) Expire(ctx context.Context, requestID do
 	}
 	if err := coordinator.persistClosed(ctx, tracked.request.State, updated); err != nil {
 		delete(coordinator.active, requestID)
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
 		return UIApprovalResult{}, ErrApprovalPersistenceUnavailable
 	}
 	delete(coordinator.active, requestID)
 	result := projectUIApprovalResult(updated, tracked.sequence)
-	coordinator.publishClosed(ctx, result)
+	if coordinator.publishClosedRequired(ctx, result) != nil {
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+		return result, ErrApprovalUnavailable
+	}
+	tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
 	return result, nil
 }
 
@@ -627,6 +834,7 @@ func (coordinator *ApprovalCoordinator) ExpireCommand(ctx context.Context, comma
 	tracked, ok := coordinator.active[command.ApprovalID]
 	valid := ok && tracked.request.RunID == command.RunID && tracked.sequence == command.ApprovalSequence &&
 		tracked.request.Intent.Scope.Generation == command.ExpectedScopeGeneration &&
+		tracked.request.Intent.PolicyGeneration == command.ExpectedPolicyGeneration &&
 		tracked.request.Digest.Equal(command.ApprovalDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
 	coordinator.mu.Unlock()
 	if !valid {
@@ -796,9 +1004,20 @@ func (coordinator *ApprovalCoordinator) Status() (PermissionStatus, *UIActionSta
 			PolicyGeneration: tracked.request.Intent.PolicyGeneration, Reviewing: tracked.reviewing,
 			ExpiresAtMillis: tracked.request.ExpiresAt.UnixMilli(),
 		}
+		if tracked.reviewer != nil {
+			reviewer := *tracked.reviewer
+			status.Reviewer = &reviewer
+		}
 		return permission, status
 	}
 	return permission, nil
+}
+
+// UIPermissionSnapshot returns the current content-free delivery projection.
+// It performs no model, Kubernetes, repository, process, or executor I/O.
+func (coordinator *ApprovalCoordinator) UIPermissionSnapshot() UIPermissionStatus {
+	permission, _ := coordinator.Status()
+	return projectUIPermissionStatus(permission)
 }
 
 func (coordinator *ApprovalCoordinator) closeMatching(
@@ -826,6 +1045,7 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 			if tracked.reviewCancel != nil {
 				tracked.reviewCancel()
 			}
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
 			continue
 		}
 		if updated.State == domain.ApprovalStateConsumed {
@@ -833,16 +1053,26 @@ func (coordinator *ApprovalCoordinator) closeMatching(
 			if tracked.reviewCancel != nil {
 				tracked.reviewCancel()
 			}
+			tracked.action.completeAuthorization(updated.ActionEnvelope(), remoteInvalidationError(reason))
 			continue
 		}
-		if persistErr := coordinator.persistClosed(ctx, tracked.request.State, updated); persistErr != nil {
+		persistErr := coordinator.persistClosed(ctx, tracked.request.State, updated)
+		if persistErr != nil {
 			resultErr = ErrApprovalPersistenceUnavailable
 		}
 		delete(coordinator.active, id)
 		if tracked.reviewCancel != nil {
 			tracked.reviewCancel()
 		}
-		coordinator.publishClosed(ctx, projectUIApprovalResult(updated, tracked.sequence))
+		result := projectUIApprovalResult(updated, tracked.sequence)
+		if coordinator.publishClosedRequired(ctx, result) != nil && resultErr == nil {
+			resultErr = ErrApprovalUnavailable
+		}
+		if persistErr != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
+		} else {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
+		}
 	}
 	return resultErr
 }
@@ -911,18 +1141,66 @@ func approvalAuditProjection(request approval.StoredRequest) (domain.AuditEventT
 	case domain.ApprovalStateExpired:
 		return domain.AuditEventApprovalExpired, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
 	default:
-		return domain.AuditEventApprovalCancelled, domain.AuditActorSystem, domain.AuditOutcomeDenied, string(request.StateReason)
+		actor := domain.AuditActorSystem
+		if request.StateReason == domain.ApprovalReasonUserCancelled {
+			actor = domain.AuditActorUser
+		}
+		return domain.AuditEventApprovalCancelled, actor, domain.AuditOutcomeDenied, string(request.StateReason)
 	}
 }
 
 func (coordinator *ApprovalCoordinator) publishClosed(ctx context.Context, result UIApprovalResult) {
+	_ = coordinator.publishClosedRequired(ctx, result)
+}
+
+func (coordinator *ApprovalCoordinator) publishClosedRequired(ctx context.Context, result UIApprovalResult) error {
 	if result.Validate() != nil {
-		return
+		return ErrApprovalUnavailable
 	}
-	_ = coordinator.uiEvents.PublishUIEvent(ctx, UIEvent{
+	event := UIEvent{
 		Kind: UIEventApprovalClosed, RunID: result.RunID, ScopeGeneration: result.ScopeGeneration,
-		Sequence: result.Sequence, ApprovalResult: &result,
-	})
+		PolicyGeneration: result.PolicyGeneration, Sequence: result.Sequence, ApprovalResult: &result,
+	}
+	if event.Validate() != nil || coordinator.uiEvents.PublishUIEvent(ctx, event) != nil {
+		return ErrApprovalUnavailable
+	}
+	return nil
+}
+
+func remoteClosureError(request domain.ApprovalRequest) error {
+	switch request.State {
+	case domain.ApprovalStateRejected:
+		return remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	case domain.ApprovalStateExpired:
+		return remoteGateError{class: domain.SafeErrorClassTimeout}
+	case domain.ApprovalStateCancelled:
+		return remoteGateError{class: domain.SafeErrorClassCancelled}
+	case domain.ApprovalStateInvalidated:
+		if request.StateReason == domain.ApprovalReasonScopeChanged {
+			return remoteGateError{class: domain.SafeErrorClassStaleScope}
+		}
+		if request.StateReason == domain.ApprovalReasonTargetChanged {
+			return remoteGateError{class: domain.SafeErrorClassConflict}
+		}
+		return remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	default:
+		return remoteGateError{class: domain.SafeErrorClassInternal}
+	}
+}
+
+func remoteInvalidationError(reason domain.ApprovalStateReason) error {
+	switch reason {
+	case domain.ApprovalReasonScopeChanged:
+		return remoteGateError{class: domain.SafeErrorClassStaleScope}
+	case domain.ApprovalReasonTargetChanged:
+		return remoteGateError{class: domain.SafeErrorClassConflict}
+	case domain.ApprovalReasonTTLExpired:
+		return remoteGateError{class: domain.SafeErrorClassTimeout}
+	case domain.ApprovalReasonContextCancelled, domain.ApprovalReasonRunCancelled, domain.ApprovalReasonUserCancelled:
+		return remoteGateError{class: domain.SafeErrorClassCancelled}
+	default:
+		return remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	}
 }
 
 func (coordinator *ApprovalCoordinator) closeAfterDeliveryFailure(ctx context.Context, request domain.ApprovalRequest) {

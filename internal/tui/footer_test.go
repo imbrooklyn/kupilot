@@ -12,7 +12,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-func TestFooterKeepsOnlyScopeAndAccessDuringBusyRun(t *testing.T) {
+func TestFooterKeepsScopePermissionAndSupervisionDuringBusyRun(t *testing.T) {
 	t.Parallel()
 
 	model := NewModel(Config{
@@ -23,7 +23,7 @@ func TestFooterKeepsOnlyScopeAndAccessDuringBusyRun(t *testing.T) {
 	})
 	model.run.Active = true
 	footer := model.footerView()
-	for _, want := range []string{"Context development", "Namespace payments", "supervised"} {
+	for _, want := range []string{"Context development", "Namespace payments", "ask", "human"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
@@ -73,7 +73,7 @@ func TestFooterUsesSemanticScopeColorsWithoutColorOnlyMeaning(t *testing.T) {
 		colored.styles.footer.Label.Render("Context "),
 		colored.styles.footer.Value.Render("development"),
 		colored.styles.footer.Value.Render("payments"),
-		colored.styles.footer.State.Render("supervised"),
+		colored.styles.footer.State.Render("ask · human"),
 	} {
 		if !strings.Contains(footer, styled) {
 			t.Fatalf("footer is missing semantic style %q: %q", styled, footer)
@@ -84,12 +84,26 @@ func TestFooterUsesSemanticScopeColorsWithoutColorOnlyMeaning(t *testing.T) {
 		Width: 100, Height: 24, Theme: ThemeNoColor,
 		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
 	}).footerView()
-	if hasColorSGR(plain) || !strings.Contains(plain, "Context development · Namespace payments · supervised") {
+	if hasColorSGR(plain) || !strings.Contains(plain, "Context development · Namespace payments · ask · human") {
 		t.Fatalf("no-color footer lost textual meaning or retained color: %q", plain)
 	}
 }
 
-func TestFooterNarrowWidthsRetainScopeAndSupervisionBeforeOptionalState(t *testing.T) {
+func TestFooterDoesNotPresentDegradedPermissionAsUsableAuthority(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 100, Height: 24, Theme: ThemeNoColor,
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+	})
+	model.permission.Healthy = false
+	footer := model.footerView()
+	if !strings.Contains(footer, "permission degraded · no authority") || strings.Contains(footer, "ask · human") {
+		t.Fatalf("degraded permission footer = %q", footer)
+	}
+}
+
+func TestFooterNarrowWidthsRetainScopePermissionAndSupervisionBeforeOptionalState(t *testing.T) {
 	t.Parallel()
 
 	for _, width := range []int{40, 24, 16} {
@@ -106,7 +120,7 @@ func TestFooterNarrowWidthsRetainScopeAndSupervisionBeforeOptionalState(t *testi
 				ModelName: "a-very-long-model-name", PrivacyMode: domain.PrivacyModeStandard,
 			})
 			footer := model.footerView()
-			if !strings.Contains(footer, "supervised") ||
+			if !strings.Contains(footer, "ask · human") ||
 				width >= 24 && (!strings.Contains(footer, "Context") || !strings.Contains(footer, "Namespace")) ||
 				width < 24 && !strings.Contains(footer, " / ") {
 				t.Fatalf("required footer state was cropped at width %d: %q", width, footer)
@@ -121,6 +135,25 @@ func TestFooterNarrowWidthsRetainScopeAndSupervisionBeforeOptionalState(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestFooterNarrowWidthPrioritizesActiveApprovalAfterScope(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(Config{
+		Width: 16, Height: 12, Theme: ThemeNoColor,
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+	})
+	model.pendingApproval = &application.UIApprovalRequest{}
+	footer := model.footerView()
+	if !strings.Contains(footer, " / ") || !strings.Contains(footer, "approva") || !strings.Contains(footer, "pending") || strings.Contains(footer, "ask · human") {
+		t.Fatalf("narrow active-approval priority = %q", footer)
+	}
+	for _, line := range strings.Split(footer, "\n") {
+		if lipgloss.Width(line) > 15 {
+			t.Fatalf("footer width = %d, content limit 15: %q", lipgloss.Width(line), line)
+		}
 	}
 }
 

@@ -146,9 +146,9 @@ func TestToolResourceReaderUnknownTargetsStopBeforeSecondaryActions(t *testing.T
 	assertSingleClientAction(t, fakeClient.Actions(), "get", "", "v1", "pods", "team-a")
 
 	fakeClient.ClearActions()
-	_, err = reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "missing-pod", Container: "app",
-		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
+	_, err = reader.ResolveObservationTarget(context.Background(), toolcontract.ObservationTargetRequest{
+		Scope: liveScope("team-a"), PolicyGeneration: 1, Operation: domain.ActionOperationLogsCurrent,
+		Namespace: "team-a", PodName: "missing-pod", RequestedContainer: "app",
 	})
 	assertKubeErrorClass(t, err, ClassNotFound)
 	assertSingleClientAction(t, fakeClient.Actions(), "get", "", "v1", "pods", "team-a")
@@ -296,7 +296,7 @@ func TestToolResourceReaderRecordsExactCurrentPreviousAndInitLogRequests(t *test
 			reader, closeReader := newHTTPToolResourceReader(t, server)
 			defer closeReader()
 			result, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-				Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "sample-pod", Container: test.container, Previous: test.previous,
+				Scope: liveScope("team-a"), PolicyGeneration: 1, Pod: boundLogPod(), Namespace: "team-a", PodName: "sample-pod", Container: test.container, Previous: test.previous,
 				TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 			})
 			if err != nil || result.Availability != toolcontract.PodLogAvailable || result.Previous != test.previous ||
@@ -317,7 +317,7 @@ func TestToolResourceReaderRecordsExactCurrentPreviousAndInitLogRequests(t *test
 
 func TestToolResourceReaderSelectsContainersAndNeverFallsBackFromPrevious(t *testing.T) {
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "sample-pod", Namespace: "team-a", UID: "generated-pod-uid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "sample-pod", Namespace: "team-a", UID: "generated-pod-uid", ResourceVersion: "17"},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}},
 		Status:     corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "app", RestartCount: 0}}},
 	}
@@ -325,7 +325,8 @@ func TestToolResourceReaderSelectsContainersAndNeverFallsBackFromPrevious(t *tes
 	defer client.Close()
 	reader, _ := NewToolResourceReader(gateway, client, liveScope("team-a"), alwaysCurrentResourcePolicy{})
 	base := toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "sample-pod", TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
+		Scope: liveScope("team-a"), PolicyGeneration: 1,
+		Pod: boundLogPod(), Namespace: "team-a", PodName: "sample-pod", TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	}
 
 	_, err := reader.ReadPodLog(context.Background(), base)
@@ -378,7 +379,7 @@ func TestToolResourceReaderLocallyBoundsOversizedLogResponse(t *testing.T) {
 	reader, closeReader := newHTTPToolResourceReader(t, server)
 	defer closeReader()
 	result, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "sample-pod", Container: "app",
+		Scope: liveScope("team-a"), PolicyGeneration: 1, Pod: boundLogPod(), Namespace: "team-a", PodName: "sample-pod", Container: "app",
 		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	})
 	if err != nil || result.Content.Len() != 4096-len(podFixture) || !result.Truncated {
@@ -404,7 +405,7 @@ func TestToolResourceReaderMapsLogSubresourceRBACWithoutRawError(t *testing.T) {
 	reader, closeReader := newHTTPToolResourceReader(t, server)
 	defer closeReader()
 	_, err := reader.ReadPodLog(context.Background(), toolcontract.PodLogReadRequest{
-		Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "sample-pod", Container: "app",
+		Scope: liveScope("team-a"), PolicyGeneration: 1, Pod: boundLogPod(), Namespace: "team-a", PodName: "sample-pod", Container: "app",
 		TailLines: 17, SinceSeconds: 600, LimitBytes: 4096,
 	})
 	assertKubeErrorClass(t, err, ClassPermissionDenied)
@@ -533,7 +534,7 @@ func TestToolResourceReaderRecordsAllContainerLogsAndAggregateLimits(t *testing.
 	readAndAssert := func(maxContainers int, wantNames []string, wantPartial bool) {
 		t.Helper()
 		result, err := reader.ReadPodLogs(context.Background(), toolcontract.PodLogsReadRequest{
-			Scope: liveScope("team-a"), PolicyGeneration: 1, Namespace: "team-a", PodName: "sample-pod",
+			Scope: liveScope("team-a"), PolicyGeneration: 1, Pod: boundLogPod(), Namespace: "team-a", PodName: "sample-pod",
 			IncludeInit: true, IncludeEphemeral: true, TailLines: 17, SinceSeconds: 600, MaxContainers: maxContainers, LimitBytes: 64 * 1024,
 		})
 		if err != nil || len(result.Items) != len(wantNames) || result.Partial != wantPartial || result.Truncated != wantPartial ||
@@ -796,6 +797,13 @@ func readKubeFixture(t *testing.T, name string) string {
 		t.Fatalf("read fixture %q: %v", name, err)
 	}
 	return string(value)
+}
+
+func boundLogPod() domain.ResourceRef {
+	return domain.ResourceRef{
+		APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+		UID: "generated-pod-uid", ResourceVersion: "17",
+	}
 }
 
 func newHTTPToolResourceReader(t *testing.T, server *httptest.Server) (*ToolResourceReader, func()) {

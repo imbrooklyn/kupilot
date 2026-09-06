@@ -90,6 +90,7 @@ func TestRestartApprovalEndToEndWriteActionMatrix(t *testing.T) {
 			Scope: old.scope, ApprovalIDs: restartedIDs, AuditIDs: restartedIDs,
 			UIEvents: &fakeApprovalUIEvents{}, Rollout: restartedRollout, Now: old.clock.Now,
 			RestartRevalidator: restartedExecutor, RestartExecutor: restartedExecutor,
+			Observations: fakeObservationRevalidator{}, ObservationPolicy: domain.DisabledObservabilityPolicyCatalog(),
 			Permissions: restartedPermissions, Reviews: old.persistence,
 		})
 		if err != nil {

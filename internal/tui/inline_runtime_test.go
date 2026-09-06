@@ -152,7 +152,7 @@ func TestTerminalRuntimeCommitsHistoryOnceWithoutMouseOrAlternateScreen(t *testi
 		runStartedEvent(1),
 		application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 2,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 			ToolStep: &application.ToolStep{
 				InvocationID: testInvocationID,
 				Name:         domain.ToolNameGetClusterOverview,
@@ -162,7 +162,7 @@ func TestTerminalRuntimeCommitsHistoryOnceWithoutMouseOrAlternateScreen(t *testi
 		},
 		application.UIEvent{
 			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 3, Text: "Three Nodes are Ready.",
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "Three Nodes are Ready.",
 		},
 	)
 	if final.run.Status != "completed" || !final.run.Terminal {
@@ -373,7 +373,7 @@ func TestTerminalRuntimeSettlesCompactFrameBeforePrintingCompletedTurn(t *testin
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventToolStep, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID,
 			Name:         domain.ToolNameGetClusterOverview,
@@ -391,7 +391,7 @@ func TestTerminalRuntimeSettlesCompactFrameBeforePrintingCompletedTurn(t *testin
 	runtime.sized = true
 	next, command := runtime.Update(ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 3,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		Text: "| Resource | State |\n|---|---|\n| node-a | Ready |",
 	}})
 	prepared, ok := next.(TerminalRuntime)
@@ -516,7 +516,7 @@ func TestTerminalRuntimeBlocksUnsafeControlsBeforeHistoryInsertion(t *testing.T)
 		runStartedEvent(1),
 		application.UIEvent{
 			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 2, Text: "Ready\x1b]52;c;answer-canary\x07.",
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Ready\x1b]52;c;answer-canary\x07.",
 		},
 	)
 	if strings.Contains(rendered, "question-canary") || strings.Contains(rendered, "answer-canary") ||
@@ -541,7 +541,7 @@ func TestTerminalRuntimeCommitsTerminalCancellationWithoutLiveState(t *testing.T
 		runStartedEvent(1),
 		application.UIEvent{
 			Kind: application.UIEventRunCancelled, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
 		},
 	)
 	transcript := final.TerminalTranscript()

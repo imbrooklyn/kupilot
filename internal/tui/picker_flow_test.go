@@ -336,7 +336,7 @@ func TestScopeSwitchDiscardsLateRunEventsAndTerminatesOldRunProjection(t *testin
 	model.scope.Switching = true
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "late old-scope text",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "late old-scope text",
 	}})
 	if model.run.StreamedText != "" || model.run.LastSequence != 1 {
 		t.Fatal("scope-switching UI accepted a late old-generation event")

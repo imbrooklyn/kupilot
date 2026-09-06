@@ -228,7 +228,7 @@ func TestGetPodLogsDiscardsRawContentAfterScopeBecomesStale(t *testing.T) {
 			Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable, Content: boundedPodLogContent(t, canary),
 		}, nil
 	}}
-	dependencies := logDependencies(reader, &sequenceScopeGuard{results: []bool{true, false}}, LogPolicyAllowed)
+	dependencies := logDependencies(reader, &sequenceScopeGuard{results: []bool{true, true, true, false}}, LogPolicyAllowed)
 	dependencies.EvidenceIDs = ids
 	tool, _ := NewGetPodLogsTool(dependencies)
 	result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
@@ -248,7 +248,7 @@ func TestGetPodLogsDiscardsRawContentWhenPostflightAuthorizationChanges(t *testi
 		wantClass domain.SafeErrorClass
 	}{
 		{name: "consent revoked", decision: LogPolicyConsentRequired, wantClass: domain.SafeErrorClassConsentRequired},
-		{name: "permission changed", decision: LogPolicyPermissionRequired, wantClass: domain.SafeErrorClassPolicyDenied},
+		{name: "denied", decision: LogPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied},
 		{name: "read denied", decision: LogPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied},
 		{name: "invalid decision", decision: LogPolicyDecision("generated"), wantClass: domain.SafeErrorClassInternal},
 	} {
@@ -350,9 +350,68 @@ func TestGetPodLogsAllContainersPropagatesPartialAndPolicyDenial(t *testing.T) {
 	}
 }
 
+func TestPodLogActionGateDenialsPreventUnsupervisedReads(t *testing.T) {
+	tests := []struct {
+		name         string
+		prepareErr   error
+		authorizeErr error
+		wantTargets  int
+		wantPrepare  int
+		wantAuth     int
+	}{
+		{name: "preflight denied", prepareErr: &fakeClassifiedError{class: domain.SafeErrorClassPolicyDenied}, wantPrepare: 1},
+		{name: "approval denied", authorizeErr: &fakeClassifiedError{class: domain.SafeErrorClassPolicyDenied}, wantTargets: 1, wantPrepare: 1, wantAuth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &fakePodLogReader{}
+			targets := &recordingObservationTargetResolver{}
+			actions := &permissiveObservationActionGate{now: func() time.Time { return eventObservedAt }, prepareErr: test.prepareErr, authorizeErr: test.authorizeErr}
+			dependencies := logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed)
+			dependencies.Targets, dependencies.Actions = targets, actions
+			tool, err := NewGetPodLogsTool(dependencies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
+				`{"container":"app","pod_name":"sample-pod","purpose":"Inspect current logs."}`))
+			if result.Validate() != nil || result.Error == nil || result.Error.Class != domain.SafeErrorClassPolicyDenied ||
+				reader.count() != 0 || targets.count() != test.wantTargets || actions.prepared != test.wantPrepare ||
+				actions.authorized != test.wantAuth || len(actions.outcomes) != 0 {
+				t.Fatalf("denied log action = %#v reads/targets/prepare/auth/outcomes=%d/%d/%d/%d/%d", result,
+					reader.count(), targets.count(), actions.prepared, actions.authorized, len(actions.outcomes))
+			}
+		})
+	}
+}
+
+func TestPodLogOutcomeAuditFailureSuppressesSanitizedContent(t *testing.T) {
+	canary := strings.Repeat("outcome-audit-log-canary", 3)
+	reader := &fakePodLogReader{readFn: func(context.Context, PodLogReadRequest) (PodLogObservation, error) {
+		return PodLogObservation{Pod: podLogTarget(), Container: "app", Availability: PodLogAvailable, Content: boundedPodLogContent(t, canary)}, nil
+	}}
+	actions := &permissiveObservationActionGate{now: func() time.Time { return eventObservedAt }, outcomeErr: errors.New("synthetic outcome persistence failure")}
+	dependencies := logDependencies(reader, &sequenceScopeGuard{}, LogPolicyAllowed)
+	dependencies.Actions = actions
+	tool, err := NewGetPodLogsTool(dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.Execute(context.Background(), boundLogCall(t, testRunInput(t, 0), domain.ToolNameGetPodLogs,
+		`{"container":"app","pod_name":"sample-pod","purpose":"Inspect current logs."}`))
+	if result.Validate() != nil || result.Error == nil || result.Error.Class != domain.SafeErrorClassPersistenceUnavailable ||
+		reader.count() != 1 || actions.prepared != 1 || actions.authorized != 1 || len(actions.outcomes) != 1 ||
+		actions.lastPlan.Target.Resource != podLogTarget() || strings.Contains(fmt.Sprintf("%#v", result), canary) {
+		t.Fatalf("outcome audit failure = %#v reads/prepare/auth/outcomes=%d/%d/%d/%d", result,
+			reader.count(), actions.prepared, actions.authorized, len(actions.outcomes))
+	}
+}
+
 func logDependencies(reader PodLogReader, guard ScopeGuard, decision LogPolicyDecision) LogToolDependencies {
 	return LogToolDependencies{
-		Reader: reader, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
+		Reader: reader, Targets: permissiveObservationTargetResolver{},
+		Actions:    &permissiveObservationActionGate{now: func() time.Time { return eventObservedAt }},
+		ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(),
 		Policy: &staticLogPolicy{decision: decision}, Now: func() time.Time { return eventObservedAt },
 	}
 }

@@ -29,7 +29,7 @@ func (coordinator *ApprovalCoordinator) finishRestartExecution(
 		}
 		event := newRestartExecutionEvent(tracked, eventIndex, UIRestartNotAttempted)
 		event.ErrorClass = errorClass
-		coordinator.publishRestartExecution(ctx, event)
+		coordinator.publishRestartExecution(ctx, tracked, event)
 		return event, ErrApprovalExecutionFailed
 	case approval.RestartDeploymentPatchFailed:
 		if err := coordinator.persistRestartAudit(
@@ -40,7 +40,7 @@ func (coordinator *ApprovalCoordinator) finishRestartExecution(
 		}
 		event := newRestartExecutionEvent(tracked, eventIndex, UIRestartPatchFailed)
 		event.ErrorClass = attempt.ErrorClass
-		coordinator.publishRestartExecution(ctx, event)
+		coordinator.publishRestartExecution(ctx, tracked, event)
 		return event, ErrApprovalExecutionFailed
 	case approval.RestartDeploymentPatchUnknown:
 		if err := coordinator.persistRestartAudit(
@@ -51,7 +51,7 @@ func (coordinator *ApprovalCoordinator) finishRestartExecution(
 		}
 		event := newRestartExecutionEvent(tracked, eventIndex, UIRestartPatchOutcomeUnknown)
 		event.ErrorClass = attempt.ErrorClass
-		coordinator.publishRestartExecution(ctx, event)
+		coordinator.publishRestartExecution(ctx, tracked, event)
 		return event, ErrApprovalPatchOutcomeUnknown
 	case approval.RestartDeploymentPatchAccepted:
 		acceptedTarget := attempt.Acceptance
@@ -64,7 +64,7 @@ func (coordinator *ApprovalCoordinator) finishRestartExecution(
 		accepted := newRestartExecutionEvent(tracked, eventIndex, UIRestartPatchAccepted)
 		accepted.TargetGeneration = acceptedTarget.TargetGeneration
 		accepted.TargetReplicas = acceptedTarget.TargetReplicas
-		coordinator.publishRestartExecution(ctx, accepted)
+		coordinator.publishRestartExecution(ctx, tracked, accepted)
 		eventIndex++
 		if consumeErr != nil {
 			return coordinator.finishUnavailableRollout(ctx, tracked, eventIndex, safeApprovalExecutionClass(consumeErr))
@@ -130,7 +130,7 @@ func (sink *approvalRolloutProgressSink) PublishRestartRolloutProgress(
 		return err
 	}
 	event := rolloutExecutionEvent(sink.tracked, *sink.eventIndex, UIRestartRolloutProgress, observation)
-	sink.coordinator.publishRestartExecution(ctx, event)
+	sink.coordinator.publishRestartExecution(ctx, sink.tracked, event)
 	sink.lastObservation = observation.ObservationNumber
 	*sink.eventIndex = *sink.eventIndex + 1
 	return nil
@@ -182,7 +182,7 @@ func (coordinator *ApprovalCoordinator) finishObservedRollout(
 	if result.ObservationCount > 0 {
 		event = rolloutExecutionEvent(tracked, eventIndex, state, result.Final)
 	}
-	coordinator.publishRestartExecution(ctx, event)
+	coordinator.publishRestartExecution(ctx, tracked, event)
 	return event, resultErr
 }
 
@@ -200,7 +200,7 @@ func (coordinator *ApprovalCoordinator) finishUnavailableRollout(
 	}
 	event := newRestartExecutionEvent(tracked, eventIndex, UIRestartRolloutUnavailable)
 	event.ErrorClass = errorClass
-	coordinator.publishRestartExecution(ctx, event)
+	coordinator.publishRestartExecution(ctx, tracked, event)
 	return event, ErrApprovalRolloutUnavailable
 }
 
@@ -255,11 +255,11 @@ func (coordinator *ApprovalCoordinator) publishResultAuditFailure(
 ) UIRestartExecution {
 	event := newRestartExecutionEvent(tracked, eventIndex, UIRestartResultAuditFailed)
 	event.ErrorClass = domain.SafeErrorClassPersistenceUnavailable
-	coordinator.publishRestartExecution(ctx, event)
+	coordinator.publishRestartExecution(ctx, tracked, event)
 	return event
 }
 
-func (coordinator *ApprovalCoordinator) publishRestartExecution(ctx context.Context, execution UIRestartExecution) {
+func (coordinator *ApprovalCoordinator) publishRestartExecution(ctx context.Context, tracked trackedApproval, execution UIRestartExecution) {
 	if execution.Validate() != nil {
 		return
 	}
@@ -270,7 +270,8 @@ func (coordinator *ApprovalCoordinator) publishRestartExecution(ctx context.Cont
 	defer cancel()
 	_ = coordinator.uiEvents.PublishUIEvent(deliveryContext, UIEvent{
 		Kind: UIEventRestartExecution, RunID: execution.RunID,
-		ScopeGeneration: execution.ScopeGeneration, Sequence: execution.Sequence,
+		ScopeGeneration: execution.ScopeGeneration, PolicyGeneration: tracked.request.Intent.PolicyGeneration,
+		Sequence:         execution.Sequence,
 		RestartExecution: &execution,
 	})
 }

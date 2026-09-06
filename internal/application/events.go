@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -84,9 +85,88 @@ type UIPermissionStatus struct {
 	FullAccessAllowed    bool
 	HighRiskAcknowledged bool
 	SessionRuleCount     int
+	CustomRoutes         []UICustomPermissionRoute
+	SessionRules         []UISessionPermissionRuleStatus
 }
 
-// UIActionStatus contains no target, parameter, rationale, or credential.
+// UICustomPermissionRoute is one content-free exact custom routing row.
+type UICustomPermissionRoute struct {
+	Operation   domain.ActionOperation
+	Risk        domain.RiskClass
+	Disposition domain.ReviewDisposition
+}
+
+// UISessionPermissionRuleStatus is a bounded, process-local rule projection.
+// It contains no nonce, credential, raw response, or persisted authority.
+type UISessionPermissionRuleStatus struct {
+	ID                     domain.PermissionRuleID
+	Operation              domain.ActionOperation
+	Scope                  domain.ScopeSnapshot
+	NamespaceAccess        domain.NamespaceAccessPolicy
+	PolicyGeneration       domain.PolicyGeneration
+	Target                 string
+	TargetSubresource      string
+	ParameterSummary       string
+	Effect                 domain.CapabilityEffectClass
+	Risk                   domain.RiskClass
+	DataCategories         domain.ActionDataCategories
+	AllowedSinks           domain.ActionSinks
+	NetworkEffects         domain.ActionNetworkEffects
+	NetworkDestinationHash domain.ActionDigest
+	Limits                 domain.ActionLimits
+	CreatedAtMillis        int64
+	ExpiresAtMillis        int64
+}
+
+// UIReviewerState is an explicit delivery state. It never carries authority.
+type UIReviewerState string
+
+const (
+	UIReviewerReviewing UIReviewerState = "reviewing"
+	UIReviewerApproved  UIReviewerState = "approved"
+	UIReviewerDenied    UIReviewerState = "denied"
+	UIReviewerEscalated UIReviewerState = "escalated_to_user"
+	UIReviewerTimedOut  UIReviewerState = "timed_out"
+)
+
+func (state UIReviewerState) valid() bool {
+	return state == UIReviewerReviewing || state == UIReviewerApproved || state == UIReviewerDenied ||
+		state == UIReviewerEscalated || state == UIReviewerTimedOut
+}
+
+// UIReviewerStatus identifies the optional Reviewer and its latest explicit
+// state without representing its recommendation as a human decision.
+type UIReviewerStatus struct {
+	State            UIReviewerState
+	Profile          string
+	OriginHash       string
+	RationaleSummary string
+}
+
+// UIReviewerEvent is one ordered, digest-bound Reviewer presentation event.
+// EventIndex orders lifecycle states inside the ActionEnvelope's single run
+// sequence and is not approval authority.
+type UIReviewerEvent struct {
+	RequestID        domain.ApprovalID
+	RunID            domain.AgentRunID
+	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
+	Sequence         int64
+	EventIndex       int64
+	Digest           domain.ApprovalDigest
+	Status           UIReviewerStatus
+}
+
+func (event UIReviewerEvent) Validate() error {
+	if !event.RequestID.Valid() || !event.RunID.Valid() || event.ScopeGeneration < 1 ||
+		!event.PolicyGeneration.Valid() || event.Sequence < 1 || event.Sequence > maxUIEventSequence ||
+		event.EventIndex < 1 || event.EventIndex > 16 || !event.Digest.Valid() || !event.Status.valid() {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// UIActionStatus contains no target, parameter, credential, or nonce.
 type UIActionStatus struct {
 	RequestID        domain.ApprovalID
 	Operation        domain.ActionOperation
@@ -96,7 +176,20 @@ type UIActionStatus struct {
 	ScopeGeneration  int64
 	PolicyGeneration domain.PolicyGeneration
 	Reviewing        bool
+	Reviewer         *UIReviewerStatus
 	ExpiresAtMillis  int64
+}
+
+// UIPermissionsResult is the local bounded result used by /permissions and
+// permission changes. It performs no model, Kubernetes, repository, Tool, or
+// executor I/O.
+type UIPermissionsResult struct {
+	RequestID   uint64
+	Permission  UIPermissionStatus
+	Reviewer    UIModelRoleStatus
+	Action      *UIActionStatus
+	Changed     bool
+	RuleCreated bool
 }
 
 // UIModelContextStatus contains counts and coverage only, never content.
@@ -199,6 +292,7 @@ type UICommandOutcome struct {
 	LocalStateDeletion *LocalStateDeletionResult
 	Export             *SessionExportResult
 	Approval           *UIApprovalResult
+	Permissions        *UIPermissionsResult
 	RunID              domain.AgentRunID
 	Failure            UIQueryFailureCode
 }
@@ -206,8 +300,13 @@ type UICommandOutcome struct {
 // Validate checks command/result correlation and exclusive payload shapes.
 func (result UICommandOutcome) Validate() error {
 	approvalCommand := result.Command == UICommandApproveAction || result.Command == UICommandRejectAction ||
-		result.Command == UICommandExpireAction
+		result.Command == UICommandCancelAction || result.Command == UICommandExpireAction
 	if approvalCommand != (result.Approval != nil) || result.Approval != nil && result.Approval.Validate() != nil {
+		return ErrInvalidUIEvent
+	}
+	permissionsCommand := result.Command == UICommandShowPermissions || result.Command == UICommandChangePermission ||
+		result.Command == UICommandCreateSessionRule
+	if permissionsCommand != (result.Permissions != nil) || result.Permissions != nil && result.Permissions.valid() != nil {
 		return ErrInvalidUIEvent
 	}
 	if result.Failure != "" && (!result.Failure.valid() ||
@@ -302,6 +401,15 @@ func (result UICommandOutcome) Validate() error {
 	case UICommandShowStatus:
 		if result.RequestID != 0 || result.Status == nil || !result.Status.valid() || result.Session != nil || result.Resumed != nil ||
 			result.Scope != nil || result.Resource != nil || result.RunID != "" || result.Failure != "" {
+			return ErrInvalidUIEvent
+		}
+	case UICommandShowPermissions, UICommandChangePermission, UICommandCreateSessionRule:
+		if result.RequestID == 0 || result.Permissions.RequestID != result.RequestID || result.Failure != "" ||
+			result.Session != nil || result.Resumed != nil || result.Scope != nil || result.Resource != nil ||
+			result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.RunID != "" ||
+			result.Command == UICommandShowPermissions && (result.Permissions.Changed || result.Permissions.RuleCreated) ||
+			result.Command == UICommandChangePermission && (!result.Permissions.Changed || result.Permissions.RuleCreated) ||
+			result.Command == UICommandCreateSessionRule && (!result.Permissions.RuleCreated || result.Permissions.Changed) {
 			return ErrInvalidUIEvent
 		}
 	case UICommandSubmitQuestion:
@@ -410,7 +518,7 @@ func (result UICommandOutcome) Validate() error {
 			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
-	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
+	case UICommandApproveAction, UICommandRejectAction, UICommandCancelAction, UICommandExpireAction:
 		if result.RequestID == 0 || result.Failure != "" || result.Session != nil || result.Resumed != nil ||
 			result.Scope != nil || result.Resource != nil || result.Status != nil || result.Privacy != nil ||
 			result.RunID != result.Approval.RunID {
@@ -452,19 +560,131 @@ func (result UIStatusResult) valid() bool {
 
 func (status UIPermissionStatus) valid(_ bool) bool {
 	if !status.Configured {
-		return status == (UIPermissionStatus{})
+		return status.Profile == "" && status.PolicyGeneration == 0 && !status.Healthy &&
+			!status.FullAccessAllowed && !status.HighRiskAcknowledged && status.SessionRuleCount == 0 &&
+			len(status.CustomRoutes) == 0 && len(status.SessionRules) == 0
 	}
-	return status.Profile.Valid() && status.PolicyGeneration.Valid() &&
-		status.SessionRuleCount >= 0 && status.SessionRuleCount <= MaxSessionPermissionRules &&
-		(status.Profile == domain.PermissionProfileFullAccess || !status.FullAccessAllowed) &&
-		(!status.FullAccessAllowed || status.HighRiskAcknowledged)
+	if !status.Profile.Valid() || !status.PolicyGeneration.Valid() ||
+		status.SessionRuleCount < 0 || status.SessionRuleCount > MaxSessionPermissionRules ||
+		status.SessionRuleCount != len(status.SessionRules) || len(status.CustomRoutes) > MaxCustomPermissionRoutes ||
+		status.Profile == domain.PermissionProfileFullAccess && (!status.FullAccessAllowed || !status.HighRiskAcknowledged) ||
+		status.Profile != domain.PermissionProfileFullAccess && (status.FullAccessAllowed || status.HighRiskAcknowledged) {
+		return false
+	}
+	if status.Profile != domain.PermissionProfileCustom && len(status.CustomRoutes) != 0 {
+		return false
+	}
+	for _, route := range status.CustomRoutes {
+		if !route.Operation.Valid() || !route.Risk.Valid() || !route.Disposition.Valid() {
+			return false
+		}
+	}
+	for _, rule := range status.SessionRules {
+		if rule.Validate() != nil || rule.PolicyGeneration != status.PolicyGeneration {
+			return false
+		}
+	}
+	return true
 }
 
 func (status UIActionStatus) valid() bool {
-	return status.RequestID.Valid() && status.Operation.Valid() && status.Risk.Valid() &&
-		status.Route.Valid() && status.Route != domain.ReviewDispositionDeny && status.State.Valid() &&
-		!status.State.Terminated() && status.ScopeGeneration > 0 && status.PolicyGeneration.Valid() &&
-		status.ExpiresAtMillis > 0
+	if !status.RequestID.Valid() || !status.Operation.Valid() || !status.Risk.Valid() ||
+		!status.Route.Valid() || status.Route == domain.ReviewDispositionDeny || !status.State.Valid() ||
+		status.State.Terminated() || status.ScopeGeneration <= 0 || !status.PolicyGeneration.Valid() ||
+		status.ExpiresAtMillis <= 0 {
+		return false
+	}
+	if status.Reviewing != (status.Reviewer != nil && status.Reviewer.State == UIReviewerReviewing) {
+		return false
+	}
+	return status.Reviewer == nil || status.Reviewer.valid()
+}
+
+func (status UIReviewerStatus) valid() bool {
+	if !status.State.valid() || len(status.RationaleSummary) > agent.MaxReviewerRationaleBytes {
+		return false
+	}
+	if status.Profile == "" {
+		return status.OriginHash == "" && status.State == UIReviewerEscalated && status.RationaleSummary == ""
+	}
+	return domain.ValidModelToken(status.Profile, 128) && validPrivacyDigest(status.OriginHash)
+}
+
+func (rule UISessionPermissionRuleStatus) Validate() error {
+	if !rule.ID.Valid() || !rule.Operation.Valid() || rule.Scope.Validate() != nil || !rule.NamespaceAccess.Valid() ||
+		!rule.PolicyGeneration.Valid() ||
+		rule.Target == "" || len(rule.Target) > 1024 || len(rule.TargetSubresource) > 64 ||
+		rule.ParameterSummary == "" || len(rule.ParameterSummary) > MaxApprovalDisplaySummaryBytes ||
+		!rule.Effect.Valid() || rule.Risk != domain.RiskReview || !rule.DataCategories.Valid() ||
+		!rule.AllowedSinks.Valid() || !rule.NetworkEffects.Valid() || rule.Limits.Validate() != nil ||
+		rule.CreatedAtMillis <= 0 || rule.ExpiresAtMillis <= rule.CreatedAtMillis {
+		return ErrInvalidUIEvent
+	}
+	requiresDestination := rule.NetworkEffects&(domain.ActionNetworkModelOrigin|domain.ActionNetworkDataSource|domain.ActionNetworkRemotePod|domain.ActionNetworkExternalCommand) != 0
+	if requiresDestination != rule.NetworkDestinationHash.Valid() {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+func (result UIPermissionsResult) valid() error {
+	if result.RequestID == 0 || !result.Permission.valid(true) || !result.Reviewer.valid(false) ||
+		result.Changed && result.RuleCreated || result.Action != nil && !result.Action.valid() {
+		return ErrInvalidUIEvent
+	}
+	if result.Action != nil && result.Action.PolicyGeneration != result.Permission.PolicyGeneration {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+func projectUIPermissionStatus(status PermissionStatus) UIPermissionStatus {
+	result := UIPermissionStatus{
+		Configured: true, Profile: status.Profile, PolicyGeneration: status.PolicyGeneration,
+		Healthy: status.Healthy, FullAccessAllowed: status.FullAccessAllowed,
+		HighRiskAcknowledged: status.HighRiskAcknowledged,
+		SessionRuleCount:     len(status.SessionRules),
+		CustomRoutes:         make([]UICustomPermissionRoute, 0, len(status.CustomRoutes)),
+		SessionRules:         make([]UISessionPermissionRuleStatus, 0, len(status.SessionRules)),
+	}
+	for _, route := range status.CustomRoutes {
+		result.CustomRoutes = append(result.CustomRoutes, UICustomPermissionRoute{
+			Operation: route.Operation, Risk: route.Risk, Disposition: route.Disposition,
+		})
+	}
+	for _, rule := range status.SessionRules {
+		result.SessionRules = append(result.SessionRules, projectUISessionPermissionRule(rule))
+	}
+	return result
+}
+
+func projectUISessionPermissionRule(rule SessionPermissionRuleStatus) UISessionPermissionRuleStatus {
+	target := fmt.Sprintf("%s %s/%s* · API %s", rule.TargetKind, rule.TargetNamespace, rule.TargetPrefix, rule.TargetAPIVersion)
+	if rule.TargetNamespace == "" {
+		target = fmt.Sprintf("%s %s* · API %s", rule.TargetKind, rule.TargetPrefix, rule.TargetAPIVersion)
+	}
+	parameter := "kind=" + string(rule.ParameterKind)
+	switch rule.ParameterKind {
+	case domain.ActionParametersRemoteArgv, domain.ActionParametersLocalArgv:
+		parameter = fmt.Sprintf("kind=%s executable=%q argv-prefix=%q", rule.ParameterKind, rule.Executable, rule.ArgumentPrefix.Values())
+		if rule.Container != "" {
+			parameter += fmt.Sprintf(" container=%q", rule.Container)
+		}
+		if rule.ParameterDigest.Valid() {
+			parameter += " complete-parameter-digest=" + string(rule.ParameterDigest)
+		}
+	default:
+		parameter += " digest=" + string(rule.ParameterDigest)
+	}
+	return UISessionPermissionRuleStatus{
+		ID: rule.ID, Operation: rule.Operation, Scope: rule.Scope, NamespaceAccess: rule.NamespaceAccess,
+		PolicyGeneration: rule.PolicyGeneration,
+		Target:           target, TargetSubresource: rule.TargetSubresource, ParameterSummary: parameter,
+		Effect: rule.Effect, Risk: rule.Risk, DataCategories: rule.DataCategories,
+		AllowedSinks: rule.AllowedSinks, NetworkEffects: rule.NetworkEffects,
+		NetworkDestinationHash: rule.NetworkDestinationHash, Limits: rule.Limits,
+		CreatedAtMillis: rule.CreatedAt.UnixMilli(), ExpiresAtMillis: rule.ExpiresAt.UnixMilli(),
+	}
 }
 
 func (status UIModelContextStatus) valid(hasSession bool) bool {
@@ -598,6 +818,7 @@ const (
 	UIEventPersistenceDegraded UIEventKind = "persistence_degraded"
 	UIEventApprovalRequested   UIEventKind = "approval_requested"
 	UIEventApprovalClosed      UIEventKind = "approval_closed"
+	UIEventReviewerState       UIEventKind = "reviewer_state"
 	UIEventRestartExecution    UIEventKind = "restart_execution"
 )
 
@@ -639,12 +860,14 @@ type UIEvent struct {
 	Kind               UIEventKind
 	RunID              domain.AgentRunID
 	ScopeGeneration    int64
+	PolicyGeneration   domain.PolicyGeneration
 	Sequence           int64
 	Text               string
 	EvidenceReferences []UIEvidenceReference
 	ToolStep           *ToolStep
 	Approval           *UIApprovalRequest
 	ApprovalResult     *UIApprovalResult
+	Reviewer           *UIReviewerEvent
 	RestartExecution   *UIRestartExecution
 }
 
@@ -655,16 +878,17 @@ func (event UIEvent) Terminal() bool {
 
 // Validate checks identity, payload exclusivity, and fixed event states.
 func (event UIEvent) Validate() error {
-	if !event.RunID.Valid() || event.ScopeGeneration < 1 || event.Sequence < 1 || event.Sequence > maxUIEventSequence {
+	if !event.RunID.Valid() || event.ScopeGeneration < 1 || !event.PolicyGeneration.Valid() ||
+		event.Sequence < 1 || event.Sequence > maxUIEventSequence {
 		return ErrInvalidUIEvent
 	}
 	switch event.Kind {
 	case UIEventRunStarted:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRunCompleted:
-		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 		for _, reference := range event.EvidenceReferences {
@@ -674,31 +898,39 @@ func (event UIEvent) Validate() error {
 			}
 		}
 	case UIEventTextDelta:
-		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRunFailed, UIEventRunCancelled, UIEventValidationWarning, UIEventPersistenceDegraded:
-		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventToolStep:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil || event.RestartExecution != nil {
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep == nil || !event.ToolStep.valid() || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalRequested:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil || event.RestartExecution != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval == nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil ||
 			event.Approval.Validate() != nil || event.Approval.RunID != event.RunID ||
-			event.Approval.Scope.Generation != event.ScopeGeneration || event.Approval.Sequence != event.Sequence {
+			event.Approval.Scope.Generation != event.ScopeGeneration || event.Approval.PolicyGeneration != event.PolicyGeneration || event.Approval.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	case UIEventApprovalClosed:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil || event.RestartExecution != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult == nil || event.Reviewer != nil || event.RestartExecution != nil ||
 			event.ApprovalResult.Validate() != nil || event.ApprovalResult.RunID != event.RunID ||
-			event.ApprovalResult.ScopeGeneration != event.ScopeGeneration || event.ApprovalResult.Sequence != event.Sequence {
+			event.ApprovalResult.ScopeGeneration != event.ScopeGeneration || event.ApprovalResult.PolicyGeneration != event.PolicyGeneration || event.ApprovalResult.Sequence != event.Sequence {
+			return ErrInvalidUIEvent
+		}
+	case UIEventReviewerState:
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil ||
+			event.ApprovalResult != nil || event.Reviewer == nil || event.RestartExecution != nil ||
+			event.Reviewer.Validate() != nil || event.Reviewer.RunID != event.RunID ||
+			event.Reviewer.ScopeGeneration != event.ScopeGeneration || event.Reviewer.PolicyGeneration != event.PolicyGeneration ||
+			event.Reviewer.Sequence != event.Sequence {
 			return ErrInvalidUIEvent
 		}
 	case UIEventRestartExecution:
-		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil ||
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil ||
 			event.RestartExecution == nil || event.RestartExecution.Validate() != nil ||
 			event.RestartExecution.RunID != event.RunID || event.RestartExecution.ScopeGeneration != event.ScopeGeneration ||
 			event.RestartExecution.Sequence != event.Sequence {
@@ -754,6 +986,9 @@ type UIApprovalRequest struct {
 	RiskSummary            string
 	CurrentSummary         string
 	ProposedSummary        string
+	ParameterSummary       string
+	EffectSummary          string
+	Reviewer               *UIReviewerStatus
 	Digest                 domain.ApprovalDigest
 	Nonce                  domain.ApprovalNonce
 	RequestedAt            time.Time
@@ -786,11 +1021,15 @@ func (request UIApprovalRequest) Validate() error {
 		ExpiresAt: request.ExpiresAt, StateChangedAt: request.RequestedAt,
 	}
 	wantCurrent, wantProposed := actionApprovalSummaries(intent)
+	wantParameters := actionParameterSummary(intent.Parameters)
+	wantEffects := actionEffectSummary(intent)
 	digest, err := approval.OperationDigest(domainRequest)
 	if request.Sequence < 1 || request.Sequence > 4096 || request.Target.Validate() != nil ||
 		len(request.CurrentSummary) > MaxApprovalDisplaySummaryBytes || len(request.ProposedSummary) > MaxApprovalDisplaySummaryBytes ||
 		!validApprovalActionIntent(intent) || request.CurrentSummary != wantCurrent ||
-		request.ProposedSummary != wantProposed || domainRequest.Validate() != nil ||
+		request.ProposedSummary != wantProposed || request.ParameterSummary != wantParameters ||
+		request.EffectSummary != wantEffects || request.Reviewer != nil && !request.Reviewer.valid() ||
+		domainRequest.Validate() != nil ||
 		err != nil || !request.Digest.Equal(digest) {
 		return ErrInvalidUIEvent
 	}
@@ -812,6 +1051,10 @@ func validApprovalActionIntent(intent domain.ActionIntent) bool {
 	case domain.ActionOperationPodExec, domain.ActionOperationContainerFileRead,
 		domain.ActionOperationDiagnosticPod, domain.ActionOperationPodDiagnostic:
 		return intent.Validate() == nil
+	case domain.ActionOperationLogsCurrent, domain.ActionOperationLogsPrevious,
+		domain.ActionOperationLogsAllContainers, domain.ActionOperationLogSearch,
+		domain.ActionOperationPrometheusQuery, domain.ActionOperationLokiQuery:
+		return intent.ValidateObservationAction() == nil
 	default:
 		return false
 	}
@@ -854,40 +1097,148 @@ func actionApprovalSummaries(intent domain.ActionIntent) (string, string) {
 		return identity, "Read only the displayed normalized container path through the fixed no-shell reader."
 	case domain.ActionOperationDiagnosticPod:
 		return identity, "Create, observe, and clean up only the displayed policy-bound diagnostic Pod."
+	case domain.ActionOperationLogsCurrent, domain.ActionOperationLogsPrevious,
+		domain.ActionOperationLogsAllContainers, domain.ActionOperationLogSearch:
+		return identity, "Read only the displayed bounded, sanitized log selection from this exact Pod."
+	case domain.ActionOperationPrometheusQuery, domain.ActionOperationLokiQuery:
+		return identity, "Send only the displayed code-owned query for this exact Pod to the configured origin bound by digest."
 	default:
 		return "", ""
 	}
 }
 
 func actionNetworkSummary(effects domain.ActionNetworkEffects) string {
-	switch effects {
-	case domain.ActionNetworkNone:
+	values := make([]string, 0, 5)
+	for _, value := range []struct {
+		flag  domain.ActionNetworkEffects
+		label string
+	}{
+		{domain.ActionNetworkKubernetesAPI, "Kubernetes API"},
+		{domain.ActionNetworkModelOrigin, "model origin"},
+		{domain.ActionNetworkDataSource, "configured data source"},
+		{domain.ActionNetworkRemotePod, "exact remote Pod/Service"},
+		{domain.ActionNetworkExternalCommand, "policy-bound command destination"},
+	} {
+		if effects&value.flag != 0 {
+			values = append(values, value.label)
+		}
+	}
+	if len(values) == 0 {
 		return "none"
-	case domain.ActionNetworkKubernetesAPI:
-		return "frozen Kubernetes API Context"
-	case domain.ActionNetworkExternalCommand:
-		return "exact policy-bound external origin"
+	}
+	return strings.Join(values, ", ")
+}
+
+func actionParameterSummary(parameters domain.ActionParameters) string {
+	switch parameters.Kind {
+	case domain.ActionParametersNone:
+		return "none"
+	case domain.ActionParametersReplicaTarget:
+		return fmt.Sprintf("replicas %d -> %d", parameters.ReplicaCurrent, parameters.ReplicaTarget)
+	case domain.ActionParametersRevision:
+		return fmt.Sprintf("revision %d", parameters.Revision)
+	case domain.ActionParametersNodeScheduling:
+		return fmt.Sprintf("spec.unschedulable=%t", parameters.Unschedulable)
+	case domain.ActionParametersPodDelete:
+		return fmt.Sprintf("grace-period=%ds · force=false", parameters.GracePeriodSeconds)
+	case domain.ActionParametersDrainPlan:
+		return fmt.Sprintf("plan=%s · targets=%d · grace-period=%ds", parameters.PlanDigest, parameters.PlanTargetCount, parameters.GracePeriodSeconds)
+	case domain.ActionParametersContainerFile:
+		return fmt.Sprintf("container=%q path=%q executable=%q argv=%q", parameters.Container, parameters.NormalizedPath, parameters.Executable, parameters.Arguments.Values())
+	case domain.ActionParametersRemoteArgv:
+		return fmt.Sprintf("container=%q executable=%q argv=%q", parameters.Container, parameters.Executable, parameters.Arguments.Values())
+	case domain.ActionParametersLocalArgv:
+		return fmt.Sprintf("policy=%q executable=%q argv=%q cwd=%q environment=%q credential-reference=%q", parameters.PolicyID, parameters.Executable, parameters.Arguments.Values(), parameters.WorkingDirectory, parameters.Environment.Values(), parameters.CredentialReference)
+	case domain.ActionParametersShellCommand:
+		return fmt.Sprintf("policy=%q shell=%q command=%q cwd=%q environment=%q", parameters.PolicyID, parameters.Executable, parameters.ShellCommand, parameters.WorkingDirectory, parameters.Environment.Values())
+	case domain.ActionParametersObservation:
+		observation := parameters.Observation
+		return fmt.Sprintf("kind=%s container=%q previous=%t all-containers=%t include-init=%t include-ephemeral=%t search=%q query=%q window=%ds step=%ds tail-lines=%d series-limit=%d line-limit=%d",
+			observation.Kind, observation.Container, observation.Previous, observation.AllContainers,
+			observation.IncludeInit, observation.IncludeEphemeral, observation.Search, observation.QueryID,
+			observation.WindowSeconds, observation.StepSeconds, observation.TailLines,
+			observation.SeriesLimit, observation.LineLimit)
 	default:
 		return "invalid"
 	}
 }
 
+func actionEffectSummary(intent domain.ActionIntent) string {
+	return fmt.Sprintf("effect=%s · data=%s · sinks=%s · network=%s · destination=%s · stdin=%t tty=%t shell=%t · timeout=%s · items=%d lines=%d bytes=%d output=%d",
+		intent.Effect, actionDataSummary(intent.DataCategories), actionSinkSummary(intent.AllowedSinks),
+		actionNetworkSummary(intent.NetworkEffects), optionalActionDigest(intent.NetworkDestinationHash),
+		intent.Stdin, intent.TTY, intent.Shell, intent.Limits.Timeout,
+		intent.Limits.MaximumItems, intent.Limits.MaximumLines, intent.Limits.MaximumBytes, intent.Limits.MaximumOutput)
+}
+
+func actionDataSummary(categories domain.ActionDataCategories) string {
+	values := make([]string, 0, 6)
+	for _, value := range []struct {
+		flag  domain.ActionDataCategories
+		label string
+	}{
+		{domain.ActionDataResourceMetadata, "resource metadata"},
+		{domain.ActionDataProjectedStatus, "projected status"},
+		{domain.ActionDataProjectedEvents, "projected events"},
+		{domain.ActionDataContainerOutput, "container output"},
+		{domain.ActionDataFileOutput, "file output"},
+		{domain.ActionDataProcessOutput, "process output"},
+	} {
+		if categories&value.flag != 0 {
+			values = append(values, value.label)
+		}
+	}
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ", ")
+}
+
+func actionSinkSummary(sinks domain.ActionSinks) string {
+	values := make([]string, 0, 4)
+	for _, value := range []struct {
+		flag  domain.ActionSinks
+		label string
+	}{
+		{domain.ActionSinkTerminal, "terminal"},
+		{domain.ActionSinkModel, "model"},
+		{domain.ActionSinkKubernetesAPI, "Kubernetes API"},
+		{domain.ActionSinkLocalProcess, "local process"},
+	} {
+		if sinks&value.flag != 0 {
+			values = append(values, value.label)
+		}
+	}
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ", ")
+}
+
+func optionalActionDigest(digest domain.ActionDigest) string {
+	if digest == "" {
+		return "none"
+	}
+	return string(digest)
+}
+
 // UIApprovalResult closes one exact dialog request without carrying its nonce.
 type UIApprovalResult struct {
-	RequestID       domain.ApprovalID
-	RunID           domain.AgentRunID
-	ScopeGeneration int64
-	Sequence        int64
-	Digest          domain.ApprovalDigest
-	State           domain.ApprovalState
-	StateReason     domain.ApprovalStateReason
-	Execution       *UIRestartExecution
-	ActionExecution *UIActionExecution
+	RequestID        domain.ApprovalID
+	RunID            domain.AgentRunID
+	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
+	Sequence         int64
+	Digest           domain.ApprovalDigest
+	State            domain.ApprovalState
+	StateReason      domain.ApprovalStateReason
+	Execution        *UIRestartExecution
+	ActionExecution  *UIActionExecution
 }
 
 // Validate checks one bounded non-pending dialog outcome.
 func (result UIApprovalResult) Validate() error {
-	if !result.RequestID.Valid() || !result.RunID.Valid() || result.ScopeGeneration < 1 ||
+	if !result.RequestID.Valid() || !result.RunID.Valid() || result.ScopeGeneration < 1 || !result.PolicyGeneration.Valid() ||
 		result.Sequence < 1 || result.Sequence > 4096 || !result.Digest.Valid() ||
 		!validApprovalResultState(result.State, result.StateReason) {
 		return ErrInvalidUIEvent
@@ -919,7 +1270,7 @@ func validApprovalResultState(state domain.ApprovalState, reason domain.Approval
 	case domain.ApprovalStateApproved:
 		return reason == domain.ApprovalReasonUserApproved
 	case domain.ApprovalStateRejected:
-		return reason == domain.ApprovalReasonUserRejected
+		return reason == domain.ApprovalReasonUserRejected || reason == domain.ApprovalReasonReviewerRejected
 	case domain.ApprovalStateExpired:
 		return reason == domain.ApprovalReasonTTLExpired
 	case domain.ApprovalStateCancelled:
@@ -955,7 +1306,9 @@ func projectUIApprovalRequest(request domain.ApprovalRequest, sequence int64) UI
 		NetworkDestinationHash: request.Intent.NetworkDestinationHash,
 		Limits:                 request.Intent.Limits, VerificationPlanID: request.Intent.VerificationPlanID,
 		ReasonSummary: request.Intent.ReasonSummary, RiskSummary: request.Intent.RiskSummary,
-		Digest: request.Digest, Nonce: request.Nonce,
+		ParameterSummary: actionParameterSummary(request.Intent.Parameters),
+		EffectSummary:    actionEffectSummary(request.Intent),
+		Digest:           request.Digest, Nonce: request.Nonce,
 		RequestedAt: request.RequestedAt, ExpiresAt: request.ExpiresAt,
 	}
 	projection.CurrentSummary, projection.ProposedSummary = actionApprovalSummaries(request.Intent)
@@ -965,7 +1318,8 @@ func projectUIApprovalRequest(request domain.ApprovalRequest, sequence int64) UI
 func projectUIApprovalResult(request domain.ApprovalRequest, sequence int64) UIApprovalResult {
 	return UIApprovalResult{
 		RequestID: request.ID, RunID: request.RunID, ScopeGeneration: request.Intent.Scope.Generation,
-		Sequence: sequence, Digest: request.Digest, State: request.State, StateReason: request.StateReason,
+		PolicyGeneration: request.Intent.PolicyGeneration, Sequence: sequence, Digest: request.Digest,
+		State: request.State, StateReason: request.StateReason,
 	}
 }
 
@@ -1014,25 +1368,26 @@ const (
 // It owns no goroutine or channel, never drops structural events, and assigns a
 // UI-local sequence so coalesced Agent deltas cannot create ambiguous ordering.
 type eventBridge struct {
-	runID           domain.AgentRunID
-	scopeGeneration int64
-	sink            UIEventSink
-	sequence        int64
-	started         bool
-	terminal        bool
-	pendingDelta    string
-	lastDeltaAt     time.Time
-	lastDeltaFlush  time.Time
-	deltaEvents     int
-	deltaBytes      int
-	diagnosis       *domain.Diagnosis
+	runID            domain.AgentRunID
+	scopeGeneration  int64
+	policyGeneration domain.PolicyGeneration
+	sink             UIEventSink
+	sequence         int64
+	started          bool
+	terminal         bool
+	pendingDelta     string
+	lastDeltaAt      time.Time
+	lastDeltaFlush   time.Time
+	deltaEvents      int
+	deltaBytes       int
+	diagnosis        *domain.Diagnosis
 }
 
-func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, sink UIEventSink) (*eventBridge, error) {
-	if !runID.Valid() || scopeGeneration < 1 || sink == nil {
+func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, policyGeneration domain.PolicyGeneration, sink UIEventSink) (*eventBridge, error) {
+	if !runID.Valid() || scopeGeneration < 1 || !policyGeneration.Valid() || sink == nil {
 		return nil, ErrInvalidUIEvent
 	}
-	return &eventBridge{runID: runID, scopeGeneration: scopeGeneration, sink: sink}, nil
+	return &eventBridge{runID: runID, scopeGeneration: scopeGeneration, policyGeneration: policyGeneration, sink: sink}, nil
 }
 
 func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) error {
@@ -1177,6 +1532,7 @@ func (bridge *eventBridge) emit(ctx context.Context, event UIEvent) error {
 	nextSequence := bridge.sequence + 1
 	event.RunID = bridge.runID
 	event.ScopeGeneration = bridge.scopeGeneration
+	event.PolicyGeneration = bridge.policyGeneration
 	event.Sequence = nextSequence
 	if event.Validate() != nil {
 		return ErrInvalidUIEvent

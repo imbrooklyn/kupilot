@@ -90,6 +90,7 @@ func applicationFailure(message tea.Msg, safeMessage string) ApplicationFailureM
 	case ApplicationCommandMsg:
 		result.RequestID = request.Command.RequestID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
+		result.PolicyGeneration = request.Command.ExpectedPolicyGeneration
 		result.RunID = request.Command.RunID
 		result.ApprovalID = request.Command.ApprovalID
 		result.ApprovalDigest = request.Command.ApprovalDigest

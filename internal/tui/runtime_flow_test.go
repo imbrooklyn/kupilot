@@ -395,17 +395,17 @@ func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing
 			model := newTestModel()
 			stream := []application.UIEvent{
 				runStartedEvent(1),
-				{Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2, Text: "Inspecting "},
-				{Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3, ToolStep: &application.ToolStep{
+				{Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Inspecting "},
+				{Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, ToolStep: &application.ToolStep{
 					InvocationID: testInvocationID, Name: domain.ToolNameGetResource,
 					Purpose: "Inspect the selected Resource.", Status: application.ToolStepRunning,
 				}},
-				{Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 4, Text: "current state."},
-				{Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 5, ToolStep: &application.ToolStep{
+				{Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "current state."},
+				{Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 5, ToolStep: &application.ToolStep{
 					InvocationID: testInvocationID, Name: domain.ToolNameGetResource,
 					Status: application.ToolStepSucceeded, Summary: "Safe projected status.", EvidenceCount: 2,
 				}},
-				{Kind: tt.terminal, RunID: testRunID, ScopeGeneration: 7, Sequence: 6, Text: tt.text},
+				{Kind: tt.terminal, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 6, Text: tt.text},
 			}
 			for _, event := range stream {
 				model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
@@ -419,7 +419,7 @@ func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing
 			}
 			model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 				Kind: application.UIEventTextDelta, RunID: testRunID,
-				ScopeGeneration: 7, Sequence: 7, Text: "late",
+				ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 7, Text: "late",
 			}})
 			if model.run.StreamedText != tt.text || model.run.LastSequence != 6 {
 				t.Fatal("late event changed terminal state")
@@ -435,12 +435,12 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 		runStartedEvent(1),
 		{
 			Kind: application.UIEventPersistenceDegraded, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 2,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 			Text: "Local persistence is degraded; this run may not be resumable.",
 		},
 		{
 			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 3, Text: "In-memory diagnosis.",
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "In-memory diagnosis.",
 		},
 	}
 	for _, event := range stream {
@@ -470,12 +470,12 @@ func TestAnswerValidationWarningRemainsVisibleWithoutChangingStorageState(t *tes
 		runStartedEvent(1),
 		{
 			Kind: application.UIEventValidationWarning, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 2,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 			Text: "Kupilot removed unsupported final-answer metadata.",
 		},
 		{
 			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, Sequence: 3, Text: answer,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: answer,
 		},
 	}
 	for _, event := range stream {
@@ -513,7 +513,7 @@ func TestActiveRunDraftCanBeEditedButOnlyCancelCanDispatch(t *testing.T) {
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
 	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "next question" ||
 		!strings.Contains(model.View().Content, "The diagnostic run was cancelled.") {
@@ -535,7 +535,7 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "The diagnostic run was cancelled.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
 	}})
 	terminalTranscript := model.TerminalTranscript()
 	if !commandQuits(cmd) || model.quitAfterCancel ||

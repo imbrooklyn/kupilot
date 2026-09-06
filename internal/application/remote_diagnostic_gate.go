@@ -30,10 +30,16 @@ type RemoteDiagnosticActionRevalidator interface {
 	RevalidateRemoteDiagnosticAction(context.Context, domain.RemoteDiagnosticActionPlan) error
 }
 
+// RemoteDiagnosticActionSupervisor is the shared Application-owned human and
+// Reviewer route. It blocks the Tool caller until the immutable envelope is
+// consumed or safely closed.
+type RemoteDiagnosticActionSupervisor interface {
+	AuthorizeRemoteDiagnosticAction(context.Context, PermissionPolicy, domain.RemoteDiagnosticActionPlan) (domain.ActionEnvelope, error)
+}
+
 // RemoteDiagnosticActionGate applies the generic durable approval lifecycle to
-// the S04 operations. Automatic and matching Session-rule routes can execute;
-// human and Reviewer routes remain fail-closed until a shared delivery flow
-// owns the decision.
+// the S04 operations. Automatic and matching Session-rule routes keep their
+// direct durable path; human and Reviewer routes use the shared S05 supervisor.
 type RemoteDiagnosticActionGate struct {
 	service      ApprovalLifecycle
 	persistence  ApprovalPersistence
@@ -42,6 +48,7 @@ type RemoteDiagnosticActionGate struct {
 	scope        ApprovalCurrentScope
 	identifiers  RemoteDiagnosticGateIdentifierSource
 	permissions  *PermissionManager
+	supervisor   RemoteDiagnosticActionSupervisor
 	policies     domain.RemoteDiagnosticsPolicyCatalog
 	now          func() time.Time
 	timeout      time.Duration
@@ -55,6 +62,7 @@ type RemoteDiagnosticActionGateConfig struct {
 	Scope              ApprovalCurrentScope
 	Identifiers        RemoteDiagnosticGateIdentifierSource
 	Permissions        *PermissionManager
+	Supervisor         RemoteDiagnosticActionSupervisor
 	PolicyCatalog      domain.RemoteDiagnosticsPolicyCatalog
 	Now                func() time.Time
 	PersistenceTimeout time.Duration
@@ -66,7 +74,7 @@ func NewRemoteDiagnosticActionGate(config RemoteDiagnosticActionGateConfig) (*Re
 		config.PersistenceTimeout <= 0 || config.PersistenceTimeout > time.Minute {
 		return nil, ErrRemoteDiagnosticGateUnavailable
 	}
-	return &RemoteDiagnosticActionGate{service: config.Service, persistence: config.Persistence, resultAudits: config.ResultAudits, revalidator: config.Revalidator, scope: config.Scope, identifiers: config.Identifiers, permissions: config.Permissions, policies: config.PolicyCatalog, now: config.Now, timeout: config.PersistenceTimeout}, nil
+	return &RemoteDiagnosticActionGate{service: config.Service, persistence: config.Persistence, resultAudits: config.ResultAudits, revalidator: config.Revalidator, scope: config.Scope, identifiers: config.Identifiers, permissions: config.Permissions, supervisor: config.Supervisor, policies: config.PolicyCatalog, now: config.Now, timeout: config.PersistenceTimeout}, nil
 }
 
 func (gate *RemoteDiagnosticActionGate) AuthorizeAndConsume(ctx context.Context, plan domain.RemoteDiagnosticActionPlan) (domain.ActionEnvelope, error) {
@@ -83,6 +91,12 @@ func (gate *RemoteDiagnosticActionGate) AuthorizeAndConsume(ctx context.Context,
 	policy, preliminary := gate.permissions.EvaluateCatalog(plan.SessionID, PermissionEvaluationInput{Operation: plan.Operation, Effect: plan.Effect, Risk: plan.Risk, CapabilityAdmitted: true, CapabilityEnabled: true})
 	if policy.Validate() != nil || preliminary.Validate() != nil || preliminary.Disposition == domain.ReviewDispositionDeny || policy.Generation != plan.PolicyGeneration {
 		return domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	}
+	if preliminary.Disposition == domain.ReviewDispositionHuman || preliminary.Disposition == domain.ReviewDispositionReviewer {
+		if gate.supervisor == nil {
+			return domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+		}
+		return gate.supervisor.AuthorizeRemoteDiagnosticAction(ctx, policy, plan)
 	}
 	intent, err := NewRemoteDiagnosticActionIntent(policy, plan)
 	if err != nil {

@@ -216,6 +216,71 @@ func TestApprovalRepositoryStoresOnlyDigestsForLocalArgvShellAndOutput(t *testin
 	}
 }
 
+func TestApprovalRepositoryStoresOnlyObservationParameterDigest(t *testing.T) {
+	db := openTestDB(t, context.Background(), testStateDir(t), "observation-action-derivatives")
+	repository := NewApprovalRepository(db)
+	requestedAt := time.UnixMilli(1_700_000_030_000).UTC()
+	run := seedApprovalRun(t, db, requestedAt)
+	scope := domain.ClusterScope{
+		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent,
+		Generation: run.Scope.Generation, ActivatedAt: requestedAt.Add(-time.Millisecond),
+	}
+	filterCanary := "raw-observation-filter-canary-s05"
+	parameters := domain.ActionParameters{Kind: domain.ActionParametersObservation, Observation: domain.ActionObservationParameters{
+		Kind: domain.ActionObservationLoki, QueryID: domain.QueryLokiPodLogs, Search: filterCanary,
+		WindowSeconds: 300, LineLimit: 20,
+	}}
+	plan := domain.ObservationActionPlan{
+		RunID: run.ID, SessionID: run.SessionID, Scope: scope, PolicyGeneration: 1,
+		Operation: domain.ActionOperationLokiQuery,
+		Target: domain.ActionTarget{Resource: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: scope.Namespace, Name: "sample-pod",
+			UID: "pod-uid", ResourceVersion: "31",
+		}, Fingerprint: string(parameters.Digest())},
+		Parameters: parameters,
+		Limits:     domain.ActionLimits{Timeout: 5 * time.Second, MaximumItems: 2, MaximumLines: 20, MaximumBytes: 4096, MaximumOutput: 4096},
+		OriginHash: domain.ActionDigest(strings.Repeat("b", 64)), ReasonSummary: "Query one exact bounded Pod log source.",
+	}
+	intent, err := plan.Intent(domain.PermissionProfileAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := pendingRequestForIntent(t, "00000000-0000-7000-8000-000000009024", run, intent, requestedAt, 0x64)
+	audit := testApprovalAudit(t, request, domain.AuditEventApprovalRequested, domain.AuditActorAgent, domain.AuditOutcomeSuccess, "requested", requestedAt)
+	audit.ID = "00000000-0000-7000-8000-000000009224"
+	if err := repository.CreateWithAudit(context.Background(), request, audit); err != nil {
+		t.Fatalf("CreateWithAudit(observation) error = %v", err)
+	}
+	stored, _, err := repository.Get(context.Background(), request.ID)
+	if err != nil || stored.Intent.ParameterKind != domain.ActionParametersObservation || stored.Intent.ParameterDigest != parameters.Digest() {
+		t.Fatalf("stored observation request = %#v/%v", stored, err)
+	}
+	var row struct {
+		Kind   string `db:"parameter_kind"`
+		Digest string `db:"parameter_digest"`
+	}
+	if err := db.handle.GetContext(context.Background(), &row, `
+		SELECT parameter_kind, parameter_digest FROM approvals WHERE id = ?
+	`, request.ID); err != nil || row.Kind != string(domain.ActionParametersObservation) || row.Digest != string(parameters.Digest()) {
+		t.Fatalf("stored observation derivative = %#v/%v", row, err)
+	}
+	if _, err := db.handle.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range append([]string{db.databasePath}, db.databasePath+"-wal", db.databasePath+"-shm") {
+		content, readErr := os.ReadFile(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if bytes.Contains(content, []byte(filterCanary)) {
+			t.Fatalf("raw observation filter entered SQLite at %s", path)
+		}
+	}
+}
+
 func TestApprovalRepositoryPersistsOnlyValidatedActionReviewMetadata(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "action-review-metadata")
 	repository := NewApprovalRepository(db)

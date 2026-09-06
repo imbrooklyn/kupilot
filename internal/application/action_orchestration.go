@@ -23,7 +23,7 @@ func (coordinator *ApprovalCoordinator) resolveAutomaticAction(ctx context.Conte
 		return err
 	}
 	actionResult, err := coordinator.ConsumeApprovedAction(ctx, approvalExecutionCommand(updated, tracked.sequence))
-	if tracked.action.kind != trackedActionRestart && actionResult.Validate() == nil {
+	if tracked.action.kind != trackedActionRestart && !tracked.action.toolAuthorization() && actionResult.Validate() == nil {
 		coordinator.publishClosed(ctx, actionResult)
 	}
 	return err
@@ -32,7 +32,7 @@ func (coordinator *ApprovalCoordinator) resolveAutomaticAction(ctx context.Conte
 func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracked trackedApproval) error {
 	binding := coordinator.reviewer
 	if binding == nil || !binding.valid() || !binding.Available {
-		return coordinator.escalateReviewerToHuman(ctx, tracked)
+		return coordinator.escalateReviewerToHuman(ctx, tracked, UIReviewerStatus{State: UIReviewerEscalated})
 	}
 	allowed, err := binding.Privacy.AuthorizeModel(ctx)
 	if err != nil || !allowed {
@@ -40,7 +40,9 @@ func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracke
 			_, closeErr := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonContextCancelled)
 			return closeErr
 		}
-		return coordinator.escalateReviewerToHuman(ctx, tracked)
+		return coordinator.escalateReviewerToHuman(ctx, tracked, UIReviewerStatus{
+			State: UIReviewerEscalated, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+		})
 	}
 	if !coordinator.actionCurrent(tracked.request.ActionEnvelope()) {
 		_, err := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonPolicyChanged)
@@ -71,6 +73,13 @@ func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracke
 	current.reviewing, current.reviewCancel = true, cancel
 	coordinator.active[tracked.request.ID] = current
 	coordinator.mu.Unlock()
+	if err := coordinator.publishReviewerState(reviewContext, tracked.request.ID, UIReviewerStatus{
+		State: UIReviewerReviewing, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+	}); err != nil {
+		cancel()
+		_, closeErr := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonPolicyChanged)
+		return errors.Join(err, closeErr)
+	}
 	result, reviewErr := binding.Transport.Review(reviewContext, request, reservation)
 	cancel()
 
@@ -117,7 +126,21 @@ func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracke
 		return errors.Join(err, closeErr)
 	}
 	if disposition == ActionReviewEscalate {
-		return coordinator.escalateReviewerToHuman(ctx, tracked)
+		return coordinator.escalateReviewerToHuman(ctx, tracked, UIReviewerStatus{
+			State: UIReviewerEscalated, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+			RationaleSummary: result.Rationale,
+		})
+	}
+	reviewerState := UIReviewerDenied
+	if disposition == ActionReviewApprove {
+		reviewerState = UIReviewerApproved
+	}
+	if err := coordinator.publishReviewerState(ctx, tracked.request.ID, UIReviewerStatus{
+		State: reviewerState, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+		RationaleSummary: result.Rationale,
+	}); err != nil {
+		_, closeErr := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonPolicyChanged)
+		return errors.Join(err, closeErr)
 	}
 	updated, err := coordinator.resolveProgrammatic(
 		ctx, tracked, choice, domain.ApprovalActorReviewer, domain.ReviewDispositionReviewer,
@@ -130,7 +153,7 @@ func (coordinator *ApprovalCoordinator) reviewAction(ctx context.Context, tracke
 		return nil
 	}
 	actionResult, consumeErr := coordinator.ConsumeApprovedAction(ctx, approvalExecutionCommand(updated, tracked.sequence))
-	if tracked.action.kind != trackedActionRestart && actionResult.Validate() == nil {
+	if tracked.action.kind != trackedActionRestart && !tracked.action.toolAuthorization() && actionResult.Validate() == nil {
 		coordinator.publishClosed(ctx, actionResult)
 	}
 	return consumeErr
@@ -157,7 +180,20 @@ func (coordinator *ApprovalCoordinator) recordReviewFailureAndEscalate(
 		_, err := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonContextCancelled)
 		return err
 	}
-	return coordinator.escalateReviewerToHuman(ctx, tracked)
+	if disposition == ActionReviewTimedOut {
+		deliveryContext, cancel := context.WithTimeout(context.Background(), coordinator.persistenceLimit)
+		err := coordinator.publishReviewerState(deliveryContext, tracked.request.ID, UIReviewerStatus{
+			State: UIReviewerTimedOut, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+		})
+		cancel()
+		if err != nil {
+			_, closeErr := coordinator.invalidateClaim(ctx, tracked, domain.ApprovalReasonPolicyChanged)
+			return errors.Join(err, closeErr)
+		}
+	}
+	return coordinator.escalateReviewerToHuman(ctx, tracked, UIReviewerStatus{
+		State: UIReviewerEscalated, Profile: binding.Profile, OriginHash: binding.Privacy.OriginHash(),
+	})
 }
 
 func (coordinator *ApprovalCoordinator) persistReview(record ActionReviewRecord) error {
@@ -172,7 +208,10 @@ func (coordinator *ApprovalCoordinator) persistReview(record ActionReviewRecord)
 	return nil
 }
 
-func (coordinator *ApprovalCoordinator) escalateReviewerToHuman(ctx context.Context, tracked trackedApproval) error {
+func (coordinator *ApprovalCoordinator) escalateReviewerToHuman(ctx context.Context, tracked trackedApproval, status UIReviewerStatus) error {
+	if err := coordinator.publishReviewerState(ctx, tracked.request.ID, status); err != nil {
+		return err
+	}
 	coordinator.mu.Lock()
 	current, ok := coordinator.active[tracked.request.ID]
 	if !ok || current.request.Digest != tracked.request.Digest || !coordinator.actionCurrent(tracked.request.ActionEnvelope()) {
@@ -185,6 +224,43 @@ func (coordinator *ApprovalCoordinator) escalateReviewerToHuman(ctx context.Cont
 	coordinator.active[tracked.request.ID] = current
 	coordinator.mu.Unlock()
 	return coordinator.publishApprovalDialog(ctx, current)
+}
+
+func (coordinator *ApprovalCoordinator) publishReviewerState(
+	ctx context.Context,
+	requestID domain.ApprovalID,
+	status UIReviewerStatus,
+) error {
+	if coordinator == nil || ctx == nil || status.valid() == false {
+		return ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	tracked, ok := coordinator.active[requestID]
+	if !ok || tracked.request.State != domain.ApprovalStatePending && tracked.request.State != domain.ApprovalStateApproved {
+		coordinator.mu.Unlock()
+		return ErrApprovalUnavailable
+	}
+	tracked.reviewIndex++
+	copy := status
+	tracked.reviewer = &copy
+	tracked.reviewing = status.State == UIReviewerReviewing
+	coordinator.active[requestID] = tracked
+	event := UIReviewerEvent{
+		RequestID: tracked.request.ID, RunID: tracked.request.RunID,
+		ScopeGeneration:  tracked.request.Intent.Scope.Generation,
+		PolicyGeneration: tracked.request.Intent.PolicyGeneration,
+		Sequence:         tracked.sequence, EventIndex: tracked.reviewIndex,
+		Digest: tracked.request.Digest, Status: status,
+	}
+	coordinator.mu.Unlock()
+	projection := UIEvent{
+		Kind: UIEventReviewerState, RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
+		PolicyGeneration: event.PolicyGeneration, Sequence: event.Sequence, Reviewer: &event,
+	}
+	if projection.Validate() != nil || coordinator.uiEvents.PublishUIEvent(ctx, projection) != nil {
+		return ErrApprovalUnavailable
+	}
+	return nil
 }
 
 func (coordinator *ApprovalCoordinator) resolveProgrammatic(
@@ -226,6 +302,7 @@ func (coordinator *ApprovalCoordinator) resolveProgrammatic(
 	}) != nil {
 		coordinator.cancelInMemory(updated.ID)
 		delete(coordinator.active, tracked.request.ID)
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPersistenceUnavailable})
 		return domain.ApprovalRequest{}, ErrApprovalPersistenceUnavailable
 	}
 	if updated.State == domain.ApprovalStateApproved {
@@ -234,7 +311,12 @@ func (coordinator *ApprovalCoordinator) resolveProgrammatic(
 		coordinator.active[tracked.request.ID] = current
 	} else {
 		delete(coordinator.active, tracked.request.ID)
-		coordinator.publishClosed(ctx, projectUIApprovalResult(updated, tracked.sequence))
+		result := projectUIApprovalResult(updated, tracked.sequence)
+		if coordinator.publishClosedRequired(ctx, result) != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+			return domain.ApprovalRequest{}, ErrApprovalUnavailable
+		}
+		tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteClosureError(updated))
 	}
 	return updated, nil
 }
@@ -243,6 +325,7 @@ func approvalExecutionCommand(request domain.ApprovalRequest, sequence int64) UI
 	return UICommand{
 		Kind: UICommandApproveAction, RequestID: uint64(sequence), RunID: request.RunID,
 		ExpectedScopeGeneration: request.Intent.Scope.Generation, ApprovalID: request.ID,
-		ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce, ApprovalSequence: sequence,
+		ExpectedPolicyGeneration: request.Intent.PolicyGeneration,
+		ApprovalDigest:           request.Digest, ApprovalNonce: request.Nonce, ApprovalSequence: sequence,
 	}
 }

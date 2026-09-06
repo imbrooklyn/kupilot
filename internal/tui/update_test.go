@@ -3,8 +3,10 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
@@ -30,11 +32,40 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 		LocalExecutionPolicyVersion:    domain.LocalExecutionPolicyVersion,
 		ModelContext: application.UIModelContextStatus{
 			Mode: domain.PrivacyModeStandard, EligibleMessages: 4, EligibleBytes: 4096,
-			RecentTailMessages: 4, SummaryCallsUsed: 1, SummaryCallsMaximum: 2, StorageHealthy: true,
+			Compressed: true, CompressedAtUnixMillis: 1_700_000_000_000,
+			CoveredThroughMessageID: "0198a46e-7d2a-7d34-9b6f-2df5f45a2a55",
+			RecentTailMessages:      2, SummaryCallsUsed: 1, SummaryCallsMaximum: 2, StorageHealthy: true,
 		},
 		AgentModel: application.UIModelRoleStatus{
 			Role: domain.ModelRoleAgent, Profile: "agent", OriginHash: strings.Repeat("a", 64),
 			Configured: true, Available: true, Consented: true,
+		},
+		ReviewerModel: application.UIModelRoleStatus{
+			Role: domain.ModelRoleApprovalReviewer, Profile: "approval_reviewer", OriginHash: strings.Repeat("b", 64),
+			Configured: true, Available: true, Consented: true,
+		},
+		Permission: application.UIPermissionStatus{
+			Configured: true, Profile: domain.PermissionProfileAsk, PolicyGeneration: 7, Healthy: true,
+			SessionRuleCount: 1,
+			SessionRules: []application.UISessionPermissionRuleStatus{{
+				ID: "00000000-0000-7000-8000-000000009002", Operation: domain.ActionOperationRestartDeployment,
+				Scope:           domain.ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 7},
+				NamespaceAccess: domain.NamespaceAccessCurrent, PolicyGeneration: 7,
+				Target:           "Deployment test-namespace/sample-deployment* · API apps/v1",
+				ParameterSummary: "kind=none digest=" + strings.Repeat("c", 64),
+				Effect:           domain.CapabilityEffectClusterMutation, Risk: domain.RiskReview,
+				DataCategories:  domain.ActionDataResourceMetadata,
+				AllowedSinks:    domain.ActionSinkTerminal | domain.ActionSinkKubernetesAPI,
+				NetworkEffects:  domain.ActionNetworkKubernetesAPI,
+				Limits:          domain.ActionLimits{Timeout: 2 * time.Minute, MaximumItems: 1},
+				CreatedAtMillis: 1_700_000_000_000, ExpiresAtMillis: 1_700_003_600_000,
+			}},
+		},
+		Action: &application.UIActionStatus{
+			RequestID: "00000000-0000-7000-8000-000000009001",
+			Operation: domain.ActionOperationRestartDeployment, Risk: domain.RiskReview,
+			Route: domain.ReviewDispositionHuman, State: domain.ApprovalStatePending,
+			ScopeGeneration: 7, PolicyGeneration: 7, ExpiresAtMillis: 1_700_000_060_000,
 		},
 		Budget: application.UIBudgetStatus{
 			ModelEvidenceBasis: application.ModelBudgetEvidenceBasis,
@@ -67,6 +98,15 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 		"Scope", "Context     test-context", "Namespace   test-namespace", "Generation  7",
 		"Access      namespace policy all",
 		"Actions     typed remediation and exact local policies · permission route and fresh RBAC required",
+		"Model context", "covered through 0198a46e-7d2a-7d34-9b6f-2df5f45a2a55",
+		"Compacted", "Recent tail 2 messages", "Summary budget 1/2 calls", "Storage     healthy",
+		"Permission and action supervision", "Profile     ask", "Generation  7", "Health      healthy",
+		"Boundary    safe automatic; review and critical require the local user",
+		"Reviewer    not used", "Risk        default supervised profile", "1 current-process, current-Session rules",
+		"restart_deployment · review · route human · state pending · scope 7 · policy 7",
+		"scope test-context/test-namespace generation 7 access current · policy 7",
+		"effect cluster_mutation · risk review · data resource metadata · sinks terminal, Kubernetes API",
+		"network Kubernetes API · destination none · timeout 2m0s · items 1",
 		"Run", "Catalog     " + agent.ToolCatalogVersion,
 		"Resources   " + domain.ResourcePolicyVersion + " · 17 types", "Budget", "Profile     balanced",
 		"Observability " + domain.ObservabilityPolicyVersion + " · Prometheus enabled · Loki disabled",
@@ -81,6 +121,19 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 	} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("status text missing %q:\n%s", required, got)
+		}
+	}
+	for _, width := range []int{24, 40} {
+		model := NewModel(Config{
+			Width: width, Height: 80, Theme: ThemeNoColor,
+			Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true},
+		})
+		model.transcript.AppendNotice(got)
+		model.reflow()
+		for _, line := range strings.Split(model.transcript.View(), "\n") {
+			if lineWidth := lipgloss.Width(line); lineWidth > model.contentWidth() {
+				t.Fatalf("status line width = %d, limit %d at terminal width %d: %q", lineWidth, model.contentWidth(), width, line)
+			}
 		}
 	}
 }
@@ -511,20 +564,20 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2, Text: "first",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "first",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2, Text: "duplicate",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "duplicate",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 8, Sequence: 3, Text: "stale",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 8, PolicyGeneration: 1, Sequence: 3, Text: "stale",
 	}})
 	if model.run.StreamedText != "first" || model.run.LastSequence != 2 {
 		t.Fatalf("run after rejected events = %#v", model.run)
 	}
 
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID,
 			Name:         domain.ToolNameGetResource,
@@ -536,7 +589,7 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 		t.Fatal("Tool step was not placed inline")
 	}
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 4,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4,
 		ToolStep: &application.ToolStep{
 			InvocationID:  testInvocationID,
 			Name:          domain.ToolNameGetResource,
@@ -545,7 +598,7 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 		},
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 5,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 5,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID,
 			Name:         domain.ToolNameGetResource,
@@ -556,10 +609,10 @@ func TestUpdateActiveRunPreservesDraftAndRejectsLateEvents(t *testing.T) {
 		t.Fatalf("terminal Tool step regressed: %#v", got)
 	}
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, Sequence: 6, Text: "Final diagnosis.",
+		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 6, Text: "Final diagnosis.",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 7, Text: "late",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 7, Text: "late",
 	}})
 	if model.run.Active || !model.run.Terminal || model.run.StreamedText != "Final diagnosis." || model.run.LastSequence != 6 {
 		t.Fatalf("terminal run state = %#v", model.run)
@@ -578,11 +631,11 @@ func TestRequestedToolClearsOnlyThePreToolProvisionalAnswer(t *testing.T) {
 	model := newTestModel()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2,
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 		Text: "Discard this pre-Tool draft.",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID,
 			Name:         domain.ToolNameGetResource,
@@ -594,11 +647,11 @@ func TestRequestedToolClearsOnlyThePreToolProvisionalAnswer(t *testing.T) {
 		t.Fatalf("requested Tool retained pre-Tool text: run=%#v view=%q", model.run, model.transcript.View())
 	}
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 4,
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4,
 		Text: "Keep this final answer.",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, Sequence: 5,
+		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 5,
 		Text: "Keep this final answer.",
 	}})
 	if model.run.StreamedText != "Keep this final answer." ||
@@ -614,15 +667,15 @@ func TestUpdateBoundsCumulativeStreamText(t *testing.T) {
 	model := newTestModel()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2,
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 		Text: strings.Repeat("x", application.MaxQuestionBytes),
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		Text: strings.Repeat("y", application.MaxQuestionBytes),
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 4, Text: "overflow",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "overflow",
 	}})
 	if len(model.run.StreamedText) != application.MaxAnswerMarkdownBytes || model.run.LastSequence != 4 {
 		t.Fatalf("bounded stream state = bytes %d, sequence %d", len(model.run.StreamedText), model.run.LastSequence)
@@ -674,10 +727,11 @@ func newTestModel() Model {
 
 func runStartedEvent(sequence int64) application.UIEvent {
 	return application.UIEvent{
-		Kind:            application.UIEventRunStarted,
-		RunID:           testRunID,
-		ScopeGeneration: 7,
-		Sequence:        sequence,
+		Kind:             application.UIEventRunStarted,
+		RunID:            testRunID,
+		ScopeGeneration:  7,
+		PolicyGeneration: 1,
+		Sequence:         sequence,
 	}
 }
 

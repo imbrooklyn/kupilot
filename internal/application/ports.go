@@ -131,6 +131,11 @@ func (generator *IdentifierGenerator) NewApprovalID() (domain.ApprovalID, error)
 	return domain.ApprovalID(value), err
 }
 
+func (generator *IdentifierGenerator) NewPermissionRuleID() (domain.PermissionRuleID, error) {
+	value, err := generator.next()
+	return domain.PermissionRuleID(value), err
+}
+
 // NewNonce creates one opaque approval proof from cryptographic randomness.
 // It is never formatted, logged, persisted in plaintext, or reused as an ID.
 func (generator *IdentifierGenerator) NewNonce(ctx context.Context) (domain.ApprovalNonce, error) {

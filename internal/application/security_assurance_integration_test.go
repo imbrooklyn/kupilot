@@ -423,8 +423,8 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 
 	runID := domain.AgentRunID("00000000-0000-7000-8000-000000000932")
 	uiEvents := []application.UIEvent{
-		{Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 7, Sequence: 1},
-		{Kind: application.UIEventRunFailed, RunID: runID, ScopeGeneration: 7, Sequence: 2, Text: boundary.err.Error()},
+		{Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 1},
+		{Kind: application.UIEventRunFailed, RunID: runID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: boundary.err.Error()},
 	}
 	for _, event := range uiEvents {
 		if event.Validate() != nil {

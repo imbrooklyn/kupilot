@@ -63,7 +63,7 @@ func TestWorkingTickRejectsStaleAndTerminalMessages(t *testing.T) {
 
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "Ready.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Ready.",
 	}})
 	model, command = updateModel(t, model, WorkingTickMsg{
 		RunID: testRunID, ScopeGeneration: 7, Sequence: 1,

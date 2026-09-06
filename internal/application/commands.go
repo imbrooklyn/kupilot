@@ -66,48 +66,55 @@ func (command CancelRunCommand) Validate() error {
 type UICommandKind string
 
 const (
-	UICommandSubmitQuestion  UICommandKind = "submit_question"
-	UICommandSelectContext   UICommandKind = "select_context"
-	UICommandSelectNamespace UICommandKind = "select_namespace"
-	UICommandSelectResource  UICommandKind = "select_resource"
-	UICommandNewSession      UICommandKind = "new_session"
-	UICommandResumeSession   UICommandKind = "resume_session"
-	UICommandRenameSession   UICommandKind = "rename_session"
-	UICommandShowPrivacy     UICommandKind = "show_privacy"
-	UICommandAcceptPrivacy   UICommandKind = "accept_privacy"
-	UICommandRejectPrivacy   UICommandKind = "reject_privacy"
-	UICommandRevokePrivacy   UICommandKind = "revoke_privacy"
-	UICommandToggleLogs      UICommandKind = "toggle_logs"
-	UICommandCancelPrivacy   UICommandKind = "cancel_privacy"
-	UICommandCancelRun       UICommandKind = "cancel_run"
-	UICommandActivateScope   UICommandKind = "activate_scope"
-	UICommandAcceptResume    UICommandKind = "accept_resume"
-	UICommandCancelResume    UICommandKind = "cancel_resume"
-	UICommandShowStatus      UICommandKind = "show_status"
-	UICommandExportSession   UICommandKind = "export_session"
-	UICommandApproveAction   UICommandKind = "approve_action"
-	UICommandRejectAction    UICommandKind = "reject_action"
-	UICommandExpireAction    UICommandKind = "expire_action"
+	UICommandSubmitQuestion    UICommandKind = "submit_question"
+	UICommandSelectContext     UICommandKind = "select_context"
+	UICommandSelectNamespace   UICommandKind = "select_namespace"
+	UICommandSelectResource    UICommandKind = "select_resource"
+	UICommandNewSession        UICommandKind = "new_session"
+	UICommandResumeSession     UICommandKind = "resume_session"
+	UICommandRenameSession     UICommandKind = "rename_session"
+	UICommandShowPrivacy       UICommandKind = "show_privacy"
+	UICommandAcceptPrivacy     UICommandKind = "accept_privacy"
+	UICommandRejectPrivacy     UICommandKind = "reject_privacy"
+	UICommandRevokePrivacy     UICommandKind = "revoke_privacy"
+	UICommandToggleLogs        UICommandKind = "toggle_logs"
+	UICommandCancelPrivacy     UICommandKind = "cancel_privacy"
+	UICommandCancelRun         UICommandKind = "cancel_run"
+	UICommandActivateScope     UICommandKind = "activate_scope"
+	UICommandAcceptResume      UICommandKind = "accept_resume"
+	UICommandCancelResume      UICommandKind = "cancel_resume"
+	UICommandShowStatus        UICommandKind = "show_status"
+	UICommandShowPermissions   UICommandKind = "show_permissions"
+	UICommandChangePermission  UICommandKind = "change_permission"
+	UICommandExportSession     UICommandKind = "export_session"
+	UICommandApproveAction     UICommandKind = "approve_action"
+	UICommandRejectAction      UICommandKind = "reject_action"
+	UICommandCancelAction      UICommandKind = "cancel_action"
+	UICommandExpireAction      UICommandKind = "expire_action"
+	UICommandCreateSessionRule UICommandKind = "create_session_rule"
 )
 
 // UICommand contains only the typed intent data needed by the current TUI.
 // It carries no Bubble Tea value, callback, client, credential, or write path.
 type UICommand struct {
-	Kind                    UICommandKind
-	RequestID               uint64
-	Text                    string
-	RunID                   domain.AgentRunID
-	ExpectedScopeGeneration int64
-	Scope                   *domain.ScopeCandidate
-	Resource                *domain.ResourceRef
-	PrivacyRevision         string
-	LogsEnabled             *bool
-	ApprovalID              domain.ApprovalID
-	ApprovalDigest          domain.ApprovalDigest
-	ApprovalNonce           domain.ApprovalNonce
-	ApprovalSequence        int64
-	Lifecycle               *SessionLifecycleIntent
-	Export                  *ExportSummaryIntent
+	Kind                     UICommandKind
+	RequestID                uint64
+	Text                     string
+	RunID                    domain.AgentRunID
+	ExpectedScopeGeneration  int64
+	Scope                    *domain.ScopeCandidate
+	Resource                 *domain.ResourceRef
+	PrivacyRevision          string
+	LogsEnabled              *bool
+	ApprovalID               domain.ApprovalID
+	ApprovalDigest           domain.ApprovalDigest
+	ApprovalNonce            domain.ApprovalNonce
+	ApprovalSequence         int64
+	ExpectedPolicyGeneration domain.PolicyGeneration
+	PermissionProfile        domain.PermissionProfile
+	HighRiskAcknowledged     bool
+	Lifecycle                *SessionLifecycleIntent
+	Export                   *ExportSummaryIntent
 }
 
 // Validate checks payload exclusivity and bounded delivery data.
@@ -116,8 +123,15 @@ func (command UICommand) Validate() error {
 		return ErrInvalidUICommand
 	}
 	approvalCommand := command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
-		command.Kind == UICommandExpireAction
+		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction ||
+		command.Kind == UICommandCreateSessionRule
 	if !approvalCommand && command.hasApprovalPayload() {
+		return ErrInvalidUICommand
+	}
+	permissionCommand := command.Kind == UICommandChangePermission || command.Kind == UICommandCreateSessionRule ||
+		command.Kind == UICommandApproveAction || command.Kind == UICommandRejectAction ||
+		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction
+	if !permissionCommand && command.hasPermissionPayload() {
 		return ErrInvalidUICommand
 	}
 	lifecycleCommand := command.Kind == UICommandTightenRetention || command.Kind == UICommandSetPersistenceMode ||
@@ -219,16 +233,31 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
+	case UICommandShowPermissions:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.hasPermissionPayload() {
+			return ErrInvalidUICommand
+		}
+	case UICommandChangePermission:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			!command.ExpectedPolicyGeneration.Valid() || !command.PermissionProfile.Valid() ||
+			(command.PermissionProfile == domain.PermissionProfileFullAccess) != command.HighRiskAcknowledged {
+			return ErrInvalidUICommand
+		}
 	case UICommandCancelRun:
 		if command.RequestID != 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
 		}
-	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
+	case UICommandApproveAction, UICommandRejectAction, UICommandCancelAction, UICommandExpireAction,
+		UICommandCreateSessionRule:
 		if command.RequestID == 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
 			!command.ApprovalID.Valid() || !command.ApprovalDigest.Valid() || !command.ApprovalNonce.Valid() ||
-			command.ApprovalSequence < 1 || command.ApprovalSequence > 4096 {
+			command.ApprovalSequence < 1 || command.ApprovalSequence > 4096 ||
+			!command.ExpectedPolicyGeneration.Valid() || command.PermissionProfile != "" || command.HighRiskAcknowledged {
 			return ErrInvalidUICommand
 		}
 	default:
@@ -243,6 +272,10 @@ func (command UICommand) hasPrivacyPayload() bool {
 
 func (command UICommand) hasApprovalPayload() bool {
 	return command.ApprovalID != "" || command.ApprovalDigest != "" || command.ApprovalNonce.Valid() || command.ApprovalSequence != 0
+}
+
+func (command UICommand) hasPermissionPayload() bool {
+	return command.ExpectedPolicyGeneration != 0 || command.PermissionProfile != "" || command.HighRiskAcknowledged
 }
 
 func validUICommandText(value string, limit int) bool {

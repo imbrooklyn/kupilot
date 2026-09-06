@@ -1,6 +1,6 @@
 # Performance Baseline and Budgets
 
-- Status: Accepted `v0.5` target with implemented `v0.4` harnesses
+- Status: Accepted `v0.5` target with implemented deterministic harnesses
 - Date: 2026-09-03
 
 ## Scope
@@ -44,12 +44,14 @@ Performance and compatibility evidence are reported separately:
    denial, escalation, latency, token use, and cost. It cannot replace
    deterministic security or protocol tests.
 
-Before `v0.5` is release-ready, versioned harnesses must cover safe Session
-context selection, Eino ADK Runner and summarization, coverage/recent-tail
-memory, Agent/Reviewer/summary budget isolation, permission routing,
-ActionEnvelope revalidation and audit, process cancellation/join, and
-ambiguous-outcome verification. This document does not claim those harnesses or
-baselines already exist.
+The checked-in versioned harnesses cover safe Session-context selection, Eino
+ADK Runner and summarization, coverage/recent-tail memory,
+Agent/Reviewer/summary budget isolation, permission routing, ActionEnvelope
+revalidation and audit, process cancellation/join, and ambiguous-outcome
+verification. Passing them is deterministic implementation evidence, not a
+release-ready or universal performance claim. A release still requires fresh
+results for every applicable gate and separately reported live/evaluation
+evidence.
 
 ## Environment classes and comparison method
 

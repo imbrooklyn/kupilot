@@ -6,17 +6,17 @@ observations and controlled actions, keeps deterministic Evidence separate from
 model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
-> ADR-0044 through ADR-0047 and the canonical docs define the Accepted `v0.5`
-> target. The checked-in code, strict version 1 configuration, SQLite schema,
-> and RBAC fixtures still implement the narrower `v0.4` baseline. The new
-> capabilities are not yet available, tested, or release-ready.
+> The checked-in source implements the deterministic `v0.5` contract described
+> by ADR-0044 through ADR-0047 and the canonical docs. It is unreleased. Passing
+> deterministic gates is not a release-readiness claim, and opt-in live results
+> apply only to the exact endpoint, model, cluster, and versions tested.
 
 Kupilot is Agent-first. It is not k9s, a Kubernetes Dashboard, a generic
 kubectl wrapper, a shell console, an IDE, a controller, or a generic API client.
 There is no primary resource tree, YAML editor, action dashboard, dynamic
 plugin, background reconciliation loop, or autonomous remediation.
 
-## Accepted `v0.5` direction
+## Implemented `v0.5` boundary
 
 The P0 capability catalog covers:
 
@@ -112,10 +112,11 @@ Requirements are Go 1.25.0 or newer and macOS or Linux on `amd64` or `arm64`.
 The contributor and CI toolchain uses the exact patch version documented in
 [Development and CI Gates](docs/development.md).
 
-The current `v0.4` binary supports its seven typed read Tools and one supervised
-`restart_deployment` action. It does not implement the broader Accepted `v0.5`
-catalog. `config.example.yaml` intentionally remains valid for the current
-strict version 1 parser and contains no speculative future fields.
+The current source implements the fixed fourteen-Tool operational catalog,
+named Agent and optional Reviewer profiles, Session context and summarization,
+permission supervision, remote diagnostics, local execution policy, and the
+typed remediation catalog. `config.example.yaml` uses the current strict
+version 2 schema and intentionally contains no credential.
 
 Start a new Session with:
 
@@ -134,8 +135,7 @@ kupilot resume --last
 Automatically managed files stay below
 `${KUPILOT_HOME:-$HOME/.kupilot}`. If current model configuration is incomplete,
 the TUI requests one endpoint, model, and masked key and discloses plaintext
-local credential storage before saving it. This is the implemented setup flow,
-not the future named-profile schema.
+local credential storage before saving it into the named Agent profile.
 
 ## Scope, data, and storage
 

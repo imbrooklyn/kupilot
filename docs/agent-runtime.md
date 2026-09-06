@@ -16,9 +16,11 @@ used by the existing supervised Deployment restart and the default-off Pod
 Exec, container-file, and diagnostic-Pod handlers. The shared Application
 dispatcher additionally owns typed scale/rollback/controller-owned-Pod delete/
 cordon/uncordon/drain and exact local direct-argv/separate-shell actions.
-Human/Reviewer remote-diagnostic routes, review-class logs, and optional sources
-fail closed before I/O in the default `ask` composition until their delivery
-path can own those ActionEnvelopes.
+Human/Reviewer remote-diagnostic routes, review-class Pod logs, and optional
+Prometheus/Loki reads use the same inline Application supervision. Their Tool
+calls remain blocked until the exact target-bound ActionEnvelope is durably
+consumed or safely closed; a failed, stale, cancelled, denied, or timed-out
+decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
@@ -196,10 +198,11 @@ The deterministic permission and controlled-action foundation described here
 is implemented. Current production composition uses it for the existing
 supervised Deployment restart, all six additional typed remediation operations,
 exact local direct argv, and the separate shell operation. The three default-
-off remote-diagnostic handlers are also wired, but their gate can consume only
-an automatic route or a matching current-process Session rule in this slice;
-human and Reviewer routes remain fail-closed pending the next integration
-slice.
+off remote-diagnostic handlers are also wired. Their human and Reviewer routes
+block the current Tool call in the shared Application supervision flow; the
+handler receives an envelope only after exact authority is durably consumed.
+Rejection, cancellation, timeout, stale state, and Reviewer failure release no
+remote execution authority.
 
 The final response may contain only versioned typed proposals from the P0
 catalog: restart, scale, rollback, one controller-owned ordinary Pod delete,
@@ -378,8 +381,9 @@ remote-diagnostic policy version and enabled-entry counts, the
 local-execution policy version and enabled direct/shell entry counts, the
 byte/call/time/cost-unit evidence basis with no endpoint-token claim,
 privacy, and storage health without model, Kubernetes, Reviewer, process, or
-executor activity. The complete `/permissions` management interaction remains
-later work.
+executor activity. `/permissions` uses the same local status projection, a
+fixed five-profile picker, and a typed Application command; it performs no
+business I/O from Bubble Tea `Update` or `View`.
 
 ## Failure classes
 

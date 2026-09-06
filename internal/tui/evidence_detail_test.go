@@ -248,6 +248,7 @@ func modelWithEvidenceReferences(t *testing.T, references []application.UIEviden
 		Kind:               application.UIEventRunCompleted,
 		RunID:              testRunID,
 		ScopeGeneration:    7,
+		PolicyGeneration:   1,
 		Sequence:           2,
 		Text:               "Final diagnosis.",
 		EvidenceReferences: references,

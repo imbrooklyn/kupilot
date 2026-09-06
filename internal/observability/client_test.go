@@ -479,9 +479,12 @@ func sourceSettings(kind domain.DataSourceKind, origin string, reference config.
 func prometheusRequest(origin string) toolcontract.PrometheusReadRequest {
 	return toolcontract.PrometheusReadRequest{
 		Scope: testScope(), PolicyGeneration: 3,
-		Policy:    domain.DataSourcePolicy{Kind: domain.DataSourcePrometheus, OriginHash: domain.SHA256Hex(origin), Queries: []domain.ObservabilityQueryID{domain.QueryPrometheusPodCPUUsage}, RequestTimeout: time.Second},
-		Reference: domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"},
-		QueryID:   domain.QueryPrometheusPodCPUUsage, Start: testStart, End: testEnd, Step: time.Minute,
+		Policy: domain.DataSourcePolicy{Kind: domain.DataSourcePrometheus, OriginHash: domain.SHA256Hex(origin), Queries: []domain.ObservabilityQueryID{domain.QueryPrometheusPodCPUUsage}, RequestTimeout: time.Second},
+		Reference: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+			UID: "pod-uid", ResourceVersion: "123",
+		},
+		QueryID: domain.QueryPrometheusPodCPUUsage, Start: testStart, End: testEnd, Step: time.Minute,
 		MaxSeries: 2, MaxSamples: 122, LimitBytes: 64 * 1024,
 	}
 }
@@ -489,9 +492,12 @@ func prometheusRequest(origin string) toolcontract.PrometheusReadRequest {
 func lokiRequest(origin string) toolcontract.LokiReadRequest {
 	return toolcontract.LokiReadRequest{
 		Scope: testScope(), PolicyGeneration: 3,
-		Policy:    domain.DataSourcePolicy{Kind: domain.DataSourceLoki, OriginHash: domain.SHA256Hex(origin), Queries: []domain.ObservabilityQueryID{domain.QueryLokiPodLogs}, RequestTimeout: time.Second},
-		Reference: domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"},
-		QueryID:   domain.QueryLokiPodLogs, Contains: "error", Start: testStart, End: testEnd,
+		Policy: domain.DataSourcePolicy{Kind: domain.DataSourceLoki, OriginHash: domain.SHA256Hex(origin), Queries: []domain.ObservabilityQueryID{domain.QueryLokiPodLogs}, RequestTimeout: time.Second},
+		Reference: domain.ResourceRef{
+			APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod",
+			UID: "pod-uid", ResourceVersion: "123",
+		},
+		QueryID: domain.QueryLokiPodLogs, Contains: "error", Start: testStart, End: testEnd,
 		MaxPages: 2, PageLines: 2, MaxLines: 3, LimitBytes: 64 * 1024,
 	}
 }

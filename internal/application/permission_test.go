@@ -121,6 +121,65 @@ func TestLocalExecutionPermissionProfileMatrixUsesExactOperationAndRisk(t *testi
 	}
 }
 
+func TestObservationPermissionProfileMatrixUsesExactEffect(t *testing.T) {
+	profiles := []struct {
+		name   string
+		policy PermissionPolicy
+		log    domain.ReviewDisposition
+		source domain.ReviewDisposition
+	}{
+		{name: "read-only", policy: permissionPolicy(domain.PermissionProfileReadOnly), log: domain.ReviewDispositionHuman, source: domain.ReviewDispositionDeny},
+		{name: "ask", policy: permissionPolicy(domain.PermissionProfileAsk), log: domain.ReviewDispositionHuman, source: domain.ReviewDispositionHuman},
+		{name: "auto-review", policy: permissionPolicy(domain.PermissionProfileAutoReview), log: domain.ReviewDispositionReviewer, source: domain.ReviewDispositionReviewer},
+		{name: "full-access", policy: PermissionPolicy{Profile: domain.PermissionProfileFullAccess, Generation: 1, FullAccessAllowed: true, HighRiskAcknowledged: true}, log: domain.ReviewDispositionAutomatic, source: domain.ReviewDispositionAutomatic},
+		{name: "custom default", policy: permissionPolicy(domain.PermissionProfileCustom), log: domain.ReviewDispositionDeny, source: domain.ReviewDispositionDeny},
+	}
+	operations := []struct {
+		name      string
+		operation domain.ActionOperation
+		effect    domain.CapabilityEffectClass
+		want      func(profile struct {
+			name   string
+			policy PermissionPolicy
+			log    domain.ReviewDisposition
+			source domain.ReviewDisposition
+		}) domain.ReviewDisposition
+	}{
+		{name: "Pod logs", operation: domain.ActionOperationLogsCurrent, effect: domain.CapabilityEffectSensitiveRead, want: func(profile struct {
+			name   string
+			policy PermissionPolicy
+			log    domain.ReviewDisposition
+			source domain.ReviewDisposition
+		}) domain.ReviewDisposition {
+			return profile.log
+		}},
+		{name: "Prometheus", operation: domain.ActionOperationPrometheusQuery, effect: domain.CapabilityEffectNetworkEgress, want: func(profile struct {
+			name   string
+			policy PermissionPolicy
+			log    domain.ReviewDisposition
+			source domain.ReviewDisposition
+		}) domain.ReviewDisposition {
+			return profile.source
+		}},
+	}
+	for _, profile := range profiles {
+		for _, operation := range operations {
+			t.Run(profile.name+"/"+operation.name, func(t *testing.T) {
+				if !admittedSupervisedAction(operation.operation) {
+					t.Fatalf("observation operation %s is not admitted", operation.operation)
+				}
+				got := EvaluatePermission(profile.policy, PermissionEvaluationInput{
+					Operation: operation.operation, Effect: operation.effect, Risk: domain.RiskReview,
+					CapabilityAdmitted: true, CapabilityEnabled: true,
+				})
+				if got.Validate() != nil || got.Disposition != operation.want(profile) {
+					t.Fatalf("observation permission = %#v", got)
+				}
+			})
+		}
+	}
+}
+
 func TestS04ExecutionPermissionRouteMatrixIsComplete(t *testing.T) {
 	operations := []struct {
 		name      string
@@ -591,6 +650,7 @@ func TestPermissionGenerationInvalidatesBeforeCancellationAndRulesAreProcessLoca
 	status := manager.Status(fresh.RequestedAt)
 	if len(status.SessionRules) != 1 || status.SessionRules[0].ID != rule.ID ||
 		status.SessionRules[0].Scope != rule.Scope || status.SessionRules[0].TargetAPIVersion != rule.TargetAPIVersion ||
+		status.SessionRules[0].NamespaceAccess != rule.NamespaceAccess ||
 		status.SessionRules[0].TargetKind != rule.TargetKind || status.SessionRules[0].TargetNamespace != rule.TargetNamespace ||
 		status.SessionRules[0].TargetSubresource != rule.TargetSubresource || status.SessionRules[0].TargetPrefix != rule.TargetNamePrefix ||
 		status.SessionRules[0].ParameterKind != rule.ParameterKind || status.SessionRules[0].ParameterDigest != rule.ParameterDigest ||

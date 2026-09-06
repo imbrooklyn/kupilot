@@ -67,15 +67,16 @@ Metrics API reads and normalized integer CPU/memory quantities. Prometheus and
 Loki use only configured canonical origins and code-owned query IDs.
 
 The default `ask` composition routes container output and optional external
-data-source access to permission review. The S04 remote-diagnostic gate creates
-and atomically consumes the same durable `ActionEnvelope` lifecycle for an
-automatic full-access/custom route or an eligible current-process Session
-rule. Human and Reviewer routes fail closed before remote execution until their
-delivery integration is completed; configuring an entry alone never executes
-it. Deterministic adapter and Tool tests exercise the authorized path without
-claiming live endpoint or cluster integration. The separate shared dispatcher
-now owns local-process and typed-remediation decisions; it does not silently
-extend authority to the remote-diagnostic gate.
+data-source access to permission review. Remote diagnostics, Pod logs, and
+Prometheus/Loki reads create and atomically consume the same durable
+`ActionEnvelope` lifecycle for human, Reviewer, automatic, or eligible
+current-process Session-rule routes. The exact Pod identity and operation
+parameters are revalidated before consumption. Failed or stale supervision
+performs no remote execution, log-content read, or external-source request;
+configuring an entry alone never executes it. Deterministic adapter and Tool
+tests exercise these paths without generalizing compatibility to an untested
+endpoint or cluster. The shared dispatcher separately owns local-process and
+typed-remediation attempts.
 
 Source allowlisting occurs before projection, normalization, sensitive-value
 handling, limits, neutral serialization, and final role/origin/category consent.

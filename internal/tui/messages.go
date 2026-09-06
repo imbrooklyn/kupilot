@@ -120,6 +120,7 @@ type ApplicationFailureMsg struct {
 	Message          string
 	RequestID        uint64
 	ScopeGeneration  int64
+	PolicyGeneration domain.PolicyGeneration
 	RunID            domain.AgentRunID
 	ApprovalID       domain.ApprovalID
 	ApprovalDigest   domain.ApprovalDigest

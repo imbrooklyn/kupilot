@@ -50,6 +50,7 @@ func (availability PodLogAvailability) valid() bool {
 type PodLogReadRequest struct {
 	Scope            domain.ClusterScope
 	PolicyGeneration domain.PolicyGeneration
+	Pod              domain.ResourceRef
 	Namespace        string
 	PodName          string
 	Container        string
@@ -100,8 +101,22 @@ func (content PodLogContent) bytes() []byte {
 
 // Validate rejects cross-scope or expanding log reads before an adapter action.
 func (request PodLogReadRequest) Validate() error {
+	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || request.Pod.Validate() != nil || request.Pod.UID == "" || request.Pod.ResourceVersion == "" ||
+		request.Pod.APIVersion != "v1" || request.Pod.Kind != "Pod" || request.Pod.Namespace != request.Namespace || request.Pod.Name != request.PodName ||
+		!request.Scope.AllowsReference(request.Pod) ||
+		request.Container != "" && !domain.ValidResourceName(request.Container) ||
+		request.TailLines < 1 || request.TailLines > domain.MaxObservabilityLines ||
+		request.SinceSeconds < 60 || request.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
+		request.LimitBytes < 1 || request.LimitBytes > domain.MaxObservabilityBytes {
+		return ErrInvalidPodLogRead
+	}
+	return nil
+}
+
+func (request PodLogReadRequest) validateUnresolved() error {
 	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName}
-	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
+	if request.Pod != (domain.ResourceRef{}) || request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() ||
+		domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
 		request.Container != "" && !domain.ValidResourceName(request.Container) ||
 		request.TailLines < 1 || request.TailLines > domain.MaxObservabilityLines ||
 		request.SinceSeconds < 60 || request.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
@@ -131,6 +146,7 @@ type PodLogObservation struct {
 type PodLogsReadRequest struct {
 	Scope            domain.ClusterScope
 	PolicyGeneration domain.PolicyGeneration
+	Pod              domain.ResourceRef
 	Namespace        string
 	PodName          string
 	Previous         bool
@@ -143,8 +159,9 @@ type PodLogsReadRequest struct {
 }
 
 func (request PodLogsReadRequest) Validate() error {
-	pod := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName}
-	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || domain.ValidateLiveResourceRef(pod) != nil || !request.Scope.AllowsReference(pod) ||
+	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || request.Pod.Validate() != nil || request.Pod.UID == "" || request.Pod.ResourceVersion == "" ||
+		request.Pod.APIVersion != "v1" || request.Pod.Kind != "Pod" || request.Pod.Namespace != request.Namespace || request.Pod.Name != request.PodName ||
+		!request.Scope.AllowsReference(request.Pod) ||
 		request.TailLines < 1 || request.TailLines > domain.MaxObservabilityLines || request.SinceSeconds < 60 || request.SinceSeconds > int(domain.MaxObservabilityWindow/time.Second) ||
 		request.MaxContainers < 1 || request.MaxContainers > domain.MaxObservabilityLogContainers || request.LimitBytes < 1 || request.LimitBytes > domain.MaxObservabilityBytes {
 		return ErrInvalidPodLogRead
@@ -162,13 +179,12 @@ type PodLogsObservation struct {
 }
 
 func (observation PodLogsObservation) Validate(request PodLogsReadRequest) error {
-	if request.Validate() != nil || domain.ValidateLiveResourceRef(observation.Pod) != nil || observation.Pod.APIVersion != "v1" || observation.Pod.Kind != "Pod" ||
-		observation.Pod.Namespace != request.Namespace || observation.Pod.Name != request.PodName || len(observation.Items) > request.MaxContainers ||
+	if request.Validate() != nil || observation.Pod != request.Pod || len(observation.Items) > request.MaxContainers ||
 		observation.SourceBytes < 0 || observation.SourceBytes > request.LimitBytes || !domain.ValidModelText(observation.PartialReason, 64, true) {
 		return ErrInvalidPodLogRead
 	}
 	for _, item := range observation.Items {
-		single := PodLogReadRequest{Scope: request.Scope, PolicyGeneration: request.PolicyGeneration, Namespace: request.Namespace, PodName: request.PodName, Container: item.Container,
+		single := PodLogReadRequest{Scope: request.Scope, PolicyGeneration: request.PolicyGeneration, Pod: request.Pod, Namespace: request.Namespace, PodName: request.PodName, Container: item.Container,
 			Previous: request.Previous, TailLines: request.TailLines, SinceSeconds: request.SinceSeconds, LimitBytes: request.LimitBytes}
 		if item.Validate(single) != nil {
 			return ErrInvalidPodLogRead
@@ -179,9 +195,7 @@ func (observation PodLogsObservation) Validate(request PodLogsReadRequest) error
 
 // Validate checks source identity, semantics, and the adapter-side byte bound.
 func (observation PodLogObservation) Validate(request PodLogReadRequest) error {
-	if request.Validate() != nil || domain.ValidateLiveResourceRef(observation.Pod) != nil ||
-		observation.Pod.APIVersion != "v1" || observation.Pod.Kind != "Pod" ||
-		observation.Pod.Namespace != request.Namespace || observation.Pod.Name != request.PodName ||
+	if request.Validate() != nil || observation.Pod != request.Pod ||
 		!domain.ValidResourceName(observation.Container) ||
 		request.Container != "" && observation.Container != request.Container ||
 		observation.Previous != request.Previous || !observation.Availability.valid() || observation.RestartCount < 0 ||
@@ -219,10 +233,9 @@ type LogTextProcessor interface {
 type LogPolicyDecision string
 
 const (
-	LogPolicyAllowed            LogPolicyDecision = "allowed"
-	LogPolicyConsentRequired    LogPolicyDecision = "consent_required"
-	LogPolicyPermissionRequired LogPolicyDecision = "permission_required"
-	LogPolicyDenied             LogPolicyDecision = "denied"
+	LogPolicyAllowed         LogPolicyDecision = "allowed"
+	LogPolicyConsentRequired LogPolicyDecision = "consent_required"
+	LogPolicyDenied          LogPolicyDecision = "denied"
 )
 
 // LogPolicyRequest contains only safe run/scope metadata and fixed instance
@@ -253,7 +266,7 @@ func classifyLogPolicyDecision(decision LogPolicyDecision) domain.SafeErrorClass
 		return ""
 	case LogPolicyConsentRequired:
 		return domain.SafeErrorClassConsentRequired
-	case LogPolicyPermissionRequired, LogPolicyDenied:
+	case LogPolicyDenied:
 		return domain.SafeErrorClassPolicyDenied
 	default:
 		return domain.SafeErrorClassInternal
@@ -272,6 +285,8 @@ func authorizeLogRead(ctx context.Context, request LogPolicyRequest, dependencie
 // separately named Pod log handlers.
 type LogToolDependencies struct {
 	Reader      PodLogReader
+	Targets     ObservationTargetResolver
+	Actions     ObservationActionGate
 	ScopeGuard  ScopeGuard
 	PolicyGuard PolicyGenerationGuard
 	EvidenceIDs EvidenceIDSource
@@ -281,7 +296,8 @@ type LogToolDependencies struct {
 }
 
 func (dependencies LogToolDependencies) validate() error {
-	if dependencies.Reader == nil || dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil || dependencies.EvidenceIDs == nil ||
+	if dependencies.Reader == nil || dependencies.Targets == nil || dependencies.Actions == nil ||
+		dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil || dependencies.EvidenceIDs == nil ||
 		dependencies.Text == nil || dependencies.Policy == nil || dependencies.Now == nil ||
 		!validRequiredUTCTime(dependencies.Now()) {
 		return ErrInvalidLogToolDependencies
@@ -356,7 +372,7 @@ func decodePodLogCall(call BoundToolCall, previous bool) (decodedPodLogCall, err
 		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Namespace: arguments.Namespace, PodName: arguments.PodName, Container: arguments.Container, Previous: previous,
 		TailLines: effectiveLines, SinceSeconds: effectiveWindow, LimitBytes: effectiveBytes,
 	}
-	if request.Validate() != nil {
+	if request.validateUnresolved() != nil {
 		return decodedPodLogCall{}, ErrInvalidCanonicalArguments
 	}
 	return decodedPodLogCall{
@@ -394,44 +410,93 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
 		return failedResult(call, observed, class)
 	}
-	if ctx.Err() != nil {
-		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
+	operation := podLogActionOperation(previous, decoded.arguments.ContainerMode == "all", decoded.arguments.Search != "")
+	preflight := domain.ObservationActionPreflight{
+		RunID: call.RunID(), SessionID: call.SessionID(), Scope: call.Scope(),
+		PolicyGeneration: call.PolicyGeneration(), Operation: operation,
 	}
+	if err := dependencies.Actions.PrepareObservationAction(ctx, preflight); err != nil {
+		return failedResult(call, observed, classifyFailure(ctx, err))
+	}
+	targetRequest := ObservationTargetRequest{
+		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Operation: operation,
+		Namespace: decoded.request.Namespace, PodName: decoded.request.PodName,
+		RequestedContainer: decoded.request.Container, AllContainers: decoded.arguments.ContainerMode == "all",
+		IncludeInit: decoded.arguments.IncludeInit, IncludeEphemeral: decoded.arguments.IncludeEphemeral,
+	}
+	target, err := dependencies.Targets.ResolveObservationTarget(ctx, targetRequest)
+	if err != nil {
+		return failedResult(call, observed, classifyFailure(ctx, err))
+	}
+	if target.Validate(targetRequest) != nil || !observationCallCurrent(ctx, call, dependencies.ScopeGuard, dependencies.PolicyGuard) {
+		return failedResult(call, observed, observationCurrentFailure(ctx))
+	}
+	parameters := domain.ActionParameters{Kind: domain.ActionParametersObservation, Observation: domain.ActionObservationParameters{
+		Kind: domain.ActionObservationPodLog, Container: target.Container, Previous: previous,
+		AllContainers: decoded.arguments.ContainerMode == "all", IncludeInit: decoded.arguments.IncludeInit,
+		IncludeEphemeral: decoded.arguments.IncludeEphemeral, Search: decoded.arguments.Search,
+		WindowSeconds: decoded.request.SinceSeconds, TailLines: decoded.request.TailLines,
+	}}
+	items := 1
 	if decoded.arguments.ContainerMode == "all" {
-		return executeAllPodLogs(ctx, call, observed, decoded, dependencies, policyRequest)
+		items = call.Ceilings().MaxLogContainers
 	}
-	observation, readErr := dependencies.Reader.ReadPodLog(ctx, decoded.request)
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	plan := domain.ObservationActionPlan{
+		RunID: call.RunID(), SessionID: call.SessionID(), Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(),
+		Operation:  operation,
+		Target:     domain.ActionTarget{Resource: target.Reference, Subresource: "log", Fingerprint: string(parameters.Digest())},
+		Parameters: parameters,
+		Limits: domain.ActionLimits{
+			Timeout: domain.ObservationKubernetesTimeout, MaximumItems: items,
+			MaximumLines: decoded.request.TailLines * items, MaximumBytes: decoded.request.LimitBytes,
+			MaximumOutput: call.Ceilings().MaxResultBytes,
+		},
+		ReasonSummary: call.Purpose(),
 	}
-	if ctx.Err() != nil {
-		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
+	envelope, err := dependencies.Actions.AuthorizeObservationAction(ctx, plan)
+	if err != nil {
+		return failAfterObservationAuthority(ctx, call, observed, envelope, false, 0, 0, 0, false, classifyFailure(ctx, err), dependencies.Actions)
+	}
+	if class := observationEnvelopeCurrent(ctx, call, envelope, dependencies.Now, dependencies.ScopeGuard, dependencies.PolicyGuard); class != "" {
+		return failAfterObservationAuthority(ctx, call, observed, envelope, false, 0, 0, 0, false, class, dependencies.Actions)
+	}
+	decoded.request.Pod, decoded.request.Container = target.Reference, target.Container
+	if decoded.arguments.ContainerMode == "all" {
+		return executeAllPodLogs(ctx, call, observed, decoded, dependencies, policyRequest, envelope)
+	}
+	readContext, cancel := context.WithTimeout(ctx, envelope.Intent.Limits.Timeout)
+	defer cancel()
+	observation, readErr := dependencies.Reader.ReadPodLog(readContext, decoded.request)
+	if !observationCallCurrent(readContext, call, dependencies.ScopeGuard, dependencies.PolicyGuard) {
+		class := observationCurrentFailure(readContext)
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 0, 0, observation.Content.Len(), observation.Truncated, class, dependencies.Actions)
 	}
 	if readErr != nil {
-		return failedResult(call, observed, classifyFailure(ctx, readErr))
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 0, 0, 0, false, classifyFailure(readContext, readErr), dependencies.Actions)
 	}
-	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
-		return failedResult(call, observed, class)
-	}
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	if class := authorizeLogRead(readContext, policyRequest, dependencies); class != "" {
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, 0, observation.Content.Len(), observation.Truncated, class, dependencies.Actions)
 	}
 	if observation.Validate(decoded.request) != nil {
-		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 0, 0, observation.Content.Len(), observation.Truncated, domain.SafeErrorClassInvalidExternalResponse, dependencies.Actions)
 	}
 	data, warnings, reason, projectErr := projectPodLog(dependencies, observation, decoded)
 	if projectErr != nil {
-		return failedResult(call, observed, domain.SafeErrorClassInternal)
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, 0, observation.Content.Len(), observation.Truncated, domain.SafeErrorClassInternal, dependencies.Actions)
 	}
 	planned, templates := fitPodLogResult(call, observed, data, warnings, reason)
 	if planned.Status == domain.ToolResultStatusDenied || planned.Status == domain.ToolResultStatusError {
-		return planned
+		class := domain.SafeErrorClassBudgetExhausted
+		if planned.Error != nil && planned.Error.Class.Valid() {
+			class = planned.Error.Class
+		}
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, data.LineCount, observation.Content.Len(), data.Truncated, class, dependencies.Actions)
 	}
 	evidence, err := materializeEvidence(
 		ResourceToolDependencies{EvidenceIDs: dependencies.EvidenceIDs}, call, observed, templates,
 	)
 	if err != nil {
-		return failedResult(call, observed, domain.SafeErrorClassInternal)
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, data.LineCount, observation.Content.Len(), data.Truncated, domain.SafeErrorClassInternal, dependencies.Actions)
 	}
 	if planned.Truncation.Truncated {
 		for index := range evidence {
@@ -440,40 +505,67 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 		}
 	}
 	planned.Evidence = evidence
+	if recordObservationSuccess(readContext, envelope, 1, data.LineCount, observation.Content.Len(), data.Truncated, dependencies.Actions) != nil {
+		return failedResult(call, observed, domain.SafeErrorClassPersistenceUnavailable)
+	}
 	return finalizePlannedResult(call, observed, planned)
 }
 
-func executeAllPodLogs(ctx context.Context, call BoundToolCall, observed time.Time, decoded decodedPodLogCall, dependencies LogToolDependencies, policyRequest LogPolicyRequest) ToolResult {
+func executeAllPodLogs(ctx context.Context, call BoundToolCall, observed time.Time, decoded decodedPodLogCall, dependencies LogToolDependencies, policyRequest LogPolicyRequest, envelope domain.ActionEnvelope) ToolResult {
 	reader, ok := dependencies.Reader.(PodLogsReader)
 	if !ok {
-		return failedResult(call, observed, domain.SafeErrorClassUnsupported)
+		return failAfterObservationAuthority(ctx, call, observed, envelope, false, 0, 0, 0, false, domain.SafeErrorClassUnsupported, dependencies.Actions)
 	}
-	request := PodLogsReadRequest{Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Namespace: decoded.request.Namespace, PodName: decoded.request.PodName,
+	request := PodLogsReadRequest{Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Pod: decoded.request.Pod, Namespace: decoded.request.Namespace, PodName: decoded.request.PodName,
 		Previous: decoded.request.Previous, IncludeInit: decoded.arguments.IncludeInit, IncludeEphemeral: decoded.arguments.IncludeEphemeral,
 		TailLines: decoded.request.TailLines, SinceSeconds: decoded.request.SinceSeconds, MaxContainers: call.Ceilings().MaxLogContainers, LimitBytes: decoded.request.LimitBytes}
 	if request.Validate() != nil {
-		return failedResult(call, observed, domain.SafeErrorClassPolicyDenied)
+		return failAfterObservationAuthority(ctx, call, observed, envelope, false, 0, 0, 0, false, domain.SafeErrorClassPolicyDenied, dependencies.Actions)
 	}
-	observations, readErr := reader.ReadPodLogs(ctx, request)
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
-	}
-	if ctx.Err() != nil {
-		return failedResult(call, observed, classifyFailure(ctx, ctx.Err()))
+	readContext, cancel := context.WithTimeout(ctx, envelope.Intent.Limits.Timeout)
+	defer cancel()
+	observations, readErr := reader.ReadPodLogs(readContext, request)
+	if !observationCallCurrent(readContext, call, dependencies.ScopeGuard, dependencies.PolicyGuard) {
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, observationCurrentFailure(readContext), dependencies.Actions)
 	}
 	if readErr != nil {
-		return failedResult(call, observed, classifyFailure(ctx, readErr))
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, classifyFailure(readContext, readErr), dependencies.Actions)
 	}
-	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
-		return failedResult(call, observed, class)
-	}
-	if !dependencies.ScopeGuard.Current(ctx, call.Scope()) || !dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, observed, domain.SafeErrorClassStaleScope)
+	if class := authorizeLogRead(readContext, policyRequest, dependencies); class != "" {
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, class, dependencies.Actions)
 	}
 	if observations.Validate(request) != nil {
-		return failedResult(call, observed, domain.SafeErrorClassInvalidExternalResponse)
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, domain.SafeErrorClassInvalidExternalResponse, dependencies.Actions)
 	}
-	return buildAllPodLogsResult(call, observed, decoded, observations, dependencies)
+	result := buildAllPodLogsResult(call, observed, decoded, observations, dependencies)
+	lines := 0
+	for _, item := range observations.Items {
+		lines += len(logLines(string(item.Content.bytes())))
+	}
+	if result.Status == domain.ToolResultStatusDenied || result.Status == domain.ToolResultStatusError {
+		class := domain.SafeErrorClassInternal
+		if result.Error != nil && result.Error.Class.Valid() {
+			class = result.Error.Class
+		}
+		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), min(lines, envelope.Intent.Limits.MaximumLines), observations.SourceBytes, observations.Truncated, class, dependencies.Actions)
+	}
+	if recordObservationSuccess(readContext, envelope, len(observations.Items), min(lines, envelope.Intent.Limits.MaximumLines), observations.SourceBytes, observations.Truncated, dependencies.Actions) != nil {
+		return failedResult(call, observed, domain.SafeErrorClassPersistenceUnavailable)
+	}
+	return result
+}
+
+func podLogActionOperation(previous, allContainers, search bool) domain.ActionOperation {
+	if search {
+		return domain.ActionOperationLogSearch
+	}
+	if allContainers {
+		return domain.ActionOperationLogsAllContainers
+	}
+	if previous {
+		return domain.ActionOperationLogsPrevious
+	}
+	return domain.ActionOperationLogsCurrent
 }
 
 type safePodLogData struct {

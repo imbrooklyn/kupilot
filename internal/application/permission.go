@@ -445,7 +445,34 @@ func (manager *PermissionManager) Reconfigure(ctx context.Context, actor Permiss
 	if actor != PermissionChangeActorLocalUser || ctx == nil || ctx.Err() != nil {
 		return ErrPermissionConfiguration
 	}
+	return manager.reconfigure(ctx, 0, next)
+}
+
+// ReconfigureAtGeneration applies a delivery-requested profile only when the
+// displayed policy generation is still current. The generation check and the
+// change share the manager's serialized transition, so a stale picker cannot
+// overwrite a newer local policy.
+func (manager *PermissionManager) ReconfigureAtGeneration(
+	ctx context.Context,
+	actor PermissionChangeActor,
+	expected domain.PolicyGeneration,
+	next PermissionPolicy,
+) error {
+	if actor != PermissionChangeActorLocalUser || ctx == nil || ctx.Err() != nil || !expected.Valid() {
+		return ErrPermissionConfiguration
+	}
+	return manager.reconfigure(ctx, expected, next)
+}
+
+func (manager *PermissionManager) reconfigure(
+	ctx context.Context,
+	expected domain.PolicyGeneration,
+	next PermissionPolicy,
+) error {
 	return manager.advance(ctx, func(current PermissionPolicy, generation domain.PolicyGeneration) (PermissionPolicy, error) {
+		if expected != 0 && current.Generation != expected {
+			return PermissionPolicy{}, ErrPermissionStale
+		}
 		next.Generation = generation
 		if next.Validate() != nil {
 			return PermissionPolicy{}, ErrPermissionConfiguration
@@ -760,6 +787,7 @@ type PermissionStatus struct {
 	HighRiskAcknowledged bool
 	Healthy              bool
 	SessionID            domain.SessionID
+	CustomRoutes         []CustomPermissionRoute
 	SessionRules         []SessionPermissionRuleStatus
 }
 
@@ -767,6 +795,7 @@ type SessionPermissionRuleStatus struct {
 	ID                     domain.PermissionRuleID
 	Operation              domain.ActionOperation
 	Scope                  domain.ScopeSnapshot
+	NamespaceAccess        domain.NamespaceAccessPolicy
 	PolicyGeneration       domain.PolicyGeneration
 	TargetAPIVersion       string
 	TargetKind             string
@@ -800,12 +829,13 @@ func (manager *PermissionManager) Status(now time.Time) PermissionStatus {
 		Profile: manager.policy.Profile, PolicyGeneration: manager.policy.Generation,
 		FullAccessAllowed: manager.policy.FullAccessAllowed, HighRiskAcknowledged: manager.policy.HighRiskAcknowledged,
 		Healthy: manager.healthy, SessionID: manager.sessionID,
+		CustomRoutes: append([]CustomPermissionRoute(nil), manager.policy.CustomRoutes...),
 		SessionRules: make([]SessionPermissionRuleStatus, 0, len(manager.rules)),
 	}
 	for _, rule := range manager.rules {
 		if now.Before(rule.ExpiresAt) {
 			status.SessionRules = append(status.SessionRules, SessionPermissionRuleStatus{
-				ID: rule.ID, Operation: rule.Operation, Scope: rule.Scope,
+				ID: rule.ID, Operation: rule.Operation, Scope: rule.Scope, NamespaceAccess: rule.NamespaceAccess,
 				PolicyGeneration: rule.PolicyGeneration, TargetAPIVersion: rule.TargetAPIVersion,
 				TargetKind: rule.TargetKind, TargetNamespace: rule.TargetNamespace,
 				TargetSubresource: rule.TargetSubresource, TargetPrefix: rule.TargetNamePrefix,

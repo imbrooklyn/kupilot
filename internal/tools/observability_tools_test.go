@@ -224,7 +224,7 @@ func TestDataSourceToolDiscardsReturnedDataWhenPostflightAuthorizationChanges(t 
 		wantClass domain.SafeErrorClass
 	}{
 		{name: "consent revoked", decision: ObservationPolicyConsentRequired, wantClass: domain.SafeErrorClassConsentRequired},
-		{name: "permission changed", decision: ObservationPolicyPermissionRequired, wantClass: domain.SafeErrorClassPolicyDenied},
+		{name: "denied", decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied},
 		{name: "source denied", decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied},
 		{name: "invalid decision", decision: ObservationPolicyDecision("generated"), wantClass: domain.SafeErrorClassInternal},
 	} {
@@ -264,7 +264,7 @@ func TestDataSourceToolPolicyAndStateDenialsPerformZeroSourceCalls(t *testing.T)
 		wantPolicies int
 	}{
 		{name: "consent", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyConsentRequired, wantClass: domain.SafeErrorClassConsentRequired, wantPolicies: 1},
-		{name: "permission", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyPermissionRequired, wantClass: domain.SafeErrorClassPolicyDenied, wantPolicies: 1},
+		{name: "denied", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied, wantPolicies: 1},
 		{name: "denied", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied, wantPolicies: 1},
 		{name: "cancelled", ctx: cancelledContext(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyAllowed, wantClass: domain.SafeErrorClassCancelled},
 		{name: "stale", ctx: context.Background(), guard: &sequenceScopeGuard{results: []bool{false}}, decision: ObservationPolicyAllowed, wantClass: domain.SafeErrorClassStaleScope},
@@ -282,6 +282,67 @@ func TestDataSourceToolPolicyAndStateDenialsPerformZeroSourceCalls(t *testing.T)
 				t.Fatalf("Execute() result/source/policy calls = %#v/%d/%d/%d", result, prometheus.count(), loki.count(), policy.count())
 			}
 		})
+	}
+}
+
+func TestDataSourceActionGateDenialsPreventUnsupervisedNetworkCalls(t *testing.T) {
+	input := observabilityRunInput(t)
+	tests := []struct {
+		name         string
+		prepareErr   error
+		authorizeErr error
+		wantTargets  int
+		wantAuth     int
+	}{
+		{name: "preflight denied", prepareErr: &fakeClassifiedError{class: domain.SafeErrorClassPolicyDenied}},
+		{name: "approval denied", authorizeErr: &fakeClassifiedError{class: domain.SafeErrorClassPolicyDenied}, wantTargets: 1, wantAuth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prometheus := &recordingPrometheusReader{}
+			targets := &recordingObservationTargetResolver{}
+			actions := &permissiveObservationActionGate{now: func() time.Time { return observabilityNow }, prepareErr: test.prepareErr, authorizeErr: test.authorizeErr}
+			dependencies := sourceDependenciesAt(prometheus, &recordingLokiReader{}, &sequenceScopeGuard{}, &recordingObservationPolicy{decision: ObservationPolicyAllowed})
+			dependencies.Targets, dependencies.Actions = targets, actions
+			tool, err := NewQueryPrometheusTool(dependencies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := tool.Execute(context.Background(), boundSourceCall(t, input, domain.ToolNameQueryPrometheus,
+				`{"namespace":null,"pod_name":"sample-pod","purpose":"Inspect bounded Pod CPU history.","query_id":"pod_cpu_usage","series_limit":2,"step_seconds":60,"window_seconds":3600}`))
+			if result.Validate() != nil || result.Error == nil || result.Error.Class != domain.SafeErrorClassPolicyDenied ||
+				prometheus.count() != 0 || targets.count() != test.wantTargets || actions.prepared != 1 ||
+				actions.authorized != test.wantAuth || len(actions.outcomes) != 0 {
+				t.Fatalf("denied source action = %#v calls/targets/prepare/auth/outcomes=%d/%d/%d/%d/%d", result,
+					prometheus.count(), targets.count(), actions.prepared, actions.authorized, len(actions.outcomes))
+			}
+		})
+	}
+}
+
+func TestDataSourceOutcomeAuditFailureSuppressesReturnedContent(t *testing.T) {
+	input := observabilityRunInput(t)
+	canary := strings.Repeat("outcome-audit-source-canary", 3)
+	prometheus := &recordingPrometheusReader{readFn: func(_ context.Context, request PrometheusReadRequest) (PrometheusObservation, error) {
+		return PrometheusObservation{
+			Reference: request.Reference, QueryID: request.QueryID, Start: request.Start, End: request.End,
+			Series: []PrometheusSeries{{Series: canary, Samples: []PrometheusSample{{Timestamp: request.End, Value: 1}}}}, SourceBytes: 128,
+		}, nil
+	}}
+	actions := &permissiveObservationActionGate{now: func() time.Time { return observabilityNow }, outcomeErr: errors.New("synthetic outcome persistence failure")}
+	dependencies := sourceDependenciesAt(prometheus, &recordingLokiReader{}, &sequenceScopeGuard{}, &recordingObservationPolicy{decision: ObservationPolicyAllowed})
+	dependencies.Actions = actions
+	tool, err := NewQueryPrometheusTool(dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.Execute(context.Background(), boundSourceCall(t, input, domain.ToolNameQueryPrometheus,
+		`{"namespace":null,"pod_name":"sample-pod","purpose":"Inspect bounded Pod CPU history.","query_id":"pod_cpu_usage","series_limit":2,"step_seconds":60,"window_seconds":3600}`))
+	if result.Validate() != nil || result.Error == nil || result.Error.Class != domain.SafeErrorClassPersistenceUnavailable ||
+		prometheus.count() != 1 || actions.prepared != 1 || actions.authorized != 1 || len(actions.outcomes) != 1 ||
+		actions.lastPlan.Target.Resource != podLogTarget() || strings.Contains(fmt.Sprintf("%#v", result), canary) {
+		t.Fatalf("source outcome audit failure = %#v calls/prepare/auth/outcomes=%d/%d/%d/%d", result,
+			prometheus.count(), actions.prepared, actions.authorized, len(actions.outcomes))
 	}
 }
 
@@ -387,7 +448,9 @@ func boundSourceCall(t *testing.T, input agent.RunInput, name domain.ToolName, a
 
 func sourceDependenciesAt(prometheus PrometheusReader, loki LokiReader, guard ScopeGuard, policy ObservationDataPolicy) DataSourceToolDependencies {
 	return DataSourceToolDependencies{
-		Prometheus: prometheus, Loki: loki, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, Policy: policy,
+		Prometheus: prometheus, Loki: loki, Targets: permissiveObservationTargetResolver{},
+		Actions:    &permissiveObservationActionGate{now: func() time.Time { return observabilityNow }},
+		ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, Policy: policy,
 		EvidenceIDs: &sequenceEvidenceIDs{}, Text: security.NewRedactor(), Now: func() time.Time { return observabilityNow },
 	}
 }

@@ -15,6 +15,7 @@ const (
 	slashApplication slashAction = iota + 1
 	slashHelp
 	slashModel
+	slashPermissions
 	slashStatus
 	slashQuit
 )
@@ -36,6 +37,7 @@ var fixedSlashCommands = [...]SlashCommand{
 	{Name: "context", Usage: "[filter]", Summary: "Select the Kubernetes Context", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectContext},
 	{Name: "namespace", Aliases: []string{"ns"}, Usage: "[filter]", Summary: "Select the Kubernetes Namespace", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectNamespace},
 	{Name: "resource", Aliases: []string{"res"}, Usage: "[filter]", Summary: "Select or clear the target resource", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandSelectResource},
+	{Name: "permissions", Summary: "Review or change the permission profile", action: slashPermissions},
 	{Name: "status", Summary: "Show the current safe status", action: slashStatus},
 	{Name: "new", Summary: "Start a new Session", action: slashApplication, commandKind: application.UICommandNewSession},
 	{Name: "resume", Usage: "[filter]", Summary: "Resume a local Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandResumeSession},

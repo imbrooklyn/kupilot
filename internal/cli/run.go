@@ -29,6 +29,8 @@ Usage:
   kupilot help [COMMAND]
 
 Running kupilot without a subcommand starts a new Session.
+Inside the TUI, /permissions reviews or changes supervision and /status shows
+the content-free local permission, action, Reviewer, budget, and Session state.
 
 Commands:
   resume   Resume by picker, exact Session ID, or --last.

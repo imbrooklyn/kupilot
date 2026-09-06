@@ -700,11 +700,14 @@ func TestDiagnosticPodIdentityAllowsOnlySchedulerAndAPIDefaults(t *testing.T) {
 	}
 	zeroPriority := int32(0)
 	pod.Spec.Priority = &zeroPriority
+	preemptLowerPriority := corev1.PreemptLowerPriority
+	pod.Spec.PreemptionPolicy = &preemptLowerPriority
+	pod.Spec.DeprecatedServiceAccount = diagnosticServiceAccount
 	if !diagnosticPodMatchesRequest(pod, request) {
 		t.Fatal("scheduler and fixed API defaults changed the diagnostic identity")
 	}
-	if pod.Spec.PreemptionPolicy == nil || *pod.Spec.PreemptionPolicy != corev1.PreemptNever {
-		t.Fatalf("diagnostic Pod preemption policy = %#v", pod.Spec.PreemptionPolicy)
+	if diagnosticPodFor(request).Spec.PreemptionPolicy != nil {
+		t.Fatal("diagnostic Pod request supplied an admission-controlled preemption policy without a PriorityClass")
 	}
 	changed := pod.DeepCopy()
 	changed.Spec.Tolerations = append(changed.Spec.Tolerations, corev1.Toleration{Key: "dedicated", Operator: corev1.TolerationOpExists})
@@ -726,6 +729,17 @@ func TestDiagnosticPodIdentityAllowsOnlySchedulerAndAPIDefaults(t *testing.T) {
 	changed.Spec.PriorityClassName = "global-default"
 	if diagnosticPodMatchesRequest(changed, request) {
 		t.Fatal("an admission-selected PriorityClass was accepted")
+	}
+	changed = pod.DeepCopy()
+	preemptNever := corev1.PreemptNever
+	changed.Spec.PreemptionPolicy = &preemptNever
+	if diagnosticPodMatchesRequest(changed, request) {
+		t.Fatal("a non-default admission preemption policy was accepted")
+	}
+	changed = pod.DeepCopy()
+	changed.Spec.DeprecatedServiceAccount = "another-service-account"
+	if diagnosticPodMatchesRequest(changed, request) {
+		t.Fatal("a changed deprecated ServiceAccount alias was accepted")
 	}
 }
 

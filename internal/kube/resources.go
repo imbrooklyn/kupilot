@@ -1015,6 +1015,9 @@ func (reader *ToolResourceReader) ReadPodLogs(ctx context.Context, request toolc
 	if projectErr != nil {
 		return toolcontract.PodLogsObservation{}, invalidKubernetesProjectionError(operation)
 	}
+	if projected.Reference != request.Pod {
+		return toolcontract.PodLogsObservation{}, newKubeSafeError(ClassConflict, "kubernetes_log_target_changed", operation, "The Kubernetes Pod log target changed before the read started.")
+	}
 	names := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers)+len(pod.Spec.EphemeralContainers))
 	for _, container := range pod.Spec.Containers {
 		names = append(names, container.Name)
@@ -1155,6 +1158,9 @@ func (reader *ToolResourceReader) readPodLog(
 	projectedPod, projectErr := projectPod(pod, request.Namespace, request.PodName)
 	if projectErr != nil {
 		return toolcontract.PodLogObservation{}, invalidKubernetesProjectionError(operation)
+	}
+	if projectedPod.Reference != request.Pod {
+		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassConflict, "kubernetes_log_target_changed", operation, "The Kubernetes Pod log target changed before the read started.")
 	}
 	if reader.policyGuard == nil || !reader.policyGuard.CurrentPolicyGeneration(ctx, request.PolicyGeneration) {
 		return toolcontract.PodLogObservation{}, newKubeSafeError(ClassStaleScope, "kubernetes_log_policy_generation_stale", operation, "The observability policy changed before the Kubernetes read completed.")

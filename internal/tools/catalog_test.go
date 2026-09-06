@@ -132,7 +132,9 @@ func TestToolAuthorityMatrixRejectsBeforeHandlerOrReaderAction(t *testing.T) {
 		Resources: testDependencies(resourceReader, guard),
 		Events:    eventDependencies(eventReader, guard),
 		Logs: LogToolDependencies{
-			Reader: logReader, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{},
+			Reader: logReader, Targets: permissiveObservationTargetResolver{},
+			Actions:    &permissiveObservationActionGate{now: func() time.Time { return testObservedAt }},
+			ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{}, EvidenceIDs: &sequenceEvidenceIDs{},
 			Text: security.NewRedactor(), Policy: logPolicy, Now: func() time.Time { return testObservedAt },
 		},
 		Metrics: metricDependencies(metricReader, guard),

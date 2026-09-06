@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,29 +24,35 @@ func TestApprovalReviewerRecommendationMatrixIsFailClosed(t *testing.T) {
 		wantConsume     int
 		wantExecute     int
 		wantHumanDialog bool
+		wantStates      []UIReviewerState
 	}{
 		{
 			name: "approve", result: reviewerResult(agent.ReviewerDecisionApprove, domain.RiskReview),
 			wantReview: ActionReviewApprove, wantChoice: domain.ApprovalDecisionApprove,
 			wantResolve: 1, wantConsume: 1, wantExecute: 1,
+			wantStates: []UIReviewerState{UIReviewerReviewing, UIReviewerApproved},
 		},
 		{
 			name: "deny", result: reviewerResult(agent.ReviewerDecisionDeny, domain.RiskReview),
 			wantReview: ActionReviewDeny, wantChoice: domain.ApprovalDecisionReject, wantResolve: 1,
+			wantStates: []UIReviewerState{UIReviewerReviewing, UIReviewerDenied},
 		},
 		{
 			name: "escalate", result: reviewerResult(agent.ReviewerDecisionEscalateToUser, domain.RiskReview),
 			wantReview: ActionReviewEscalate, wantHumanDialog: true,
+			wantStates: []UIReviewerState{UIReviewerReviewing, UIReviewerEscalated},
 		},
 		{
 			name: "risk lowering", result: reviewerResult(agent.ReviewerDecisionApprove, domain.RiskSafe),
 			wantReview: ActionReviewFailed, wantErrorClass: domain.SafeErrorClassInvalidExternalResponse,
 			wantHumanDialog: true,
+			wantStates:      []UIReviewerState{UIReviewerReviewing, UIReviewerEscalated},
 		},
 		{
 			name: "timeout", err: context.DeadlineExceeded,
 			wantReview: ActionReviewTimedOut, wantErrorClass: domain.SafeErrorClassTimeout,
 			wantHumanDialog: true,
+			wantStates:      []UIReviewerState{UIReviewerReviewing, UIReviewerTimedOut, UIReviewerEscalated},
 		},
 	}
 	for _, current := range tests {
@@ -87,6 +94,9 @@ func TestApprovalReviewerRecommendationMatrixIsFailClosed(t *testing.T) {
 			}
 			if got := countUIEvents(fixture.ui.events, UIEventApprovalRequested); (got == 1) != current.wantHumanDialog {
 				t.Fatalf("human approval dialogs = %d, want visible=%t", got, current.wantHumanDialog)
+			}
+			if states := reviewerUIStates(fixture.ui.events); !slices.Equal(states, current.wantStates) {
+				t.Fatalf("Reviewer UI states = %v, want %v", states, current.wantStates)
 			}
 		})
 	}
@@ -440,4 +450,14 @@ func countUIEvents(events []UIEvent, kind UIEventKind) int {
 		}
 	}
 	return count
+}
+
+func reviewerUIStates(events []UIEvent) []UIReviewerState {
+	states := make([]UIReviewerState, 0, len(events))
+	for _, event := range events {
+		if event.Kind == UIEventReviewerState && event.Reviewer != nil {
+			states = append(states, event.Reviewer.Status.State)
+		}
+	}
+	return states
 }

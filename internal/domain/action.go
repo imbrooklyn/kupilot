@@ -309,6 +309,7 @@ const (
 	ActionParametersRemoteArgv     ActionParameterKind = "remote_argv"
 	ActionParametersLocalArgv      ActionParameterKind = "local_argv"
 	ActionParametersShellCommand   ActionParameterKind = "shell_command"
+	ActionParametersObservation    ActionParameterKind = "observation"
 )
 
 // Valid reports whether the parameter discriminator is code-owned.
@@ -323,7 +324,8 @@ func (kind ActionParameterKind) Valid() bool {
 		ActionParametersContainerFile,
 		ActionParametersRemoteArgv,
 		ActionParametersLocalArgv,
-		ActionParametersShellCommand:
+		ActionParametersShellCommand,
+		ActionParametersObservation:
 		return true
 	default:
 		return false
@@ -500,10 +502,14 @@ type ActionParameters struct {
 	ShellCommand        string
 	PlanDigest          ActionDigest
 	PlanTargetCount     int
+	Observation         ActionObservationParameters
 }
 
 func (parameters ActionParameters) Validate() error {
 	if !parameters.Kind.Valid() {
+		return ErrInvalidActionParameters
+	}
+	if parameters.Kind != ActionParametersObservation && !parameters.Observation.empty() {
 		return ErrInvalidActionParameters
 	}
 	zeroArguments := ActionArguments{}
@@ -586,6 +592,14 @@ func (parameters ActionParameters) Validate() error {
 			parameters.NormalizedPath != "" || parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
 			return ErrInvalidActionParameters
 		}
+	case ActionParametersObservation:
+		if parameters.Observation.Validate() != nil || parameters.ReplicaCurrent != 0 || parameters.ReplicaTarget != 0 ||
+			parameters.Revision != 0 || parameters.Unschedulable || parameters.GracePeriodSeconds != 0 ||
+			parameters.Container != "" || parameters.NormalizedPath != "" || parameters.Executable != "" ||
+			parameters.Arguments != zeroArguments || parameters.hasLocalExecutionFields() ||
+			parameters.PlanDigest != "" || parameters.PlanTargetCount != 0 {
+			return ErrInvalidActionParameters
+		}
 	}
 	return nil
 }
@@ -653,6 +667,9 @@ func (parameters ActionParameters) canonical() string {
 			string(parameters.CredentialReference),
 			parameters.ShellCommand,
 		)
+	}
+	if parameters.Kind == ActionParametersObservation {
+		fields = append(fields, parameters.Observation.canonical())
 	}
 	return strings.Join(fields, "\n")
 }

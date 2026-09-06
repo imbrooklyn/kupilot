@@ -18,6 +18,7 @@ const helpText = `/help                 Show commands and key bindings
 /context [filter]     Select the Kubernetes Context
 /namespace [filter]   Select the Kubernetes Namespace
 /resource [filter]    Select or clear the target resource
+/permissions          Review or change the permission profile
 /status               Show the current safe status
 /new                  Start a new Session
 /resume [filter]      Resume a local Session
@@ -177,15 +178,38 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool {
 	if message.Command == application.UICommandApproveAction || message.Command == application.UICommandRejectAction ||
-		message.Command == application.UICommandExpireAction {
+		message.Command == application.UICommandCancelAction || message.Command == application.UICommandExpireAction {
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || message.RequestID != model.pendingApprovalID ||
 			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
+			message.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
 			message.ApprovalID != model.pendingApproval.RequestID ||
 			!message.ApprovalDigest.Equal(model.pendingApproval.Digest) ||
 			message.ApprovalSequence != model.pendingApproval.Sequence {
 			return false
 		}
 		model.clearApproval()
+		return true
+	}
+	if message.Command == application.UICommandCreateSessionRule {
+		if model.pendingApproval == nil || model.pendingPermissionID == 0 || message.RequestID != model.pendingPermissionID ||
+			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
+			message.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
+			message.ApprovalID != model.pendingApproval.RequestID ||
+			!message.ApprovalDigest.Equal(model.pendingApproval.Digest) ||
+			message.ApprovalSequence != model.pendingApproval.Sequence {
+			return false
+		}
+		model.pendingPermissionID = 0
+		model.clearApproval()
+		return true
+	}
+	if message.Command == application.UICommandShowPermissions || message.Command == application.UICommandChangePermission ||
+		message.Command == application.UICommandCreateSessionRule {
+		if model.pendingPermissionID == 0 || message.RequestID != model.pendingPermissionID ||
+			message.Command != application.UICommandShowPermissions && message.PolicyGeneration != model.permission.PolicyGeneration {
+			return false
+		}
+		model.pendingPermissionID = 0
 		return true
 	}
 	if message.Command == application.UICommandSubmitQuestion {
@@ -374,6 +398,8 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return model, model.prepareQuit()
 			}
 			switch {
+			case model.permissionConfirmation != nil:
+				return model.updatePermissionConfirmationKey(message)
 			case model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetError:
 				return model.updateSessionExportTargetErrorKey(message)
 			case model.sessionExport != nil && model.sessionExport.Stage == sessionExportConfirmation:
@@ -422,6 +448,9 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return model, model.prepareQuit()
 			}
 			return model, nil
+		}
+		if model.permissionConfirmation != nil {
+			return model.updatePermissionConfirmationKey(message)
 		}
 		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetError {
 			return model.updateSessionExportTargetErrorKey(message)
@@ -523,10 +552,16 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			model.movePicker(1)
 			return model, nil
 		case key.Matches(message, model.keymap.Complete):
+			if model.permissionPicker.Open() {
+				return model, nil
+			}
 			model.completePickerSelection()
 			model.reflow()
 			return model, nil
 		case key.Matches(message, model.keymap.Submit):
+			if model.permissionPicker.Open() {
+				return model.selectPermissionCandidate()
+			}
 			cmd := model.selectPickerCandidate()
 			model.reflow()
 			return model, cmd
@@ -608,10 +643,31 @@ func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, 
 		}
 		return model, nil
 	}
+	approvalWidth, approvalHeight := model.approvalReviewSize()
+	if !model.approvalDialog.Reviewable(approvalWidth, approvalHeight) {
+		switch {
+		case key.Matches(message, model.keymap.Submit):
+			model.approvalDialog.SelectDeny()
+			return model.submitApprovalDecision(false)
+		case key.Matches(message, model.keymap.Close), key.Matches(message, model.keymap.Quit):
+			return model.submitApprovalDecision(true)
+		default:
+			return model, nil
+		}
+	}
 	switch {
-	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.Next),
-		key.Matches(message, model.keymap.PreviousAlt), key.Matches(message, model.keymap.NextAlt),
-		key.Matches(message, model.keymap.Complete), key.Matches(message, model.keymap.Reverse):
+	case key.Matches(message, model.keymap.TranscriptUp):
+		model.approvalDialog.Scroll(-8)
+		return model, nil
+	case key.Matches(message, model.keymap.TranscriptDown):
+		model.approvalDialog.Scroll(8)
+		return model, nil
+	case key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.PreviousAlt),
+		key.Matches(message, model.keymap.Reverse):
+		model.approvalDialog.Move(-1)
+		return model, nil
+	case key.Matches(message, model.keymap.Next), key.Matches(message, model.keymap.NextAlt),
+		key.Matches(message, model.keymap.Complete):
 		model.approvalDialog.Move(1)
 		return model, nil
 	case key.Matches(message, model.keymap.Submit):
@@ -623,20 +679,31 @@ func (model Model) updateApprovalDialogKey(message tea.KeyPressMsg) (tea.Model, 
 	}
 }
 
-func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd) {
-	if model.pendingApproval == nil || model.pendingApprovalID != 0 || !model.approvalDialog.MarkSubmitted() {
+func (model Model) submitApprovalDecision(forceCancel bool) (tea.Model, tea.Cmd) {
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 || model.pendingPermissionID != 0 ||
+		!model.approvalDialog.MarkSubmitted() {
 		return model, nil
 	}
 	request := *model.pendingApproval
 	kind := application.UICommandRejectAction
-	if !forceReject && model.approvalDialog.ApproveSelected() {
-		kind = application.UICommandApproveAction
+	if forceCancel {
+		kind = application.UICommandCancelAction
+	} else {
+		switch model.approvalDialog.Choice() {
+		case components.ApprovalCancel:
+			kind = application.UICommandCancelAction
+		case components.ApprovalOnce:
+			kind = application.UICommandApproveAction
+		case components.ApprovalSessionRule:
+			kind = application.UICommandCreateSessionRule
+		}
 	}
 	requestID := model.nextUIRequestID()
 	command := application.UICommand{
 		Kind: kind, RequestID: requestID, RunID: request.RunID,
-		ExpectedScopeGeneration: request.Scope.Generation,
-		ApprovalID:              request.RequestID, ApprovalDigest: request.Digest,
+		ExpectedScopeGeneration:  request.Scope.Generation,
+		ExpectedPolicyGeneration: request.PolicyGeneration,
+		ApprovalID:               request.RequestID, ApprovalDigest: request.Digest,
 		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
 	}
 	if command.Validate() != nil {
@@ -644,7 +711,11 @@ func (model Model) submitApprovalDecision(forceReject bool) (tea.Model, tea.Cmd)
 		model.showDialog("Approval unavailable", "The approval decision could not be submitted safely.")
 		return model, nil
 	}
-	model.pendingApprovalID = requestID
+	if kind == application.UICommandCreateSessionRule {
+		model.pendingPermissionID = requestID
+	} else {
+		model.pendingApprovalID = requestID
+	}
 	return model, applicationCommand(command)
 }
 
@@ -779,6 +850,15 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		model.slashMenu.Close()
 		model.reflow()
 		return model, applicationCommand(application.UICommand{Kind: application.UICommandShowStatus})
+	case slashPermissions:
+		model.composer.Reset()
+		model.slashMenu.Close()
+		requestID := model.nextUIRequestID()
+		model.pendingPermissionID = requestID
+		model.reflow()
+		return model, applicationCommand(application.UICommand{
+			Kind: application.UICommandShowPermissions, RequestID: requestID,
+		})
 	case slashQuit:
 		model.composer.Reset()
 		model.slashMenu.Close()
@@ -1244,6 +1324,29 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.transcript.AppendNotice("The current Session title was updated.")
 	case application.UICommandShowStatus:
 		model.transcript.AppendNotice(statusText(*result.Status, model.modelName))
+	case application.UICommandShowPermissions, application.UICommandChangePermission, application.UICommandCreateSessionRule:
+		if model.pendingPermissionID == 0 || result.RequestID != model.pendingPermissionID || result.Permissions == nil {
+			return
+		}
+		model.pendingPermissionID = 0
+		if result.Command == application.UICommandShowPermissions {
+			model.showPermissionPicker(*result.Permissions)
+			return
+		}
+		previousGeneration := model.permission.PolicyGeneration
+		model.permission = result.Permissions.Permission
+		model.permissionReviewer = result.Permissions.Reviewer
+		model.permissionConfirmation = nil
+		model.clearActionPresentation()
+		model.clearApproval()
+		if model.run.Active && previousGeneration != model.permission.PolicyGeneration {
+			model.run.Active = false
+			model.run.Terminal = true
+			model.run.Status = "cancelled"
+			model.run.StreamedText = "The diagnostic run was cancelled because the permission policy changed."
+			model.transcript.FinishAgentWithDuration(model.run.StreamedText, model.currentRunElapsed())
+		}
+		model.transcript.AppendNotice(permissionChangeNotice(*result.Permissions))
 	case application.UICommandSubmitQuestion:
 		if model.pendingSubmitID == 0 || result.RequestID != model.pendingSubmitID {
 			return
@@ -1379,11 +1482,12 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.transcript.AppendNotice("Model data-sharing consent was revoked; any active diagnostic run was cancelled.")
 	case application.UICommandCancelPrivacy:
 		model.finishPrivacyAction(result.RequestID)
-	case application.UICommandApproveAction, application.UICommandRejectAction, application.UICommandExpireAction:
+	case application.UICommandApproveAction, application.UICommandRejectAction, application.UICommandCancelAction, application.UICommandExpireAction:
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || result.RequestID != model.pendingApprovalID ||
 			result.Approval.RequestID != model.pendingApproval.RequestID ||
 			result.Approval.RunID != model.pendingApproval.RunID ||
 			result.Approval.ScopeGeneration != model.pendingApproval.Scope.Generation ||
+			result.Approval.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
 			result.Approval.Sequence != model.pendingApproval.Sequence ||
 			!result.Approval.Digest.Equal(model.pendingApproval.Digest) {
 			return
@@ -1401,10 +1505,16 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.transcript.AppendNotice("The action was approved but not executed.")
 		case domain.ApprovalStateRejected:
 			model.clearApproval()
+			model.clearActionPresentation()
 			model.transcript.AppendNotice("The action was rejected. No operation was executed.")
 		case domain.ApprovalStateExpired:
 			model.clearApproval()
+			model.clearActionPresentation()
 			model.transcript.AppendNotice("The action approval expired. No operation was executed.")
+		case domain.ApprovalStateCancelled:
+			model.clearApproval()
+			model.clearActionPresentation()
+			model.transcript.AppendNotice("The action approval was cancelled. No operation was executed.")
 		case domain.ApprovalStateConsumed:
 			status := approvalExecutionStatus(*result.Approval)
 			if model.approvalDialog.Open() {
@@ -1413,12 +1523,14 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.pendingApproval = nil
 			model.pendingApprovalID = 0
 			model.approvalState = ""
+			model.clearActionPresentation()
 			model.transcript.AppendNotice(status)
 			if result.Approval.ActionExecution != nil && result.Approval.ActionExecution.SafeOutput != "" {
 				model.transcript.AppendNotice("Sanitized command output:\n" + result.Approval.ActionExecution.SafeOutput)
 			}
 		default:
 			model.clearApproval()
+			model.clearActionPresentation()
 			model.transcript.AppendNotice("The action approval was invalidated. No operation was executed.")
 		}
 	case application.UICommandResumeSession:
@@ -1427,7 +1539,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 }
 
 func (model *Model) acceptApprovalExpiry(message ApprovalExpiryMsg) tea.Cmd {
-	if model.pendingApproval == nil || model.pendingApprovalID != 0 ||
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 || model.pendingPermissionID != 0 ||
 		message.RequestID != model.pendingApproval.RequestID || message.RunID != model.pendingApproval.RunID ||
 		message.ScopeGeneration != model.pendingApproval.Scope.Generation || message.Sequence != model.pendingApproval.Sequence ||
 		!message.Digest.Equal(model.pendingApproval.Digest) {
@@ -1441,15 +1553,16 @@ func (model *Model) acceptApprovalExpiry(message ApprovalExpiryMsg) tea.Cmd {
 }
 
 func (model *Model) expirePendingApproval() tea.Cmd {
-	if model.pendingApproval == nil || model.pendingApprovalID != 0 {
+	if model.pendingApproval == nil || model.pendingApprovalID != 0 || model.pendingPermissionID != 0 {
 		return nil
 	}
 	request := *model.pendingApproval
 	requestID := model.nextUIRequestID()
 	command := application.UICommand{
 		Kind: application.UICommandExpireAction, RequestID: requestID, RunID: request.RunID,
-		ExpectedScopeGeneration: request.Scope.Generation,
-		ApprovalID:              request.RequestID, ApprovalDigest: request.Digest,
+		ExpectedScopeGeneration:  request.Scope.Generation,
+		ExpectedPolicyGeneration: request.PolicyGeneration,
+		ApprovalID:               request.RequestID, ApprovalDigest: request.Digest,
 		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
 	}
 	if command.Validate() != nil {
@@ -1771,6 +1884,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	if result.Failure != "" {
 		if changed {
 			model.clearApproval()
+			model.clearActionPresentation()
 			model.finishRunForScopeChange()
 			model.resource = ResourceView{}
 			model.pendingResourceID = 0
@@ -1783,6 +1897,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	}
 	if changed {
 		model.clearApproval()
+		model.clearActionPresentation()
 		model.finishRunForScopeChange()
 		model.resource = ResourceView{}
 		model.pendingResourceID = 0
@@ -1862,6 +1977,14 @@ func statusText(status application.UIStatusResult, modelName string) string {
 	if modelContext.Compressed {
 		compression = "covered through " + string(modelContext.CoveredThroughMessageID)
 	}
+	compressedAt := "never"
+	if modelContext.CompressedAtUnixMillis > 0 {
+		compressedAt = time.UnixMilli(modelContext.CompressedAtUnixMillis).UTC().Format(time.RFC3339)
+	}
+	contextStorage := "healthy"
+	if !modelContext.StorageHealthy {
+		contextStorage = "degraded"
+	}
 	agentBinding := "unconfigured"
 	if status.AgentModel.Configured {
 		agentBinding = status.AgentModel.Profile + " · " + status.AgentModel.OriginHash
@@ -1886,7 +2009,40 @@ func statusText(status application.UIStatusResult, modelName string) string {
 	if modelName == "" {
 		modelName = "unavailable"
 	}
-	return strings.Join([]string{
+	permissionProfile := "unconfigured"
+	permissionGeneration := "unavailable"
+	permissionHealth := "unavailable"
+	permissionBoundary := "no permission policy is active"
+	permissionReviewer := "not routed"
+	permissionRisk := "all actions unavailable"
+	permissionRules := "0 current-process rules"
+	if status.Permission.Configured {
+		permissionProfile = string(status.Permission.Profile)
+		permissionGeneration = fmt.Sprintf("%d", status.Permission.PolicyGeneration)
+		permissionHealth = "healthy"
+		if !status.Permission.Healthy {
+			permissionHealth = "degraded · no permission may be inferred"
+		}
+		permissionBoundary, permissionReviewer, permissionRisk = permissionStatusDescriptions(status.Permission.Profile)
+		permissionRules = fmt.Sprintf("%d current-process, current-Session rules", status.Permission.SessionRuleCount)
+	}
+	actionState := "none"
+	reviewerState := "none"
+	if status.Action != nil {
+		actionState = fmt.Sprintf("%s · %s · route %s · state %s · scope %d · policy %d · expires %s",
+			status.Action.Operation, status.Action.Risk, status.Action.Route, status.Action.State,
+			status.Action.ScopeGeneration, status.Action.PolicyGeneration,
+			time.UnixMilli(status.Action.ExpiresAtMillis).UTC().Format(time.RFC3339))
+		if status.Action.Reviewer != nil {
+			reviewerState = reviewerIdentity(*status.Action.Reviewer)
+			if status.Action.Reviewer.RationaleSummary != "" {
+				reviewerState += " · rationale " + sanitizeExternalText(status.Action.Reviewer.RationaleSummary, 2048)
+			}
+		} else if status.Action.Reviewing {
+			reviewerState = "optional approval_reviewer · Reviewing"
+		}
+	}
+	lines := []string{
 		"Kupilot status",
 		"",
 		"Session",
@@ -1901,8 +2057,10 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		statusRow("Mode", string(modelContext.Mode)),
 		statusRow("History", fmt.Sprintf("%d messages · %s", modelContext.EligibleMessages, statusBytes(modelContext.EligibleBytes))),
 		statusRow("Summary", compression),
+		statusRow("Compacted", compressedAt),
 		statusRow("Recent tail", fmt.Sprintf("%d messages", modelContext.RecentTailMessages)),
-		statusRow("Summary calls", fmt.Sprintf("%d/%d", modelContext.SummaryCallsUsed, modelContext.SummaryCallsMaximum)),
+		statusRow("Summary budget", fmt.Sprintf("%d/%d calls", modelContext.SummaryCallsUsed, modelContext.SummaryCallsMaximum)),
+		statusRow("Storage", contextStorage),
 		"",
 		"Scope",
 		statusRow("Context", contextName),
@@ -1910,6 +2068,32 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		statusRow("Generation", fmt.Sprintf("%d", status.ScopeGeneration)),
 		statusRow("Access", access),
 		statusRow("Actions", actions),
+		"",
+		"Permission and action supervision",
+		statusRow("Profile", permissionProfile),
+		statusRow("Generation", permissionGeneration),
+		statusRow("Health", permissionHealth),
+		statusRow("Boundary", permissionBoundary),
+		statusRow("Reviewer", permissionReviewer),
+		statusRow("Risk", permissionRisk),
+		statusRow("Rules", permissionRules),
+		statusRow("Action", actionState),
+		statusRow("Review state", reviewerState),
+	}
+	for _, route := range status.Permission.CustomRoutes {
+		lines = append(lines, statusRow("Custom route", fmt.Sprintf("%s · %s -> %s", route.Operation, route.Risk, route.Disposition)))
+	}
+	for _, rule := range status.Permission.SessionRules {
+		lines = append(lines, statusRow("Session rule", fmt.Sprintf(
+			"%s · %s · scope %s/%s generation %d access %s · policy %d · target %s · parameters %s · effect %s · risk %s · data %s · sinks %s · network %s · destination %s · %s · created %s · expires %s",
+			rule.ID, rule.Operation, rule.Scope.Context, rule.Scope.Namespace, rule.Scope.Generation,
+			rule.NamespaceAccess, rule.PolicyGeneration, rule.Target, rule.ParameterSummary,
+			rule.Effect, rule.Risk, statusActionDataSummary(rule.DataCategories), statusActionSinkSummary(rule.AllowedSinks),
+			statusActionNetworkSummary(rule.NetworkEffects), statusActionDigest(rule.NetworkDestinationHash),
+			actionLimitsSummary(rule.Limits), time.UnixMilli(rule.CreatedAtMillis).UTC().Format(time.RFC3339),
+			time.UnixMilli(rule.ExpiresAtMillis).UTC().Format(time.RFC3339))))
+	}
+	lines = append(lines,
 		"",
 		"Run",
 		statusRow("State", run),
@@ -1948,7 +2132,30 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		statusRow("Resources", fmt.Sprintf("%d pages · %d items/page · %s/page · %d scanned · %d returned · %s total",
 			budget.ResourcePagesMaximum, budget.ResourcePageItemsMaximum, statusBytes(budget.ResourcePageBytesMaximum),
 			budget.ResourceScannedMaximum, budget.ResourceReturnedMaximum, statusBytes(budget.ResourceBytesMaximum))),
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
+}
+
+func permissionStatusDescriptions(profile domain.PermissionProfile) (string, string, string) {
+	switch profile {
+	case domain.PermissionProfileReadOnly:
+		return "safe reads automatic; sensitive reads human; mutation and execution denied",
+			"never routes", "approval cannot elevate a denied effect"
+	case domain.PermissionProfileAsk:
+		return "safe automatic; review and critical require the local user",
+			"not used", "default supervised profile"
+	case domain.PermissionProfileAutoReview:
+		return "safe automatic; review delegated; critical remains human",
+			"optional approval_reviewer for review only", "Reviewer failure or timeout authorizes nothing"
+	case domain.PermissionProfileFullAccess:
+		return "admitted and enabled review and critical may route automatically",
+			"not used", "high risk; no scope, RBAC, consent, catalog, audit, or denial bypass"
+	case domain.PermissionProfileCustom:
+		return "exact routes only; missing safe/review routes deny; critical defaults human",
+			"eligible exact review routes only", "empty custom policy is conservative"
+	default:
+		return "no permission policy is active", "not routed", "all actions unavailable"
+	}
 }
 
 func statusEnabled(enabled bool) string {
@@ -1976,33 +2183,117 @@ func statusBytes(value int) string {
 	return fmt.Sprintf("%d B", value)
 }
 
+func actionLimitsSummary(limits domain.ActionLimits) string {
+	return fmt.Sprintf("timeout %s · items %d · lines %d · bytes %d · output %d",
+		limits.Timeout, limits.MaximumItems, limits.MaximumLines, limits.MaximumBytes, limits.MaximumOutput)
+}
+
+func statusActionDataSummary(categories domain.ActionDataCategories) string {
+	values := make([]string, 0, 6)
+	for _, item := range []struct {
+		flag  domain.ActionDataCategories
+		label string
+	}{
+		{domain.ActionDataResourceMetadata, "resource metadata"},
+		{domain.ActionDataProjectedStatus, "projected status"},
+		{domain.ActionDataProjectedEvents, "projected events"},
+		{domain.ActionDataContainerOutput, "container output"},
+		{domain.ActionDataFileOutput, "file output"},
+		{domain.ActionDataProcessOutput, "process output"},
+	} {
+		if categories&item.flag != 0 {
+			values = append(values, item.label)
+		}
+	}
+	return strings.Join(values, ", ")
+}
+
+func statusActionSinkSummary(sinks domain.ActionSinks) string {
+	values := make([]string, 0, 4)
+	for _, item := range []struct {
+		flag  domain.ActionSinks
+		label string
+	}{
+		{domain.ActionSinkTerminal, "terminal"},
+		{domain.ActionSinkModel, "model"},
+		{domain.ActionSinkKubernetesAPI, "Kubernetes API"},
+		{domain.ActionSinkLocalProcess, "local process"},
+	} {
+		if sinks&item.flag != 0 {
+			values = append(values, item.label)
+		}
+	}
+	return strings.Join(values, ", ")
+}
+
+func statusActionNetworkSummary(effects domain.ActionNetworkEffects) string {
+	values := make([]string, 0, 6)
+	for _, item := range []struct {
+		flag  domain.ActionNetworkEffects
+		label string
+	}{
+		{domain.ActionNetworkNone, "none"},
+		{domain.ActionNetworkKubernetesAPI, "Kubernetes API"},
+		{domain.ActionNetworkModelOrigin, "model origin"},
+		{domain.ActionNetworkDataSource, "configured data source"},
+		{domain.ActionNetworkRemotePod, "exact remote Pod/Service"},
+		{domain.ActionNetworkExternalCommand, "policy-bound command destination"},
+	} {
+		if effects&item.flag != 0 {
+			values = append(values, item.label)
+		}
+	}
+	return strings.Join(values, ", ")
+}
+
+func statusActionDigest(digest domain.ActionDigest) string {
+	if !digest.Valid() {
+		return "none"
+	}
+	return string(digest)
+}
+
 func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
-	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation {
+	if event.Validate() != nil || model.scope.Switching || event.ScopeGeneration != model.scope.Generation ||
+		event.PolicyGeneration != model.permission.PolicyGeneration {
 		return nil
 	}
 	if event.Kind == application.UIEventRestartExecution {
-		if model.pendingApproval == nil || event.RestartExecution == nil ||
-			event.RestartExecution.RequestID != model.pendingApproval.RequestID ||
-			event.RunID != model.pendingApproval.RunID || event.Sequence != model.pendingApproval.Sequence ||
-			!event.RestartExecution.Digest.Equal(model.pendingApproval.Digest) ||
-			event.RestartExecution.EventIndex != model.approvalDialog.ExecutionIndex()+1 ||
-			!model.approvalDialog.Open() || !model.approvalDialog.Submitted() {
+		execution := *event.RestartExecution
+		if model.pendingApproval != nil {
+			if execution.RequestID != model.pendingApproval.RequestID || event.RunID != model.pendingApproval.RunID ||
+				event.Sequence != model.pendingApproval.Sequence || !execution.Digest.Equal(model.pendingApproval.Digest) ||
+				execution.EventIndex != model.approvalDialog.ExecutionIndex()+1 ||
+				!model.approvalDialog.Open() || !model.approvalDialog.Submitted() {
+				return nil
+			}
+			model.approvalDialog.SetExecutionStatus(
+				execution.EventIndex, restartExecutionStatus(execution), execution.State.Terminal(),
+			)
 			return nil
 		}
-		model.approvalDialog.SetExecutionStatus(
-			event.RestartExecution.EventIndex, restartExecutionStatus(*event.RestartExecution),
-			event.RestartExecution.State.Terminal(),
-		)
+		if !model.acceptAutomaticActionEvent(execution.RequestID, execution.Digest, event.Sequence, execution.EventIndex) {
+			return nil
+		}
+		model.transcript.AppendNotice(restartExecutionStatus(execution))
+		if execution.State.Terminal() {
+			model.clearActionPresentation()
+		}
+		return nil
+	}
+	if event.Kind == application.UIEventReviewerState {
+		if !model.acceptReviewerEvent(*event.Reviewer) {
+			return nil
+		}
+		model.transcript.AppendNotice(reviewerEventNotice(event.Reviewer.Status))
 		return nil
 	}
 	if event.Kind == application.UIEventApprovalClosed {
 		state := event.ApprovalResult.State
 		if model.pendingApproval == nil {
-			if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
-				event.Sequence != model.run.LastSequence+1 {
+			if !model.acceptClosedActionEvent(*event.ApprovalResult) {
 				return nil
 			}
-			model.run.LastSequence = event.Sequence
 			if state == domain.ApprovalStateConsumed {
 				model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
 				if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
@@ -2013,13 +2304,16 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 			} else {
 				model.transcript.AppendNotice("The action closed without execution.")
 			}
+			model.clearActionPresentation()
 			return nil
 		}
 		if event.ApprovalResult.RequestID != model.pendingApproval.RequestID || event.RunID != model.pendingApproval.RunID ||
-			event.Sequence != model.pendingApproval.Sequence || !event.ApprovalResult.Digest.Equal(model.pendingApproval.Digest) {
+			event.Sequence != model.pendingApproval.Sequence || event.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
+			!event.ApprovalResult.Digest.Equal(model.pendingApproval.Digest) {
 			return nil
 		}
 		model.clearApproval()
+		model.clearActionPresentation()
 		if state == domain.ApprovalStateConsumed {
 			model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
 			if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
@@ -2039,9 +2333,10 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		startedAt := model.now().UTC().Truncate(time.Millisecond)
 		model.run = RunView{
 			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
-			LastSequence: event.Sequence, StartedAt: startedAt,
+			PolicyGeneration: event.PolicyGeneration, LastSequence: event.Sequence, StartedAt: startedAt,
 			Active: true, Status: "active",
 		}
+		model.clearActionPresentation()
 		model.workingAt = startedAt
 		model.workingFrame = 0
 		model.closeEvidenceInteraction()
@@ -2049,7 +2344,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		return workingTick(model.run)
 	}
 	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
-		event.ScopeGeneration != model.run.ScopeGeneration || event.Sequence != model.run.LastSequence+1 {
+		event.ScopeGeneration != model.run.ScopeGeneration || event.PolicyGeneration != model.run.PolicyGeneration {
 		return nil
 	}
 	if event.Kind == application.UIEventApprovalRequested {
@@ -2057,22 +2352,38 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 			return nil
 		}
 		request := *event.Approval
+		reviewerContinuation := model.actionPresentation != nil && model.reviewerEvent != nil &&
+			model.reviewerEvent.Status.State == application.UIReviewerEscalated &&
+			model.actionPresentation.RequestID == request.RequestID &&
+			model.actionPresentation.Sequence == event.Sequence &&
+			model.actionPresentation.Digest.Equal(request.Digest)
+		if reviewerContinuation {
+			if request.Reviewer == nil || *request.Reviewer != model.reviewerEvent.Status {
+				return nil
+			}
+		} else if !model.acceptInitialActionSequence(event.Sequence) {
+			return nil
+		}
 		content := components.ApprovalDialogContent{
 			Operation: approvalOperationLabel(request.Operation),
-			Scope: fmt.Sprintf("%s / %s · scope revision %d",
+			Scope: fmt.Sprintf("%s / %s · namespace access %s · scope revision %d · profile %s · policy generation %d",
 				sanitizeExternalText(request.Scope.Context, 253),
-				sanitizeExternalText(request.Scope.Namespace, 63), request.Scope.Generation),
-			Resource: fmt.Sprintf("%s %s/%s · API %s · UID %s",
-				sanitizeExternalText(request.Target.Kind, 63),
-				sanitizeExternalText(request.Target.Namespace, 63),
-				sanitizeExternalText(request.Target.Name, 253),
-				sanitizeExternalText(request.Target.APIVersion, 253),
-				sanitizeExternalText(request.Target.UID, 1024)),
-			Current:  sanitizeExternalText(request.CurrentSummary, application.MaxApprovalDisplaySummaryBytes),
-			Proposed: sanitizeExternalText(request.ProposedSummary, application.MaxApprovalDisplaySummaryBytes),
-			Reason:   sanitizeExternalText(request.ReasonSummary, domain.MaxApprovalReasonSummaryBytes),
-			Risk:     sanitizeExternalText(request.RiskSummary, 4096),
-			Digest:   string(request.Digest), ExpiresAt: request.ExpiresAt,
+				sanitizeExternalText(request.Scope.Namespace, 63), request.NamespaceAccess,
+				request.Scope.Generation, request.PermissionProfile, request.PolicyGeneration),
+			Resource:   approvalTargetLabel(request),
+			Current:    sanitizeExternalText(request.CurrentSummary, application.MaxApprovalDisplaySummaryBytes),
+			Proposed:   sanitizeExternalText(request.ProposedSummary, application.MaxApprovalDisplaySummaryBytes),
+			Parameters: sanitizeExternalText(request.ParameterSummary, application.MaxApprovalDisplaySummaryBytes),
+			Effects:    sanitizeExternalText(request.EffectSummary, application.MaxApprovalDisplaySummaryBytes),
+			Reason:     sanitizeExternalText(request.ReasonSummary, domain.MaxApprovalReasonSummaryBytes),
+			Risk:       string(request.Risk) + " · " + sanitizeExternalText(request.RiskSummary, 4096),
+			Digest:     string(request.Digest), Timeout: request.Limits.Timeout,
+			ExpiresAt:   request.ExpiresAt,
+			SessionRule: request.Risk == domain.RiskReview,
+		}
+		if request.Reviewer != nil {
+			content.Reviewer = reviewerIdentity(*request.Reviewer)
+			content.ReviewerReason = sanitizeExternalText(request.Reviewer.RationaleSummary, 2048)
 		}
 		now := model.now().UTC().Truncate(time.Millisecond)
 		if now.IsZero() || now.UnixMilli() < 0 {
@@ -2082,7 +2393,6 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.pendingApproval = &request
 		model.pendingApprovalID = 0
 		model.approvalState = domain.ApprovalStatePending
-		model.run.LastSequence = event.Sequence
 		if !now.Before(request.ExpiresAt) {
 			return model.expirePendingApproval()
 		}
@@ -2094,6 +2404,9 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.composer.Blur()
 		model.focus = FocusModal
 		return approvalExpiry(request, now)
+	}
+	if event.Sequence != model.run.LastSequence+1 {
+		return nil
 	}
 
 	switch event.Kind {
@@ -2138,6 +2451,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		})
 	case application.UIEventRunCompleted, application.UIEventRunFailed, application.UIEventRunCancelled:
 		model.clearApproval()
+		model.clearActionPresentation()
 		textLimit := application.MaxQuestionBytes
 		if event.Kind == application.UIEventRunCompleted {
 			textLimit = application.MaxAnswerMarkdownBytes
@@ -2173,6 +2487,137 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	}
 	model.run.LastSequence = event.Sequence
 	return nil
+}
+
+func approvalTargetLabel(request application.UIApprovalRequest) string {
+	resourceName := sanitizeExternalText(request.Target.Name, 253)
+	if request.Target.Namespace != "" {
+		resourceName = sanitizeExternalText(request.Target.Namespace, 63) + "/" + resourceName
+	}
+	parts := []string{
+		sanitizeExternalText(request.Target.Kind, 63) + " " + resourceName,
+		"API " + sanitizeExternalText(request.Target.APIVersion, 253),
+		"UID " + sanitizeExternalText(request.Target.UID, 1024),
+		"resource version " + sanitizeExternalText(request.Target.ResourceVersion, 1024),
+	}
+	if request.TargetSubresource != "" {
+		parts = append(parts, "subresource "+sanitizeExternalText(request.TargetSubresource, 64))
+	}
+	if request.TemplateFingerprint != "" {
+		parts = append(parts, "fingerprint "+sanitizeExternalText(request.TemplateFingerprint, 1024))
+	}
+	if request.DeploymentGeneration > 0 {
+		parts = append(parts, fmt.Sprintf("generation %d", request.DeploymentGeneration))
+	}
+	if request.TargetRevision > 0 {
+		parts = append(parts, fmt.Sprintf("revision %d", request.TargetRevision))
+	}
+	if request.TargetSetDigest.Valid() {
+		parts = append(parts, "target set "+string(request.TargetSetDigest), fmt.Sprintf("target count %d", request.TargetCount))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (model *Model) acceptReviewerEvent(event application.UIReviewerEvent) bool {
+	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
+		event.ScopeGeneration != model.run.ScopeGeneration || event.PolicyGeneration != model.run.PolicyGeneration {
+		return false
+	}
+	if model.actionPresentation == nil {
+		if event.EventIndex != 1 || !model.acceptInitialActionSequence(event.Sequence) {
+			return false
+		}
+		model.actionPresentation = &actionPresentation{
+			RequestID: event.RequestID, Digest: event.Digest, Sequence: event.Sequence,
+		}
+	} else if model.reviewerEvent == nil || model.actionPresentation.RequestID != event.RequestID ||
+		model.actionPresentation.Sequence != event.Sequence || !model.actionPresentation.Digest.Equal(event.Digest) ||
+		event.EventIndex != model.reviewerEvent.EventIndex+1 {
+		return false
+	}
+	copy := event
+	model.reviewerEvent = &copy
+	return true
+}
+
+func (model *Model) acceptAutomaticActionEvent(
+	requestID domain.ApprovalID,
+	digest domain.ApprovalDigest,
+	sequence int64,
+	executionIndex int64,
+) bool {
+	if !model.run.Active || model.run.Terminal {
+		return false
+	}
+	if model.actionPresentation == nil {
+		if executionIndex != 1 || !model.acceptInitialActionSequence(sequence) {
+			return false
+		}
+		model.actionPresentation = &actionPresentation{RequestID: requestID, Digest: digest, Sequence: sequence}
+	} else if model.actionPresentation.RequestID != requestID || model.actionPresentation.Sequence != sequence ||
+		!model.actionPresentation.Digest.Equal(digest) || executionIndex != model.actionPresentation.ExecutionIndex+1 {
+		return false
+	}
+	model.actionPresentation.ExecutionIndex = executionIndex
+	return true
+}
+
+func (model *Model) acceptClosedActionEvent(result application.UIApprovalResult) bool {
+	if !model.run.Active || model.run.Terminal || result.RunID != model.run.RunID ||
+		result.ScopeGeneration != model.run.ScopeGeneration || result.PolicyGeneration != model.run.PolicyGeneration {
+		return false
+	}
+	if model.actionPresentation == nil {
+		if !model.acceptInitialActionSequence(result.Sequence) {
+			return false
+		}
+		return true
+	}
+	return model.actionPresentation.RequestID == result.RequestID &&
+		model.actionPresentation.Sequence == result.Sequence && model.actionPresentation.Digest.Equal(result.Digest)
+}
+
+// Approval and Reviewer events may be inserted into the ordered Agent event
+// bridge or originate while a Tool call is blocked for supervision. The
+// latter have an independent action-local sequence and must not create a gap
+// in the Agent stream.
+func (model *Model) acceptInitialActionSequence(sequence int64) bool {
+	if sequence < 1 || sequence > 4096 || sequence <= model.run.LastActionSequence {
+		return false
+	}
+	model.run.LastActionSequence = sequence
+	if sequence == model.run.LastSequence+1 {
+		model.run.LastSequence = sequence
+	}
+	return true
+}
+
+func reviewerEventNotice(status application.UIReviewerStatus) string {
+	identity := reviewerIdentity(status)
+	rationale := sanitizeExternalText(status.RationaleSummary, 2048)
+	suffix := ""
+	if rationale != "" {
+		suffix = " Rationale: " + rationale
+	}
+	switch status.State {
+	case application.UIReviewerReviewing:
+		return "Reviewer " + identity + ". No action has started."
+	case application.UIReviewerApproved:
+		return "Reviewer " + identity + ". This automated recommendation is not human approval." + suffix
+	case application.UIReviewerDenied:
+		return "Reviewer " + identity + ". No action was started." + suffix
+	case application.UIReviewerEscalated:
+		return "Reviewer " + identity + ". A local user decision is now required; no action has started." + suffix
+	case application.UIReviewerTimedOut:
+		return "Reviewer " + identity + ". The timeout authorized nothing and no action was started."
+	default:
+		return "Reviewer state unavailable. No action was started."
+	}
+}
+
+func (model *Model) clearActionPresentation() {
+	model.reviewerEvent = nil
+	model.actionPresentation = nil
 }
 
 func (model *Model) acceptWorkingTick(message WorkingTickMsg) tea.Cmd {
@@ -2211,6 +2656,26 @@ func approvalOperationLabel(operation domain.ApprovalOperation) string {
 		return "Run Restricted Command"
 	case domain.ActionOperationShell:
 		return "Run Restricted Shell"
+	case domain.ActionOperationContainerFileRead:
+		return "Read Container File"
+	case domain.ActionOperationPodDiagnostic:
+		return "Run Pod Diagnostic"
+	case domain.ActionOperationPodExec:
+		return "Run Pod Exec"
+	case domain.ActionOperationDiagnosticPod:
+		return "Run Diagnostic Pod"
+	case domain.ActionOperationLogsCurrent:
+		return "Read Current Pod Logs"
+	case domain.ActionOperationLogsPrevious:
+		return "Read Previous Pod Logs"
+	case domain.ActionOperationLogsAllContainers:
+		return "Read All-container Pod Logs"
+	case domain.ActionOperationLogSearch:
+		return "Search Pod Logs"
+	case domain.ActionOperationPrometheusQuery:
+		return "Query Prometheus"
+	case domain.ActionOperationLokiQuery:
+		return "Query Loki"
 	default:
 		return "Unavailable operation"
 	}
@@ -2224,6 +2689,9 @@ func approvalExecutionStatus(result application.UIApprovalResult) string {
 		return "The action result is unavailable."
 	}
 	execution := result.ActionExecution
+	if execution.Authorization != nil {
+		return "The exact Tool approval authority was consumed. The Tool must pass final scope, policy, expiry, and cancellation checks before one bounded attempt; completion is reported by the Tool step."
+	}
 	if execution.LocalProcess != nil {
 		switch execution.LocalProcess.State {
 		case domain.LocalProcessExited:

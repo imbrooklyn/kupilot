@@ -566,12 +566,11 @@ func notAttemptedDiagnosticPodObservation() toolcontract.DiagnosticPodObservatio
 func diagnosticPodFor(request toolcontract.DiagnosticPodRequest) *corev1.Pod {
 	falseValue, trueValue := false, true
 	one := int64(1)
-	preemptionPolicy := corev1.PreemptNever
 	deadline := int64((request.Timeout + time.Second - 1) / time.Second)
 	command := append([]string{request.Executable}, request.Arguments.Values()...)
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: request.Service.Namespace, Labels: map[string]string{"app.kubernetes.io/managed-by": "kupilot", "kupilot.io/purpose": "diagnostic"}, Annotations: map[string]string{"kupilot.io/target-digest": diagnosticPodIdentityDigest(request)}}, Spec: corev1.PodSpec{
 		AutomountServiceAccountToken: &falseValue, ServiceAccountName: diagnosticServiceAccount, RestartPolicy: corev1.RestartPolicyNever, ActiveDeadlineSeconds: &deadline, HostNetwork: false, HostPID: false, HostIPC: false,
-		DNSPolicy: corev1.DNSClusterFirst, SchedulerName: corev1.DefaultSchedulerName, EnableServiceLinks: &falseValue, PreemptionPolicy: &preemptionPolicy,
+		DNSPolicy: corev1.DNSClusterFirst, SchedulerName: corev1.DefaultSchedulerName, EnableServiceLinks: &falseValue,
 		SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &trueValue, RunAsUser: &one, RunAsGroup: &one, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 		Containers: []corev1.Container{{Name: diagnosticContainerName, Image: request.Image, ImagePullPolicy: corev1.PullIfNotPresent, Command: command,
 			SecurityContext:        &corev1.SecurityContext{AllowPrivilegeEscalation: &falseValue, ReadOnlyRootFilesystem: &trueValue, RunAsNonRoot: &trueValue, RunAsUser: &one, RunAsGroup: &one, Privileged: &falseValue, Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
@@ -594,7 +593,9 @@ func diagnosticPodMatchesRequest(pod *corev1.Pod, request toolcontract.Diagnosti
 	gotSpec := pod.Spec.DeepCopy()
 	wantSpec := want.Spec.DeepCopy()
 	if gotSpec == nil || wantSpec == nil || !validDiagnosticDefaultTolerations(gotSpec.Tolerations) ||
-		gotSpec.PriorityClassName != "" || gotSpec.Priority != nil && *gotSpec.Priority != 0 {
+		gotSpec.PriorityClassName != "" || gotSpec.Priority != nil && *gotSpec.Priority != 0 ||
+		gotSpec.PreemptionPolicy != nil && *gotSpec.PreemptionPolicy != corev1.PreemptLowerPriority ||
+		gotSpec.DeprecatedServiceAccount != "" && gotSpec.DeprecatedServiceAccount != wantSpec.ServiceAccountName {
 		return false
 	}
 	// NodeName is assigned by the scheduler. The API server commonly injects
@@ -603,6 +604,8 @@ func diagnosticPodMatchesRequest(pod *corev1.Pod, request toolcontract.Diagnosti
 	gotSpec.NodeName = ""
 	gotSpec.Tolerations = nil
 	gotSpec.Priority = nil
+	gotSpec.PreemptionPolicy = nil
+	gotSpec.DeprecatedServiceAccount = ""
 	return apiequality.Semantic.DeepEqual(*gotSpec, *wantSpec)
 }
 

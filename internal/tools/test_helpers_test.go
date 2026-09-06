@@ -429,10 +429,123 @@ func metricDependencies(reader MetricReader, guard ScopeGuard) MetricToolDepende
 
 func sourceDependencies(prometheus PrometheusReader, loki LokiReader, guard ScopeGuard) DataSourceToolDependencies {
 	return DataSourceToolDependencies{
-		Prometheus: prometheus, Loki: loki, ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{},
+		Prometheus: prometheus, Loki: loki, Targets: permissiveObservationTargetResolver{}, Actions: &permissiveObservationActionGate{},
+		ScopeGuard: guard, PolicyGuard: alwaysCurrentPolicyGuard{},
 		Policy: staticObservationPolicy{decision: ObservationPolicyAllowed}, EvidenceIDs: &sequenceEvidenceIDs{},
 		Text: security.NewRedactor(), Now: func() time.Time { return testObservedAt },
 	}
+}
+
+type permissiveObservationTargetResolver struct{}
+
+func (permissiveObservationTargetResolver) ResolveObservationTarget(
+	_ context.Context,
+	request ObservationTargetRequest,
+) (ResolvedObservationTarget, error) {
+	if request.Validate() != nil {
+		return ResolvedObservationTarget{}, ErrInvalidObservationActionDependency
+	}
+	container := request.RequestedContainer
+	if container == "" && !request.AllContainers && request.Operation != domain.ActionOperationPrometheusQuery && request.Operation != domain.ActionOperationLokiQuery {
+		container = "app"
+	}
+	return ResolvedObservationTarget{Reference: domain.ResourceRef{
+		APIVersion: "v1", Kind: "Pod", Namespace: request.Namespace, Name: request.PodName,
+		UID: "generated-pod-uid", ResourceVersion: "17",
+	}, Container: container}, nil
+}
+
+type recordingObservationTargetResolver struct {
+	mu     sync.Mutex
+	calls  int
+	target ResolvedObservationTarget
+	err    error
+}
+
+func (resolver *recordingObservationTargetResolver) ResolveObservationTarget(
+	ctx context.Context,
+	request ObservationTargetRequest,
+) (ResolvedObservationTarget, error) {
+	resolver.mu.Lock()
+	resolver.calls++
+	target, err := resolver.target, resolver.err
+	resolver.mu.Unlock()
+	if err != nil {
+		return ResolvedObservationTarget{}, err
+	}
+	if target != (ResolvedObservationTarget{}) {
+		return target, nil
+	}
+	return (permissiveObservationTargetResolver{}).ResolveObservationTarget(ctx, request)
+}
+
+func (resolver *recordingObservationTargetResolver) count() int {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	return resolver.calls
+}
+
+type permissiveObservationActionGate struct {
+	mu           sync.Mutex
+	prepared     int
+	authorized   int
+	outcomes     []domain.ObservationActionOutcome
+	now          func() time.Time
+	prepareErr   error
+	authorizeErr error
+	outcomeErr   error
+	lastPlan     domain.ObservationActionPlan
+}
+
+func (gate *permissiveObservationActionGate) PrepareObservationAction(_ context.Context, preflight domain.ObservationActionPreflight) error {
+	if preflight.Validate() != nil {
+		return ErrInvalidObservationActionDependency
+	}
+	gate.mu.Lock()
+	gate.prepared++
+	err := gate.prepareErr
+	gate.mu.Unlock()
+	return err
+}
+
+func (gate *permissiveObservationActionGate) AuthorizeObservationAction(
+	_ context.Context,
+	plan domain.ObservationActionPlan,
+) (domain.ActionEnvelope, error) {
+	intent, err := plan.Intent(domain.PermissionProfileAsk)
+	if err != nil {
+		return domain.ActionEnvelope{}, err
+	}
+	gate.mu.Lock()
+	gate.authorized++
+	gate.lastPlan = plan
+	index := gate.authorized
+	authorizeErr := gate.authorizeErr
+	current := testObservedAt
+	if gate.now != nil {
+		current = gate.now()
+	}
+	gate.mu.Unlock()
+	if authorizeErr != nil {
+		return domain.ActionEnvelope{}, authorizeErr
+	}
+	id := domain.ApprovalID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 800000+index))
+	return domain.NewActionEnvelope(id, plan.SessionID, plan.RunID, intent, current)
+}
+
+func (gate *permissiveObservationActionGate) RecordObservationOutcome(
+	_ context.Context,
+	envelope domain.ActionEnvelope,
+	outcome domain.ObservationActionOutcome,
+) error {
+	if outcome.Validate(envelope.Intent) != nil {
+		return ErrInvalidObservationActionDependency
+	}
+	gate.mu.Lock()
+	gate.outcomes = append(gate.outcomes, outcome)
+	err := gate.outcomeErr
+	gate.mu.Unlock()
+	return err
 }
 
 func testRunInput(t *testing.T, resultBytes int) agent.RunInput {

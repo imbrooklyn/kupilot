@@ -28,7 +28,7 @@ func (coordinator *ApprovalCoordinator) PrepareActionPolicy(
 ) (PermissionPolicy, domain.ClusterScope, error) {
 	if coordinator == nil || !sessionID.Valid() || scope.Validate() != nil ||
 		!operation.Valid() || !effect.Valid() || !risk.Valid() || risk == domain.RiskDeny ||
-		!admittedExecutableAction(operation) {
+		!admittedSupervisedAction(operation) {
 		return PermissionPolicy{}, domain.ClusterScope{}, ErrApprovalUnavailable
 	}
 	status := coordinator.permissions.Status(coordinator.now())
@@ -51,7 +51,7 @@ func (coordinator *ApprovalCoordinator) PrepareActionPolicy(
 	return policy, current, nil
 }
 
-func admittedExecutableAction(operation domain.ActionOperation) bool {
+func admittedSupervisedAction(operation domain.ActionOperation) bool {
 	switch operation {
 	case domain.ActionOperationRestartDeployment,
 		domain.ActionOperationScaleWorkload,
@@ -61,11 +61,178 @@ func admittedExecutableAction(operation domain.ActionOperation) bool {
 		domain.ActionOperationUncordonNode,
 		domain.ActionOperationDrainNode,
 		domain.ActionOperationRestrictedLocalArgv,
-		domain.ActionOperationShell:
+		domain.ActionOperationShell,
+		domain.ActionOperationPodDiagnostic,
+		domain.ActionOperationPodExec,
+		domain.ActionOperationContainerFileRead,
+		domain.ActionOperationDiagnosticPod,
+		domain.ActionOperationLogsCurrent,
+		domain.ActionOperationLogsPrevious,
+		domain.ActionOperationLogsAllContainers,
+		domain.ActionOperationLogSearch,
+		domain.ActionOperationPrometheusQuery,
+		domain.ActionOperationLokiQuery:
 		return true
 	default:
 		return false
 	}
+}
+
+type toolAuthorizationResult struct {
+	envelope domain.ActionEnvelope
+	err      error
+}
+
+// AuthorizeRemoteDiagnosticAction routes one Tool-owned remote diagnostic
+// through the shared human/Reviewer/automatic coordinator. The caller remains
+// blocked until the exact request is consumed or safely closed, so no remote
+// operation can start while approval is pending.
+func (coordinator *ApprovalCoordinator) AuthorizeRemoteDiagnosticAction(
+	ctx context.Context,
+	policy PermissionPolicy,
+	plan domain.RemoteDiagnosticActionPlan,
+) (domain.ActionEnvelope, error) {
+	if coordinator == nil || ctx == nil || coordinator.remoteDiagnostics == nil ||
+		policy.Validate() != nil || plan.Validate() != nil || policy.Generation != plan.PolicyGeneration {
+		return domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	}
+	intent, err := NewRemoteDiagnosticActionIntent(policy, plan)
+	if err != nil {
+		return domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassPolicyDenied}
+	}
+	completion := make(chan toolAuthorizationResult, 1)
+	return coordinator.authorizeToolAction(ctx, plan.RunID, plan.SessionID, intent,
+		trackedAction{kind: trackedActionRemoteDiagnostic, remote: plan, authorizationCompletion: completion})
+}
+
+func (coordinator *ApprovalCoordinator) authorizeToolAction(
+	ctx context.Context,
+	runID domain.AgentRunID,
+	sessionID domain.SessionID,
+	intent domain.ActionIntent,
+	action trackedAction,
+) (domain.ActionEnvelope, error) {
+	sequence, err := coordinator.nextToolActionSequence(runID)
+	if err != nil {
+		return domain.ActionEnvelope{}, toolAuthorizationError{class: domain.SafeErrorClassInternal}
+	}
+	request, err := coordinator.submitPreparedAction(ctx, runID, sessionID, sequence, intent, action)
+	if err != nil {
+		// Programmatic Reviewer resolution may consume the envelope before a
+		// final freshness check fails. Preserve that consumed identity together
+		// with the error so the Tool can append the required no-attempt outcome;
+		// an error-bearing result is never executable authority.
+		select {
+		case result := <-action.authorizationCompletion:
+			if result.envelope.Validate() == nil {
+				return result.envelope, result.err
+			}
+		default:
+		}
+		return domain.ActionEnvelope{}, toolAuthorizationFailure(ctx, err)
+	}
+	select {
+	case result := <-action.authorizationCompletion:
+		if ctx.Err() != nil {
+			if result.envelope.Validate() == nil {
+				return result.envelope, toolAuthorizationError{class: remoteContextClass(ctx)}
+			}
+			return domain.ActionEnvelope{}, toolAuthorizationError{class: remoteContextClass(ctx)}
+		}
+		return result.envelope, result.err
+	case <-ctx.Done():
+		select {
+		case result := <-action.authorizationCompletion:
+			if result.envelope.Validate() == nil {
+				return result.envelope, toolAuthorizationError{class: remoteContextClass(ctx)}
+			}
+		default:
+		}
+		closeContext, cancel := context.WithTimeout(context.Background(), coordinator.persistenceLimit)
+		_ = coordinator.cancelToolAction(closeContext, request.ID)
+		select {
+		case result := <-action.authorizationCompletion:
+			cancel()
+			if result.envelope.Validate() == nil {
+				return result.envelope, toolAuthorizationError{class: remoteContextClass(ctx)}
+			}
+			return domain.ActionEnvelope{}, toolAuthorizationError{class: remoteContextClass(ctx)}
+		default:
+		}
+		select {
+		case result := <-action.authorizationCompletion:
+			cancel()
+			if result.envelope.Validate() == nil {
+				return result.envelope, toolAuthorizationError{class: remoteContextClass(ctx)}
+			}
+			return domain.ActionEnvelope{}, toolAuthorizationError{class: remoteContextClass(ctx)}
+		case <-closeContext.Done():
+			cancel()
+			return domain.ActionEnvelope{}, toolAuthorizationError{class: remoteContextClass(ctx)}
+		}
+	}
+}
+
+func (coordinator *ApprovalCoordinator) nextToolActionSequence(runID domain.AgentRunID) (int64, error) {
+	if coordinator == nil || !runID.Valid() {
+		return 0, ErrApprovalUnavailable
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.toolSequenceRun != runID {
+		coordinator.toolSequenceRun = runID
+		coordinator.toolSequence = 0
+	}
+	if coordinator.toolSequence >= 4096 {
+		return 0, ErrApprovalUnavailable
+	}
+	coordinator.toolSequence++
+	return coordinator.toolSequence, nil
+}
+
+func (coordinator *ApprovalCoordinator) cancelToolAction(ctx context.Context, requestID domain.ApprovalID) error {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
+		return tracked.request.ID == requestID && tracked.action.toolAuthorization()
+	}, domain.ApprovalReasonContextCancelled)
+}
+
+func toolAuthorizationFailure(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return toolAuthorizationError{class: remoteContextClass(ctx)}
+	}
+	switch {
+	case errors.Is(err, ErrApprovalExpired):
+		return toolAuthorizationError{class: domain.SafeErrorClassTimeout}
+	case errors.Is(err, ErrApprovalPersistenceUnavailable), errors.Is(err, ErrApprovalResultAuditUnavailable):
+		return toolAuthorizationError{class: domain.SafeErrorClassPersistenceUnavailable}
+	case errors.Is(err, ErrPermissionDenied), errors.Is(err, ErrPermissionStale):
+		return toolAuthorizationError{class: domain.SafeErrorClassPolicyDenied}
+	case errors.Is(err, ErrApprovalInvalidated):
+		return toolAuthorizationError{class: domain.SafeErrorClassStaleScope}
+	default:
+		return toolAuthorizationError{class: domain.SafeErrorClassInternal}
+	}
+}
+
+type toolAuthorizationError struct{ class domain.SafeErrorClass }
+
+func (err toolAuthorizationError) Error() string {
+	return "The supervised Tool action was not authorized."
+}
+func (err toolAuthorizationError) Class() domain.SafeErrorClass {
+	if err.class.Valid() {
+		return err.class
+	}
+	return domain.SafeErrorClassInternal
+}
+
+func remoteContextClass(ctx context.Context) domain.SafeErrorClass {
+	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return domain.SafeErrorClassTimeout
+	}
+	return domain.SafeErrorClassCancelled
 }
 
 // SubmitRemediationAction retains the full typed target plan in memory while
@@ -161,6 +328,7 @@ func (coordinator *ApprovalCoordinator) consumeApprovedDispatched(
 		currentTracked.request.RunID != command.RunID || currentTracked.consuming ||
 		currentTracked.sequence != command.ApprovalSequence ||
 		currentTracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
+		currentTracked.request.Intent.PolicyGeneration != command.ExpectedPolicyGeneration ||
 		currentTracked.action.kind != tracked.action.kind || !currentTracked.action.matches(currentTracked.request.Intent) {
 		coordinator.mu.Unlock()
 		return UIApprovalResult{}, ErrApprovalUnavailable
@@ -214,12 +382,49 @@ func (coordinator *ApprovalCoordinator) consumeApprovedDispatched(
 	coordinator.mu.Unlock()
 
 	result := projectUIApprovalResult(consumed, tracked.sequence)
+	if tracked.action.toolAuthorization() {
+		envelope := consumed.ActionEnvelope()
+		authorizationErr := coordinator.remotePostConsumeError(ctx, envelope)
+		execution := UIActionExecution{
+			RequestID: consumed.ID, RunID: consumed.RunID,
+			ScopeGeneration: consumed.Intent.Scope.Generation, Sequence: tracked.sequence,
+			Digest: consumed.Digest, Operation: consumed.Intent.Operation, Limits: consumed.Intent.Limits,
+			Authorization: &UIToolActionAuthorization{State: uiToolActionAuthorized},
+		}
+		result.ActionExecution = &execution
+		if result.Validate() != nil || coordinator.publishClosedRequired(ctx, result) != nil {
+			tracked.action.completeAuthorization(domain.ActionEnvelope{}, remoteGateError{class: domain.SafeErrorClassInternal})
+			return result, ErrApprovalUnavailable
+		}
+		tracked.action.completeAuthorization(envelope, authorizationErr)
+		if authorizationErr != nil {
+			return result, ErrPermissionStale
+		}
+		return result, nil
+	}
 	execution, resultErr := coordinator.executeDispatchedAction(ctx, tracked, consumed.ActionEnvelope())
 	result.ActionExecution = &execution
 	if result.Validate() != nil {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	return result, resultErr
+}
+
+func (coordinator *ApprovalCoordinator) remotePostConsumeError(ctx context.Context, envelope domain.ActionEnvelope) error {
+	if ctx == nil || ctx.Err() != nil {
+		return remoteGateError{class: remoteContextClass(ctx)}
+	}
+	now := coordinator.now()
+	if !validCoordinatorTime(now) {
+		return remoteGateError{class: domain.SafeErrorClassInternal}
+	}
+	if !now.Before(envelope.ExpiresAt) {
+		return remoteGateError{class: domain.SafeErrorClassTimeout}
+	}
+	if !coordinator.actionCurrent(envelope) {
+		return remoteGateError{class: domain.SafeErrorClassStaleScope}
+	}
+	return nil
 }
 
 func (coordinator *ApprovalCoordinator) revalidateDispatchedAction(
@@ -243,6 +448,16 @@ func (coordinator *ApprovalCoordinator) revalidateDispatchedAction(
 			return ErrLocalActionInvalid
 		}
 		return coordinator.revalidateLocalPaths(ctx, tracked.action.shell.Observation, intent.Parameters)
+	case trackedActionRemoteDiagnostic:
+		if coordinator.remoteDiagnostics == nil || !tracked.action.remote.MatchesIntent(intent) {
+			return ErrRemoteDiagnosticActionInvalid
+		}
+		return coordinator.remoteDiagnostics.RevalidateRemoteDiagnosticAction(ctx, tracked.action.remote)
+	case trackedActionObservation:
+		if coordinator.observations == nil || !tracked.action.observation.MatchesIntent(intent) {
+			return ErrObservationActionInvalid
+		}
+		return coordinator.observations.RevalidateObservationAction(ctx, tracked.action.observation)
 	default:
 		return ErrApprovalUnavailable
 	}

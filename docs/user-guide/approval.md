@@ -3,15 +3,18 @@
 This page defines the Accepted `v0.5` interaction and its current deterministic
 implementation. The checked-in composition dispatches supervised restart,
 scale, rollback, controller-owned Pod delete, cordon, uncordon, drain, exact
-local direct argv, and the separate shell operation. The default-off remote-
-diagnostic gate is also present, but its human/Reviewer delivery remains fail-
-closed in this slice. No live execution or release readiness is implied.
+local direct argv, the separate shell operation, and the default-off remote-
+diagnostic handlers. Human and Reviewer routes for remote diagnostics, review-
+class Pod logs, and optional Prometheus/Loki reads block the Tool call until the
+exact envelope is durably consumed or safely closed. No universal live
+compatibility or release readiness is implied.
 
 ## Choose a permission profile
 
-`ask` is the default. `/permissions` is the planned local control for reviewing
-and changing the profile and current-Session rules; `/status` reports the same
-bounded state without external I/O.
+`ask` is the default. `/permissions` opens the fixed local profile picker using
+the same composer and shows each profile's technical boundary, Reviewer route,
+and residual risk. `/status` reports the same bounded state without external
+I/O.
 
 | Profile | Behavior |
 | --- | --- |
@@ -40,10 +43,11 @@ resume. For a restricted local command, the template is the complete exact
 argv vector; a partial prefix cannot authorize a longer local command.
 
 The inline auto-review states are `Reviewing`, `Approved`, `Denied`,
-`Escalated`, and `Timed out`; they are never styled as human decisions. A
+`Escalated to user`, and `Timed out`; they are never styled as human decisions. A
 failure or timeout performs no action. The human review surface offers only
-approve once, an eligible narrow Session rule, deny, and cancel, and displays
-the exact envelope fields before any choice.
+approve once, an eligible narrow Session rule, deny, and cancel. Deny is the
+safe default. Creating a Session rule invalidates the displayed source action;
+that action does not execute and a fresh request is required.
 
 ## Review an ActionEnvelope
 
@@ -64,7 +68,7 @@ The digest uses a versioned fixed-order length-prefixed canonical encoding and
 SHA-256. A human summary, model phrase, Reviewer rationale, JSON key order,
 raw YAML, map, or unnormalized command is never authority.
 
-Approve-once defaults to Reject, expires exactly 60 seconds after proposal
+Approve-once defaults to Deny, expires exactly 60 seconds after proposal
 creation, and is single-use. Approval of one envelope does not authorize a
 different target, parameter, destination, command, cleanup, retry, or follow-up
 operation. Changing scope or permission policy invalidates pending state before
@@ -131,11 +135,12 @@ and deliberately avoid wildcard verbs/resources. See
 ## Current shared action interaction
 
 Application prepares each Kubernetes target or local filesystem identity before
-review, defaults the dialog to Reject, and binds the envelope for exactly 60
+review, defaults the dialog to Deny, and binds the envelope for exactly 60
 seconds. After a valid human, Reviewer, automatic, or Session-rule decision it
 revalidates the complete plan, durably consumes authority and pre-audits, then
-calls only the matching executor at most once. Restart retains its annotation-
-only PATCH. Other Kubernetes actions use their exact scale/update/delete/Node-
-patch/eviction contracts, while local direct argv and shell use distinct
-process contracts. Attempt, partial acceptance, ambiguous outcome, and bounded
+calls only the matching narrow executor or source port at most once. Restart
+retains its annotation-only PATCH. Other Kubernetes actions use their exact
+scale/update/delete/Node-patch/eviction contracts; Pod logs and optional sources
+use bounded read contracts; local direct argv and shell use distinct process
+contracts. Attempt, partial acceptance, ambiguous outcome, and bounded
 verification remain separate; retry always requires a fresh envelope.

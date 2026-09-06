@@ -9,8 +9,10 @@ output remains non-authoritative. The current Application action foundation
 covers the supervised Deployment restart, six additional typed remediation
 operations, exact local direct-argv and separate-shell actions, and the three
 default-off remote-diagnostic handlers. Human and Reviewer delivery for those
-remote diagnostics remains fail-closed until its inline supervision path owns
-the corresponding ActionEnvelopes.
+remote diagnostics uses the same inline Application supervision and exact
+ActionEnvelope authority. Review-class Pod logs and optional Prometheus/Loki
+reads use that supervision too; model output cannot bypass their privacy,
+catalog, permission, target, generation, or audit checks.
 
 The protocol is intentionally narrower than the broad and inconsistent use of
 the term "OpenAI-compatible." Compatibility means passing this contract for
@@ -486,9 +488,12 @@ The current fixtures also cover Reviewer permission routing, durable decisions,
 pre-operation audit, and one-attempt execution for the supervised Deployment
 restart, all six additional typed remediation operations, exact local
 direct-argv and separate-shell actions, and the three default-off
-remote-diagnostic handlers. Human and Reviewer remote-diagnostic delivery
-remains fail-closed pending its inline supervision path; deterministic handler
-and automatic-route coverage does not claim that delivery path is reachable.
+remote-diagnostic handlers. The same fixtures cover review-class Pod-log and
+optional data-source supervision, including preflight denial, target mutation,
+outcome-audit failure, and zero source calls without consumed authority. Human
+and Reviewer delivery is reachable through the inline supervision path;
+deterministic tests establish the zero-call denial boundary but do not claim
+universal endpoint or cluster compatibility.
 
 Deterministic CI remains the required protocol and safety proof. Opt-in tagged
 live integration may establish compatibility only for the exact endpoint,

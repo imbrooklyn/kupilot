@@ -120,6 +120,11 @@ func TestRootHelpListsOnlyFixedCommands(t *testing.T) {
 			t.Errorf("root help does not contain startup option %q", want)
 		}
 	}
+	for _, want := range []string{"/permissions", "/status"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("root help does not identify fixed TUI command %q", want)
+		}
+	}
 
 	forbidden := []string{
 		"cwd",

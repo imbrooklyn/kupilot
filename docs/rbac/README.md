@@ -2,12 +2,13 @@
 
 This page defines the Accepted `v0.5` RBAC target and identifies the currently
 implemented slices. The primary checked-in YAML grants the built-in broad-read
-resources, existing Events/logs/relationships, and one separately gated exact
-Deployment restart. Secret metadata, Pod/Node metrics, one example exact CRD,
-Pod Exec/container-file reads, and diagnostic Pods use separate opt-in
-fixtures. Scale, rollback, one owned-Pod delete, Node scheduling, and drain now
-have separate opt-in fixtures as well. No fixture pre-grants optional non-
-Kubernetes data sources or local execution; those use their explicitly selected
+resources and existing Events/logs/relationships. Supervised mutations remain
+in separate capability-specific fixtures. Secret metadata, Pod/Node metrics,
+one example exact CRD, Pod Exec/container-file reads, and diagnostic Pods use
+separate opt-in fixtures. Scale, rollback, one owned-Pod delete, Node
+scheduling, and drain now have separate opt-in fixtures as well. No fixture
+grants optional non-Kubernetes data sources or local execution; those use their
+explicitly selected
 local process and existing external identity rather than Kubernetes client-go.
 
 Do not grant `cluster-admin`, wildcard verbs or resources, generic Secret

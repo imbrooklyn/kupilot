@@ -12,6 +12,10 @@ import (
 )
 
 func (model *Model) syncSuggestionsAfterEdit() tea.Cmd {
+	if model.permissionPicker.Open() {
+		model.refreshPermissionPicker()
+		return nil
+	}
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry {
 		model.closePickers()
 		model.slashMenu.Close()
@@ -459,11 +463,19 @@ func (model *Model) closePickers() {
 	model.namespacePicker.Close()
 	model.resourcePicker.Close()
 	model.sessionPicker.Close()
+	if model.permissionPicker.Open() {
+		model.permissionPicker.Close()
+		model.composer.ResetPlaceholder()
+		model.composer.Reset()
+	}
 	model.activePicker = ""
 	model.pendingCompletion = application.UICompletionQuery{}
 }
 
 func (model Model) pickerOpen() bool {
+	if model.permissionPicker.Open() {
+		return true
+	}
 	switch model.activePicker {
 	case application.UICompletionContext:
 		return model.contextPicker.Open()
@@ -479,6 +491,9 @@ func (model Model) pickerOpen() bool {
 }
 
 func (model Model) pickerView() string {
+	if model.permissionPicker.Open() {
+		return model.permissionPicker.View()
+	}
 	switch model.activePicker {
 	case application.UICompletionContext:
 		return model.contextPicker.View()
@@ -494,6 +509,9 @@ func (model Model) pickerView() string {
 }
 
 func (model Model) pickerHeight() int {
+	if model.permissionPicker.Open() {
+		return model.permissionPicker.Height()
+	}
 	switch model.activePicker {
 	case application.UICompletionContext:
 		return model.contextPicker.Height()
@@ -509,6 +527,10 @@ func (model Model) pickerHeight() int {
 }
 
 func (model *Model) movePicker(delta int) {
+	if model.permissionPicker.Open() {
+		model.permissionPicker.Move(delta)
+		return
+	}
 	switch model.activePicker {
 	case application.UICompletionContext:
 		model.contextPicker.Move(delta)

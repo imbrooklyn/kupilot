@@ -76,6 +76,33 @@ func TestStructuredUICommandsRejectMixedOrUnboundPickerData(t *testing.T) {
 			command: UICommand{Kind: UICommandShowStatus, ExpectedScopeGeneration: 7},
 			wantErr: true,
 		},
+		{
+			name:    "show permissions",
+			command: UICommand{Kind: UICommandShowPermissions, RequestID: 4},
+		},
+		{
+			name: "change permission",
+			command: UICommand{
+				Kind: UICommandChangePermission, RequestID: 5, ExpectedPolicyGeneration: 3,
+				PermissionProfile: domain.PermissionProfileAutoReview,
+			},
+		},
+		{
+			name: "full access without acknowledgement",
+			command: UICommand{
+				Kind: UICommandChangePermission, RequestID: 6, ExpectedPolicyGeneration: 3,
+				PermissionProfile: domain.PermissionProfileFullAccess,
+			},
+			wantErr: true,
+		},
+		{
+			name: "stale-prone permission change without generation",
+			command: UICommand{
+				Kind: UICommandChangePermission, RequestID: 7,
+				PermissionProfile: domain.PermissionProfileAsk,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

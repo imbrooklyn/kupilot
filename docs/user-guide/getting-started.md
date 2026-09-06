@@ -152,11 +152,11 @@ or router. Summarization reuses `agent` rather than introducing a
 deterministic `review` route and its recommendation never becomes permission or
 execution authority by itself.
 
-The current permission foundation uses `ask` by default and exposes local,
-content-free status plus a generic supervised action flow for typed remediation
-and local execution. The complete `/permissions` management interaction remains
-planned. No profile can enable a default-off capability or bypass RBAC,
-consent, scope, audit, fresh revalidation, or hard denial.
+The permission interaction uses `ask` by default. `/permissions` exposes the
+five fixed profiles with their boundary, Reviewer route, and risk, and changes
+the profile through a typed Application command. No profile can enable a
+default-off capability or bypass RBAC, consent, scope, audit, fresh
+revalidation, or hard denial.
 
 Every question after the first in a Session receives one ordered, bounded
 representation of all retained eligible safe history when such history exists.
@@ -171,8 +171,9 @@ execution never regain authority.
 The implemented capability boundary is documented in
 [Operational Capabilities](../diagnostic-capabilities.md). Every sensitive or
 effectful request still requires deterministic risk and an immutable
-ActionEnvelope. Remote-diagnostic human/Reviewer delivery and complete
-permission management remain later integration work; this guide grants neither.
+ActionEnvelope. A visible permission route does not enable a default-off remote
+diagnostic or optional source, and it does not bypass Pod-log consent; this
+guide grants no capability that policy and composition have not enabled.
 
 ## Current first-run flow
 
@@ -181,8 +182,9 @@ permission management remain later integration work; this guide grants neither.
    the composer. `/model` can reconfigure it later, and `Ctrl+C` or `Esc`
    cancels any current setup step without silently replacing the active model.
 2. Confirm the footer shows the intended verified Context, working Namespace,
-   and `supervised` state. Use `/status` to check namespace policy and budget;
-   use `/context` and `/namespace` when scope is unavailable.
+   permission profile, and supervision route, such as `ask · human`. Use
+   `/status` to check detailed policy, Reviewer, action, model-context, and
+   budget state; use `/context` and `/namespace` when scope is unavailable.
 3. Optionally use `/resource` to attach one allowlisted direct resource. Picker
    selection is only an input aid; it is not Evidence and does not prove that
    the object still exists.
@@ -210,6 +212,7 @@ The compile-time command registry is fixed:
 | `/context [filter]` | Select a kubeconfig Context. |
 | `/namespace [filter]`, `/ns` | Select a Namespace in the current Context. |
 | `/resource [filter]`, `/res` | Select or clear a direct target resource. |
+| `/permissions` | Review the five fixed permission profiles and change the active profile through Application. |
 | `/status` | Show current safe Session, scope, namespace policy, capability catalog, action availability, budget usage, privacy, and storage status. |
 | `/new` | Create a new Session without querying history. |
 | `/resume [filter]` | Open eligible local Session selection inside the TUI. |

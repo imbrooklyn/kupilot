@@ -2,7 +2,52 @@
 
 This file records notable user-visible changes to Kupilot.
 
-## Unreleased (`v0.4` candidate)
+## Unreleased (`v0.5` development)
+
+### Added
+
+- Added the fixed fourteen-Tool read, observability, and remote-diagnostic
+  catalog; exact optional Prometheus and Loki sources; and typed restart,
+  scale, rollback, owned-Pod delete, cordon, uncordon, and drain actions.
+- Added named `agent` and optional `approval_reviewer` profiles, role- and
+  origin-bound consent, Eino ADK Session context and summarization, and strict
+  fail-closed Reviewer decisions.
+- Added `read-only`, `ask`, `auto-review`, `full-access`, and `custom`
+  permission profiles, `/permissions`, detailed local `/status`, inline
+  approval/reviewer state, narrow Session rules, and one-attempt action
+  supervision.
+- Added strict version 2 configuration, forward-only SQLite migrations through
+  migration 12, split least-privilege RBAC fixtures, and opt-in tagged model,
+  Reviewer, Session, and disposable-cluster integration harnesses.
+
+### Changed
+
+- Reused Eino ADK `ChatModelAgent`, `Runner`, Tool-message pairing, message
+  state, and summarization middleware inside the single model boundary while
+  retaining safe SQLite Messages as the sole durable Session source.
+- Generalized the restart-only action path into immutable digest-bound
+  ActionEnvelopes with deterministic risk, policy and scope generations,
+  durable pre-operation audit, at most one external attempt, and separate
+  verification.
+- Routed review-class Pod logs and optional Prometheus/Loki reads through the
+  same exact-target, permission, approval/Reviewer, revalidation, durable-audit,
+  and bounded-outcome lifecycle before source content or external-source I/O.
+- Completed the low-chrome conversational TUI permission picker, approval
+  surface, Reviewer states, input-routing precedence, Markdown/table and
+  no-color behavior, explicit resume history, and terminal restoration flow.
+
+### Security
+
+- Kept model and Reviewer text non-authoritative; hard denials, credentials,
+  Secret values, raw objects, raw process output, generic writes, arbitrary
+  commands, and cross-Context operations remain outside every permission
+  profile.
+- Added deterministic zero-call denial, stale-generation, cancellation,
+  timeout, sensitive-canary, audit-failure, cleanup, and ambiguous-outcome
+  coverage. Live integration and model evaluation remain separate opt-in
+  evidence and do not establish release readiness.
+
+## Unreleased development history (`v0.4` candidate)
 
 ### Changed
 

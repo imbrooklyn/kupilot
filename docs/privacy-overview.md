@@ -14,15 +14,16 @@ existing supervised Deployment restart. It also implements broad, bounded
 built-in and exact configured CRD resource projections plus deterministic
 Events, logs, metrics, Prometheus, and Loki safety pipelines, plus the
 default-off Pod Exec, container-file, and diagnostic-Pod output pipeline.
-Human-routed remote diagnostics, review-class logs, and optional-source calls
-remain fail-closed under the default `ask` composition until the public
-permission flow can own their ActionEnvelopes. Exact local direct argv, the
-separate default-off shell operation, and the typed remediation catalog now use
-the shared action dispatcher. Their raw process or Kubernetes response bytes
-remain ephemeral and only bounded safe output, digests, state, and verification
-metadata cross their adapters. Kupilot does not claim that redaction recognizes
-every sensitive value or that a model or data provider follows its local
-retention schedule.
+Human and Reviewer routes for remote diagnostics, review-class Pod logs, and
+optional-source calls use the same inline permission and ActionEnvelope flow.
+No content/source attempt begins while review is pending or after denial,
+timeout, cancellation, stale generation, target mutation, or audit failure.
+Exact local direct argv, the separate default-off shell operation, and the typed
+remediation catalog use the shared action dispatcher. Their raw process,
+Kubernetes, log, or source-response bytes remain ephemeral and only bounded
+safe output, digests, state, and verification metadata cross their adapters.
+Kupilot does not claim that redaction recognizes every sensitive value or that
+a model or data provider follows its local retention schedule.
 
 > [!IMPORTANT]
 > Context and Namespace names, resource names, Node and workload status,

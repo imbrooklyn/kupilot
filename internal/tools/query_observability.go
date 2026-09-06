@@ -25,10 +25,9 @@ var (
 type ObservationPolicyDecision string
 
 const (
-	ObservationPolicyAllowed            ObservationPolicyDecision = "allowed"
-	ObservationPolicyConsentRequired    ObservationPolicyDecision = "consent_required"
-	ObservationPolicyPermissionRequired ObservationPolicyDecision = "permission_required"
-	ObservationPolicyDenied             ObservationPolicyDecision = "denied"
+	ObservationPolicyAllowed         ObservationPolicyDecision = "allowed"
+	ObservationPolicyConsentRequired ObservationPolicyDecision = "consent_required"
+	ObservationPolicyDenied          ObservationPolicyDecision = "denied"
 )
 
 type ObservationPolicyRequest struct {
@@ -66,7 +65,7 @@ type PrometheusReadRequest struct {
 
 func (request PrometheusReadRequest) Validate() error {
 	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || request.Policy.Validate() != nil || request.Policy.Kind != domain.DataSourcePrometheus || !request.Policy.Allows(request.QueryID) ||
-		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Kind != "Pod" || !request.Scope.AllowsReference(request.Reference) ||
+		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Kind != "Pod" || request.Reference.UID == "" || request.Reference.ResourceVersion == "" || !request.Scope.AllowsReference(request.Reference) ||
 		!validRequiredUTCTime(request.Start) || !validRequiredUTCTime(request.End) || request.End.Before(request.Start) || request.End.Sub(request.Start) > domain.MaxObservabilityWindow ||
 		request.Step < 15*time.Second || request.Step > domain.MaxObservabilityStep || request.MaxSeries < 1 || request.MaxSeries > domain.MaxObservabilitySeries ||
 		request.MaxSamples < 1 || request.MaxSamples > domain.MaxObservabilitySamples || request.LimitBytes < 1 || request.LimitBytes > domain.MaxObservabilityBytes {
@@ -145,7 +144,7 @@ type LokiReadRequest struct {
 
 func (request LokiReadRequest) Validate() error {
 	if request.Scope.Validate() != nil || !request.PolicyGeneration.Valid() || request.Policy.Validate() != nil || request.Policy.Kind != domain.DataSourceLoki || !request.Policy.Allows(request.QueryID) ||
-		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Kind != "Pod" || !request.Scope.AllowsReference(request.Reference) ||
+		domain.ValidateLiveResourceRef(request.Reference) != nil || request.Reference.Kind != "Pod" || request.Reference.UID == "" || request.Reference.ResourceVersion == "" || !request.Scope.AllowsReference(request.Reference) ||
 		!validRequiredUTCTime(request.Start) || !validRequiredUTCTime(request.End) || request.End.Before(request.Start) || request.End.Sub(request.Start) > domain.MaxObservabilityWindow ||
 		request.MaxPages < 1 || request.MaxPages > domain.MaxObservabilityPages || request.PageLines < 1 || request.PageLines > domain.MaxObservabilityLines ||
 		request.MaxLines < 1 || request.MaxLines > domain.MaxObservabilityLines || request.PageLines > request.MaxLines ||
@@ -211,6 +210,8 @@ type LokiReader interface {
 type DataSourceToolDependencies struct {
 	Prometheus  PrometheusReader
 	Loki        LokiReader
+	Targets     ObservationTargetResolver
+	Actions     ObservationActionGate
 	ScopeGuard  ScopeGuard
 	PolicyGuard PolicyGenerationGuard
 	Policy      ObservationDataPolicy
@@ -220,7 +221,8 @@ type DataSourceToolDependencies struct {
 }
 
 func (dependencies DataSourceToolDependencies) validate() error {
-	if dependencies.Prometheus == nil || dependencies.Loki == nil || dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil ||
+	if dependencies.Prometheus == nil || dependencies.Loki == nil || dependencies.Targets == nil || dependencies.Actions == nil ||
+		dependencies.ScopeGuard == nil || dependencies.PolicyGuard == nil ||
 		dependencies.Policy == nil || dependencies.EvidenceIDs == nil || dependencies.Text == nil || dependencies.Now == nil || !validRequiredUTCTime(dependencies.Now()) {
 		return ErrInvalidDataSourceToolDependencies
 	}
@@ -275,7 +277,7 @@ func decodePrometheusCall(call BoundToolCall, now time.Time) (PrometheusReadRequ
 		QueryID: arguments.QueryID, Start: now.Add(-window).UTC(), End: now, Step: step,
 		MaxSeries: arguments.SeriesLimit, MaxSamples: call.Ceilings().MaxDataSourceSamples, LimitBytes: call.Ceilings().MaxDataSourceBytes}
 	pointsPerSeries := arguments.WindowSeconds/arguments.StepSeconds + 1
-	if request.Validate() != nil || window > call.Ceilings().MaxDataSourceWindow ||
+	if !prometheusRequestValidBeforeResolution(request) || window > call.Ceilings().MaxDataSourceWindow ||
 		step > call.Ceilings().MaxDataSourceStep || arguments.SeriesLimit > call.Ceilings().MaxDataSourceSeries ||
 		pointsPerSeries < 1 || request.MaxSeries > request.MaxSamples/pointsPerSeries {
 		return PrometheusReadRequest{}, ErrInvalidCanonicalArguments
@@ -306,11 +308,29 @@ func decodeLokiCall(call BoundToolCall, now time.Time) (lokiToolArguments, LokiR
 	pageLines := min(maxLines, 200)
 	request := LokiReadRequest{Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Policy: call.SourcePolicy(), Reference: domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: arguments.Namespace, Name: arguments.PodName},
 		QueryID: arguments.QueryID, Contains: arguments.Contains, Start: now.Add(-window).UTC(), End: now, MaxPages: call.Ceilings().MaxDataSourcePages, PageLines: pageLines, MaxLines: maxLines, LimitBytes: call.Ceilings().MaxDataSourceBytes}
-	if request.Validate() != nil || window > call.Ceilings().MaxDataSourceWindow ||
+	if !lokiRequestValidBeforeResolution(request) || window > call.Ceilings().MaxDataSourceWindow ||
 		arguments.LineLimit > call.Ceilings().MaxDataSourceLines {
 		return lokiToolArguments{}, LokiReadRequest{}, ErrInvalidCanonicalArguments
 	}
 	return arguments, request, nil
+}
+
+func prometheusRequestValidBeforeResolution(request PrometheusReadRequest) bool {
+	if request.Reference.UID != "" || request.Reference.ResourceVersion != "" {
+		return false
+	}
+	request.Reference.UID = "unresolved"
+	request.Reference.ResourceVersion = "unresolved"
+	return request.Validate() == nil
+}
+
+func lokiRequestValidBeforeResolution(request LokiReadRequest) bool {
+	if request.Reference.UID != "" || request.Reference.ResourceVersion != "" {
+		return false
+	}
+	request.Reference.UID = "unresolved"
+	request.Reference.ResourceVersion = "unresolved"
+	return request.Validate() == nil
 }
 
 func authorizeObservation(ctx context.Context, call BoundToolCall, kind domain.DataSourceKind, query domain.ObservabilityQueryID, dependencies DataSourceToolDependencies) domain.SafeErrorClass {
@@ -323,8 +343,6 @@ func authorizeObservation(ctx context.Context, call BoundToolCall, kind domain.D
 		return ""
 	case ObservationPolicyConsentRequired:
 		return domain.SafeErrorClassConsentRequired
-	case ObservationPolicyPermissionRequired:
-		return domain.SafeErrorClassPolicyDenied
 	case ObservationPolicyDenied:
 		return domain.SafeErrorClassPolicyDenied
 	default:
@@ -345,6 +363,55 @@ func dataSourcePreflight(ctx context.Context, call BoundToolCall, kind domain.Da
 	return authorizeObservation(ctx, call, kind, query, dependencies)
 }
 
+func authorizeDataSourceAction(
+	ctx context.Context,
+	call BoundToolCall,
+	reference domain.ResourceRef,
+	parameters domain.ActionObservationParameters,
+	limits domain.ActionLimits,
+	dependencies DataSourceToolDependencies,
+) (domain.ActionEnvelope, domain.ResourceRef, domain.SafeErrorClass) {
+	operation := domain.ActionOperationPrometheusQuery
+	kind := domain.DataSourcePrometheus
+	if parameters.Kind == domain.ActionObservationLoki {
+		operation, kind = domain.ActionOperationLokiQuery, domain.DataSourceLoki
+	}
+	preflight := domain.ObservationActionPreflight{
+		RunID: call.RunID(), SessionID: call.SessionID(), Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(),
+		Operation: operation, SourceKind: kind, OriginHash: domain.ActionDigest(call.SourcePolicy().OriginHash), QueryID: parameters.QueryID,
+	}
+	if err := dependencies.Actions.PrepareObservationAction(ctx, preflight); err != nil {
+		return domain.ActionEnvelope{}, domain.ResourceRef{}, classifyFailure(ctx, err)
+	}
+	targetRequest := ObservationTargetRequest{
+		Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(), Operation: operation,
+		Namespace: reference.Namespace, PodName: reference.Name,
+	}
+	target, err := dependencies.Targets.ResolveObservationTarget(ctx, targetRequest)
+	if err != nil {
+		return domain.ActionEnvelope{}, domain.ResourceRef{}, classifyFailure(ctx, err)
+	}
+	if target.Validate(targetRequest) != nil {
+		return domain.ActionEnvelope{}, domain.ResourceRef{}, domain.SafeErrorClassInvalidExternalResponse
+	}
+	typed := domain.ActionParameters{Kind: domain.ActionParametersObservation, Observation: parameters}
+	plan := domain.ObservationActionPlan{
+		RunID: call.RunID(), SessionID: call.SessionID(), Scope: call.Scope(), PolicyGeneration: call.PolicyGeneration(),
+		Operation:  operation,
+		Target:     domain.ActionTarget{Resource: target.Reference, Fingerprint: string(typed.Digest())},
+		Parameters: typed, Limits: limits, OriginHash: domain.ActionDigest(call.SourcePolicy().OriginHash),
+		ReasonSummary: call.Purpose(),
+	}
+	envelope, err := dependencies.Actions.AuthorizeObservationAction(ctx, plan)
+	if err != nil {
+		return envelope, target.Reference, classifyFailure(ctx, err)
+	}
+	if class := observationEnvelopeCurrent(ctx, call, envelope, dependencies.Now, dependencies.ScopeGuard, dependencies.PolicyGuard); class != "" {
+		return envelope, target.Reference, class
+	}
+	return envelope, target.Reference, ""
+}
+
 func (tool *QueryPrometheusTool) Execute(ctx context.Context, call BoundToolCall) ToolResult {
 	if tool == nil || tool.dependencies.validate() != nil || call.Validate() != nil {
 		return ToolResult{}
@@ -357,27 +424,53 @@ func (tool *QueryPrometheusTool) Execute(ctx context.Context, call BoundToolCall
 	if class := dataSourcePreflight(ctx, call, domain.DataSourcePrometheus, request.QueryID, tool.dependencies); class != "" {
 		return failedResult(call, started, class)
 	}
-	observation, readErr := tool.dependencies.Prometheus.QueryPrometheus(ctx, request)
+	parameters := domain.ActionObservationParameters{
+		Kind: domain.ActionObservationPrometheus, QueryID: request.QueryID,
+		WindowSeconds: int(request.End.Sub(request.Start) / time.Second), StepSeconds: int(request.Step / time.Second),
+		SeriesLimit: request.MaxSeries,
+	}
+	limits := domain.ActionLimits{
+		Timeout: request.Policy.RequestTimeout, MaximumItems: request.MaxSeries,
+		MaximumBytes: request.LimitBytes, MaximumOutput: call.Ceilings().MaxResultBytes,
+	}
+	envelope, target, class := authorizeDataSourceAction(ctx, call, request.Reference, parameters, limits, tool.dependencies)
+	if class != "" {
+		return failAfterObservationAuthority(ctx, call, started, envelope, false, 0, 0, 0, false, class, tool.dependencies.Actions)
+	}
+	request.Reference = target
+	request.End = envelope.RequestedAt
+	request.Start = request.End.Add(-time.Duration(parameters.WindowSeconds) * time.Second)
+	readContext, cancel := context.WithTimeout(ctx, envelope.Intent.Limits.Timeout)
+	defer cancel()
+	observation, readErr := tool.dependencies.Prometheus.QueryPrometheus(readContext, request)
 	completed := tool.dependencies.Now()
 	if !validRequiredUTCTime(completed) || completed.Before(started) {
-		return failedResult(call, started, domain.SafeErrorClassInternal)
+		return failAfterObservationAuthority(readContext, call, started, envelope, true, 0, 0, observation.SourceBytes, observation.Truncated, domain.SafeErrorClassInternal, tool.dependencies.Actions)
 	}
-	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) || !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, completed, domain.SafeErrorClassStaleScope)
-	}
-	if ctx.Err() != nil {
-		return failedResult(call, completed, classifyFailure(ctx, ctx.Err()))
+	if !observationCallCurrent(readContext, call, tool.dependencies.ScopeGuard, tool.dependencies.PolicyGuard) {
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, len(observation.Series), 0, observation.SourceBytes, observation.Truncated, observationCurrentFailure(readContext), tool.dependencies.Actions)
 	}
 	if readErr != nil {
-		return failedResult(call, completed, classifyFailure(ctx, readErr))
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, 0, 0, observation.SourceBytes, observation.Truncated, classifyFailure(readContext, readErr), tool.dependencies.Actions)
 	}
-	if class := dataSourcePostflight(ctx, call, domain.DataSourcePrometheus, request.QueryID, tool.dependencies); class != "" {
-		return failedResult(call, completed, class)
+	if class := dataSourcePostflight(readContext, call, domain.DataSourcePrometheus, request.QueryID, tool.dependencies); class != "" {
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, len(observation.Series), 0, observation.SourceBytes, observation.Truncated, class, tool.dependencies.Actions)
 	}
 	if observation.Validate(request) != nil || observation.End.After(completed) {
-		return failedResult(call, completed, domain.SafeErrorClassInvalidExternalResponse)
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, len(observation.Series), 0, observation.SourceBytes, observation.Truncated, domain.SafeErrorClassInvalidExternalResponse, tool.dependencies.Actions)
 	}
-	return buildPrometheusResult(call, completed, observation, tool.dependencies)
+	result := buildPrometheusResult(call, completed, observation, tool.dependencies)
+	if result.Status == domain.ToolResultStatusDenied || result.Status == domain.ToolResultStatusError {
+		failureClass := domain.SafeErrorClassInternal
+		if result.Error != nil && result.Error.Class.Valid() {
+			failureClass = result.Error.Class
+		}
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, len(observation.Series), 0, observation.SourceBytes, observation.Truncated, failureClass, tool.dependencies.Actions)
+	}
+	if recordObservationSuccess(readContext, envelope, len(observation.Series), 0, observation.SourceBytes, observation.Truncated, tool.dependencies.Actions) != nil {
+		return failedResult(call, completed, domain.SafeErrorClassPersistenceUnavailable)
+	}
+	return result
 }
 
 type safePrometheusSample struct {
@@ -453,27 +546,52 @@ func (tool *QueryLokiTool) Execute(ctx context.Context, call BoundToolCall) Tool
 	if class := dataSourcePreflight(ctx, call, domain.DataSourceLoki, request.QueryID, tool.dependencies); class != "" {
 		return failedResult(call, started, class)
 	}
-	observation, readErr := tool.dependencies.Loki.QueryLoki(ctx, request)
+	parameters := domain.ActionObservationParameters{
+		Kind: domain.ActionObservationLoki, Search: arguments.Contains, QueryID: request.QueryID,
+		WindowSeconds: int(request.End.Sub(request.Start) / time.Second), LineLimit: request.MaxLines,
+	}
+	limits := domain.ActionLimits{
+		Timeout: request.Policy.RequestTimeout, MaximumItems: request.MaxPages, MaximumLines: request.MaxLines,
+		MaximumBytes: request.LimitBytes, MaximumOutput: call.Ceilings().MaxResultBytes,
+	}
+	envelope, target, class := authorizeDataSourceAction(ctx, call, request.Reference, parameters, limits, tool.dependencies)
+	if class != "" {
+		return failAfterObservationAuthority(ctx, call, started, envelope, false, 0, 0, 0, false, class, tool.dependencies.Actions)
+	}
+	request.Reference = target
+	request.End = envelope.RequestedAt
+	request.Start = request.End.Add(-time.Duration(parameters.WindowSeconds) * time.Second)
+	readContext, cancel := context.WithTimeout(ctx, envelope.Intent.Limits.Timeout)
+	defer cancel()
+	observation, readErr := tool.dependencies.Loki.QueryLoki(readContext, request)
 	completed := tool.dependencies.Now()
 	if !validRequiredUTCTime(completed) || completed.Before(started) {
-		return failedResult(call, started, domain.SafeErrorClassInternal)
+		return failAfterObservationAuthority(readContext, call, started, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, domain.SafeErrorClassInternal, tool.dependencies.Actions)
 	}
-	if !tool.dependencies.ScopeGuard.Current(ctx, call.Scope()) || !tool.dependencies.PolicyGuard.CurrentPolicyGeneration(ctx, call.PolicyGeneration()) {
-		return failedResult(call, completed, domain.SafeErrorClassStaleScope)
-	}
-	if ctx.Err() != nil {
-		return failedResult(call, completed, classifyFailure(ctx, ctx.Err()))
+	if !observationCallCurrent(readContext, call, tool.dependencies.ScopeGuard, tool.dependencies.PolicyGuard) {
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, observationCurrentFailure(readContext), tool.dependencies.Actions)
 	}
 	if readErr != nil {
-		return failedResult(call, completed, classifyFailure(ctx, readErr))
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, classifyFailure(readContext, readErr), tool.dependencies.Actions)
 	}
-	if class := dataSourcePostflight(ctx, call, domain.DataSourceLoki, request.QueryID, tool.dependencies); class != "" {
-		return failedResult(call, completed, class)
+	if class := dataSourcePostflight(readContext, call, domain.DataSourceLoki, request.QueryID, tool.dependencies); class != "" {
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, class, tool.dependencies.Actions)
 	}
 	if observation.Validate(request) != nil || observation.End.After(completed) {
-		return failedResult(call, completed, domain.SafeErrorClassInvalidExternalResponse)
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, domain.SafeErrorClassInvalidExternalResponse, tool.dependencies.Actions)
 	}
-	return buildLokiResult(call, completed, arguments, observation, tool.dependencies)
+	result := buildLokiResult(call, completed, arguments, observation, tool.dependencies)
+	if result.Status == domain.ToolResultStatusDenied || result.Status == domain.ToolResultStatusError {
+		failureClass := domain.SafeErrorClassInternal
+		if result.Error != nil && result.Error.Class.Valid() {
+			failureClass = result.Error.Class
+		}
+		return failAfterObservationAuthority(readContext, call, completed, envelope, true, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, failureClass, tool.dependencies.Actions)
+	}
+	if recordObservationSuccess(readContext, envelope, observation.Pages, len(observation.Lines), observation.SourceBytes, observation.Truncated, tool.dependencies.Actions) != nil {
+		return failedResult(call, completed, domain.SafeErrorClassPersistenceUnavailable)
+	}
+	return result
 }
 
 func dataSourcePostflight(ctx context.Context, call BoundToolCall, kind domain.DataSourceKind, query domain.ObservabilityQueryID, dependencies DataSourceToolDependencies) domain.SafeErrorClass {

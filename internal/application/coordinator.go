@@ -938,7 +938,7 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		return coordinator.executeHistoryDeletionCommand(ctx, command)
 	case UICommandExportSession:
 		return coordinator.executeExportSessionCommand(ctx, command)
-	case UICommandApproveAction, UICommandRejectAction, UICommandExpireAction:
+	case UICommandApproveAction, UICommandRejectAction, UICommandCancelAction, UICommandExpireAction:
 		if coordinator.approvals == nil {
 			return UICommandOutcome{}, ErrApprovalUnavailable
 		}
@@ -948,6 +948,8 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 		)
 		if command.Kind == UICommandExpireAction {
 			result, err = coordinator.approvals.ExpireCommand(ctx, command)
+		} else if command.Kind == UICommandCancelAction {
+			result, err = coordinator.approvals.CancelAction(ctx, command)
 		} else {
 			result, err = coordinator.approvals.Decide(ctx, command)
 			if err == nil && command.Kind == UICommandApproveAction && result.State == domain.ApprovalStateApproved {
@@ -990,6 +992,37 @@ func (coordinator *Coordinator) ExecuteUICommand(ctx context.Context, command UI
 	case UICommandShowStatus:
 		status := coordinator.uiStatus()
 		return UICommandOutcome{Command: command.Kind, Status: &status}, nil
+	case UICommandShowPermissions, UICommandChangePermission, UICommandCreateSessionRule:
+		if coordinator.approvals == nil {
+			return UICommandOutcome{}, ErrPermissionUnavailable
+		}
+		beforePermission, _ := coordinator.approvals.Status()
+		changed, ruleCreated := false, false
+		var err error
+		switch command.Kind {
+		case UICommandChangePermission:
+			err = coordinator.approvals.ReconfigurePermission(ctx, command)
+			changed = err == nil
+		case UICommandCreateSessionRule:
+			err = coordinator.approvals.CreateSessionRule(ctx, command)
+			ruleCreated = err == nil
+		}
+		afterPermission, _ := coordinator.approvals.Status()
+		if command.Kind != UICommandShowPermissions && beforePermission.PolicyGeneration.Valid() &&
+			afterPermission.PolicyGeneration.Valid() &&
+			afterPermission.PolicyGeneration != beforePermission.PolicyGeneration {
+			coordinator.cancelRunAfterPermissionChange()
+		}
+		if err != nil {
+			return UICommandOutcome{}, err
+		}
+		status := coordinator.uiStatus()
+		permissions := UIPermissionsResult{
+			RequestID: command.RequestID, Permission: status.Permission,
+			Reviewer: status.ReviewerModel, Action: status.Action,
+			Changed: changed, RuleCreated: ruleCreated,
+		}
+		return UICommandOutcome{Command: command.Kind, RequestID: command.RequestID, Permissions: &permissions}, nil
 	case UICommandShowPrivacy, UICommandAcceptPrivacy, UICommandRejectPrivacy,
 		UICommandRevokePrivacy, UICommandToggleLogs, UICommandCancelPrivacy:
 		return coordinator.executePrivacyCommand(ctx, command)
@@ -1514,11 +1547,7 @@ func (coordinator *Coordinator) uiStatus() UIStatusResult {
 	}
 	if coordinator.approvals != nil {
 		permission, action := coordinator.approvals.Status()
-		result.Permission = UIPermissionStatus{
-			Configured: true, Profile: permission.Profile, PolicyGeneration: permission.PolicyGeneration,
-			Healthy: permission.Healthy, FullAccessAllowed: permission.FullAccessAllowed,
-			HighRiskAcknowledged: permission.HighRiskAcknowledged, SessionRuleCount: len(permission.SessionRules),
-		}
+		result.Permission = projectUIPermissionStatus(permission)
 		result.Action = action
 	}
 	if coordinator.uiScopes != nil {
@@ -1985,7 +2014,7 @@ func (coordinator *Coordinator) StartRun(ctx context.Context, command StartRunCo
 	if !coordinator.runResourcePolicies.CurrentPolicyGeneration(runContext, policyGeneration) {
 		return "", ErrCoordinatorDependency
 	}
-	bridge, err := newEventBridge(runID, scope.Generation, coordinator.uiEvents)
+	bridge, err := newEventBridge(runID, scope.Generation, policyGeneration, coordinator.uiEvents)
 	if err != nil {
 		return "", ErrCoordinatorDependency
 	}
@@ -2435,6 +2464,25 @@ func (coordinator *Coordinator) CancelRun(ctx context.Context, command CancelRun
 		}
 	}
 	return nil
+}
+
+// cancelRunAfterPermissionChange runs only after PermissionManager has
+// advanced policy generation and invalidated dependent reviews, approvals,
+// rules, and actions. The old run observes cancellation through its existing
+// owner and cannot emit current-generation UI authority.
+func (coordinator *Coordinator) cancelRunAfterPermissionChange() {
+	if coordinator == nil {
+		return
+	}
+	coordinator.mu.Lock()
+	var cancel context.CancelFunc
+	if coordinator.active != nil && !coordinator.active.terminal {
+		cancel = coordinator.active.cancel
+	}
+	coordinator.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // SubmitRestartDeploymentProposal delegates the supervised proposal bridge to

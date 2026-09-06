@@ -2,8 +2,8 @@
 
 > [!NOTE]
 > This page documents the historical `0.3.0` archive shape. There is no
-> documented current `v0.4` archive in this repository; build the current
-> candidate from reviewed source unless a separately verified release is
+> documented `v0.5` archive in this repository; build the current unreleased
+> implementation from reviewed source unless a separately verified release is
 > published.
 
 Kupilot release archives target macOS and Linux on `amd64` and `arm64`.

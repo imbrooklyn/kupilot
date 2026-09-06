@@ -261,55 +261,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err != nil {
 		return err
 	}
-	readPolicy := compositionObservationPolicy{privacy: privacyManager, permissions: permissionManager}
-	remoteActionGate, err := application.NewRemoteDiagnosticActionGate(application.RemoteDiagnosticActionGateConfig{
-		Service: approvalService, Persistence: approvalRepository, ResultAudits: auditRepository,
-		Revalidator: runtimeGateway, Scope: scopeManager, Identifiers: identifiers, Permissions: permissionManager,
-		PolicyCatalog: remoteDiagnosticsPolicies, Now: now,
-		PersistenceTimeout: application.DefaultPersistenceTimeout,
-	})
-	if err != nil {
-		return err
-	}
-	toolHandlers, err := tools.NewToolCatalog(tools.ToolCatalogDependencies{
-		Resources: tools.ResourceToolDependencies{
-			Reader: runtimeGateway, QueryReader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
-			EvidenceIDs: identifiers, Text: redactor, Now: now,
-		},
-		Events: tools.EventToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
-			EvidenceIDs: identifiers, Text: redactor, Now: now,
-		},
-		Logs: tools.LogToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
-			EvidenceIDs: identifiers, Text: redactor, Policy: readPolicy, Now: now,
-		},
-		Metrics: tools.MetricToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
-			EvidenceIDs: identifiers, Now: now,
-		},
-		Sources: tools.DataSourceToolDependencies{
-			Prometheus: prometheusReader, Loki: lokiReader, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
-			Policy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
-		},
-		Related: tools.RelatedToolDependencies{
-			Reader: runtimeGateway, ScopeGuard: scopeManager,
-			EvidenceIDs: identifiers, Text: redactor, Now: now,
-		},
-		Remote: &tools.RemoteDiagnosticToolDependencies{
-			Resolver: runtimeGateway, Commands: runtimeGateway, DiagnosticPods: runtimeGateway,
-			ScopeGuard: scopeManager, PolicyGuard: resourceAuthority, Actions: remoteActionGate,
-			OutputPolicy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	modelFactory := &compositionModelFactory{
-		base: loaded.Config, tools: toolHandlers, scope: scopeManager,
-		identifiers: identifiers, now: now, logger: logger,
-	}
+	readPolicy := compositionObservationPolicy{privacy: privacyManager}
 	profileWriterBase := loaded.Config
 	if loaded.SourceVersion == config.LegacyVersion &&
 		profileWriterBase.Models.Agent.MaxOutputTokens == config.LegacyDefaultMaxModelOutputTokens {
@@ -387,6 +339,81 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			}
 		}
 	}
+	deliveryStop := make(chan struct{})
+	uiEventSink := &deliveryUIEventSink{events: make(chan application.UIEvent, 64), stopped: deliveryStop}
+	approvalCoordinator, err := application.NewApprovalCoordinator(application.ApprovalCoordinatorConfig{
+		Service:            approvalService,
+		Persistence:        approvalRepository,
+		ResultAudits:       auditRepository,
+		Scope:              scopeManager,
+		ApprovalIDs:        identifiers,
+		AuditIDs:           identifiers,
+		UIEvents:           uiEventSink,
+		Rollout:            rolloutObserver,
+		RestartRevalidator: restarter,
+		RestartExecutor:    restarter,
+		Remediation:        remediator,
+		LocalProcesses:     localExecutor,
+		RemoteDiagnostics:  runtimeGateway,
+		Observations:       runtimeGateway,
+		ObservationPolicy:  observabilityPolicies,
+		Permissions:        permissionManager,
+		Reviewer:           reviewerBinding,
+		Reviews:            approvalRepository,
+		Now:                now,
+	})
+	if err != nil {
+		return err
+	}
+	remoteActionGate, err := application.NewRemoteDiagnosticActionGate(application.RemoteDiagnosticActionGateConfig{
+		Service: approvalService, Persistence: approvalRepository, ResultAudits: auditRepository,
+		Revalidator: runtimeGateway, Scope: scopeManager, Identifiers: identifiers, Permissions: permissionManager,
+		Supervisor: approvalCoordinator, PolicyCatalog: remoteDiagnosticsPolicies, Now: now,
+		PersistenceTimeout: application.DefaultPersistenceTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	toolHandlers, err := tools.NewToolCatalog(tools.ToolCatalogDependencies{
+		Resources: tools.ResourceToolDependencies{
+			Reader: runtimeGateway, QueryReader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+		Events: tools.EventToolDependencies{
+			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+		Logs: tools.LogToolDependencies{
+			Reader: runtimeGateway, Targets: runtimeGateway, Actions: approvalCoordinator,
+			ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Text: redactor, Policy: readPolicy, Now: now,
+		},
+		Metrics: tools.MetricToolDependencies{
+			Reader: runtimeGateway, ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			EvidenceIDs: identifiers, Now: now,
+		},
+		Sources: tools.DataSourceToolDependencies{
+			Prometheus: prometheusReader, Loki: lokiReader, Targets: runtimeGateway, Actions: approvalCoordinator,
+			ScopeGuard: scopeManager, PolicyGuard: resourceAuthority,
+			Policy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+		Related: tools.RelatedToolDependencies{
+			Reader: runtimeGateway, ScopeGuard: scopeManager,
+			EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+		Remote: &tools.RemoteDiagnosticToolDependencies{
+			Resolver: runtimeGateway, Commands: runtimeGateway, DiagnosticPods: runtimeGateway,
+			ScopeGuard: scopeManager, PolicyGuard: resourceAuthority, Actions: remoteActionGate,
+			OutputPolicy: readPolicy, EvidenceIDs: identifiers, Text: redactor, Now: now,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	modelFactory := &compositionModelFactory{
+		base: loaded.Config, tools: toolHandlers, scope: scopeManager,
+		identifiers: identifiers, now: now, logger: logger,
+	}
 	var initialRuntime application.ModelRuntime
 	if loaded.Models.Agent.Endpoint != "" && loaded.Models.Agent.Model != "" && loaded.Credentials.Agent.Value.IsSet() {
 		setupSecret, secretErr := applicationSecret(&loaded.Credentials.Agent.Value)
@@ -411,29 +438,6 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			initialRuntime.Close()
 		}
 	}()
-	deliveryStop := make(chan struct{})
-	uiEventSink := &deliveryUIEventSink{events: make(chan application.UIEvent, 64), stopped: deliveryStop}
-	approvalCoordinator, err := application.NewApprovalCoordinator(application.ApprovalCoordinatorConfig{
-		Service:            approvalService,
-		Persistence:        approvalRepository,
-		ResultAudits:       auditRepository,
-		Scope:              scopeManager,
-		ApprovalIDs:        identifiers,
-		AuditIDs:           identifiers,
-		UIEvents:           uiEventSink,
-		Rollout:            rolloutObserver,
-		RestartRevalidator: restarter,
-		RestartExecutor:    restarter,
-		Remediation:        remediator,
-		LocalProcesses:     localExecutor,
-		Permissions:        permissionManager,
-		Reviewer:           reviewerBinding,
-		Reviews:            approvalRepository,
-		Now:                now,
-	})
-	if err != nil {
-		return err
-	}
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		Sessions: sessionRepository, Runs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
@@ -493,6 +497,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		ModelConfigured:         initialRuntime != nil,
 		ModelConfiguredSet:      true,
 		PrivacyMode:             domain.PrivacyModeStandard,
+		Permission:              approvalCoordinator.UIPermissionSnapshot(),
 		ScopePreferenceDegraded: scopePreferenceDegraded,
 	})
 	if startResult.Session != nil {
@@ -1171,12 +1176,11 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 }
 
 type compositionObservationPolicy struct {
-	privacy     *application.PrivacyManager
-	permissions *application.PermissionManager
+	privacy *application.PrivacyManager
 }
 
 func (policy compositionObservationPolicy) AuthorizeLogRead(ctx context.Context, request tools.LogPolicyRequest) tools.LogPolicyDecision {
-	if policy.privacy == nil || policy.permissions == nil {
+	if policy.privacy == nil {
 		return tools.LogPolicyDenied
 	}
 	switch policy.privacy.AuthorizeLogs(ctx) {
@@ -1185,33 +1189,7 @@ func (policy compositionObservationPolicy) AuthorizeLogRead(ctx context.Context,
 	case application.PrivacyLogDenied:
 		return tools.LogPolicyDenied
 	}
-	operation := domain.ActionOperationLogsCurrent
-	if request.Previous {
-		operation = domain.ActionOperationLogsPrevious
-	}
-	if request.AllContainers {
-		operation = domain.ActionOperationLogsAllContainers
-	}
-	if request.Search {
-		operation = domain.ActionOperationLogSearch
-	}
-	_, evaluation := policy.permissions.EvaluateCatalog(request.SessionID, application.PermissionEvaluationInput{
-		Operation: operation, Effect: domain.CapabilityEffectSensitiveRead, Risk: domain.RiskReview,
-		CapabilityAdmitted: true, CapabilityEnabled: true,
-	})
-	if evaluation.Generation != request.PolicyGeneration {
-		return tools.LogPolicyDenied
-	}
-	// S03 provides the bounded reader and safety pipeline, but an automatic
-	// permission route is not execution authority. Keep every review-class log
-	// read closed until the Application permission flow supplies and consumes
-	// its exact ActionEnvelope.
-	switch evaluation.Disposition {
-	case domain.ReviewDispositionAutomatic, domain.ReviewDispositionHuman, domain.ReviewDispositionReviewer:
-		return tools.LogPolicyPermissionRequired
-	default:
-		return tools.LogPolicyDenied
-	}
+	return tools.LogPolicyAllowed
 }
 
 func (policy compositionObservationPolicy) AuthorizeRemoteOutput(ctx context.Context, _ tools.RemoteOutputPolicyRequest) tools.LogPolicyDecision {
@@ -1229,7 +1207,7 @@ func (policy compositionObservationPolicy) AuthorizeRemoteOutput(ctx context.Con
 }
 
 func (policy compositionObservationPolicy) AuthorizeObservation(ctx context.Context, request tools.ObservationPolicyRequest) tools.ObservationPolicyDecision {
-	if policy.privacy == nil || policy.permissions == nil {
+	if policy.privacy == nil {
 		return tools.ObservationPolicyDenied
 	}
 	switch policy.privacy.AuthorizeDataSource(ctx, request.Kind, request.OriginHash) {
@@ -1238,25 +1216,7 @@ func (policy compositionObservationPolicy) AuthorizeObservation(ctx context.Cont
 	case application.PrivacyLogDenied:
 		return tools.ObservationPolicyDenied
 	}
-	operation := domain.ActionOperationPrometheusQuery
-	if request.Kind == domain.DataSourceLoki {
-		operation = domain.ActionOperationLokiQuery
-	}
-	_, evaluation := policy.permissions.EvaluateCatalog(request.SessionID, application.PermissionEvaluationInput{
-		Operation: operation, Effect: domain.CapabilityEffectNetworkEgress, Risk: domain.RiskReview,
-		CapabilityAdmitted: true, CapabilityEnabled: true,
-	})
-	if evaluation.Generation != request.PolicyGeneration {
-		return tools.ObservationPolicyDenied
-	}
-	// Optional-source network access follows the same fail-closed boundary as
-	// container output; a profile route cannot replace an ActionEnvelope.
-	switch evaluation.Disposition {
-	case domain.ReviewDispositionAutomatic, domain.ReviewDispositionHuman, domain.ReviewDispositionReviewer:
-		return tools.ObservationPolicyPermissionRequired
-	default:
-		return tools.ObservationPolicyDenied
-	}
+	return tools.ObservationPolicyAllowed
 }
 
 func configuredDataSourceOrigin(source *config.DataSourceConfig) string {

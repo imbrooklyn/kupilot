@@ -3,7 +3,7 @@
 - Status: Accepted target for `v0.5`
 - Date: 2026-09-05
 
-The checked-in SQLite schema is now at forward-only migration 11. It implements
+The checked-in SQLite schema is now at forward-only migration 12. It implements
 the safe Session-summary/coverage record, role-scoped consent, named
 model-request metadata, and minimal generalized ActionEnvelope, approval, and
 Reviewer-decision metadata described here. Migration 8 adds bounded exact API
@@ -21,12 +21,14 @@ streams, archives, file content, Pod bodies, logs, credentials, and action-audit
 command bodies remain prohibited.
 Migration 11 expands only the closed operation and parameter-kind constraints
 for typed remediation, exact local argv, and shell identities; it adds no
-payload column. The supervised restart, additional typed remediation, and
-default-off local-process actions are composed through the shared action
-lifecycle. The remote-diagnostic default `ask` human-delivery route remains
-fail-closed in this slice. No raw argv, shell command, executable or working-
-directory path, child environment, credential value, Kubernetes response, or
-process output is eligible for SQLite, audit, logs, or export.
+payload column. Migration 12 adds only the `observation` parameter-kind value
+to the same closed approval table and adds no column. Pod-log search text,
+data-source query parameters, raw source responses, and container output remain
+represented only by an eligible digest or excluded entirely. Supervised reads,
+remote diagnostics, typed remediation, and default-off local-process actions
+use the shared action lifecycle. No raw argv, shell command, executable or
+working-directory path, child environment, credential value, Kubernetes
+response, or process output is eligible for SQLite, audit, logs, or export.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,

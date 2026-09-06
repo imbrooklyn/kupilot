@@ -31,5 +31,6 @@ The current composition uses fourteen typed bounded diagnostic capabilities and
 admits supervised restart, scale, rollback, controller-owned Pod delete,
 cordon, uncordon, drain, exact local argv, and a separate shell risk class. It
 adds no generic model authority, autonomous remediation, or reusable cross-
-Session approval. Remote-diagnostic human/Reviewer delivery remains fail-closed
-until its separate integration is completed.
+Session approval. Remote diagnostics, review-class Pod logs, and optional
+Prometheus/Loki reads use the same inline approval supervision and keep the
+effectful/source attempt blocked until exact authority is durably consumed.

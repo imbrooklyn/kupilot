@@ -36,21 +36,21 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		model := newPerformanceModel()
 		view := applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventRunStarted, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: 1,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 1,
 		})
 		for index := range deltaCount {
 			view = applyPerformanceEvent(b, &model, application.UIEvent{
 				Kind: application.UIEventTextDelta, RunID: performanceRunID,
-				ScopeGeneration: 7, Sequence: int64(index + 2), Text: delta,
+				ScopeGeneration: 7, PolicyGeneration: 1, Sequence: int64(index + 2), Text: delta,
 			})
 		}
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventTextDelta, RunID: performanceRunID,
-			ScopeGeneration: 8, Sequence: deltaCount + 2, Text: "stale",
+			ScopeGeneration: 8, PolicyGeneration: 1, Sequence: deltaCount + 2, Text: "stale",
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: deltaCount + 2,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 2,
 			ToolStep: &application.ToolStep{
 				InvocationID: performanceInvocationID, Name: domain.ToolNameGetResource,
 				Purpose: "Inspect one bounded synthetic projection.", Status: application.ToolStepRunning,
@@ -58,7 +58,7 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventToolStep, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: deltaCount + 3,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 3,
 			ToolStep: &application.ToolStep{
 				InvocationID: performanceInvocationID, Name: domain.ToolNameGetResource,
 				Purpose: "Inspect one bounded synthetic projection.", Status: application.ToolStepSucceeded,
@@ -67,11 +67,11 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventRunCompleted, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: deltaCount + 4, Text: terminal,
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 4, Text: terminal,
 		})
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventTextDelta, RunID: performanceRunID,
-			ScopeGeneration: 7, Sequence: deltaCount + 5, Text: "late",
+			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 5, Text: "late",
 		})
 		if !model.run.Terminal || model.run.LastSequence != deltaCount+4 || len(model.run.StreamedText) > application.MaxAnswerMarkdownBytes {
 			b.Fatalf("terminal stream state is invalid: sequence=%d bytes=%d", model.run.LastSequence, len(model.run.StreamedText))

@@ -61,13 +61,24 @@ type StartupView struct {
 type RunView struct {
 	RunID               domain.AgentRunID
 	ScopeGeneration     int64
+	PolicyGeneration    domain.PolicyGeneration
 	LastSequence        int64
+	LastActionSequence  int64
 	StartedAt           time.Time
 	Active              bool
 	Terminal            bool
 	PersistenceDegraded bool
 	StreamedText        string
 	Status              string
+}
+
+// actionPresentation binds ordered automatic/Reviewer-only lifecycle events
+// that have no human approval dialog. It is display state, never authority.
+type actionPresentation struct {
+	RequestID      domain.ApprovalID
+	Digest         domain.ApprovalDigest
+	Sequence       int64
+	ExecutionIndex int64
 }
 
 // Config supplies pure initial UI state; it contains no infrastructure client.
@@ -86,6 +97,7 @@ type Config struct {
 	ModelConfiguredSet      bool
 	ScopePreferenceDegraded bool
 	PrivacyMode             domain.PrivacyMode
+	Permission              application.UIPermissionStatus
 	Now                     func() time.Time
 }
 
@@ -116,18 +128,19 @@ type Model struct {
 	privacyMode     domain.PrivacyMode
 	now             func() time.Time
 
-	composer        components.Composer
-	transcript      components.Transcript
-	slashMenu       components.SlashMenu
-	contextPicker   components.ContextPicker
-	namespacePicker components.NamespacePicker
-	resourcePicker  components.ResourcePicker
-	sessionPicker   components.SessionPicker
-	dialog          components.ErrorDialog
-	evidenceDialog  components.EvidenceDetailDialog
-	approvalDialog  components.ApprovalDialog
-	scopeConflict   components.ScopeConflictDialog
-	footer          components.Footer
+	composer         components.Composer
+	transcript       components.Transcript
+	slashMenu        components.SlashMenu
+	contextPicker    components.ContextPicker
+	namespacePicker  components.NamespacePicker
+	resourcePicker   components.ResourcePicker
+	sessionPicker    components.SessionPicker
+	permissionPicker components.PermissionPicker
+	dialog           components.ErrorDialog
+	evidenceDialog   components.EvidenceDetailDialog
+	approvalDialog   components.ApprovalDialog
+	scopeConflict    components.ScopeConflictDialog
+	footer           components.Footer
 
 	activePicker           application.UICompletionKind
 	pendingCompletion      application.UICompletionQuery
@@ -145,6 +158,7 @@ type Model struct {
 	pendingDeleteID        uint64
 	pendingExportID        uint64
 	pendingApprovalID      uint64
+	pendingPermissionID    uint64
 	pendingModelSetupID    uint64
 	modelSetup             *modelSetupState
 	privacyReview          *application.PrivacyReview
@@ -153,6 +167,11 @@ type Model struct {
 	localDeletion          *localDeletionState
 	sessionExport          *sessionExportState
 	pendingApproval        *application.UIApprovalRequest
+	permission             application.UIPermissionStatus
+	permissionReviewer     application.UIModelRoleStatus
+	permissionConfirmation *domain.PermissionProfile
+	reviewerEvent          *application.UIReviewerEvent
+	actionPresentation     *actionPresentation
 	evidenceReferences     []application.UIEvidenceReference
 	pendingEvidence        application.UIEvidenceDetailQuery
 	evidenceGeneration     int64
@@ -197,26 +216,33 @@ func NewModel(config Config) Model {
 	if config.ModelConfiguredSet {
 		modelConfigured = config.ModelConfigured
 	}
+	permission := config.Permission
+	if !permission.Configured || !permission.Profile.Valid() || !permission.PolicyGeneration.Valid() {
+		permission = application.UIPermissionStatus{
+			Configured: true, Profile: domain.PermissionProfileAsk, PolicyGeneration: 1, Healthy: true,
+		}
+	}
 	model := Model{
 		width: width, height: height, theme: theme, focus: FocusComposer,
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
 		modelName:       sanitizeExternalText(config.ModelName, 256),
 		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
 		modelConfigured: modelConfigured,
-		privacyMode:     privacy, now: now,
-		composer:        components.NewComposer(styles.composer, application.MaxQuestionBytes),
-		transcript:      components.NewTranscript(styles.transcript, styles.toolSteps),
-		slashMenu:       components.NewSlashMenu(styles.slashMenu),
-		contextPicker:   components.NewContextPicker(styles.picker),
-		namespacePicker: components.NewNamespacePicker(styles.picker),
-		resourcePicker:  components.NewResourcePicker(styles.picker),
-		sessionPicker:   components.NewSessionPicker(styles.picker),
-		dialog:          components.NewErrorDialog(styles.dialog),
-		evidenceDialog:  components.NewEvidenceDetailDialog(styles.evidence),
-		approvalDialog:  components.NewApprovalDialog(styles.approval),
-		scopeConflict:   components.NewScopeConflictDialog(styles.scopeConflict),
-		footer:          components.NewFooter(styles.footer),
-		styles:          styles, keymap: DefaultKeyMap(), terminalFocused: true,
+		privacyMode:     privacy, permission: permission, now: now,
+		composer:         components.NewComposer(styles.composer, application.MaxQuestionBytes),
+		transcript:       components.NewTranscript(styles.transcript, styles.toolSteps),
+		slashMenu:        components.NewSlashMenu(styles.slashMenu),
+		contextPicker:    components.NewContextPicker(styles.picker),
+		namespacePicker:  components.NewNamespacePicker(styles.picker),
+		resourcePicker:   components.NewResourcePicker(styles.picker),
+		sessionPicker:    components.NewSessionPicker(styles.picker),
+		permissionPicker: components.NewPermissionPicker(styles.picker),
+		dialog:           components.NewErrorDialog(styles.dialog),
+		evidenceDialog:   components.NewEvidenceDetailDialog(styles.evidence),
+		approvalDialog:   components.NewApprovalDialog(styles.approval),
+		scopeConflict:    components.NewScopeConflictDialog(styles.scopeConflict),
+		footer:           components.NewFooter(styles.footer),
+		styles:           styles, keymap: DefaultKeyMap(), terminalFocused: true,
 	}
 	model.configureStartup(config.StartIntent)
 	if config.ScopePreferenceDegraded {
@@ -312,6 +338,7 @@ func (model *Model) applyStyleSet(styles styleSet) {
 	model.namespacePicker.SetStyles(styles.picker)
 	model.resourcePicker.SetStyles(styles.picker)
 	model.sessionPicker.SetStyles(styles.picker)
+	model.permissionPicker.SetStyles(styles.picker)
 	model.dialog.SetStyles(styles.dialog)
 	model.evidenceDialog.SetStyles(styles.evidence)
 	model.approvalDialog.SetStyles(styles.approval)
@@ -351,6 +378,7 @@ func (model *Model) reflow() {
 	model.namespacePicker.SetWidth(contentWidth)
 	model.resourcePicker.SetWidth(contentWidth)
 	model.sessionPicker.SetWidth(contentWidth)
+	model.permissionPicker.SetWidth(contentWidth)
 	footerHeight := 1 + strings.Count(model.footerView(), "\n")
 	workingHeight := 0
 	if model.run.Active && !model.run.Terminal {

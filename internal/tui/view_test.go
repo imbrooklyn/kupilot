@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -47,6 +48,40 @@ func TestViewExposesComposerRealCursorForSystemInputMethods(t *testing.T) {
 	}
 }
 
+func TestApprovalLayoutOwnsWorkingAreaAndRetainsCompactFooter(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_700_000_050_000).UTC()
+	model := newTestModel()
+	model.now = func() time.Time { return now }
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "unsubmitted draft"})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	request := testUIApprovalRequest(t, now, 2)
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
+		Kind: application.UIEventApprovalRequested, RunID: testRunID,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Approval: &request,
+	}})
+	view := model.View()
+	if view.Cursor != nil || lipgloss.Height(view.Content) > model.height {
+		t.Fatalf("approval layout cursor/height = %#v/%d, terminal height %d", view.Cursor, lipgloss.Height(view.Content), model.height)
+	}
+	for _, want := range []string{"Action approval", "Context test-context", "Namespace test-namespace", "approval pending"} {
+		if !strings.Contains(view.Content, want) {
+			t.Fatalf("approval layout missing %q:\n%s", want, view.Content)
+		}
+	}
+	for _, hidden := range []string{"Working", "unsubmitted draft", "Ask a question, or type / for commands"} {
+		if strings.Contains(view.Content, hidden) {
+			t.Fatalf("approval layout leaked background %q:\n%s", hidden, view.Content)
+		}
+	}
+	for row, line := range strings.Split(view.Content, "\n") {
+		if width := lipgloss.Width(line); width >= model.width {
+			t.Fatalf("approval row %d width = %d, terminal width %d: %q", row, width, model.width, line)
+		}
+	}
+}
+
 func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
 	t.Parallel()
 
@@ -69,7 +104,7 @@ func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
 			for sequence := int64(2); sequence <= 18; sequence++ {
 				model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 					Kind: application.UIEventTextDelta, RunID: testRunID,
-					ScopeGeneration: 7, Sequence: sequence,
+					ScopeGeneration: 7, PolicyGeneration: 1, Sequence: sequence,
 					Text: "A bounded streaming paragraph grows while the composer stays visible. ",
 				}})
 				assertCursorOnComposer(t, model, "streaming answer")
@@ -77,7 +112,7 @@ func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
 
 			model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 				Kind: application.UIEventRunCompleted, RunID: testRunID,
-				ScopeGeneration: 7, Sequence: 19,
+				ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 19,
 				Text: "The scheduling path is healthy.",
 			}})
 			assertCursorOnComposer(t, model, "completed answer")
@@ -174,7 +209,7 @@ func TestWorkingLayoutKeepsNewestTurnVisibleAndFollowsCompletion(t *testing.T) {
 	answer := strings.Repeat("Diagnostic detail.\n", 8) + "Final visible answer."
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: answer,
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: answer,
 	}})
 	if view := model.transcript.View(); !strings.Contains(view, "Final visible answer.") {
 		t.Fatalf("completed turn did not remain attached to the live bottom: %q", view)
@@ -270,7 +305,7 @@ func TestViewNoColorSemanticGolden(t *testing.T) {
 <timing> Worked for <1s
 <composer> › /r
 <candidate> /resource
-<footer> Context test-context · Namespace test-namespace · supervised`)
+<footer> Context test-context · Namespace test-namespace · ask · human`)
 	if got != want {
 		t.Fatalf("semantic golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -310,7 +345,7 @@ func TestSemanticPaletteModesKeepMeaningIndependentOfColor(t *testing.T) {
 	if SemanticPaletteFor(ThemeNoColor, true).ColorEnabled {
 		t.Fatal("no-color palette reports color enabled")
 	}
-	if !strings.Contains(newTestModel().View().Content, "supervised") {
+	if !strings.Contains(newTestModel().View().Content, "ask · human") {
 		t.Fatal("supervision state depends on color")
 	}
 }
@@ -328,7 +363,7 @@ func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview
 	}
 	terminalEvent := application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, Sequence: 2, Text: "Three Nodes are Ready.",
+		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Three Nodes are Ready.",
 	}
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
 	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
@@ -367,17 +402,17 @@ func populatedViewModel(t *testing.T) Model {
 	_ = commandFromCmd(t, cmd)
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, Sequence: 2, Text: "Inspecting.",
+		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Inspecting.",
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, Sequence: 3,
+		Kind: application.UIEventToolStep, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
 		ToolStep: &application.ToolStep{
 			InvocationID: testInvocationID, Name: domain.ToolNameGetResource,
 			Purpose: "Inspect the selected Pod.", Status: application.ToolStepSucceeded, EvidenceCount: 2,
 		},
 	}})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, Sequence: 4, Text: "Final diagnosis.",
+		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "Final diagnosis.",
 	}})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/r"})
 	model.transcript.PageUp()
@@ -426,7 +461,7 @@ func semanticViewSnapshot(content string) string {
 		case strings.HasPrefix(trimmed, "› /resource"):
 			snapshot = append(snapshot, "<candidate> /resource")
 		case strings.Contains(trimmed, "Context test-context"):
-			snapshot = append(snapshot, "<footer> Context test-context · Namespace test-namespace · supervised")
+			snapshot = append(snapshot, "<footer> Context test-context · Namespace test-namespace · ask · human")
 		}
 	}
 	return strings.Join(snapshot, "\n")

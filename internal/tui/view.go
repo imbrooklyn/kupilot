@@ -45,6 +45,9 @@ func (model Model) render() string {
 func (model Model) renderLayout() (content string, composerY int, composerVisible bool) {
 	gap := model.layoutGap()
 	contentWidth := model.contentWidth()
+	if model.approvalDialog.Open() {
+		return model.renderApprovalLayout(contentWidth, gap), 0, false
+	}
 	topSections := make([]string, 0, 2)
 	if transcript := model.transcript.View(); transcript != "" {
 		topSections = append(topSections, constrainLayoutWidth(transcript, contentWidth))
@@ -91,8 +94,6 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 
 	overlay := ""
 	switch {
-	case model.approvalDialog.Open():
-		overlay = model.approvalDialog.View(model.width)
 	case model.scopeConflict.Open():
 		overlay = model.scopeConflict.View(model.width)
 	case model.evidenceDialog.Open():
@@ -110,6 +111,37 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	baseLayer := lipgloss.NewLayer(main).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
+}
+
+// renderApprovalLayout gives the exact action review the whole working area.
+// The transcript, Working row, and composer stay hidden so they cannot appear
+// through the margins of a tall modal; the compact supervision footer remains
+// visible beneath it.
+func (model Model) renderApprovalLayout(contentWidth, gap int) string {
+	footer := constrainLayoutWidth(model.footerView(), contentWidth)
+	footerHeight := lipgloss.Height(footer)
+	footerGap := 0
+	if footer != "" && model.height-footerHeight > 8 {
+		footerGap = gap
+	}
+	approvalWidth, approvalHeight := model.approvalReviewSize()
+	approval := model.approvalDialog.View(approvalWidth, approvalHeight)
+	content := lipgloss.Place(contentWidth, approvalHeight, lipgloss.Center, lipgloss.Center, approval)
+	if footer != "" {
+		content += strings.Repeat("\n", footerGap+1) + footer
+	}
+	return content
+}
+
+func (model Model) approvalReviewSize() (int, int) {
+	contentWidth := model.contentWidth()
+	footer := constrainLayoutWidth(model.footerView(), contentWidth)
+	footerHeight := lipgloss.Height(footer)
+	footerGap := 0
+	if footer != "" && model.height-footerHeight > 8 {
+		footerGap = model.layoutGap()
+	}
+	return contentWidth, max(1, model.height-footerHeight-footerGap)
 }
 
 func constrainLayoutWidth(content string, width int) string {
@@ -157,6 +189,11 @@ func (model Model) inputLabelView() string {
 		hint = "absolute .md path"
 	case model.pickerOpen():
 		hint = "type to filter"
+		if model.permissionPicker.Open() {
+			label = "Permissions"
+			hint = "boundary · reviewer · risk"
+			break
+		}
 		switch model.activePicker {
 		case application.UICompletionContext:
 			label = "Context"
@@ -252,9 +289,35 @@ func (model Model) footerView() string {
 			approvalStatus = "approval in progress"
 		}
 	}
+	if model.reviewerEvent != nil && approvalStatus == "" {
+		approvalStatus = "Reviewer · " + reviewerStateLabel(model.reviewerEvent.Status.State)
+	}
+	permission, supervision := string(model.permission.Profile), permissionSupervision(model.permission.Profile)
+	if !model.permission.Healthy {
+		permission = "permission degraded"
+		supervision = "no authority"
+	}
 	return model.footer.View(model.contentWidth(), components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
+		Permission: permission, Supervision: supervision,
 		Approval: approvalStatus,
 	})
+}
+
+func permissionSupervision(profile domain.PermissionProfile) string {
+	switch profile {
+	case domain.PermissionProfileReadOnly:
+		return "safe reads only"
+	case domain.PermissionProfileAsk:
+		return "human"
+	case domain.PermissionProfileAutoReview:
+		return "Reviewer"
+	case domain.PermissionProfileFullAccess:
+		return "auto high-risk"
+	case domain.PermissionProfileCustom:
+		return "exact routes"
+	default:
+		return "unavailable"
+	}
 }

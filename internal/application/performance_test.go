@@ -30,7 +30,7 @@ func BenchmarkStreamDeltaMergeV1(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		events := make([]UIEvent, 0, deltaCount+2)
-		bridge, err := newEventBridge(streamBenchmarkRunID, 7, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
+		bridge, err := newEventBridge(streamBenchmarkRunID, 7, 1, UIEventSinkFunc(func(_ context.Context, event UIEvent) error {
 			events = append(events, event)
 			return nil
 		}))

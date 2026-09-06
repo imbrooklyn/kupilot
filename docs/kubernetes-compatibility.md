@@ -8,8 +8,9 @@ reviewed built-ins, safe Secret metadata, exact policy-admitted CRD reads,
 typed queries, runtime-owned pagination, normalized Events, bounded Pod logs,
 and typed Pod/Node Metrics API snapshots. Optional Prometheus and Loki clients
 are separate non-Kubernetes adapters. It also implements the default-off exact
-Pod Exec, container-file, and diagnostic-Pod handlers. Their default `ask`
-human-delivery route remains fail-closed. Typed scale, rollback, controller-
+Pod Exec, container-file, and diagnostic-Pod handlers. Their human and Reviewer
+routes use the shared inline supervision flow and release no remote attempt
+until exact authority is durably consumed. Typed scale, rollback, controller-
 owned Pod delete, cordon, uncordon, and drain are implemented behind the shared
 action dispatcher. The exact local runner is a separate non-Kubernetes adapter
 and never serves as a fallback for these typed operations. Deterministic tests
@@ -209,12 +210,15 @@ work and are not reachable in this slice.
 - EndpointSlice contributes only address-free ready/not-ready counts through
   the fixed Service relationship.
 
-## Implemented `v0.4` supervised Deployment restart
+## Implemented supervised Kubernetes actions
 
-The sole mutation adapter supports one exact `apps/v1` Deployment. Proposal
+The restart adapter supports one exact `apps/v1` Deployment. Proposal
 preparation and post-approval revalidation use exact GETs. Execution uses one
 merge PATCH with a fresh resource-version precondition and changes only the
-Kupilot-owned Pod-template restart annotation.
+Kupilot-owned Pod-template restart annotation. Separate typed adapters also
+implement bounded scale, rollback, one controller-owned ordinary Pod delete,
+cordon, uncordon, and drain. Each binds its exact semantic plan and receives no
+generic patch/apply/delete authority.
 
 The model cannot supply the patch, annotation, timestamp, UID, resource
 version, template fingerprint, generation, or concurrency precondition. No
