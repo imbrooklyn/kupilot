@@ -526,7 +526,7 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 16, Height: 7, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
@@ -550,7 +550,7 @@ func TestFocusResizeAndSmallTerminalPreserveKeyboardSafety(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 20, Height: 8, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	model, _ = updateModel(t, model, tea.BlurMsg{})
 	if model.FocusedEditorCount() != 0 {

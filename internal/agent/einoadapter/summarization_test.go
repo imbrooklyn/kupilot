@@ -77,9 +77,9 @@ func TestEinoSummarizationMessageThresholdAndRecentTail(t *testing.T) {
 				message := mainInput[index+2]
 				wantContent := turn.Content
 				if turn.Role == domain.MessageRoleAssistant {
-					encoded, encodeErr := historicalAssistantContent(turn.Content)
+					encoded, encodeErr := agent.EncodeHistoricalAssistantResponse(turn.Content)
 					if encodeErr != nil {
-						t.Fatalf("historicalAssistantContent() error = %v", encodeErr)
+						t.Fatalf("EncodeHistoricalAssistantResponse() error = %v", encodeErr)
 					}
 					wantContent = encoded
 				}

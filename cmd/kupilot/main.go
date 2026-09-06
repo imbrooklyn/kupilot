@@ -476,14 +476,12 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 	initialScope := tui.ScopeView{}
-	scopePreferenceDegraded := startResult.ScopePreferenceDegraded
-	if shouldActivateInitialScope(startIntent) && startResult.ScopeCandidate != nil {
-		var activationDegraded bool
-		initialScope, activationDegraded, err = activateInitialScope(ctx, coordinator, *startResult.ScopeCandidate)
-		if err != nil {
-			return err
+	if startResult.Scope != nil {
+		initialScope = tui.ScopeView{
+			Context: startResult.Scope.Context, Namespace: startResult.Scope.Namespace,
+			Generation: startResult.Scope.Generation, ReadOnly: startResult.Scope.ReadOnly,
+			Verified: true,
 		}
-		scopePreferenceDegraded = scopePreferenceDegraded || activationDegraded
 	} else if startResult.ScopeCandidate != nil {
 		initialScope.Context = startResult.ScopeCandidate.Context
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
@@ -498,7 +496,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		ModelConfiguredSet:      true,
 		PrivacyMode:             domain.PrivacyModeStandard,
 		Permission:              approvalCoordinator.UIPermissionSnapshot(),
-		ScopePreferenceDegraded: scopePreferenceDegraded,
+		ScopePreferenceDegraded: startResult.ScopePreferenceDegraded,
 	})
 	if startResult.Session != nil {
 		updated, _ := model.Update(tui.CommandResultMsg{Result: application.UICommandOutcome{
@@ -728,35 +726,6 @@ func applicationStartIntent(intent cli.StartIntent) (application.UIStartIntent, 
 	default:
 		return application.UIStartIntent{}, application.ErrInvalidUIStartIntent
 	}
-}
-
-func shouldActivateInitialScope(intent application.UIStartIntent) bool {
-	return intent.Kind == application.UIStartNew || intent.ExplicitScope
-}
-
-func activateInitialScope(
-	ctx context.Context,
-	coordinator *application.Coordinator,
-	candidate domain.ScopeCandidate,
-) (tui.ScopeView, bool, error) {
-	contextOutcome, err := coordinator.ExecuteUICommand(ctx, application.UICommand{
-		Kind: application.UICommandActivateScope, RequestID: 1, Scope: &candidate,
-	})
-	if err != nil || contextOutcome.Scope == nil || contextOutcome.Scope.Failure != "" {
-		return tui.ScopeView{}, false, initialScopeError{}
-	}
-	result := contextOutcome.Scope
-	return tui.ScopeView{
-		Context: result.Context, Namespace: result.Namespace,
-		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
-	}, result.ScopePreferenceDegraded, nil
-}
-
-type initialScopeError struct{}
-
-func (initialScopeError) Error() string { return "initial Kubernetes scope unavailable" }
-func (initialScopeError) SafeMessage() string {
-	return "The Kubernetes scope could not be verified safely."
 }
 
 type deliveryUIEventSink struct {

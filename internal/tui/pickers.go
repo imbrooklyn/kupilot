@@ -277,61 +277,6 @@ func (model *Model) acceptCompletionResult(result application.UICompletionResult
 	}
 }
 
-func (model *Model) acceptResumeResult(result application.UIResumeResult) {
-	if result.Validate() != nil || model.pendingResume.RequestID == 0 ||
-		result.RequestID != model.pendingResume.RequestID || result.Mode != model.pendingResume.Mode ||
-		result.Mode == application.UIResumeExact && result.Session != nil && result.Session.Session.ID != model.pendingResume.SessionID {
-		return
-	}
-	model.pendingResume = application.UIResumeRequest{}
-	if result.Failure != "" {
-		model.startup.Failed = true
-		model.showDialog("Resume unavailable", resumeFailureText(result.Failure))
-		return
-	}
-	resumed := sanitizedResumedSession(*result.Session)
-	model.pendingResumed = &resumed
-	if resumed.SavedScope != nil && (resumed.SavedScope.Context != model.scope.Context || resumed.SavedScope.Namespace != model.scope.Namespace) {
-		model.scopeConflict.Show(scopeLabel(model.scope.Context, model.scope.Namespace), scopeLabel(resumed.SavedScope.Context, resumed.SavedScope.Namespace))
-		model.composer.Blur()
-		model.focus = FocusModal
-		return
-	}
-	model.applyResumedSession(resumed)
-}
-
-func (model *Model) acceptScopeResult(result application.UIScopeResult) {
-	if result.Validate() != nil || model.pendingScopeID == 0 || result.RequestID != model.pendingScopeID ||
-		result.ExpectedGeneration != model.scope.Generation {
-		return
-	}
-	model.pendingScopeID = 0
-	model.scope.Switching = false
-	if model.run.Active {
-		const cancellation = "The diagnostic run was cancelled because the scope changed."
-		model.run.Active = false
-		model.run.Terminal = true
-		model.run.Status = "cancelled"
-		model.run.StreamedText = cancellation
-		model.transcript.FinishAgent(cancellation)
-	}
-	model.resource = ResourceView{}
-	model.pendingResourceID = 0
-	model.pendingResource = ResourceView{}
-	model.closePickers()
-	if result.Failure != "" {
-		model.scope = ScopeView{Generation: result.ScopeGeneration}
-		model.showDialog("Scope unavailable", scopeFailureText(result.Failure))
-		return
-	}
-	model.scope = ScopeView{
-		Context:    sanitizeExternalText(result.Context, 253),
-		Namespace:  sanitizeExternalText(result.Namespace, 63),
-		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
-	}
-	model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")
-}
-
 func (model *Model) acceptResourceSelectionResult(result application.UIResourceSelectionResult) {
 	if result.Validate() != nil || model.pendingResourceID == 0 || result.RequestID != model.pendingResourceID ||
 		result.ScopeGeneration != model.scope.Generation {

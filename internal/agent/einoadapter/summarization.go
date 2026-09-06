@@ -162,7 +162,7 @@ func matchesInitialContext(original []*schema.Message, conversation agent.Conver
 		content := turn.Content
 		if turn.Role == domain.MessageRoleAssistant {
 			var err error
-			content, err = historicalAssistantContent(turn.Content)
+			content, err = agent.EncodeHistoricalAssistantResponse(turn.Content)
 			if err != nil {
 				return false
 			}

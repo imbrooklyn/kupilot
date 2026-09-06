@@ -33,7 +33,7 @@ func TestStartIntentsProduceOnlyTheirTypedStartupAction(t *testing.T) {
 			t.Parallel()
 			model := NewModel(Config{
 				Width: 80, Height: 24, Theme: ThemeNoColor, StartIntent: tt.intent,
-				Scope: ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+				Scope: ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true, Verified: true},
 			})
 			cmd := model.Init()
 			if model.startup.Ready != tt.wantReady {
@@ -87,7 +87,7 @@ func TestDirectResumeStartIntentsReachReadyOnlyAfterMatchingFakeResult(t *testin
 			t.Parallel()
 			model := NewModel(Config{
 				Width: 80, Height: 24, Theme: ThemeNoColor, StartIntent: tt.intent,
-				Scope: ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+				Scope: ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true, Verified: true},
 			})
 			request := resumeRequestFromCmd(t, model.Init())
 			if request.Mode != tt.wantMode || model.startup.Ready {
@@ -133,7 +133,7 @@ func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
 			Kind: application.UIStartResumeID, SessionID: testSessionID, ExplicitScope: true,
 			ConfiguredContext: "explicit-context",
 		},
-		Scope: ScopeView{Context: "explicit-context", Namespace: "explicit-namespace", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "explicit-context", Namespace: "explicit-namespace", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	request := resumeRequestFromCmd(t, model.Init())
 	resumed := application.UIResumedSession{
@@ -207,6 +207,36 @@ func TestTopLevelResumeFreshlyActivatesUnverifiedStartupScopeBeforeAcceptance(t 
 	if activation.Kind != application.UICommandActivateScope || activation.Scope == nil ||
 		activation.Scope.Context != "current-context" || activation.Scope.Namespace != "default" {
 		t.Fatalf("keep-current activation = %#v", activation)
+	}
+}
+
+func TestResumeDecisionUsesExplicitScopeVerificationState(t *testing.T) {
+	t.Parallel()
+
+	resumed := application.UIResumedSession{ResumeRequestID: 17}
+	unverified := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		Scope: ScopeView{
+			Context: "current-context", Namespace: "default", Generation: 9, ReadOnly: true,
+		},
+	})
+	command := unverified.resumeDecisionCommand(resumed, false)
+	if command.Kind != application.UICommandActivateScope || command.Scope == nil ||
+		command.ExpectedScopeGeneration != 9 || command.Scope.Context != "current-context" ||
+		command.Scope.Namespace != "default" {
+		t.Fatalf("unverified scope decision = %#v", command)
+	}
+
+	verified := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		Scope: ScopeView{
+			Context: "current-context", Namespace: "default", Generation: 9, ReadOnly: true, Verified: true,
+		},
+	})
+	command = verified.resumeDecisionCommand(resumed, false)
+	if command.Kind != application.UICommandAcceptResume || command.Scope != nil ||
+		command.ExpectedScopeGeneration != 9 {
+		t.Fatalf("verified scope decision = %#v", command)
 	}
 }
 

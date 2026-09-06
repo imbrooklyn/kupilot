@@ -65,10 +65,25 @@ func (state UISessionState) validate() bool {
 		(state.PrivacyMode == domain.PrivacyModeStandard || state.PrivacyMode == domain.PrivacyModeMinimal)
 }
 
+// UIStartupScope is a verified process-local scope projection. A startup
+// candidate is kept separate because it carries no Kubernetes authority.
+type UIStartupScope struct {
+	Context    string
+	Namespace  string
+	Generation int64
+	ReadOnly   bool
+}
+
+func (scope UIStartupScope) validate() bool {
+	candidate := domain.ScopeCandidate{Context: scope.Context, Namespace: scope.Namespace}
+	return candidate.Validate() == nil && scope.Generation > 0 && scope.ReadOnly
+}
+
 // UIStartResult is the side-effect result of one fixed CLI start intent.
 type UIStartResult struct {
 	Intent                  UIStartIntent
 	Session                 *UISessionState
+	Scope                   *UIStartupScope
 	ScopeCandidate          *domain.ScopeCandidate
 	ScopePreferenceDegraded bool
 }
@@ -87,6 +102,17 @@ func (result UIStartResult) Validate() error {
 		return ErrInvalidUIQueryResult
 	}
 	if result.ScopeCandidate != nil && result.ScopeCandidate.Validate() != nil {
+		return ErrInvalidUIQueryResult
+	}
+	if result.Scope != nil && !result.Scope.validate() {
+		return ErrInvalidUIQueryResult
+	}
+	if result.Scope != nil && result.ScopeCandidate != nil {
+		return ErrInvalidUIQueryResult
+	}
+	activatesStartupScope := result.Intent.Kind == UIStartNew || result.Intent.ExplicitScope
+	if result.Scope != nil && !activatesStartupScope || result.ScopeCandidate != nil && activatesStartupScope ||
+		result.Intent.ExplicitScope && result.Scope == nil {
 		return ErrInvalidUIQueryResult
 	}
 	return nil

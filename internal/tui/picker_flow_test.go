@@ -97,7 +97,7 @@ func TestResumePickerCancellationDiffersByOrigin(t *testing.T) {
 	topLevel := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		StartIntent: application.UIStartIntent{Kind: application.UIStartResumePicker},
-		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	topLevel, cmd := updateModel(t, topLevel, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !commandQuits(cmd) || topLevel.startup.Ready {
@@ -175,7 +175,7 @@ func TestTopLevelResumePickerDeletionNeverFallsBackToANewSession(t *testing.T) {
 	model := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		StartIntent: application.UIStartIntent{Kind: application.UIStartResumePicker},
-		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	query := completionQueryFromCmd(t, model.Init())
 	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
@@ -304,7 +304,7 @@ func TestScopePreferenceFailuresRemainVisibleWithoutRevokingScope(t *testing.T) 
 
 	startup := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope:                   ScopeView{Context: "current", Namespace: "default", Generation: 1, ReadOnly: true},
+		Scope:                   ScopeView{Context: "current", Namespace: "default", Generation: 1, ReadOnly: true, Verified: true},
 		ScopePreferenceDegraded: true,
 	})
 	entries := startup.transcript.Entries()

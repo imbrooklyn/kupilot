@@ -54,7 +54,7 @@ func TestApplicationTextAndScopeAreSanitizedBeforeRenderState(t *testing.T) {
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		Scope: ScopeView{
 			Context: "test\x1b]52;c;ignored\x07-context", Namespace: "test\u202e-namespace",
-			Generation: 7, ReadOnly: true,
+			Generation: 7, ReadOnly: true, Verified: true,
 		},
 	})
 	if model.scope.Context != "test-context" || model.scope.Namespace != "test-namespace" {

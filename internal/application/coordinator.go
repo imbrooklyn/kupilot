@@ -194,8 +194,7 @@ type pendingResume struct {
 }
 
 type startupResumeState struct {
-	intent           UIStartIntent
-	currentCandidate *domain.ScopeCandidate
+	intent UIStartIntent
 }
 
 type privacyChallenge struct {
@@ -346,9 +345,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	}, nil
 }
 
-// StartUI performs mandatory startup maintenance and applies exactly one fixed
-// Session start intent. Resume intents remain queries until delivery emits the
-// corresponding explicit request.
+// StartUI performs mandatory startup maintenance, activates a new or explicitly
+// selected startup scope, and applies exactly one fixed Session start intent.
+// Session history remains behind a later explicit resume request.
 func (coordinator *Coordinator) StartUI(
 	ctx context.Context,
 	intent UIStartIntent,
@@ -362,16 +361,29 @@ func (coordinator *Coordinator) StartUI(
 		return UIStartResult{}, err
 	}
 	result := UIStartResult{Intent: intent}
-	var currentCandidate *domain.ScopeCandidate
 	if coordinator.uiScopes != nil {
 		candidate, preferenceDegraded, resolveErr := coordinator.resolveStartupScopeCandidate(ctx, intent)
 		result.ScopePreferenceDegraded = preferenceDegraded
-		if preferenceDegraded {
-			coordinator.setScopePreferenceDegraded(true)
-		}
 		if resolveErr == nil {
-			currentCandidate = &candidate
-			result.ScopeCandidate = cloneScopeCandidate(currentCandidate)
+			if intent.Kind == UIStartNew || intent.ExplicitScope {
+				view := coordinator.uiScopes.View()
+				scope, activateErr := coordinator.activateExactScope(ctx, candidate, view.Generation)
+				if activateErr != nil {
+					if contextErr := ctx.Err(); contextErr != nil {
+						return UIStartResult{}, contextErr
+					}
+					return UIStartResult{}, ErrScopeUnavailable
+				}
+				result.Scope = &UIStartupScope{
+					Context: scope.Context, Namespace: scope.Namespace,
+					Generation: scope.Generation, ReadOnly: true,
+				}
+				if coordinator.saveScopePreference(ctx, scope.Context) != nil {
+					result.ScopePreferenceDegraded = true
+				}
+			} else {
+				result.ScopeCandidate = cloneScopeCandidate(&candidate)
+			}
 		} else if contextErr := ctx.Err(); contextErr != nil {
 			return UIStartResult{}, contextErr
 		} else if intent.ConfiguredContext != "" ||
@@ -380,11 +392,10 @@ func (coordinator *Coordinator) StartUI(
 			return UIStartResult{}, ErrScopeUnavailable
 		}
 	}
+	coordinator.setScopePreferenceDegraded(result.ScopePreferenceDegraded)
 	coordinator.mu.Lock()
 	if intent.Kind == UIStartResumePicker || intent.Kind == UIStartResumeID || intent.Kind == UIStartResumeLast {
-		coordinator.startupResume = &startupResumeState{
-			intent: intent, currentCandidate: cloneScopeCandidate(currentCandidate),
-		}
+		coordinator.startupResume = &startupResumeState{intent: intent}
 	} else {
 		coordinator.startupResume = nil
 	}

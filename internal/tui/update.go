@@ -772,7 +772,7 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 		model.showDialog("Model required", "Configure the model endpoint, model identifier, and API key before sending a question.")
 		return model, nil
 	}
-	if model.scope.Generation < 1 || !model.scope.ReadOnly {
+	if !model.scope.Verified || model.scope.Generation < 1 || !model.scope.ReadOnly {
 		model.showDialog("Scope required", "Select and verify one Context and Namespace before sending a question.")
 		return model, nil
 	}
@@ -1241,7 +1241,7 @@ func (model Model) resumeDecisionCommand(
 	if useSaved && resumed.SavedScope != nil {
 		scope := *resumed.SavedScope
 		target = &scope
-	} else if model.scope.Generation == 0 {
+	} else if !model.scope.Verified {
 		scope := domain.ScopeCandidate{Context: model.scope.Context, Namespace: model.scope.Namespace}
 		if scope.Validate() == nil {
 			target = &scope
@@ -1307,11 +1307,11 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.scope.Switching = false
 		if result.Scope.Failure != "" {
 			model.scope = ScopeView{Generation: result.Scope.ScopeGeneration}
-			model.showDialog("Scope required", "The Session was resumed without restoring historic Kubernetes authority. Activate a current scope before asking a question.")
+			model.showDialog("Scope required", "The Session resumed, but no current Kubernetes scope could be verified. Select one before asking a question.")
 		} else {
 			model.scope = ScopeView{
 				Context: sanitizeExternalText(result.Scope.Context, 253), Namespace: sanitizeExternalText(result.Scope.Namespace, 63),
-				Generation: result.Scope.ScopeGeneration, ReadOnly: result.Scope.ReadOnly,
+				Generation: result.Scope.ScopeGeneration, ReadOnly: result.Scope.ReadOnly, Verified: true,
 			}
 		}
 	case application.UICommandSelectContext, application.UICommandSelectNamespace, application.UICommandActivateScope:
@@ -1326,7 +1326,11 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.resumeOrigin = resumeOriginNone
 		model.startup.Ready = true
 		model.resetTranscript()
-		model.transcript.AppendNotice("A new Session was started. The verified scope remains active; no model request was sent.")
+		if model.scope.Verified {
+			model.transcript.AppendNotice("A new Session was started. The verified scope remains active; no model request was sent.")
+		} else {
+			model.transcript.AppendNotice("A new Session was started without a verified Kubernetes scope. Select one before asking a question; no model request was sent.")
+		}
 	case application.UICommandRenameSession:
 		if result.Failure != "" {
 			model.showDialog("Rename unavailable", "The current Session title could not be updated safely.")
@@ -1918,7 +1922,7 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	}
 	model.scope = ScopeView{
 		Context: sanitizeExternalText(result.Context, 253), Namespace: sanitizeExternalText(result.Namespace, 63),
-		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly,
+		Generation: result.ScopeGeneration, ReadOnly: result.ReadOnly, Verified: true,
 	}
 	if changed {
 		model.transcript.AppendNotice("Scope changed. The selected Resource and stale picker results were cleared.")

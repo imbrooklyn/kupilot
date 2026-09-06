@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
@@ -341,6 +342,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		if len(findingRequests) != 4 {
 			t.Fatalf("model requests after sanitized run = %d, want 4", len(findingRequests))
 		}
+		assertHistoricalResponseProtocol(t, findingRequests[2], "Re-check the selected Pod.")
 		if encoded := fmt.Sprintf("%#v", findingRequests); strings.Contains(encoded, toolPurposeCanary) ||
 			strings.Contains(encoded, diagnosisCanary) || !strings.Contains(encoded, "[REDACTED]") {
 			t.Fatalf("model requests did not contain only the sanitized derivatives: %#v", findingRequests)
@@ -576,6 +578,31 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	}
 }
 
+func assertHistoricalResponseProtocol(t *testing.T, request integrationModelRequest, currentQuestion string) {
+	t.Helper()
+
+	assistantCount := 0
+	questionCount := 0
+	for _, message := range request.Messages {
+		if message.Role == "assistant" && message.Content != "" {
+			assistantCount++
+			draft, err := agent.DecodeDiagnosticResponse(message.Content)
+			if err != nil || draft.AnswerMarkdown == "" || len(draft.ConfirmedFacts) != 0 ||
+				len(draft.RecommendedActions) != 0 {
+				t.Fatalf("historic assistant response = %#v, error = %v", draft, err)
+			}
+		}
+		if message.Role == "user" && message.Content == currentQuestion {
+			questionCount++
+		}
+	}
+	if assistantCount != 1 || questionCount != 1 || len(request.Messages) == 0 ||
+		request.Messages[len(request.Messages)-1].Role != "user" ||
+		request.Messages[len(request.Messages)-1].Content != currentQuestion {
+		t.Fatalf("second-turn request messages = %#v", request.Messages)
+	}
+}
+
 type deniedIntegrationObservationTargets struct{}
 
 func (deniedIntegrationObservationTargets) ResolveObservationTarget(context.Context, tools.ObservationTargetRequest) (tools.ResolvedObservationTarget, error) {
@@ -599,7 +626,7 @@ func (deniedIntegrationObservationActions) RecordObservationOutcome(context.Cont
 func renderIntegrationUI(events []application.UIEvent) string {
 	model := tui.NewModel(tui.Config{
 		Width: 120, Height: 80, NoColor: true,
-		Scope: tui.ScopeView{Context: "test-context", Namespace: "team-a", Generation: 7, ReadOnly: true},
+		Scope: tui.ScopeView{Context: "test-context", Namespace: "team-a", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	for _, event := range events {
 		updated, _ := model.Update(tui.ApplicationEventMsg{Event: event})

@@ -1,10 +1,6 @@
 package einoadapter
 
 import (
-	"bytes"
-	"encoding/json"
-	"strings"
-
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -33,9 +29,13 @@ func newInitialMessages(input agent.RunInput) ([]*schema.Message, error) {
 		case domain.MessageRoleUser:
 			messages = append(messages, schema.UserMessage(turn.Content))
 		case domain.MessageRoleAssistant:
-			content, err := historicalAssistantContent(turn.Content)
+			content, err := agent.EncodeHistoricalAssistantResponse(turn.Content)
 			if err != nil {
-				return nil, err
+				return nil, failedRuntime(
+					domain.SafeErrorClassBudgetExhausted,
+					"The selected Session context exceeded its fixed representation limit.",
+					err,
+				)
 			}
 			messages = append(messages, schema.AssistantMessage(content, nil))
 		default:
@@ -44,34 +44,6 @@ func newInitialMessages(input agent.RunInput) ([]*schema.Message, error) {
 	}
 	messages = append(messages, schema.UserMessage(input.Question()))
 	return messages, nil
-}
-
-// historicalAssistantContent reconstructs the current response envelope from
-// the retained visible answer only. Historic Evidence and action proposals are
-// deliberately absent so replay cannot restore either kind of authority.
-func historicalAssistantContent(answer string) (string, error) {
-	citations := make([]evidenceCitationWire, 0)
-	actions := make([]proposedActionWire, 0)
-	wire := diagnosisWire{
-		AnswerMarkdown:    &answer,
-		EvidenceCitations: &citations,
-		ProposedActions:   &actions,
-	}
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(wire); err != nil {
-		return "", failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
-	}
-	content := strings.TrimSuffix(buffer.String(), "\n")
-	if !domain.ValidModelText(content, domain.MaxModelMessageBytes, false) {
-		return "", failedRuntime(
-			domain.SafeErrorClassBudgetExhausted,
-			"The selected Session context exceeded its fixed representation limit.",
-			nil,
-		)
-	}
-	return content, nil
 }
 
 // validateConversation validates the Eino-owned ReAct conversation in place.

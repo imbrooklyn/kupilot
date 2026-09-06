@@ -144,7 +144,7 @@ func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 
 	model := tui.NewModel(tui.Config{
 		Width: 80, Height: 24, Theme: tui.ThemeNoColor,
-		Scope: tui.ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 1, ReadOnly: true},
+		Scope: tui.ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	model = updateTUIModel(t, model, tea.PasteMsg{Content: "How many Nodes are Ready?"})
 	model = updateTUIModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -346,17 +346,16 @@ func (*cancellableSetupConsumer) ExecuteUICommand(context.Context, application.U
 	return application.UICommandOutcome{}, errors.New("unexpected command")
 }
 
-func TestApplicationStartIntentPreservesOnlyExplicitScopeAuthority(t *testing.T) {
+func TestApplicationStartIntentMapsOnlyExplicitScopeSelection(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a25"
 	tests := []struct {
-		name         string
-		input        cli.StartIntent
-		want         application.UIStartIntent
-		wantActivate bool
+		name  string
+		input cli.StartIntent
+		want  application.UIStartIntent
 	}{
-		{name: "new", input: cli.StartIntent{Kind: cli.IntentNew}, want: application.UIStartIntent{Kind: application.UIStartNew}, wantActivate: true},
+		{name: "new", input: cli.StartIntent{Kind: cli.IntentNew}, want: application.UIStartIntent{Kind: application.UIStartNew}},
 		{name: "picker", input: cli.StartIntent{Kind: cli.IntentResumePicker}, want: application.UIStartIntent{Kind: application.UIStartResumePicker}},
 		{name: "exact", input: cli.StartIntent{Kind: cli.IntentResumeID, SessionID: sessionID}, want: application.UIStartIntent{Kind: application.UIStartResumeID, SessionID: domain.SessionID(sessionID)}},
 		{name: "last", input: cli.StartIntent{Kind: cli.IntentResumeLast}, want: application.UIStartIntent{Kind: application.UIStartResumeLast}},
@@ -366,15 +365,14 @@ func TestApplicationStartIntentPreservesOnlyExplicitScopeAuthority(t *testing.T)
 			want: application.UIStartIntent{
 				Kind: application.UIStartResumeLast, ExplicitScope: true, ConfiguredNamespace: "payments",
 			},
-			wantActivate: true,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := applicationStartIntent(test.input)
-			if err != nil || got != test.want || shouldActivateInitialScope(got) != test.wantActivate {
-				t.Fatalf("applicationStartIntent() = %#v, %v; activate = %v", got, err, shouldActivateInitialScope(got))
+			if err != nil || got != test.want {
+				t.Fatalf("applicationStartIntent() = %#v, %v", got, err)
 			}
 		})
 	}

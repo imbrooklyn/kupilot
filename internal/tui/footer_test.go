@@ -17,7 +17,7 @@ func TestFooterKeepsScopePermissionAndSupervisionDuringBusyRun(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 120, Height: 24, Theme: ThemeNoColor,
-		Scope:     ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope:     ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 		Resource:  ResourceView{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "payments", Name: "payment-api"},
 		ModelName: "diagnostic-model", PrivacyMode: domain.PrivacyModeMinimal,
 	})
@@ -43,7 +43,7 @@ func TestFooterExcludesResourceRunModelAndPrivacyDetails(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 72, Height: 22, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 		Resource: ResourceView{
 			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "payments", Name: "payment-api",
 		},
@@ -66,7 +66,7 @@ func TestFooterUsesSemanticScopeColorsWithoutColorOnlyMeaning(t *testing.T) {
 
 	colored := NewModel(Config{
 		Width: 100, Height: 24, Theme: ThemeDark,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	footer := colored.footerView()
 	for _, styled := range []string{
@@ -82,7 +82,7 @@ func TestFooterUsesSemanticScopeColorsWithoutColorOnlyMeaning(t *testing.T) {
 
 	plain := NewModel(Config{
 		Width: 100, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	}).footerView()
 	if hasColorSGR(plain) || !strings.Contains(plain, "Context development · Namespace payments · ask · human") {
 		t.Fatalf("no-color footer lost textual meaning or retained color: %q", plain)
@@ -94,7 +94,7 @@ func TestFooterDoesNotPresentDegradedPermissionAsUsableAuthority(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 100, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	model.permission.Healthy = false
 	footer := model.footerView()
@@ -114,7 +114,7 @@ func TestFooterNarrowWidthsRetainScopePermissionAndSupervisionBeforeOptionalStat
 				Width: width, Height: 12, Theme: ThemeNoColor,
 				Scope: ScopeView{
 					Context: "a-very-long-development-context", Namespace: "a-very-long-namespace",
-					Generation: 7, ReadOnly: true,
+					Generation: 7, ReadOnly: true, Verified: true,
 				},
 				Resource:  ResourceView{APIVersion: "v1", Kind: "Pod", Namespace: "a-very-long-namespace", Name: "a-very-long-resource-name"},
 				ModelName: "a-very-long-model-name", PrivacyMode: domain.PrivacyModeStandard,
@@ -143,7 +143,7 @@ func TestFooterNarrowWidthPrioritizesActiveApprovalAfterScope(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 16, Height: 12, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	model.pendingApproval = &application.UIApprovalRequest{}
 	footer := model.footerView()
@@ -162,7 +162,7 @@ func TestFooterAndPickerExposeNoSensitiveFieldSurface(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	model.openCompletion("context", "", resumeOriginNone)
 	view := model.render()

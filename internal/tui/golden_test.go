@@ -81,7 +81,7 @@ func TestNoColorConfigOverridesColoredTheme(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 40, Height: 12, Theme: ThemeDark, NoColor: true,
-		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true},
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	if hasColorSGR(model.View().Content) || model.styles.palette.ColorEnabled {
 		t.Fatal("NO_COLOR override left ANSI styling enabled")
@@ -91,7 +91,7 @@ func TestNoColorConfigOverridesColoredTheme(t *testing.T) {
 func TestAutoThemeUsesTerminalDefaultsUntilBackgroundResponse(t *testing.T) {
 	model := NewModel(Config{
 		Width: 72, Height: 22, Theme: ThemeAuto,
-		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true},
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	model.composer.SetValue("preserved draft")
 	model.transcript.AppendUser("preserved history")
@@ -165,7 +165,7 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	model := NewModel(Config{
 		Width: 72, Height: 22, Theme: mode, DarkBackground: mode != ThemeLight,
-		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "development", Namespace: "payments", Generation: 7, ReadOnly: true, Verified: true},
 		Resource: ResourceView{
 			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "payments", Name: "payment-api",
 		},

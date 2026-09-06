@@ -92,7 +92,7 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 	model := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		StartIntent: application.UIStartIntent{Kind: application.UIStartResumeID, SessionID: testSessionID},
-		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true},
+		Scope:       ScopeView{Context: "current", Namespace: "default", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	request := resumeRequestFromCmd(t, model.Init())
 	historicAnswer := strings.Repeat("a", application.MaxQuestionBytes+1)

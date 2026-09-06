@@ -17,7 +17,7 @@ func TestActiveRunShowsCorrelatedWorkingStatusAndEscapeInterrupts(t *testing.T) 
 	startedAt := time.Date(2026, time.August, 31, 8, 0, 0, 0, time.UTC)
 	model := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true, Verified: true},
 		Now:   func() time.Time { return startedAt },
 	})
 	model, command := updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
@@ -47,7 +47,7 @@ func TestWorkingTickRejectsStaleAndTerminalMessages(t *testing.T) {
 	startedAt := time.Date(2026, time.August, 31, 8, 0, 0, 0, time.UTC)
 	model := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true},
+		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true, Verified: true},
 		Now:   func() time.Time { return startedAt },
 	})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})

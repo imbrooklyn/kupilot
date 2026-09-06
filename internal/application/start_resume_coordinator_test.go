@@ -133,8 +133,9 @@ func TestCoordinatorResolvesStartupScopeWithoutSessionHistory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("StartUI() error = %v", err)
 			}
-			if result.Validate() != nil || result.Session == nil || result.ScopeCandidate == nil ||
-				*result.ScopeCandidate != test.want || result.ScopePreferenceDegraded != test.wantDegraded {
+			if result.Validate() != nil || result.Session == nil || result.Scope == nil || result.ScopeCandidate != nil ||
+				result.Scope.Context != test.want.Context || result.Scope.Namespace != test.want.Namespace ||
+				result.Scope.Generation < 1 || !result.Scope.ReadOnly || result.ScopePreferenceDegraded != test.wantDegraded {
 				t.Fatalf("StartUI() = %#v, want scope %#v degraded %v", result, test.want, test.wantDegraded)
 			}
 			if preferences.loadCalls != test.wantLoadCalls {
@@ -143,13 +144,119 @@ func TestCoordinatorResolvesStartupScopeWithoutSessionHistory(t *testing.T) {
 			if history.searchCalls != 0 || history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
 				t.Fatalf("startup queried Session history: %#v", history)
 			}
-			if recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 {
-				t.Fatalf("startup candidate actions = %#v", recorder.snapshot())
+			if recorder.count("contexts") != 2 || recorder.count("invalidate") != 1 ||
+				recorder.count("create") != 1 || recorder.count("verify") != 1 {
+				t.Fatalf("startup activation actions = %#v", recorder.snapshot())
 			}
 			if status := coordinator.uiStatus(); status.PersistenceDegraded != test.wantDegraded {
 				t.Fatalf("status persistence degraded = %v, want %v", status.PersistenceDegraded, test.wantDegraded)
 			}
 		})
+	}
+}
+
+func TestCoordinatorStartUIOwnsDefaultScopeActivationForNewSession(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, newRecordingSessionResumeStore())
+
+	result, err := coordinator.StartUI(
+		context.Background(),
+		UIStartIntent{Kind: UIStartNew},
+		domain.PrivacyModeStandard,
+	)
+	if err != nil {
+		t.Fatalf("StartUI() error = %v", err)
+	}
+	view := manager.View()
+	if result.Session == nil || view.State != ScopeStateActive || view.Scope == nil ||
+		view.Scope.Context != "current-context" || view.Scope.Namespace != DefaultStartupNamespace ||
+		view.Scope.Generation < 1 {
+		t.Fatalf("StartUI() = %#v, scope view = %#v", result, view)
+	}
+	if recorder.count("create") != 1 || recorder.count("verify") != 1 {
+		t.Fatalf("startup activation actions = %#v", recorder.snapshot())
+	}
+}
+
+func TestCoordinatorStartUIKeepsResumeScopeCandidateUnverifiedUntilSelection(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	history := newRecordingSessionResumeStore()
+	coordinator := newUIScopeCoordinatorHarness(t, manager, history)
+
+	result, err := coordinator.StartUI(
+		context.Background(),
+		UIStartIntent{Kind: UIStartResumeLast},
+		domain.PrivacyModeStandard,
+	)
+	if err != nil {
+		t.Fatalf("StartUI() error = %v", err)
+	}
+	if result.Session != nil || result.Scope != nil || result.ScopeCandidate == nil ||
+		result.ScopeCandidate.Context != "current-context" || result.ScopeCandidate.Namespace != DefaultStartupNamespace {
+		t.Fatalf("resume startup result = %#v", result)
+	}
+	view := manager.View()
+	if view.State != ScopeStateUnavailable || view.Scope != nil || view.Generation != 0 ||
+		recorder.count("contexts") != 1 || recorder.count("create") != 0 || recorder.count("verify") != 0 ||
+		history.searchCalls != 0 || history.listCalls != 0 || history.resumeCalls != 0 || history.latestCalls != 0 {
+		t.Fatalf("resume startup scope = %#v, actions = %#v, history = %#v", view, recorder.snapshot(), history)
+	}
+}
+
+func TestCoordinatorStartUIOwnsExplicitResumeScopeActivation(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, newRecordingSessionResumeStore())
+
+	result, err := coordinator.StartUI(
+		context.Background(),
+		UIStartIntent{
+			Kind: UIStartResumeLast, ExplicitScope: true,
+			ConfiguredContext: "saved-context", ConfiguredNamespace: "payments",
+		},
+		domain.PrivacyModeStandard,
+	)
+	if err != nil {
+		t.Fatalf("StartUI() error = %v", err)
+	}
+	if result.Session != nil || result.Scope == nil || result.ScopeCandidate != nil ||
+		result.Scope.Context != "saved-context" || result.Scope.Namespace != "payments" ||
+		result.Scope.Generation < 1 || !result.Scope.ReadOnly {
+		t.Fatalf("explicit resume startup result = %#v", result)
+	}
+	if recorder.count("create") != 1 || recorder.count("verify") != 1 {
+		t.Fatalf("explicit startup activation actions = %#v", recorder.snapshot())
+	}
+}
+
+func TestCoordinatorStartUIFailsBeforeCreatingSessionWhenDefaultScopeCannotActivate(t *testing.T) {
+	t.Parallel()
+
+	recorder := newUIScopeActionRecorder()
+	recorder.verifyError[DefaultStartupNamespace] = errors.New("forbidden")
+	manager := newCoordinatorUIScopeManager(t, recorder, nil)
+	coordinator := newUIScopeCoordinatorHarness(t, manager, newRecordingSessionResumeStore())
+
+	result, err := coordinator.StartUI(
+		context.Background(),
+		UIStartIntent{Kind: UIStartNew},
+		domain.PrivacyModeStandard,
+	)
+	if !errors.Is(err, ErrScopeUnavailable) || result != (UIStartResult{}) || coordinator.CurrentUISession() != nil {
+		t.Fatalf("StartUI() = %#v, error = %v, current Session = %#v", result, err, coordinator.CurrentUISession())
+	}
+	view := manager.View()
+	if view.State != ScopeStateUnavailable || view.Scope != nil || view.Generation != 1 ||
+		recorder.count("create") != 1 || recorder.count("verify") != 1 {
+		t.Fatalf("failed startup scope = %#v, actions = %#v", view, recorder.snapshot())
 	}
 }
 

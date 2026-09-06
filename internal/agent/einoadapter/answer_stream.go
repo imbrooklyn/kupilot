@@ -192,7 +192,7 @@ const (
 	answerExtractorDone
 )
 
-const answerMarkdownKey = `"answer_markdown"`
+const answerMarkdownKey = `"` + agent.DiagnosticResponseAnswerField + `"`
 
 type answerMarkdownExtractor struct {
 	state        answerExtractorState

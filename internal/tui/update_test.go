@@ -126,7 +126,7 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 	for _, width := range []int{24, 40} {
 		model := NewModel(Config{
 			Width: width, Height: 80, Theme: ThemeNoColor,
-			Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true},
+			Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true, Verified: true},
 		})
 		model.transcript.AppendNotice(got)
 		model.reflow()
@@ -687,7 +687,7 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 
 	model := NewModel(Config{
 		Width: 20, Height: 16, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true},
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: strings.Repeat("x", 80)})
 	if model.composer.Height() <= MinComposerRows || model.composer.Height() > MaxComposerRows {
@@ -696,7 +696,7 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 
 	limited := NewModel(Config{
 		Width: 80, Height: 24, Theme: ThemeNoColor,
-		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true},
+		Scope: ScopeView{Context: "ctx", Namespace: "ns", Generation: 1, ReadOnly: true, Verified: true},
 	})
 	limited, cmd := updateModel(t, limited, tea.PasteMsg{Content: strings.Repeat("x", application.MaxQuestionBytes+1)})
 	if cmd != nil || limited.composer.Value() != "" || !limited.dialog.Open() {
@@ -721,6 +721,7 @@ func newTestModel() Model {
 			Namespace:  "test-namespace",
 			Generation: 7,
 			ReadOnly:   true,
+			Verified:   true,
 		},
 	})
 }

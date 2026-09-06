@@ -126,7 +126,7 @@ func newPerformanceModel() Model {
 		Width: 80, Height: 24, Theme: ThemeNoColor, NoColor: true,
 		Scope: ScopeView{
 			Context: "example-context", Namespace: "example-namespace",
-			Generation: 7, ReadOnly: true,
+			Generation: 7, ReadOnly: true, Verified: true,
 		},
 	})
 }

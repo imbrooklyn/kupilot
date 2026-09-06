@@ -311,9 +311,9 @@ func TestAdapterReplaysVerifiedSummaryAndTailWithoutResummarizingCoveredPrefix(t
 	}
 	input := testInputWithConversation(t, clock, conversation)
 	model := &recordingModel{scripts: []modelScript{func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
-		tailAnswer, encodeErr := historicalAssistantContent(full.Turns()[5].Content)
+		tailAnswer, encodeErr := agent.EncodeHistoricalAssistantResponse(full.Turns()[5].Content)
 		if encodeErr != nil {
-			t.Fatalf("historicalAssistantContent() error = %v", encodeErr)
+			t.Fatalf("EncodeHistoricalAssistantResponse() error = %v", encodeErr)
 		}
 		if len(request.Messages) != 5 || request.Messages[1].Role != schema.User ||
 			request.Messages[1].Content != summaryContextPreamble+summary.Text ||
@@ -381,13 +381,13 @@ func TestAdapterBlocksHighRiskModelTextBeforeDownstreamAction(t *testing.T) {
 		clock := newTestClock()
 		guard := newTestScopeGuard()
 		encodedDiagnosis, err := json.Marshal(struct {
-			AnswerMarkdown    string                 `json:"answer_markdown"`
-			EvidenceCitations []evidenceCitationWire `json:"evidence_citations"`
-			ProposedActions   []proposedActionWire   `json:"proposed_actions"`
+			AnswerMarkdown    string     `json:"answer_markdown"`
+			EvidenceCitations []struct{} `json:"evidence_citations"`
+			ProposedActions   []struct{} `json:"proposed_actions"`
 		}{
 			AnswerMarkdown:    blockedText,
-			EvidenceCitations: []evidenceCitationWire{},
-			ProposedActions:   []proposedActionWire{},
+			EvidenceCitations: []struct{}{},
+			ProposedActions:   []struct{}{},
 		})
 		if err != nil {
 			t.Fatalf("json.Marshal(Diagnosis) error = %v", err)

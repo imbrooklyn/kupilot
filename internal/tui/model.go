@@ -32,6 +32,7 @@ type ScopeView struct {
 	Namespace  string
 	Generation int64
 	ReadOnly   bool
+	Verified   bool
 	Switching  bool
 }
 
@@ -260,6 +261,9 @@ func sanitizedScope(scope ScopeView) ScopeView {
 	scope.Namespace = sanitizeExternalText(scope.Namespace, 63)
 	if scope.Generation < 0 {
 		scope.Generation = 0
+	}
+	if scope.Verified && (scope.Generation < 1 || !scope.ReadOnly || scope.Context == "" || scope.Namespace == "") {
+		scope.Verified = false
 	}
 	return scope
 }
