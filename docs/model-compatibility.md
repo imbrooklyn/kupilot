@@ -330,6 +330,7 @@ or summarization call.
 | Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
 | Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
 | Eligible durable recent tail after summarization | Exactly 16 user/assistant Messages (eight complete turns); any current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
+| Retained final assistant answer representation | Current strict final-response JSON envelope containing the validated Markdown answer and empty Evidence/action arrays; raw model traffic is never replayed |
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |

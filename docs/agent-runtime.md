@@ -24,7 +24,7 @@ decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v12`
+- System prompt: `kupilot-agent-policy-v13`
 - Capability catalog: `kupilot-operational-tools-v5`
 
 ## Frozen run input
@@ -323,6 +323,14 @@ raw model traffic, command output, approval dialogs, and framework objects are
 not replayed. Historic scope, ResourceRef, Evidence, permission rules, Reviewer
 decisions, ActionEnvelopes, approvals, execution, clients, and generations are
 never restored as authority.
+
+At the Eino boundary, each retained final assistant answer is reconstructed in
+the current strict final-response JSON envelope. Only its locally validated
+visible Markdown is placed in `answer_markdown`; `evidence_citations` and
+`proposed_actions` are empty. The durable Message remains the safe Markdown
+answer, not raw model traffic. This role-preserving representation prevents a
+prior visible answer from becoming a plain-text response-format example and
+cannot restore historic Evidence or action authority.
 
 Eino summarization middleware produces a bounded safe summary plus a complete
 eligible recent tail. Project-owned coverage records the first/last covered

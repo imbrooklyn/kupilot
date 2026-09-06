@@ -25,6 +25,9 @@ This file records notable user-visible changes to Kupilot.
 - Reused Eino ADK `ChatModelAgent`, `Runner`, Tool-message pairing, message
   state, and summarization middleware inside the single model boundary while
   retaining safe SQLite Messages as the sole durable Session source.
+- Reconstruct retained final assistant answers in the strict response envelope
+  during Session replay so follow-up turns keep the structured protocol while
+  historic Evidence and action proposals remain non-authoritative.
 - Generalized the restart-only action path into immutable digest-bound
   ActionEnvelopes with deterministic risk, policy and scope generations,
   durable pre-operation audit, at most one external attempt, and separate

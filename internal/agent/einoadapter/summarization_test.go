@@ -75,7 +75,15 @@ func TestEinoSummarizationMessageThresholdAndRecentTail(t *testing.T) {
 			wantTail := conversation.Turns()[current.turns-summaryRecentTailMessages:]
 			for index, turn := range wantTail {
 				message := mainInput[index+2]
-				if message.Content != turn.Content || string(message.Role) != string(turn.Role) {
+				wantContent := turn.Content
+				if turn.Role == domain.MessageRoleAssistant {
+					encoded, encodeErr := historicalAssistantContent(turn.Content)
+					if encodeErr != nil {
+						t.Fatalf("historicalAssistantContent() error = %v", encodeErr)
+					}
+					wantContent = encoded
+				}
+				if message.Content != wantContent || string(message.Role) != string(turn.Role) {
 					t.Fatalf("recent tail[%d] = %#v, want %#v", index, message, turn)
 				}
 			}
@@ -348,20 +356,31 @@ func testConversationAtInputBytes(t *testing.T, clock *testClock, target int) ag
 	t.Helper()
 	const turnCount = summaryRecentTailMessages + 2
 	conversation := testConversation(t, turnCount)
+	turns := conversation.Turns()
+	for index := range turns {
+		turns[index].Content = "x"
+		turns[index].ContentHash = domain.MessageContentHash(turns[index].Content)
+	}
+	conversation, err := agent.NewConversationContext(testSessionID, turns, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
 	input := testInputWithConversation(t, clock, conversation)
 	messages, err := newInitialMessages(input)
 	if err != nil {
 		t.Fatalf("newInitialMessages() error = %v", err)
 	}
-	fixedBytes := len(messages[0].Content) + len(messages[len(messages)-1].Content)
-	historyBytes := target - fixedBytes
-	if historyBytes < turnCount || historyBytes > turnCount*domain.MaxModelInputMessageBytes {
-		t.Fatalf("invalid byte-threshold fixture target %d with %d fixed bytes", target, fixedBytes)
+	baseBytes := 0
+	for _, message := range messages {
+		baseBytes += len(message.Content)
 	}
-	turns := conversation.Turns()
+	additionalBytes := target - baseBytes
+	if additionalBytes < 0 || additionalBytes > turnCount*(domain.MaxModelInputMessageBytes-1) {
+		t.Fatalf("invalid byte-threshold fixture target %d with %d base bytes", target, baseBytes)
+	}
 	for index := range turns {
-		size := historyBytes / turnCount
-		if index < historyBytes%turnCount {
+		size := 1 + additionalBytes/turnCount
+		if index < additionalBytes%turnCount {
 			size++
 		}
 		turns[index].Content = strings.Repeat("x", size)

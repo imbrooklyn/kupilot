@@ -207,24 +207,29 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 		},
 		{
 			MessageID: "00000000-0000-7000-8000-000000008102", Role: domain.MessageRoleAssistant,
-			Content: "Only the final validated answer is retained.", ContentHash: domain.MessageContentHash("Only the final validated answer is retained."),
+			Content: "Only the final validated answer is retained.\n\n| Item | Result |\n| --- | --- |\n| quoted | \"safe\" |",
 		},
 	}
+	turns[1].ContentHash = domain.MessageContentHash(turns[1].Content)
 	conversation, err := agent.NewConversationContext(testSessionID, turns, nil)
 	if err != nil {
 		t.Fatalf("NewConversationContext() error = %v", err)
 	}
 	input := testInputWithConversation(t, clock, conversation)
+	tool := new(recordingTool)
 	model := &recordingModel{scripts: []modelScript{func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
 		if len(request.Messages) != 4 {
 			t.Fatalf("model input messages = %d, want 4", len(request.Messages))
 		}
 		wantRoles := []schema.RoleType{schema.System, schema.User, schema.Assistant, schema.User}
-		wantContent := []string{"", turns[0].Content, turns[1].Content, input.Question()}
 		currentCount := 0
 		for index, message := range request.Messages {
-			if message.Role != wantRoles[index] || index > 0 && message.Content != wantContent[index] {
+			if message.Role != wantRoles[index] {
 				t.Fatalf("model input[%d] = %#v", index, message)
+			}
+			if (index == 1 && message.Content != turns[0].Content) ||
+				(index == 3 && message.Content != input.Question()) {
+				t.Fatalf("model input[%d] content = %q", index, message.Content)
 			}
 			if message.Content == input.Question() {
 				currentCount++
@@ -233,11 +238,52 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 		if currentCount != 1 {
 			t.Fatalf("current question count = %d, want 1", currentCount)
 		}
+		historic, historyErr := diagnosisDraft(request.Messages[2])
+		if historyErr != nil {
+			// This mirrors the observed endpoint behavior: a raw Markdown assistant
+			// history item primes a plain-text response that the strict decoder must reject.
+			return scriptedChunks(diagnosisChunks("The previous answer was supplied as plain text.")...)(ctx, request)
+		}
+		if historic.AnswerMarkdown != turns[1].Content || len(historic.ConfirmedFacts) != 0 || len(historic.RecommendedActions) != 0 {
+			t.Fatalf("historic final answer = %#v", historic)
+		}
 		return scriptedChunks(diagnosisChunks(`{"answer_markdown":"The ordered Session context was supplied once.","evidence_citations":[],"proposed_actions":[]}`)...)(ctx, request)
 	}}}
-	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, newEventRecorder())
-	if outcome.Status != domain.AgentRunStatusCompleted || len(model.Requests()) != 1 {
-		t.Fatalf("outcome/requests = %#v/%d", outcome, len(model.Requests()))
+	outcome := testAdapter(t, clock, model, tool, newTestScopeGuard()).Run(context.Background(), input, newEventRecorder())
+	if outcome.Status != domain.AgentRunStatusCompleted || len(model.Requests()) != 1 || len(tool.Calls()) != 0 {
+		t.Fatalf("outcome/model requests/Tool calls = %#v/%d/%d", outcome, len(model.Requests()), len(tool.Calls()))
+	}
+}
+
+func TestAdapterRejectsOversizedHistoricalAssistantRepresentationBeforeIO(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	answer := strings.Repeat("\\", domain.MaxModelInputMessageBytes)
+	turns := []agent.ConversationTurn{
+		{
+			MessageID: "00000000-0000-7000-8000-000000008111", Role: domain.MessageRoleUser,
+			Content: "What was checked previously?", ContentHash: domain.MessageContentHash("What was checked previously?"),
+		},
+		{
+			MessageID: "00000000-0000-7000-8000-000000008112", Role: domain.MessageRoleAssistant,
+			Content: answer, ContentHash: domain.MessageContentHash(answer),
+		},
+	}
+	conversation, err := agent.NewConversationContext(testSessionID, turns, nil)
+	if err != nil {
+		t.Fatalf("NewConversationContext() error = %v", err)
+	}
+	model := new(recordingModel)
+	tool := new(recordingTool)
+	outcome := testAdapter(t, clock, model, tool, newTestScopeGuard()).Run(
+		context.Background(), testInputWithConversation(t, clock, conversation), newEventRecorder(),
+	)
+	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
+		*outcome.ErrorClass != domain.SafeErrorClassBudgetExhausted ||
+		outcome.SafeMessage != "The selected Session context exceeded its fixed representation limit." ||
+		len(model.Requests()) != 0 || len(tool.Calls()) != 0 {
+		t.Fatalf("outcome/model requests/Tool calls = %#v/%d/%d", outcome, len(model.Requests()), len(tool.Calls()))
 	}
 }
 
@@ -265,10 +311,14 @@ func TestAdapterReplaysVerifiedSummaryAndTailWithoutResummarizingCoveredPrefix(t
 	}
 	input := testInputWithConversation(t, clock, conversation)
 	model := &recordingModel{scripts: []modelScript{func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
+		tailAnswer, encodeErr := historicalAssistantContent(full.Turns()[5].Content)
+		if encodeErr != nil {
+			t.Fatalf("historicalAssistantContent() error = %v", encodeErr)
+		}
 		if len(request.Messages) != 5 || request.Messages[1].Role != schema.User ||
 			request.Messages[1].Content != summaryContextPreamble+summary.Text ||
 			request.Messages[2].Content != full.Turns()[4].Content ||
-			request.Messages[3].Content != full.Turns()[5].Content ||
+			request.Messages[3].Content != tailAnswer ||
 			request.Messages[4].Content != input.Question() {
 			t.Fatalf("replayed model input = %#v", request.Messages)
 		}

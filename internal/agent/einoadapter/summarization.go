@@ -159,7 +159,15 @@ func matchesInitialContext(original []*schema.Message, conversation agent.Conver
 		position++
 	}
 	for _, turn := range conversation.Turns() {
-		if position >= len(original) || original[position] == nil || original[position].Content != turn.Content {
+		content := turn.Content
+		if turn.Role == domain.MessageRoleAssistant {
+			var err error
+			content, err = historicalAssistantContent(turn.Content)
+			if err != nil {
+				return false
+			}
+		}
+		if position >= len(original) || original[position] == nil || original[position].Content != content {
 			return false
 		}
 		want := schema.User
@@ -181,11 +189,15 @@ func validateSummaryConversation(messages []*schema.Message) error {
 	}
 	total := 0
 	for index, message := range messages {
+		contentLimit := domain.MaxModelInputMessageBytes
+		if message != nil && message.Role == schema.Assistant {
+			contentLimit = domain.MaxModelMessageBytes
+		}
 		if message == nil || unsupportedMessageFields(message) || len(message.ToolCalls) != 0 ||
 			message.ToolCallID != "" || message.ToolName != "" ||
 			(index == 0 && message.Role != schema.System) ||
 			(index > 0 && message.Role != schema.User && message.Role != schema.Assistant) ||
-			!domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) {
+			!domain.ValidModelText(message.Content, contentLimit, false) {
 			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 		}
 		total += len(message.Content)
