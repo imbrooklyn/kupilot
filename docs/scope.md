@@ -313,3 +313,4 @@ reuse are not new durable stores or resumable authority.
 - [ADR-0050](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)

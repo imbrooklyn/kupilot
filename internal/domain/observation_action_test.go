@@ -75,6 +75,34 @@ func TestObservationActionKindsRejectCrossKindFieldsAndUnsafeRouting(t *testing.
 	}
 }
 
+func TestObservabilityTimeoutRemainsIndependentFromModelTimeout(t *testing.T) {
+	t.Parallel()
+
+	policy := DataSourcePolicy{
+		Kind: DataSourcePrometheus, OriginHash: strings.Repeat("a", 64),
+		Queries: []ObservabilityQueryID{QueryPrometheusPodCPUUsage}, RequestTimeout: MaxObservabilityRequestTimeout,
+	}
+	if policy.Validate() != nil {
+		t.Fatal("exact observability timeout was rejected")
+	}
+	policy.RequestTimeout += time.Nanosecond
+	if policy.Validate() == nil {
+		t.Fatal("one-over observability timeout was accepted")
+	}
+
+	for _, kind := range []ActionObservationKind{ActionObservationPrometheus, ActionObservationLoki} {
+		plan := testObservationActionPlan(t, kind)
+		plan.Limits.Timeout = MaxObservabilityRequestTimeout
+		if plan.Validate() != nil {
+			t.Fatalf("exact %s action timeout was rejected", kind)
+		}
+		plan.Limits.Timeout += time.Nanosecond
+		if plan.Validate() == nil {
+			t.Fatalf("one-over %s action timeout was accepted", kind)
+		}
+	}
+}
+
 func TestObservationOutcomeIsContentFreeAndBounded(t *testing.T) {
 	t.Parallel()
 

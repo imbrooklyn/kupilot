@@ -23,9 +23,9 @@ const (
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
 	LegacyDefaultMaxModelOutputTokens = 8192
-	DefaultModelRequestTimeoutSeconds = 300
+	DefaultModelRequestTimeoutSeconds = 900
 	DefaultReviewerTimeoutSeconds     = 30
-	MaxModelRequestTimeoutSeconds     = 300
+	MaxModelRequestTimeoutSeconds     = 900
 	MaxContextBytes                   = 253
 	MaxNamespaceBytes                 = 63
 	DefaultNamespace                  = "default"

@@ -13,9 +13,9 @@ func TestDefaultsUseDefaultWorkingNamespaceWithoutChoosingContext(t *testing.T) 
 
 	config := Defaults()
 	if config.Context != "" || config.Namespace != DefaultNamespace ||
-		config.Models.Agent.MaxOutputTokens != 0 {
-		t.Fatalf("defaults = Context %q Namespace %q max output tokens %d",
-			config.Context, config.Namespace, config.Models.Agent.MaxOutputTokens)
+		config.Models.Agent.MaxOutputTokens != 0 || config.Models.Agent.RequestTimeoutSeconds != 900 {
+		t.Fatalf("defaults = Context %q Namespace %q max output tokens %d request timeout %d",
+			config.Context, config.Namespace, config.Models.Agent.MaxOutputTokens, config.Models.Agent.RequestTimeoutSeconds)
 	}
 }
 

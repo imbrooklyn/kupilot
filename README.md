@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0052 and the canonical docs. It is unreleased. Passing
+> by ADR-0044 through ADR-0053 and the canonical docs. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 

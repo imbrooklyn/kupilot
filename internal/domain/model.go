@@ -42,7 +42,7 @@ const (
 	// MaxModelErrorBodyBytes bounds discarded HTTP error-body reads.
 	MaxModelErrorBodyBytes = 4096
 	// MaxModelRequestTimeout is the accepted per-request ceiling.
-	MaxModelRequestTimeout = 300 * time.Second
+	MaxModelRequestTimeout = 900 * time.Second
 
 	maxModelToolSchemaBytes    = 16 * 1024
 	maxModelCorrelationIDBytes = 128

@@ -91,7 +91,7 @@ Each selected Context owns a fresh bundle with:
 - the fixed User-Agent `kupilot/0.5`;
 - QPS 5 and Burst 10;
 - a Kubernetes request deadline selected from the immutable run profile, at
-  most 60 seconds and no later than the owning run deadline;
+  most 180 seconds and no later than the owning run deadline;
 - normal certificate and hostname verification with TLS 1.2 or newer; and
 - no HTTP redirect.
 
@@ -358,3 +358,4 @@ PDB cases, and zero-call denial without contacting a cluster.
 - [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)
 - [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
 - [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)

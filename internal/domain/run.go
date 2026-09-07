@@ -7,7 +7,7 @@ import (
 
 const (
 	// MaxAgentRunDuration is the non-expandable wall-clock ceiling for one run.
-	MaxAgentRunDuration = 30 * time.Minute
+	MaxAgentRunDuration = 60 * time.Minute
 	// MaxAgentSteps is the non-expandable single-Agent loop ceiling.
 	MaxAgentSteps = 128
 	// MaxAgentToolCalls is the non-expandable Tool-call ceiling for one run.

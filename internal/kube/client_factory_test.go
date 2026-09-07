@@ -72,6 +72,19 @@ func TestClientFactoryBuildsFixedTypedBundleWithoutNetworkIO(t *testing.T) {
 	}
 }
 
+func TestClientFactoryAcceptsExactMaximumTimeoutAndRejectsOneOverWithoutNetworkIO(t *testing.T) {
+	t.Parallel()
+
+	loader := newConfigLoaderForPaths([]string{"unused"})
+	factory, err := NewClientFactory(loader, ExecCredentialsAllow, MaxRequestTimeout)
+	if err != nil || factory.requestTimeout != 180*time.Second {
+		t.Fatalf("NewClientFactory(maximum) = %#v, %v", factory, err)
+	}
+	if _, err := NewClientFactory(loader, ExecCredentialsAllow, MaxRequestTimeout+time.Nanosecond); err == nil {
+		t.Fatal("NewClientFactory(one over) error = nil")
+	}
+}
+
 func TestClientFactoryRejectsUnsafeTLSBeforeClientConstruction(t *testing.T) {
 	t.Parallel()
 

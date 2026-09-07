@@ -233,14 +233,14 @@ func (plan ObservationActionPlan) Validate() error {
 			return ErrInvalidObservationAction
 		}
 	case ActionObservationPrometheus:
-		if plan.Target.Subresource != "" || !plan.OriginHash.Valid() || plan.Limits.Timeout <= 0 || plan.Limits.Timeout > MaxModelRequestTimeout ||
+		if plan.Target.Subresource != "" || !plan.OriginHash.Valid() || plan.Limits.Timeout <= 0 || plan.Limits.Timeout > MaxObservabilityRequestTimeout ||
 			plan.Limits.MaximumItems != parameters.SeriesLimit || plan.Limits.MaximumLines != 0 ||
 			plan.Limits.MaximumBytes < 1 || plan.Limits.MaximumBytes > MaxObservabilityBytes ||
 			plan.Limits.MaximumOutput < 1 || plan.Limits.MaximumOutput > MaxToolResultBytes {
 			return ErrInvalidObservationAction
 		}
 	case ActionObservationLoki:
-		if plan.Target.Subresource != "" || !plan.OriginHash.Valid() || plan.Limits.Timeout <= 0 || plan.Limits.Timeout > MaxModelRequestTimeout ||
+		if plan.Target.Subresource != "" || !plan.OriginHash.Valid() || plan.Limits.Timeout <= 0 || plan.Limits.Timeout > MaxObservabilityRequestTimeout ||
 			plan.Limits.MaximumItems < 1 || plan.Limits.MaximumItems > MaxObservabilityPages ||
 			plan.Limits.MaximumLines != parameters.LineLimit || plan.Limits.MaximumBytes < 1 || plan.Limits.MaximumBytes > MaxObservabilityBytes ||
 			plan.Limits.MaximumOutput < 1 || plan.Limits.MaximumOutput > MaxToolResultBytes {

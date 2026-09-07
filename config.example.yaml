@@ -26,7 +26,7 @@ models:
     temperature: 0.1
     # max_output_tokens is omitted until the selected endpoint has exact
     # evidence. Byte, call, time, stream, and cost-unit limits still apply.
-    request_timeout_seconds: 300
+    request_timeout_seconds: 900
     streaming: true
     tool_calling_required: true
 

@@ -26,10 +26,15 @@ import (
 
 func TestConfiguredBudgetLimitsSelectsProfileAndHonorsTighterModelTimeout(t *testing.T) {
 	value := config.Defaults()
-	value.Runtime.BudgetProfile = config.BudgetProfileExtended
 	limits, err := configuredBudgetLimits(value)
-	if err != nil || limits.Profile != agent.BudgetProfileExtended || limits.RunDuration != 30*time.Minute ||
-		limits.ModelRequestTimeout != 300*time.Second {
+	if err != nil || limits.Profile != agent.BudgetProfileBalanced || limits.RunDuration != 30*time.Minute ||
+		limits.ModelRequestTimeout != 600*time.Second || limits.ToolRequestTimeout != 120*time.Second {
+		t.Fatalf("configuredBudgetLimits(default) = %#v, %v", limits, err)
+	}
+	value.Runtime.BudgetProfile = config.BudgetProfileExtended
+	limits, err = configuredBudgetLimits(value)
+	if err != nil || limits.Profile != agent.BudgetProfileExtended || limits.RunDuration != 60*time.Minute ||
+		limits.ModelRequestTimeout != 900*time.Second || limits.ToolRequestTimeout != 180*time.Second {
 		t.Fatalf("configuredBudgetLimits(extended) = %#v, %v", limits, err)
 	}
 	value.Models.Agent.RequestTimeoutSeconds = 30

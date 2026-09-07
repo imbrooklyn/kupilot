@@ -272,7 +272,7 @@ func (fake *dispatchApplication) ExecuteUICommand(
 			},
 			Budget: application.UIBudgetStatus{
 				ModelEvidenceBasis: application.ModelBudgetEvidenceBasis,
-				Profile:            agent.BudgetProfileBalanced, RunMilliseconds: 600_000, RemainingMilliseconds: 600_000,
+				Profile:            agent.BudgetProfileBalanced, RunMilliseconds: 1_800_000, RemainingMilliseconds: 1_800_000,
 				StepsMaximum: 32, ToolCallsMaximum: 48, ModelCallsMaximum: 16,
 				ModelCostUnitsMaximum: 16, SummaryCallsMaximum: 2, SummaryCostUnitsMaximum: 2,
 				ReviewerCallsMaximum: 8, ReviewerCostUnitsMaximum: 8,

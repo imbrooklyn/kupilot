@@ -180,7 +180,7 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 		return newSafeError(ClassConfigurationInvalid, "config_output_limit_invalid", "validate_configuration", "Model profile max_output_tokens must be omitted without endpoint evidence or set to a positive endpoint-supported value.")
 	}
 	if profile.RequestTimeoutSeconds < 1 || profile.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
-		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "Model profile request_timeout_seconds must be between 1 and 300.")
+		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "Model profile request_timeout_seconds must be between 1 and 900.")
 	}
 	if expectedRole == ModelRoleAgent && (!profile.Streaming || !profile.ToolCallingRequired) ||
 		expectedRole == ModelRoleApprovalReviewer && (profile.Streaming || profile.ToolCallingRequired) {

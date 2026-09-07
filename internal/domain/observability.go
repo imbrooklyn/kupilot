@@ -21,6 +21,7 @@ const (
 	MaxObservabilityBytes          = 4 * 1024 * 1024
 	MaxObservabilityWindow         = 24 * time.Hour
 	MaxObservabilityStep           = 15 * time.Minute
+	MaxObservabilityRequestTimeout = 60 * time.Second
 )
 
 var ErrInvalidObservabilityPolicy = errors.New("observability policy data is invalid")
@@ -74,7 +75,7 @@ type DataSourcePolicy struct {
 func (policy DataSourcePolicy) Validate() error {
 	if !policy.Kind.Valid() || !validSHA256Hex(policy.OriginHash) ||
 		len(policy.Queries) < 1 || len(policy.Queries) > MaxObservabilityQueryTemplates ||
-		policy.RequestTimeout <= 0 || policy.RequestTimeout > MaxModelRequestTimeout {
+		policy.RequestTimeout <= 0 || policy.RequestTimeout > MaxObservabilityRequestTimeout {
 		return ErrInvalidObservabilityPolicy
 	}
 	seen := make(map[ObservabilityQueryID]struct{}, len(policy.Queries))

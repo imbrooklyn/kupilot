@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	maxToolRequestDuration = 60 * time.Second
+	maxToolRequestDuration = 180 * time.Second
 	maxLogCalls            = 32
 	maxMetricCalls         = 32
 	maxDataSourceCalls     = 64
@@ -107,7 +107,7 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 	}
 	switch profile {
 	case BudgetProfileCompact:
-		limits.RunDuration = 2 * time.Minute
+		limits.RunDuration = 10 * time.Minute
 		limits.Steps = 12
 		limits.ToolCalls = 16
 		limits.ModelCalls = 6
@@ -115,8 +115,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.SummaryCalls = 1
 		limits.SummaryCostUnits = 1
 		limits.SummaryRequestTimeout = 30 * time.Second
-		limits.ModelRequestTimeout = 60 * time.Second
-		limits.ToolRequestTimeout = 15 * time.Second
+		limits.ModelRequestTimeout = 300 * time.Second
+		limits.ToolRequestTimeout = 60 * time.Second
 		limits.RunToolResultBytes = 1 * 1024 * 1024
 		limits.LogCalls = 4
 		limits.LogContainers = 4
@@ -146,7 +146,7 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.ResourceReturnedItems = 25
 		limits.ResourceBytes = 256 * 1024
 	case BudgetProfileBalanced:
-		limits.RunDuration = 10 * time.Minute
+		limits.RunDuration = 30 * time.Minute
 		limits.Steps = 32
 		limits.ToolCalls = 48
 		limits.ModelCalls = 16
@@ -154,8 +154,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.SummaryCalls = 2
 		limits.SummaryCostUnits = 2
 		limits.SummaryRequestTimeout = 45 * time.Second
-		limits.ModelRequestTimeout = 120 * time.Second
-		limits.ToolRequestTimeout = 30 * time.Second
+		limits.ModelRequestTimeout = 600 * time.Second
+		limits.ToolRequestTimeout = 120 * time.Second
 		limits.RunToolResultBytes = 4 * 1024 * 1024
 		limits.LogCalls = 12
 		limits.LogContainers = 8
@@ -185,7 +185,7 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.ResourceReturnedItems = domain.MaxResourceSummaries
 		limits.ResourceBytes = 1 * 1024 * 1024
 	case BudgetProfileExtended:
-		limits.RunDuration = 30 * time.Minute
+		limits.RunDuration = 60 * time.Minute
 		limits.Steps = 64
 		limits.ToolCalls = 128
 		limits.ModelCalls = 32
@@ -193,8 +193,8 @@ func RunBudgetLimitsForProfile(profile BudgetProfile) (RunBudgetLimits, error) {
 		limits.SummaryCalls = 4
 		limits.SummaryCostUnits = 4
 		limits.SummaryRequestTimeout = 60 * time.Second
-		limits.ModelRequestTimeout = 300 * time.Second
-		limits.ToolRequestTimeout = 60 * time.Second
+		limits.ModelRequestTimeout = 900 * time.Second
+		limits.ToolRequestTimeout = 180 * time.Second
 		limits.RunToolResultBytes = 12 * 1024 * 1024
 		limits.LogCalls = 32
 		limits.LogContainers = 16

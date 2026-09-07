@@ -44,7 +44,7 @@ const (
 	DefaultRequestTimeout = 10 * time.Second
 	// MaxRequestTimeout is the largest profile-selected Kubernetes request
 	// timeout. A caller may tighten it but cannot expand it beyond this bound.
-	MaxRequestTimeout = 60 * time.Second
+	MaxRequestTimeout = 180 * time.Second
 
 	maxExecOutputBytes = 64 * 1024
 	maxExecErrorBytes  = 8 * 1024

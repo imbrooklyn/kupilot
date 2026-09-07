@@ -195,7 +195,7 @@ an actual key so it remains safe to copy and inspect.
 | `models.agent.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. |
 | `models.agent.temperature` | Required; accepted range `0` through `0.2`. |
 | `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
-| `models.agent.request_timeout_seconds` | Required; accepted range `1` through `300`. The run profile and remaining deadline may tighten it. |
+| `models.agent.request_timeout_seconds` | Required; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
 | `models.agent.streaming` | Required fixed value `true`. |
 | `models.agent.tool_calling_required` | Required fixed value `true`. |
 | `models.approval_reviewer` | Optional typed profile. `name`, `role: approval_reviewer`, `inherit_agent`, and `credential_ref` are always explicit. A non-inheriting profile supplies every non-secret model field. The resolved Reviewer is fixed non-streaming and Tool-free. |
@@ -232,6 +232,9 @@ an actual key so it remains safe to copy and inspect.
 | `logging.sensitive_diagnostics` | `false`; when explicitly enabled, terminal model failures may add bounded endpoint, model, provider-error, and full Go stack details to the local log. |
 
 <!-- markdownlint-enable MD013 -->
+
+The exact profile time envelopes and their no-retry semantics are defined by
+[ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md).
 
 Each supplied endpoint or model identifier is validated independently. If the
 effective endpoint, model identifier, or API key is absent, Kupilot opens the

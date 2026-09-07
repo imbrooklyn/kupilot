@@ -259,9 +259,10 @@ func TestRemoteDiagnosticLimitsIntersectRunAndCapabilityCeilings(t *testing.T) {
 	call := bindRemoteToolCall(t, input, domain.ToolNamePodExec, `{"arguments":["literal;not-a-shell","$(ignored)","*.log"],"command_id":"literal-argv","container":"app","executable":"/usr/bin/printf","namespace":"team-a","pod_name":"sample-pod","purpose":"Inspect exact argv output."}`)
 	timeout, lines, bytes := boundedRemoteLimits(call, time.Minute, domain.MaxRemoteDiagnosticLines, domain.MaxRemoteDiagnosticBytes)
 	ceilings := call.Ceilings()
+	wantTimeout := min(ceilings.RequestTimeout, time.Minute)
 	wantBytes := min(ceilings.MaxLogBytes, ceilings.MaxResultBytes)
-	if timeout != ceilings.RequestTimeout || lines != ceilings.MaxLogLines || bytes != wantBytes {
-		t.Fatalf("bounded limits = %s/%d/%d, want %s/%d/%d", timeout, lines, bytes, ceilings.RequestTimeout, ceilings.MaxLogLines, wantBytes)
+	if timeout != wantTimeout || lines != ceilings.MaxLogLines || bytes != wantBytes {
+		t.Fatalf("bounded limits = %s/%d/%d, want %s/%d/%d", timeout, lines, bytes, wantTimeout, ceilings.MaxLogLines, wantBytes)
 	}
 }
 

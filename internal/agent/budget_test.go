@@ -19,9 +19,9 @@ func TestRunBudgetProfilesMatchOperationalContract(t *testing.T) {
 		model, kube                         time.Duration
 		bytes, logs, remote, local, stalled int
 	}{
-		{BudgetProfileCompact, 2 * time.Minute, 12, 16, 6, 60 * time.Second, 15 * time.Second, 1 * 1024 * 1024, 4, 2, 1, 2},
-		{BudgetProfileBalanced, 10 * time.Minute, 32, 48, 16, 120 * time.Second, 30 * time.Second, 4 * 1024 * 1024, 12, 4, 1, 4},
-		{BudgetProfileExtended, 30 * time.Minute, 64, 128, 32, 300 * time.Second, 60 * time.Second, 12 * 1024 * 1024, 32, 8, 1, 6},
+		{BudgetProfileCompact, 10 * time.Minute, 12, 16, 6, 300 * time.Second, 60 * time.Second, 1 * 1024 * 1024, 4, 2, 1, 2},
+		{BudgetProfileBalanced, 30 * time.Minute, 32, 48, 16, 600 * time.Second, 120 * time.Second, 4 * 1024 * 1024, 12, 4, 1, 4},
+		{BudgetProfileExtended, 60 * time.Minute, 64, 128, 32, 900 * time.Second, 180 * time.Second, 12 * 1024 * 1024, 32, 8, 1, 6},
 	}
 	for _, test := range tests {
 		t.Run(string(test.profile), func(t *testing.T) {
@@ -60,6 +60,31 @@ func TestRunBudgetSnapshotReportsTimeAndFrozenLimits(t *testing.T) {
 		snapshot.Deadline != startedAt.Add(limits.RunDuration) || snapshot.CapturedAt != clock.Now() ||
 		snapshot.Elapsed != 90*time.Second || snapshot.Remaining != limits.RunDuration-90*time.Second {
 		t.Fatalf("budget snapshot = %#v", snapshot)
+	}
+}
+
+func TestRuntimeTimeHardCeilingsAcceptExactAndRejectOneOver(t *testing.T) {
+	limits, err := RunBudgetLimitsForProfile(BudgetProfileExtended)
+	if err != nil || limits.RunDuration != domain.MaxAgentRunDuration ||
+		limits.ModelRequestTimeout != domain.MaxModelRequestTimeout ||
+		limits.ToolRequestTimeout != maxToolRequestDuration || limits.Validate() != nil {
+		t.Fatalf("extended time ceilings = %#v, %v", limits, err)
+	}
+	for _, current := range []struct {
+		name   string
+		mutate func(*RunBudgetLimits)
+	}{
+		{name: "run duration", mutate: func(value *RunBudgetLimits) { value.RunDuration += time.Nanosecond }},
+		{name: "model request", mutate: func(value *RunBudgetLimits) { value.ModelRequestTimeout += time.Nanosecond }},
+		{name: "Tool request", mutate: func(value *RunBudgetLimits) { value.ToolRequestTimeout += time.Nanosecond }},
+	} {
+		t.Run(current.name, func(t *testing.T) {
+			oneOver := limits
+			current.mutate(&oneOver)
+			if oneOver.Validate() == nil {
+				t.Fatal("one-over time ceiling was accepted")
+			}
+		})
 	}
 }
 

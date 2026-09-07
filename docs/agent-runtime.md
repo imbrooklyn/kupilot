@@ -313,11 +313,11 @@ endpoint evidence may require a tighter configuration.
 
 | Boundary | Compact | Balanced (default) | Extended | Hard ceiling |
 | --- | ---: | ---: | ---: | ---: |
-| AgentRun wall clock | 2 min | 10 min | 30 min | 30 min |
+| AgentRun wall clock | 10 min | 30 min | 60 min | 60 min |
 | Agent steps | 12 | 32 | 64 | 128 |
 | Tool calls | 16 | 48 | 128 | 256 |
 | Model calls | 6 | 16 | 32 | 64 |
-| Agent model request timeout | 60 sec | 120 sec | 300 sec | 300 sec |
+| Agent model request timeout | 300 sec | 600 sec | 900 sec | 900 sec |
 | Agent model request bytes | 256 KiB | 256 KiB | 256 KiB | 256 KiB |
 | Agent model stream bytes | 8 MiB | 8 MiB | 8 MiB | 8 MiB |
 | Agent model cost units | 6 | 16 | 32 | 32 |
@@ -331,7 +331,7 @@ endpoint evidence may require a tighter configuration.
 | Reviewer request bytes | 48 KiB | 48 KiB | 48 KiB | 48 KiB |
 | Reviewer output bytes | 8 KiB | 8 KiB | 8 KiB | 8 KiB |
 | Reviewer cost units | 2 | 8 | 16 | 16 |
-| Kubernetes request | 15 sec | 30 sec | 60 sec | 60 sec |
+| Kubernetes request | 60 sec | 120 sec | 180 sec | 180 sec |
 | Resource pages per query | 2 | 4 | 8 | 8 |
 | Resource items per page | 25 | 50 | 100 | 100 |
 | Resource bytes per response | 128 KiB | 256 KiB | 1 MiB | 1 MiB |
@@ -578,3 +578,4 @@ checkpoint, persisted event, or second request.
 - [ADR-0050](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)

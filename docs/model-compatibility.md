@@ -355,7 +355,7 @@ or summarization call.
 | SSE data records or decoded Eino chunks | 32,768, whichever is reached first |
 | Discarded HTTP error-body read | 4 KiB |
 | Configured output tokens | No universal default; the request field is omitted unless the selected endpoint has exact evidence |
-| One model request | At most 300 seconds, further capped by the selected profile and owning AgentRun deadline |
+| One model request | At most 900 seconds, further capped by the selected profile and owning AgentRun deadline |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -560,4 +560,5 @@ evaluation were not run for this implementation evidence.
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)

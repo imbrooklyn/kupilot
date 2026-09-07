@@ -47,6 +47,10 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Scaled the immutable runtime time profiles for slower local models. The
+  default `balanced` profile now permits a 30-minute AgentRun, a 600-second
+  model request, and a 120-second Tool request; `compact` and `extended`
+  remain finite lower and upper tiers, and no timeout creates retry authority.
 - Reused Eino ADK `ChatModelAgent`, `Runner`, Tool-message pairing, message
   state, and summarization middleware inside the single model boundary while
   retaining safe SQLite Messages as the sole durable Session source.
