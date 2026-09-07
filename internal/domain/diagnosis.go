@@ -239,6 +239,8 @@ type Diagnosis struct {
 	CreatedAt            time.Time
 	EvidenceDetailsState EvidenceDetailState
 	ClaimCoverage        []ClaimEvidenceCoverage
+	Completeness         AnswerCompletenessManifest
+	Clarification        *ClarificationRequest
 	Plan                 *Plan
 }
 
@@ -256,7 +258,15 @@ func (diagnosis Diagnosis) Validate() error {
 		return ErrInvalidDiagnosis
 	}
 	if diagnosis.Plan != nil {
-		if diagnosis.Plan.Validate() != nil || len(diagnosis.RecommendedActions) != 0 {
+		if diagnosis.Plan.Validate() != nil || len(diagnosis.RecommendedActions) != 0 || diagnosis.Clarification != nil {
+			return ErrInvalidDiagnosis
+		}
+	}
+	if diagnosis.Clarification != nil {
+		if diagnosis.Clarification.Validate() != nil || diagnosis.Plan != nil ||
+			len(diagnosis.ConfirmedFacts) != 0 || len(diagnosis.Hypotheses) != 0 ||
+			len(diagnosis.MissingInformation) != 0 || len(diagnosis.RecommendedActions) != 0 || len(diagnosis.ClaimCoverage) != 0 ||
+			diagnosis.Completeness.StopReason != RunTerminalNeedsUserInput {
 			return ErrInvalidDiagnosis
 		}
 	}
@@ -333,6 +343,14 @@ func (diagnosis Diagnosis) Validate() error {
 			return ErrInvalidDiagnosis
 		}
 		seenClaims[coverage.TextHash] = struct{}{}
+	}
+	if !diagnosis.Completeness.Empty() {
+		if diagnosis.Completeness.Validate() != nil ||
+			!equalClaimCoverage(diagnosis.Completeness.Claims, diagnosis.ClaimCoverage) ||
+			!equalMissingInformation(diagnosis.Completeness.Limitations, diagnosis.MissingInformation) ||
+			diagnosis.Clarification == nil && diagnosis.Completeness.StopReason == RunTerminalNeedsUserInput {
+			return ErrInvalidDiagnosis
+		}
 	}
 	if len(diagnosis.ReferencedEvidenceIDs()) > maxEvidencePerInvocation {
 		return ErrInvalidDiagnosis
@@ -422,6 +440,8 @@ func diagnosisPayloadBytes(diagnosis Diagnosis) (int, error) {
 		diagnosis.RecommendedActions,
 		diagnosis.ValidationWarnings,
 		diagnosis.ClaimCoverage,
+		diagnosis.Completeness,
+		diagnosis.Clarification,
 		diagnosis.Plan,
 	}
 	total := len(diagnosis.AnswerMarkdown)
@@ -433,6 +453,46 @@ func diagnosisPayloadBytes(diagnosis Diagnosis) (int, error) {
 		total += len(encoded)
 	}
 	return total, nil
+}
+
+func equalClaimCoverage(left, right []ClaimEvidenceCoverage) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Sequence != right[index].Sequence || left[index].Kind != right[index].Kind ||
+			left[index].Text != right[index].Text || left[index].TextHash != right[index].TextHash ||
+			left[index].RunID != right[index].RunID || left[index].Scope != right[index].Scope ||
+			left[index].PolicyGeneration != right[index].PolicyGeneration || left[index].State != right[index].State ||
+			!equalEvidenceIDs(left[index].EvidenceIDs, right[index].EvidenceIDs) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalEvidenceIDs(left, right []EvidenceID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalMissingInformation(left, right []MissingInformation) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func validDiagnosisText(value string, minimumBytes, maximumBytes int) bool {

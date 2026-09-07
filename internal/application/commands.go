@@ -92,6 +92,7 @@ const (
 	UICommandAcceptResume      UICommandKind = "accept_resume"
 	UICommandCancelResume      UICommandKind = "cancel_resume"
 	UICommandShowStatus        UICommandKind = "show_status"
+	UICommandShowDoctor        UICommandKind = "show_doctor"
 	UICommandShowPermissions   UICommandKind = "show_permissions"
 	UICommandChangePermission  UICommandKind = "change_permission"
 	UICommandExportSession     UICommandKind = "export_session"
@@ -107,6 +108,7 @@ const (
 type UICommand struct {
 	Kind                     UICommandKind
 	RequestID                uint64
+	SessionID                domain.SessionID
 	Text                     string
 	RunID                    domain.AgentRunID
 	ItemID                   domain.MessageID
@@ -143,7 +145,8 @@ func (command UICommand) Validate() error {
 		command.Kind == UICommandCancelAction || command.Kind == UICommandExpireAction ||
 		command.Kind == UICommandSubmitSteer || command.Kind == UICommandEnqueueFollowUp ||
 		command.Kind == UICommandPopFollowUp || command.Kind == UICommandCancelFollowUp ||
-		command.Kind == UICommandClearFollowUps || command.Kind == UICommandCompactContext
+		command.Kind == UICommandClearFollowUps || command.Kind == UICommandCompactContext ||
+		command.Kind == UICommandSubmitQuestion
 	if !permissionCommand && command.hasPermissionPayload() {
 		return ErrInvalidUICommand
 	}
@@ -151,7 +154,11 @@ func (command UICommand) Validate() error {
 	if !queueMutationCommand && command.hasQueueMutationPayload() {
 		return ErrInvalidUICommand
 	}
+	if command.Kind != UICommandSubmitQuestion && command.SessionID != "" {
+		return ErrInvalidUICommand
+	}
 	lifecycleCommand := command.Kind == UICommandTightenRetention || command.Kind == UICommandSetPersistenceMode ||
+		command.Kind == UICommandPreviewSessionDeletion ||
 		command.Kind == UICommandDeleteSession || command.Kind == UICommandClearHistory ||
 		command.Kind == UICommandDeleteAllLocalState
 	if lifecycleCommand != (command.Lifecycle != nil) || command.Lifecycle != nil && command.Lifecycle.validateFor(command.Kind) != nil {
@@ -163,8 +170,10 @@ func (command UICommand) Validate() error {
 	}
 	switch command.Kind {
 	case UICommandSubmitQuestion:
-		if command.RequestID == 0 || command.RunID != "" || command.ExpectedScopeGeneration < 1 ||
-			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
+		if command.RequestID == 0 || !command.SessionID.Valid() || command.RunID != "" ||
+			command.ExpectedScopeGeneration < 1 || !command.ExpectedPolicyGeneration.Valid() ||
+			command.Scope != nil || command.Resource != nil && domain.ValidateLiveResourceRef(*command.Resource) != nil ||
+			command.hasPrivacyPayload() || command.PermissionProfile != "" || command.HighRiskAcknowledged ||
 			!validUICommandText(command.Text, MaxQuestionBytes) {
 			return ErrInvalidUICommand
 		}
@@ -257,7 +266,7 @@ func (command UICommand) Validate() error {
 			command.Scope != nil || command.Resource != nil || !validPrivacyDigest(command.PrivacyRevision) || command.LogsEnabled != nil {
 			return ErrInvalidUICommand
 		}
-	case UICommandDeleteSession, UICommandClearHistory, UICommandDeleteAllLocalState:
+	case UICommandPreviewSessionDeletion, UICommandDeleteSession, UICommandClearHistory, UICommandDeleteAllLocalState:
 		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
 			return ErrInvalidUICommand
@@ -283,6 +292,12 @@ func (command UICommand) Validate() error {
 	case UICommandNewSession, UICommandShowStatus:
 		if command.RequestID != 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() {
+			return ErrInvalidUICommand
+		}
+	case UICommandShowDoctor:
+		if command.RequestID == 0 || command.RunID != "" || command.Text != "" || command.ExpectedScopeGeneration != 0 ||
+			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() || command.hasApprovalPayload() ||
+			command.hasPermissionPayload() || command.hasQueueMutationPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandArmPlan, UICommandCancelPlan:
@@ -352,8 +367,16 @@ type RenameSessionRecord struct {
 	UpdatedAt       time.Time
 }
 
+// SessionTitleState is the exact durable optimistic-concurrency state read
+// immediately before one title write. It contains no Message or title text.
+type SessionTitleState struct {
+	SessionID domain.SessionID
+	Version   int64
+}
+
 // SessionTitleStore persists one bounded title change without exposing a
 // repository or database type.
 type SessionTitleStore interface {
+	ReadTitleState(context.Context, domain.SessionID) (SessionTitleState, error)
 	Rename(context.Context, RenameSessionRecord) error
 }

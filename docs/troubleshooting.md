@@ -18,6 +18,7 @@ Start with non-sensitive command information:
 ./bin/kupilot --version
 ./bin/kupilot --help
 ./bin/kupilot help resume
+./bin/kupilot doctor
 ```
 
 Do not paste a model API key, kubeconfig, raw Kubernetes response, container
@@ -60,6 +61,21 @@ has no path fields; all managed local paths derive from `KUPILOT_HOME`.
 `help`, `version`, and `cache clear` intentionally work without loading ordinary
 configuration, storage, Kubernetes, or the model. Use them to distinguish CLI
 parsing or cache maintenance from startup failure.
+
+## Local diagnostics report unavailable state
+
+Run `kupilot doctor` before opening the TUI, or `/doctor` inside an idle TUI.
+Both use the same versioned, content-free health vocabulary. The CLI opens only
+the fixed Home configuration and SQLite store; it does not construct a model,
+Kubernetes client, Tool, Reviewer, approval, child process, or executor. Use
+`kupilot doctor --json` for the bounded `kupilot.cli-doctor/v1` projection.
+
+Doctor intentionally omits endpoint text, credentials, managed absolute paths,
+Session titles, Messages, Evidence payloads, raw SQL/driver errors, and arbitrary
+environment values. A reported unsupported terminal clipboard or title is not
+an Agent failure. `Protocol continuation unavailable` means a disconnected
+stream remains unknown/recovered and requires a new explicit input; it is not a
+request to retry automatically.
 
 ## The model API key is missing or rejected
 
@@ -300,6 +316,20 @@ result.
 Resume never falls back to a new Session. Picker cancellation exits a top-level
 resume; `/resume` cancellation inside the TUI keeps the current Session. There
 is no cwd, repository, Context, Namespace, or `--all` filter.
+
+Use `kupilot sessions list` for bounded content-free discovery. `/sessions`
+opens the same metadata in the single-screen picker. `Last active` is the
+authoritative activity field; listing, viewing, resume alone, status, doctor,
+export, and deletion preview do not update it. A corrupt or future activity
+time is protected rather than silently selected for deletion.
+
+Current-Session `/delete` is unavailable while a run, commit barrier, Reviewer,
+approval, execution, or verification is active; deletion never cancels that
+work. For automation, first run a non-interactive `sessions delete --dry-run`,
+then supply the returned digest with the resolved absolute RFC3339 cutoff and
+`--confirm`. Any changed snapshot is stale and deletes nothing. Logical deletion
+does not remove exports, terminal scrollback, logs, backups, configuration,
+credentials, cache, or SQLite free pages.
 
 ## A resumed Session shows a scope conflict
 

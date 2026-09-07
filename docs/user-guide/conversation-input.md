@@ -82,11 +82,34 @@ composer to search the current committed transcript; fixed next/previous keys
 navigate and Escape restores the prior draft. Neither interaction includes
 queue, composer, streaming, failed, or recovered content.
 
+`Ctrl+R` searches only committed ordinary submitted input, while another
+`Ctrl+R` or the standard previous/next keys traverses matches. `Enter` accepts;
+`Esc` or `Ctrl+C` restores the exact prior draft. This delivery history is
+separate from model context. `Alt+Z` and `Alt+Y` provide bounded grapheme-safe
+undo/redo for ordinary composer editing; paste and committed IME input are one
+edit. Search, modal, picker, approval, secret, queue-edit, successful submit,
+Session switch, deletion, and shutdown isolate or clear the in-memory stacks.
+
+Committed transcript landmarks use fixed shortcuts: `Alt+U`/`Alt+Shift+U` for
+user input, `Alt+A`/`Alt+Shift+A` for assistant finals,
+`Alt+F`/`Alt+Shift+F` for failure or unknown, and
+`Alt+P`/`Alt+Shift+P` for approval. `Ctrl+E` opens the claim index; Left/Right
+select a claim and Up/Down select only Evidence cited by it. These jumps
+do not create a transcript page or interfere with terminal mouse selection.
+
 `/plan` arms the next ordinary input as a one-shot plan-only run; `/plan off`
 cancels before start. The plan may use safe reads, has at most twelve steps,
 cannot propose or execute actions, and never continues automatically.
 `/compact` requests a one-attempt compaction only while the interaction is
 idle.
+
+Every fixed Slash entry reports `available`, `busy`, `not applicable`,
+`disabled`, or `unsupported terminal` with a content-free reason. `/doctor`
+shows redacted local build/configuration/storage/Session/terminal/feature/
+compatibility health and performs no operational I/O. Terminal titles contain
+only fixed states; notifications are disabled. `NO_COLOR`, ANSI-16, reduced
+motion, narrow resize, IME/Unicode, and restored scrollback keep safety meaning
+in text or stable symbols rather than color or animation alone.
 
 ## Scope and resume
 

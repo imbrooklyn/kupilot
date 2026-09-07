@@ -66,12 +66,13 @@ func TestSubmitQuestionReportsModeFrozenAtRunStart(t *testing.T) {
 	clock := newCoordinatorClock()
 	runner := newControlledConversationRunner(clock)
 	coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
-	createCoordinatorSession(t, coordinator)
+	session := createCoordinatorSession(t, coordinator)
 	if _, err := coordinator.ExecuteUICommand(context.Background(), UICommand{Kind: UICommandArmPlan, RequestID: 1}); err != nil {
 		t.Fatalf("arm plan error = %v", err)
 	}
 	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandSubmitQuestion, RequestID: 2, ExpectedScopeGeneration: 7,
+		Kind: UICommandSubmitQuestion, RequestID: 2, SessionID: session.ID,
+		ExpectedScopeGeneration: 7, ExpectedPolicyGeneration: 1,
 		Text: "Plan a bounded readiness diagnosis.",
 	})
 	if err != nil || outcome.RunMode != agent.RunModePlanOnly || !outcome.RunID.Valid() {

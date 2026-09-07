@@ -243,6 +243,22 @@ and network source checks, rollout progress, CrashLoop and OOM signals, Jobs,
 and Node pressure. Sufficient and intentionally limited Evidence variants keep
 confirmed facts distinct from hypotheses when a source is absent or partial.
 
+The answer-completeness projection distinguishes checked-and-absent from not
+checked, unavailable, denied, partial, truncated, timed out, stale, and
+conflicting. Freshness is known only where a code-owned capability supplies an
+exact ceiling. Conflict or supersession requires exact typed source, subject,
+field, revision, and value-digest identity; prose is never parsed into that
+authority. Absence from a bounded list cannot prove global nonexistence unless
+the exact query coverage is complete.
+
+One complete successful `safe` read may be reused only inside the same
+Session/Run/scope and policy generations for an identical operation, canonical
+target, typed parameters, and the code-owned freshness window. Reuse preserves
+the original observation and Evidence identity. Review/critical/deny,
+mutation/Exec/process, failed/partial/unknown, stale/conflicting, cross-run or
+cross-generation results are never reused, and the model cannot select a key,
+TTL, or bypass.
+
 Opt-in tagged live integration may prove compatibility for one exact cluster,
 endpoint, data source, or executable version. Model evaluation separately
 measures diagnostic quality and Reviewer decisions, false approval/denial,
@@ -257,3 +273,4 @@ to an untested version.
 - [Least-Privilege RBAC](rbac/README.md)
 - [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
 - [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

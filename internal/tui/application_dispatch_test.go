@@ -99,7 +99,7 @@ func TestResumedHistoryIsAppliedOnlyAfterApplicationAcceptance(t *testing.T) {
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
-			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "current", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		SavedScope: &domain.ScopeCandidate{Context: "current", Namespace: "default"},
@@ -155,7 +155,7 @@ func TestAcceptedResumeReplacesInputHistoryWithResumedUserMessages(t *testing.T)
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
-			ID: resumedSessionID, Title: "Resumed Session", UpdatedAtUnixMillis: 1,
+			ID: resumedSessionID, Title: "Resumed Session", LastActivityAtUnixMillis: 1,
 			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		SavedScope: &domain.ScopeCandidate{Context: "test-context", Namespace: "test-namespace"},
@@ -241,7 +241,7 @@ func (fake *dispatchApplication) ResumeUI(
 		Session: &application.UIResumedSession{
 			ResumeRequestID: 2,
 			Session: application.UISessionCandidate{
-				ID: testSessionID, UpdatedAtUnixMillis: 1, PrivacyMode: domain.PrivacyModeStandard,
+				ID: testSessionID, LastActivityAtUnixMillis: 1, PrivacyMode: domain.PrivacyModeStandard,
 			},
 		},
 	}, nil
@@ -287,6 +287,7 @@ func (fake *dispatchApplication) ExecuteUICommand(
 				DataSourceWindowMillis: 21_600_000, DataSourceStepMillis: 300_000,
 				ResourcePagesMaximum: 4, ResourcePageItemsMaximum: 50, ResourcePageBytesMaximum: 256 * 1024,
 				ResourceScannedMaximum: 200, ResourceReturnedMaximum: 50, ResourceBytesMaximum: 1024 * 1024,
+				FineGrained: application.NewUIBudgetMeasures(agent.DefaultRunBudgetLimits()),
 			},
 		},
 	}, nil

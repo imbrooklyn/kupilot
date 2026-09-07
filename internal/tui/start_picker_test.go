@@ -111,7 +111,7 @@ func TestDirectResumeStartIntentsReachReadyOnlyAfterMatchingFakeResult(t *testin
 				t.Fatalf("initial resume state = request %#v ready %v", request, model.startup.Ready)
 			}
 			resumed := application.UIResumedSession{ResumeRequestID: request.RequestID, Session: application.UISessionCandidate{
-				ID: tt.resultID, Title: "Recovered diagnosis", UpdatedAtUnixMillis: 1,
+				ID: tt.resultID, Title: "Recovered diagnosis", LastActivityAtUnixMillis: 1,
 				Context: "current", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
 			}}
 			model, cmd := updateModel(t, model, ResumeResultMsg{Result: application.UIResumeResult{
@@ -156,7 +156,7 @@ func TestTopLevelExplicitScopeOverridesSavedCandidate(t *testing.T) {
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
-			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "saved-context", Namespace: "saved-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		SavedScope: &domain.ScopeCandidate{Context: "saved-context", Namespace: "saved-namespace"},
@@ -187,7 +187,7 @@ func TestTopLevelResumeRequiresPickerBeforeActivatingUnverifiedStartupScope(t *t
 		resumed := application.UIResumedSession{
 			ResumeRequestID: request.RequestID,
 			Session: application.UISessionCandidate{
-				ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+				ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 				Context: saved.Context, Namespace: saved.Namespace, PrivacyMode: domain.PrivacyModeStandard,
 			},
 			SavedScope: &saved,
@@ -271,7 +271,7 @@ func TestTopLevelResumeScopeActivationFailureReturnsToPickerWithoutAcceptance(t 
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
-			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "current-context", Namespace: "default", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		SavedScope: &domain.ScopeCandidate{Context: "current-context", Namespace: "default"},
@@ -312,7 +312,7 @@ func TestCtrlCCancelsInTUIResumeScopePicker(t *testing.T) {
 	resumed := application.UIResumedSession{
 		ResumeRequestID: request.RequestID,
 		Session: application.UISessionCandidate{
-			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "saved-context", Namespace: "saved-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		SavedScope: &domain.ScopeCandidate{Context: "saved-context", Namespace: "saved-namespace"},

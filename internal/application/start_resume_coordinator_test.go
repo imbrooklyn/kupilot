@@ -433,9 +433,9 @@ func TestCoordinatorSessionPickerAndResumeStayReadOnlyUntilAcceptance(t *testing
 	otherID := domain.SessionID(coordinatorUUID(52))
 	store := newRecordingSessionResumeStore()
 	store.candidates = []ResumeSessionRecord{
-		{ID: resumedID, Title: "Payment diagnosis", UpdatedAt: now, PrivacyMode: domain.PrivacyModeStandard,
+		{ID: resumedID, Title: "Payment diagnosis", LastActivityAt: now, PrivacyMode: domain.PrivacyModeStandard,
 			LastScope: &domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"}},
-		{ID: otherID, Title: "Queue diagnosis", UpdatedAt: now.Add(-time.Millisecond), PrivacyMode: domain.PrivacyModeStandard},
+		{ID: otherID, Title: "Queue diagnosis", LastActivityAt: now.Add(-time.Millisecond), PrivacyMode: domain.PrivacyModeStandard},
 	}
 	store.history = resumedRecord(resumedID, now)
 	coordinator := newUICoordinatorHarness(t, store, new(recordingStartupMaintenance))
@@ -852,10 +852,20 @@ func TestCoordinatorRenamePersistsOnlyProcessedCurrentSessionTitle(t *testing.T)
 		store.renameRecord.Title == "" || store.renameRecord.ExpectedVersion != 2 {
 		t.Fatalf("redacted rename outcome = %#v, error = %v, record = %#v", outcome, err, store.renameRecord)
 	}
+	// A committed lifecycle transition can advance the durable Session version
+	// without changing this in-memory delivery projection. Rename reads that
+	// exact version once and still performs only one optimistic write.
+	store.titleVersion = 9
 	outcome, err = coordinator.ExecuteUICommand(context.Background(), UICommand{Kind: UICommandRenameSession})
 	if err != nil || outcome.Session == nil || outcome.Session.Title != "" ||
-		store.renameRecord.Title != "" || store.renameRecord.ExpectedVersion != 3 {
+		store.renameRecord.Title != "" || store.renameRecord.ExpectedVersion != 9 {
 		t.Fatalf("cleared rename outcome = %#v, error = %v, record = %#v", outcome, err, store.renameRecord)
+	}
+	coordinator.mu.Lock()
+	current := *coordinator.currentSession
+	coordinator.mu.Unlock()
+	if current.Version != 10 || !current.LastActivityAt.Equal(store.renameRecord.UpdatedAt) {
+		t.Fatalf("authoritative in-memory rename state = %#v, record = %#v", current, store.renameRecord)
 	}
 
 	blocked := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\nsynthetic\n" +
@@ -880,10 +890,11 @@ type recordingSessionResumeStore struct {
 	renameCalls   int
 	renameRecord  RenameSessionRecord
 	renameErr     error
+	titleVersion  int64
 }
 
 func newRecordingSessionResumeStore() *recordingSessionResumeStore {
-	return new(recordingSessionResumeStore)
+	return &recordingSessionResumeStore{titleVersion: 1}
 }
 
 func (store *recordingSessionResumeStore) SearchResumable(
@@ -922,7 +933,17 @@ func (store *recordingSessionResumeStore) ResumeLatest(context.Context) (Resumed
 func (store *recordingSessionResumeStore) Rename(_ context.Context, record RenameSessionRecord) error {
 	store.renameCalls++
 	store.renameRecord = record
+	if store.renameErr == nil {
+		store.titleVersion++
+	}
 	return store.renameErr
+}
+
+func (store *recordingSessionResumeStore) ReadTitleState(_ context.Context, id domain.SessionID) (SessionTitleState, error) {
+	if store.err != nil {
+		return SessionTitleState{}, store.err
+	}
+	return SessionTitleState{SessionID: id, Version: store.titleVersion}, nil
 }
 
 type recordingStartupMaintenance struct {
@@ -1214,7 +1235,8 @@ func resumedRecord(id domain.SessionID, now time.Time) ResumedSessionRecord {
 			ID: id, Title: "Payment diagnosis", Status: domain.SessionStatusActive,
 			PrivacyMode: domain.PrivacyModeStandard,
 			LastScope:   &domain.ScopeCandidate{Context: "saved-context", Namespace: "payments"},
-			Version:     2, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(time.Millisecond),
+			Version:     2, CreatedAt: now.Add(-time.Hour), LastActivityAt: now,
+			UpdatedAt: now.Add(time.Millisecond),
 		},
 		Messages: []domain.Message{user, assistant},
 	}

@@ -15,6 +15,48 @@ import (
 
 const MaxClipboardAnswerBytes = 64 * 1024
 
+func (model Model) requestDoctor() (Model, tea.Cmd) {
+	model.composer.Reset()
+	model.slashMenu.Close()
+	if model.pendingDoctorID != 0 {
+		model.showDialog("Doctor busy", "Wait for the current local diagnostic check to finish.")
+		return model, nil
+	}
+	requestID := model.nextUIRequestID()
+	command := application.UICommand{Kind: application.UICommandShowDoctor, RequestID: requestID}
+	if command.Validate() != nil {
+		model.showDialog("Doctor unavailable", "The local diagnostic request could not be constructed safely.")
+		return model, nil
+	}
+	model.pendingDoctorID = requestID
+	model.showDialog("Running local doctor", "Checking only redacted configuration, storage, recovery, feature, and terminal capability state.")
+	return model, applicationCommand(command)
+}
+
+func (model *Model) showDoctor(result application.UIDoctorResult) {
+	capabilities := model.terminalCapabilities
+	storage := "healthy"
+	if result.PersistenceDegraded || result.Storage.ProtectedActivity > 0 || result.Storage.PendingRecoveryRuns > 0 {
+		storage = "degraded"
+	}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Schema: %s\nApplication: %s\nConfiguration: %s\nProvider: %s\nOrigin hash: %s\n",
+		result.SchemaVersion, result.ApplicationVersion, result.ConfigurationSchema, result.ProviderKind, result.AgentOriginHash)
+	fmt.Fprintf(&builder, "Model configured: %t\nStorage: %s · schema %d · Sessions %d · protected activity %d · future activity %d · pending recovery %d\n",
+		result.ModelConfigured, storage, result.Storage.SchemaRevision, result.Storage.SessionCount,
+		result.Storage.ProtectedActivity, result.Storage.FutureActivity, result.Storage.PendingRecoveryRuns)
+	fmt.Fprintf(&builder, "Model boundary: %s %s · %s %s · %s · live conformance %s\n",
+		result.ModelCompatibility.Runtime, result.ModelCompatibility.RuntimeVersion,
+		result.ModelCompatibility.Adapter, result.ModelCompatibility.AdapterVersion,
+		result.ModelCompatibility.Protocol, result.ModelCompatibility.LiveConformance)
+	fmt.Fprintf(&builder, "Terminal: native clipboard %s · OSC 52 %s · multiplexer %s · remote session %s · title %s · notification %s · color %s · alternate screen %s · reduced motion %t · scrollback %s\n",
+		capabilities.NativeClipboard, capabilities.OSC52, capabilities.Multiplexer, capabilities.RemoteSession,
+		capabilities.Title, capabilities.Notification, capabilities.Color, capabilities.AlternateScreen, capabilities.ReducedMotion, capabilities.Scrollback)
+	fmt.Fprintf(&builder, "Stream recovery: %s\n", result.ModelCompatibility.StreamContinuation)
+	builder.WriteString("Checks are local and redacted. No model, Kubernetes, Tool, Reviewer, approval, process, or executor call was made.")
+	model.showDialog("Doctor", builder.String())
+}
+
 func (model Model) copyLatestCommittedAnswer() (Model, tea.Cmd) {
 	model.composer.Reset()
 	model.slashMenu.Close()

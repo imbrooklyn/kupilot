@@ -501,3 +501,174 @@ func TestClaimCoverageLimitsAreExactAndOneOverFailsClosed(t *testing.T) {
 		t.Fatalf("ValidateDiagnosis(one-over claim ceiling) error = %v", err)
 	}
 }
+
+func TestAnswerCompletenessDistinguishesNegativeAndUnavailableSourceCoverage(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*domain.ToolResult)
+		wantState  domain.SourceCoverageState
+		wantFresh  domain.EvidenceFreshnessState
+		wantReason domain.RunTerminalReason
+	}{
+		{
+			name: "checked absent",
+			configure: func(result *domain.ToolResult) {
+				result.Evidence = nil
+				result.DataJSON = `{"items":[]}`
+			},
+			wantState: domain.SourceCheckedAbsent, wantFresh: domain.EvidenceFreshnessUnknown, wantReason: domain.RunTerminalCompleted,
+		},
+		{
+			name: "denied",
+			configure: func(result *domain.ToolResult) {
+				result.Status, result.Evidence, result.DataJSON = domain.ToolResultStatusDenied, nil, `{}`
+				result.Error = &domain.ToolResultError{Class: domain.SafeErrorClassPermissionDenied, SafeMessage: "The source was denied."}
+			},
+			wantState: domain.SourceDenied, wantFresh: domain.EvidenceFreshnessUnknown, wantReason: domain.RunTerminalPolicyDenied,
+		},
+		{
+			name: "timed out",
+			configure: func(result *domain.ToolResult) {
+				result.Status, result.Evidence, result.DataJSON = domain.ToolResultStatusError, nil, `{}`
+				result.Error = &domain.ToolResultError{Class: domain.SafeErrorClassTimeout, Retryable: true, SafeMessage: "The source timed out."}
+			},
+			wantState: domain.SourceTimedOut, wantFresh: domain.EvidenceFreshnessUnknown, wantReason: domain.RunTerminalSourceUnavailable,
+		},
+		{
+			name: "stale",
+			configure: func(result *domain.ToolResult) {
+				result.Status, result.Evidence, result.DataJSON = domain.ToolResultStatusError, nil, `{}`
+				result.Error = &domain.ToolResultError{Class: domain.SafeErrorClassStaleScope, SafeMessage: "The source became stale."}
+			},
+			wantState: domain.SourceStale, wantFresh: domain.EvidenceStale, wantReason: domain.RunTerminalStaleGeneration,
+		},
+		{
+			name: "truncated",
+			configure: func(result *domain.ToolResult) {
+				result.Status, result.Evidence, result.DataJSON = domain.ToolResultStatusPartial, nil, `{}`
+				result.Truncation = domain.ToolResultTruncation{Truncated: true, Reason: "item_limit", ReturnedBytes: 2}
+			},
+			wantState: domain.SourceTruncated, wantFresh: domain.EvidenceFreshnessUnknown, wantReason: domain.RunTerminalPartialResult,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := testRunInput(t, "Inspect the selected Pod.")
+			call := testBoundCall(t, input, testInvocationID, "sample-pod")
+			result := testToolResult(t, call, testEvidenceID, input.Scope().ActivatedAt)
+			test.configure(&result)
+			if err := result.Validate(); err != nil {
+				t.Fatalf("ToolResult.Validate() error = %v", err)
+			}
+			registry, err := NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
+			if err != nil {
+				t.Fatalf("NewEvidenceRegistry() error = %v", err)
+			}
+			if _, err := registry.AcceptToolResult(call, result); err != nil {
+				t.Fatalf("AcceptToolResult() error = %v", err)
+			}
+			diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+				AnswerMarkdown: "The bounded source state is reported without inferring omitted objects.", ResponseSchemaVersion: 2,
+				SuggestedStopReason: domain.RunTerminalCompleted,
+			}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
+			if err != nil || len(diagnosis.Completeness.Sources) != 1 {
+				t.Fatalf("ValidateDiagnosis() = %#v, %v", diagnosis, err)
+			}
+			source := diagnosis.Completeness.Sources[0]
+			if source.State != test.wantState || source.Freshness != test.wantFresh ||
+				diagnosis.Completeness.StopReason != test.wantReason || source.SourceHash == "" || source.SubjectHash == "" {
+				t.Fatalf("source/stop = %#v/%q", source, diagnosis.Completeness.StopReason)
+			}
+		})
+	}
+}
+
+func TestAnswerCompletenessMarksExactOlderEvidenceSuperseded(t *testing.T) {
+	input := testRunInput(t, "Inspect the selected Pod twice.")
+	firstCall := testBoundCall(t, input, testInvocationID, "sample-pod")
+	secondInvocation := domain.ToolInvocationID("00000000-0000-7000-8000-000000004095")
+	secondCall := testBoundCall(t, input, secondInvocation, "sample-pod")
+	first := testToolResult(t, firstCall, testEvidenceID, input.Scope().ActivatedAt)
+	secondID := domain.EvidenceID("00000000-0000-7000-8000-000000004096")
+	second := testToolResult(t, secondCall, secondID, input.Scope().ActivatedAt.Add(time.Millisecond))
+	first.Evidence[0].PolicyVersion = domain.ResourcePolicyVersion
+	first.Evidence[0].PolicyGeneration = input.PolicyGeneration()
+	second.Evidence[0].PolicyVersion = domain.ResourcePolicyVersion
+	second.Evidence[0].PolicyGeneration = input.PolicyGeneration()
+	second.Evidence[0].Fingerprint = domain.SHA256Hex("sample-pod-ready")
+	second.Evidence[0].Fact = "The projected Pod condition is Ready."
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	if _, err = registry.AcceptToolResult(firstCall, first); err != nil {
+		t.Fatalf("AcceptToolResult(first) error = %v", err)
+	}
+	if _, err = registry.AcceptToolResult(secondCall, second); err != nil {
+		t.Fatalf("AcceptToolResult(second) error = %v", err)
+	}
+	claim := "The Pod is not Ready."
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		AnswerMarkdown: claim, ResponseSchemaVersion: 2,
+		ConfirmedFacts:      []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{testEvidenceID}}},
+		ClaimCoverage:       []ClaimCoverageDraft{validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, testEvidenceID)},
+		SuggestedStopReason: domain.RunTerminalCompleted,
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: second.ObservedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
+	if err != nil {
+		t.Fatalf("ValidateDiagnosis() error = %v", err)
+	}
+	older := diagnosis.Completeness.Sources[0]
+	if older.Conflict != domain.EvidenceConflictSuperseded || len(older.SupersededByEvidenceIDs) != 1 ||
+		older.SupersededByEvidenceIDs[0] != secondID || diagnosis.Completeness.StopReason != domain.RunTerminalConflictingEvidence {
+		t.Fatalf("supersession/stop = %#v/%q", older, diagnosis.Completeness.StopReason)
+	}
+}
+
+func TestTypedClarificationHasNoEvidenceActionOrLimitationAuthority(t *testing.T) {
+	input := testRunInput(t, "Help inspect a workload.")
+	registry, err := NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
+	if err != nil {
+		t.Fatalf("NewEvidenceRegistry() error = %v", err)
+	}
+	request := domain.ClarificationRequest{
+		SchemaVersion: domain.AnswerCompletenessSchemaVersion,
+		Questions: []domain.ClarificationQuestion{{Sequence: 1, Kind: domain.ClarificationChoice,
+			Prompt: "Which workload should be inspected?", Choices: []domain.ClarificationChoiceValue{{ID: "api", Label: "API"}, {ID: "worker", Label: "Worker"}}}},
+	}
+	answer, err := RenderClarificationMarkdown(request)
+	if err != nil {
+		t.Fatalf("RenderClarificationMarkdown() error = %v", err)
+	}
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		AnswerMarkdown: answer, ResponseSchemaVersion: 2, SuggestedStopReason: domain.RunTerminalNeedsUserInput,
+		Clarification: &request,
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
+	if err != nil || diagnosis.Clarification == nil || diagnosis.Completeness.StopReason != domain.RunTerminalNeedsUserInput ||
+		diagnosis.Completeness.StopReasonBasis != domain.RunTerminalReasonFromClarification ||
+		len(diagnosis.Completeness.Claims) != 0 || len(diagnosis.Completeness.Limitations) != 0 {
+		t.Fatalf("typed clarification = %#v, %v", diagnosis, err)
+	}
+}
+
+func TestModelSuggestedStopReasonCannotOverrideAcceptedCoverage(t *testing.T) {
+	registry, input, evidenceID, _ := claimCoverageRegistry(t)
+	claim := "The Pod is not Ready."
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
+		AnswerMarkdown: claim, ResponseSchemaVersion: 2,
+		ConfirmedFacts: []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{evidenceID}}},
+		ClaimCoverage: []ClaimCoverageDraft{
+			validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, evidenceID),
+		},
+		SuggestedStopReason: domain.RunTerminalPolicyDenied,
+	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration()}, registry)
+	if err != nil || diagnosis.Completeness.StopReason != domain.RunTerminalCompleted ||
+		diagnosis.Completeness.StopReasonBasis != domain.RunTerminalReasonFromCoverage {
+		t.Fatalf("model-suggested stop reason retained authority: %#v, %v", diagnosis.Completeness, err)
+	}
+	tampered := diagnosis.Completeness
+	tampered.StopReasonBasis = domain.RunTerminalReasonFromRuntimeBudget
+	tampered.StopReason = domain.RunTerminalBudgetExhausted
+	if tampered.Validate() == nil {
+		t.Fatal("runtime-budget basis without a deterministic runtime limitation was accepted")
+	}
+}

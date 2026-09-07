@@ -21,12 +21,13 @@ func TestSessionRepositoryCRUDAndStrictNullableMapping(t *testing.T) {
 	createdAt := time.UnixMilli(1_000).UTC()
 
 	minimal := domain.Session{
-		ID:          domain.SessionID("00000000-0000-7000-8000-000000000001"),
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: domain.PrivacyModeMinimal,
-		Version:     1,
-		CreatedAt:   createdAt,
-		UpdatedAt:   createdAt,
+		ID:             domain.SessionID("00000000-0000-7000-8000-000000000001"),
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    domain.PrivacyModeMinimal,
+		Version:        1,
+		CreatedAt:      createdAt,
+		LastActivityAt: createdAt,
+		UpdatedAt:      createdAt,
 	}
 	if err := repository.Create(context.Background(), minimal); err != nil {
 		t.Fatalf("Create(minimal) error = %v", err)
@@ -57,10 +58,11 @@ func TestSessionRepositoryCRUDAndStrictNullableMapping(t *testing.T) {
 			UID:             "synthetic-uid",
 			ResourceVersion: "17",
 		},
-		Summary:   &summary,
-		Version:   1,
-		CreatedAt: createdAt,
-		UpdatedAt: time.UnixMilli(2_000).UTC(),
+		Summary:        &summary,
+		Version:        1,
+		CreatedAt:      createdAt,
+		LastActivityAt: time.UnixMilli(2_000).UTC(),
+		UpdatedAt:      time.UnixMilli(2_000).UTC(),
 	}
 	if err := repository.Create(context.Background(), standard); err != nil {
 		t.Fatalf("Create(standard) error = %v", err)
@@ -86,7 +88,8 @@ func TestSessionRepositoryCRUDAndStrictNullableMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID(renamed) error = %v", err)
 	}
-	if renamed.Title != rename.Title || renamed.Version != 2 || !renamed.UpdatedAt.Equal(rename.UpdatedAt) {
+	if renamed.Title != rename.Title || renamed.Version != 2 || !renamed.UpdatedAt.Equal(rename.UpdatedAt) ||
+		!renamed.LastActivityAt.Equal(rename.UpdatedAt) {
 		t.Fatalf("renamed Session = %#v", renamed)
 	}
 	if err := repository.Rename(context.Background(), rename); !errors.Is(err, sessioncontract.ErrSessionConflict) {
@@ -410,13 +413,14 @@ func TestSessionRepositoryHonorsExpiredDeadline(t *testing.T) {
 
 func testSession(id, title string, mode domain.PrivacyMode, updatedAt time.Time) domain.Session {
 	value := domain.Session{
-		ID:          domain.SessionID(id),
-		Title:       title,
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: mode,
-		Version:     1,
-		CreatedAt:   updatedAt,
-		UpdatedAt:   updatedAt,
+		ID:             domain.SessionID(id),
+		Title:          title,
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    mode,
+		Version:        1,
+		CreatedAt:      updatedAt,
+		LastActivityAt: updatedAt,
+		UpdatedAt:      updatedAt,
 	}
 	if mode == domain.PrivacyModeStandard {
 		value.LastScope = &domain.ScopeCandidate{

@@ -204,6 +204,14 @@ func (model Model) inputLabelView() string {
 		label = "Find"
 		current, total, _ := model.transcript.SearchState()
 		hint = fmt.Sprintf("committed transcript · %d/%d · Enter next · Shift+Tab previous · Esc close", current, total)
+	case model.historySearchMode:
+		label = "Submitted input search"
+		current := 0
+		if len(model.historySearchMatches) > 0 {
+			current = model.historySearchIndex + 1
+		}
+		hint = fmt.Sprintf("query %d/512 bytes · %d/%d · Ctrl+R next · Shift+Tab previous · Enter accept · Esc cancel",
+			len(model.historySearchQuery), current, len(model.historySearchMatches))
 	case model.modelSetup != nil:
 		parts := strings.SplitN(model.modelSetupView(), " · ", 2)
 		label = parts[0]
@@ -229,6 +237,10 @@ func (model Model) inputLabelView() string {
 			label = "Resource"
 		case application.UICompletionSession:
 			label = "Session"
+			hint = "Enter resume · D delete selected · Esc close"
+		case application.UICompletionSessionManagement:
+			label = "Sessions"
+			hint = "Enter resume · D delete selected · B delete inactive · Esc close"
 		}
 	case model.slashMenu.Open():
 		label = "Command"
@@ -259,11 +271,15 @@ func (model Model) workingView() string {
 	if model.run.Active && !model.run.Terminal {
 		bullet := "•"
 		bulletStyle := model.styles.working.Normal
-		if model.workingFrame/6%2 == 1 {
+		if !model.reducedMotion && model.workingFrame/6%2 == 1 {
 			bullet = "◦"
 			bulletStyle = model.styles.working.Muted
 		}
-		line := bulletStyle.Render(bullet) + " " + model.shimmerText("Working")
+		working := model.styles.working.Normal.Render("Working")
+		if !model.reducedMotion {
+			working = model.shimmerText("Working")
+		}
+		line := bulletStyle.Render(bullet) + " " + working
 		line += model.styles.working.Muted.Render(" (" + components.FormatElapsedCompact(model.workingElapsed()) + " • ")
 		line += model.styles.working.Normal.Render("esc")
 		line += model.styles.working.Muted.Render(" to interrupt)")
@@ -382,12 +398,18 @@ func (model Model) footerView() string {
 	if model.planArmed {
 		plan = "plan-only next"
 	}
+	egress := ""
+	if model.run.ModelEgress != nil && model.run.Active {
+		egress = fmt.Sprintf("egress %s · %d msg/%d B · %s",
+			model.run.ModelEgress.CallKind, model.run.ModelEgress.MessageCount,
+			model.run.ModelEgress.MessageBytes, model.run.ModelEgress.SummaryState)
+	}
 	return model.footer.View(model.contentWidth(), components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
 		Permission: permission, Supervision: supervision,
 		Approval:        approvalStatus,
-		ContextPressure: pressure, Plan: plan,
+		ContextPressure: pressure, Plan: plan, Egress: egress,
 	})
 }
 

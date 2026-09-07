@@ -17,6 +17,7 @@ type boundExecution struct {
 	toolName       domain.ToolName
 	modelCall      agent.ToolSelection
 	policyFeedback string
+	reuse          *agent.ToolReuseMetadata
 }
 
 type runState struct {
@@ -38,11 +39,38 @@ type runState struct {
 	boundCalls        map[string]*boundExecution
 	modelRequestIDs   map[domain.ModelRequestID]struct{}
 	toolInvocationIDs map[domain.ToolInvocationID]struct{}
+	safeReadReuse     map[agent.ToolCallIdentity]safeReadCacheEntry
+	safeReadSubjects  map[string]string
+	conflictSubjects  map[string]struct{}
 	toolBatchFailure  error
 	provisionalEvents int
 	profileName       string
 	originHash        string
 	summaryPlan       *summaryPlan
+	committedSteers   []agent.ConversationTurn
+}
+
+func (state *runState) recordCommittedSteer(claim agent.SteerClaim) error {
+	turn := agent.ConversationTurn{
+		MessageID: claim.ItemID, RunID: claim.RunID, RunSequence: claim.RunSequence,
+		Role: domain.MessageRoleUser, Content: claim.Content, ContentHash: claim.ContentHash,
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if claim.Validate() != nil || claim.RunID != state.input.RunID() || claim.SessionID != state.input.SessionID() ||
+		claim.ScopeGeneration != state.input.Scope().Generation || claim.PolicyGeneration != state.input.PolicyGeneration() ||
+		claim.RunSequence != len(state.committedSteers)+1 {
+		return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	state.committedSteers = append(state.committedSteers, turn)
+	return nil
+}
+
+func (state *runState) runInputManifest() (agent.RunInputManifest, error) {
+	state.mu.Lock()
+	steers := append([]agent.ConversationTurn(nil), state.committedSteers...)
+	state.mu.Unlock()
+	return agent.BuildRunInputManifest(state.input, steers)
 }
 
 func (state *runState) toolBatchAbort() error {
@@ -182,9 +210,11 @@ func (state *runState) validateDiagnosis(draft agent.DiagnosisDraft, modelDraft 
 	if !validRuntimeTime(createdAt) {
 		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	diagnosis, err := agent.ValidateDiagnosis(draft, agent.DiagnosisMetadata{
-		ID: id, CreatedAt: createdAt, PolicyGeneration: state.input.PolicyGeneration(),
-	}, state.registry)
+	metadata := agent.DiagnosisMetadata{ID: id, CreatedAt: createdAt, PolicyGeneration: state.input.PolicyGeneration()}
+	if !modelDraft {
+		metadata.AuthoritativeStopReason = domain.RunTerminalBudgetExhausted
+	}
+	diagnosis, err := agent.ValidateDiagnosis(draft, metadata, state.registry)
 	if err != nil {
 		if !modelDraft {
 			return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
@@ -312,7 +342,9 @@ func (state *runState) finishLocalDiagnosis(ctx context.Context, failure *runtim
 		kind = domain.MissingInformationTruncated
 	}
 	draft := agent.DiagnosisDraft{
-		AnswerMarkdown: failure.safeMessage,
+		AnswerMarkdown:        failure.safeMessage,
+		ResponseSchemaVersion: 1,
+		SuggestedStopReason:   domain.RunTerminalBudgetExhausted,
 		MissingInformation: []domain.MissingInformation{{
 			Kind:   kind,
 			Detail: failure.safeMessage,

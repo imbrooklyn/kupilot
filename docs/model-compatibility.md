@@ -131,6 +131,11 @@ contract. Kupilot keeps the existing SQLite safe Messages through the thin
 project-owned selection bridge and does not adopt `TurnLoop`, a prerelease
 Session API, or a second runtime.
 
+The reviewed OpenAI extension v0.1.13 source revision is
+`0ebab92e14f26088411dbc440a1ebdc904ccd8a1`; the pinned ACL is v0.1.17 and
+`go-openai` is v0.1.2. These are compatibility identities, not evidence for a
+particular live endpoint. No dependency was upgraded for these changes.
+
 The Eino component is the only Chat Completions serializer and stream decoder.
 Kupilot does not replace or reconstruct its JSON request. A payload observer
 rejects an oversized request or exact credential reflection and otherwise
@@ -522,13 +527,28 @@ Tool pairing, summary-before-steer handler ordering, and streaming transport.
 The adapter supplies only a fixed safe-read Tool subset and validates a strict
 bounded plan response.
 
-Protocol continuation is unavailable with the pinned stack. The OpenAI
+Before each real Agent endpoint entry, the run-bound Application preflight
+verifies exact input sequencing, scope/policy/profile/origin/consent, context
+coverage, Tool catalog, storage, budgets, sink, mode, and recovery state, then
+emits its content-free projection. New model final output must use strict
+response schema 2 and choose exactly one `answer` or `needs_user_input`
+outcome. The completeness manifest, clarification bounds, and authoritative
+stop reason are validated after Eino assembly without adding another model
+role or answer critic.
+
+**Protocol continuation unavailable.** The pinned OpenAI
 extension `v0.1.13` and ACL `v0.1.17` issue a complete Chat Completions POST;
 the `go-openai` `v0.1.2` SSE reader consumes `data:` records and `[DONE]` but
 has no replay event ID, sequence/offset, `Last-Event-ID`, or same-response
 reattach operation. Chunk response IDs and `X-Request-ID` do not establish
 replay order. Kupilot therefore retains unknown/recovered handling and adds no
 continuation, retry, polling, checkpoint, or dependency change.
+
+The deterministic loopback conformance suite covers structured finals, Tool
+call identities, event order, usage, cancellation, timeout, malformed,
+duplicate and out-of-order stream data, unknown outcome, and no cross-origin
+retry. It runs only under tests. Live endpoint conformance and model-quality
+evaluation were not run for this implementation evidence.
 
 ## References
 
@@ -539,4 +559,5 @@ continuation, retry, polling, checkpoint, or dependency change.
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)

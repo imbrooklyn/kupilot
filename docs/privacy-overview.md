@@ -151,7 +151,10 @@ reference current-run Evidence and propose a typed action. Neither Markdown nor
 an action phrase is authority.
 
 - Only deterministic local capability handling creates Evidence.
-- Invalid Evidence references are removed and produce a warning.
+- A new strict response with a missing, unknown, duplicate, cross-run,
+  cross-generation, stale, out-of-order, hash-mismatched, or unauthorized
+  Evidence reference fails closed and is not committed as a successful answer.
+  Retained legacy records may still display their bounded validation warnings.
 - A proposal does not mean approved, attempted, accepted, or verified.
 - Deterministic risk and permission routing plus a digest-bound immutable
   `ActionEnvelope` and durable pre-operation audit are required before every
@@ -163,6 +166,12 @@ an action phrase is authority.
 
 Model output may still be incomplete or wrong. Evidence is a time-bounded
 projection and not a guarantee that cluster state is unchanged.
+
+Strict response schema 2 records only bounded declared claims, limitations,
+source coverage, freshness/conflict state, Evidence identifiers, stop reason,
+or one to three typed clarification questions. Application checks provenance
+and derives the authoritative stop reason. This metadata proves structure and
+ownership, not semantic correctness or exhaustive real-world coverage.
 
 Some compatible models emit commentary before or alongside a structured Tool
 selection. Kupilot bounds and validates that content while resolving the
@@ -239,6 +248,14 @@ enters scrollback. Kupilot does not emit raw Kubernetes objects, credentials,
 provider bodies, model-selected escape sequences, clipboard controls, or
 device-control content through this path.
 
+Transcript and submitted-input search, semantic navigation, queue previews,
+undo/redo snapshots, Session picker state, terminal capabilities, command
+availability, egress preflight, doctor results, and title deduplication are
+bounded interaction state. They are not logged, exported, sent to a model, or
+persisted. Search and undo reuse the sole composer. The configured title emits
+only fixed states, and terminal notifications remain disabled in this
+implementation.
+
 ## Local persistence and deletion
 
 Kupilot manages configuration, SQLite state, cache, and operational logs below
@@ -265,6 +282,13 @@ Standard persistence may additionally store:
 - lifecycle and consent audit; and
 - versioned ActionEnvelope projection, permission decision, one-attempt outcome,
   cleanup, and verification audit for supervised actions.
+
+Session metadata includes a dedicated authoritative Last active timestamp.
+Only committed input/result, accepted Tool/Evidence/Diagnosis, approval/action/
+verification, and explicit rename transitions advance it. Listing, filtering,
+view/resume, status, doctor, export, maintenance, deletion preview, and failed
+deletion do not. `/sessions` and `kupilot sessions list` expose only bounded
+sanitized metadata; they never include Message, summary, or Evidence payloads.
 
 It never stores assembled prompts, streaming deltas, raw model traffic, raw
 Tool results, raw Kubernetes objects, raw Events, or raw container output.
@@ -296,10 +320,24 @@ and no current-question-only fallback. Historic scope, Evidence, permission
 rules, reviews, ActionEnvelopes, approvals, and execution state are never
 restored as authority.
 
+Scope and policy generations are current-process authority versions rather than
+Session, binary, schema, or database versions. Compatible upgrades and forward
+migrations keep eligible history available, but historic generations never
+authorize current transfer. A refused question start returns only fixed reason,
+recovery, Session/run identity, generation, lifecycle, and health metadata. It
+contains no question, history, resource content, credential, endpoint secret,
+raw error, or storage path. The unsent draft remains local to the composer and
+is neither persisted nor added to submitted-input history.
+
 The user can delete the current or a selected historical Session after explicit
-confirmation. Active work is cancelled and joined, and unexecuted approval is
-made terminal before one transactional graph deletion. A consuming approval or
-storage failure denies deletion without a partial-success claim.
+confirmation. `/delete` is unavailable while an AgentRun, commit barrier,
+Reviewer, approval, action, execution, or verification is active; deletion does
+not cancel that work. Queue, composer, and context state are cleared only after
+one transactional graph deletion commits. A consuming, merely attempted,
+unknown, corrupt, future, or otherwise unproved state is protected, and storage
+failure preserves the current Session and drafts without a partial-success
+claim. CLI inactive deletion uses a frozen strict cutoff and content-free digest
+and excludes the current Session.
 
 Clear-history removes Session graphs in bounded transactions while preserving
 the disclosed configuration and, when explicitly stated, valid consent.
@@ -311,13 +349,14 @@ swap, or storage media.
 ## Redacted summary export
 
 A current standard Session may be exported only through `/privacy` as
-`kupilot.export-summary.v3`, with an
+`kupilot.export-summary.v4`, with an
 explicit absolute Markdown destination and second confirmation. The versioned
 allowlist contains safe Session display metadata, bounded processed committed
 user and assistant text, the bounded safe Session-context summary and its
 content-free coverage explanation, free-form validated answer metadata,
 bounded claim/Evidence coverage metadata, and referenced Evidence summaries or
-expired markers.
+expired markers. Its Session timestamps are labeled Created at and authoritative
+Last active; the generic internal update timestamp is not presented as activity.
 
 It excludes raw Tool input/output, raw logs or Events, Kubernetes objects, full
 prompts, model traffic, credentials, Secrets, kubeconfig data, approval nonce,
@@ -359,6 +398,14 @@ stores no raw Evidence payload or raw model response. A plan is retained only
 as an ordinary committed assistant Message. Neither restores authority on
 resume.
 
+`/doctor` and `kupilot doctor` expose only versioned redacted local
+configuration, storage, Session-integrity, terminal-capability, feature, and
+compatibility state. Content-free model-egress preflight reports role, origin
+hash, consent, context counts/bytes, categories, budget reservation, and
+generations before endpoint entry. Neither surface contains prompts, questions,
+titles, resource values, credentials, raw errors, SQL, or absolute sensitive
+paths, and neither performs operational I/O.
+
 Kupilot has no usage analytics, remote crash reporting, Kupilot-operated
 account, update checker, hosted control plane, or telemetry endpoint. Normal
 network paths are the selected Kubernetes API, the explicit model origins, and
@@ -381,3 +428,6 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

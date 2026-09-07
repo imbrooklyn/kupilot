@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -385,10 +386,21 @@ func toolCallChunks(calls ...agent.ToolSelection) []*schema.Message {
 }
 
 func diagnosisChunks(content string) []*schema.Message {
+	content = strictTestDiagnosis(content)
 	return []*schema.Message{
 		{Role: schema.Assistant, Content: content},
 		{Role: schema.Assistant, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"}},
 	}
+}
+
+func strictTestDiagnosis(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.Contains(trimmed, `"answer_markdown"`) || strings.Contains(trimmed, `"response_schema_version"`) ||
+		!strings.HasSuffix(trimmed, "}") {
+		return content
+	}
+	return strings.TrimSuffix(trimmed, "}") +
+		`,"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
 }
 
 func resourceCall(id, podName string) agent.ToolSelection {

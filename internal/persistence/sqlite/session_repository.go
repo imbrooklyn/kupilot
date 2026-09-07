@@ -19,20 +19,22 @@ const (
 	createSessionSQL = `
 		INSERT INTO sessions (
 			id, title, status, privacy_mode, last_context, last_namespace,
-			selected_resource_json, summary, version, created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			selected_resource_json, summary, version, created_at_ms,
+			last_activity_at_ms, updated_at_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING
 	`
 	getSessionByIDSQL = `
 		SELECT
 			id, title, status, privacy_mode, last_context, last_namespace,
-			selected_resource_json, summary, version, created_at_ms, updated_at_ms
+			selected_resource_json, summary, version, created_at_ms,
+			last_activity_at_ms, updated_at_ms
 		FROM sessions
 		WHERE id = ?
 	`
 	renameSessionSQL = `
 		UPDATE sessions
-		SET title = ?, updated_at_ms = ?, version = version + 1
+		SET title = ?, last_activity_at_ms = ?, updated_at_ms = ?, version = version + 1
 		WHERE id = ?
 			AND privacy_mode = 'standard'
 			AND version = ?
@@ -44,7 +46,7 @@ const (
 	`
 	listResumableSessionsSQL = `
 		SELECT
-			s.id, s.title, s.updated_at_ms, s.privacy_mode,
+			s.id, s.title, s.last_activity_at_ms, s.privacy_mode,
 			s.last_context, s.last_namespace
 		FROM sessions AS s
 		WHERE s.status = 'active'
@@ -54,31 +56,31 @@ const (
 				FROM messages AS m
 				WHERE m.session_id = s.id AND m.status = 'committed'
 			)
-		ORDER BY s.updated_at_ms DESC, s.id DESC
+		ORDER BY s.last_activity_at_ms DESC, s.id DESC
 		LIMIT ?
 	`
 	listResumableSessionsBeforeSQL = `
 		SELECT
-			s.id, s.title, s.updated_at_ms, s.privacy_mode,
+			s.id, s.title, s.last_activity_at_ms, s.privacy_mode,
 			s.last_context, s.last_namespace
 		FROM sessions AS s
 		WHERE s.status = 'active'
 			AND s.privacy_mode = 'standard'
 			AND (
-				s.updated_at_ms < ?
-				OR (s.updated_at_ms = ? AND s.id < ?)
+				s.last_activity_at_ms < ?
+				OR (s.last_activity_at_ms = ? AND s.id < ?)
 			)
 			AND EXISTS (
 				SELECT 1
 				FROM messages AS m
 				WHERE m.session_id = s.id AND m.status = 'committed'
 			)
-		ORDER BY s.updated_at_ms DESC, s.id DESC
+		ORDER BY s.last_activity_at_ms DESC, s.id DESC
 		LIMIT ?
 	`
 	getLatestResumableSessionSQL = `
 		SELECT
-			s.id, s.title, s.updated_at_ms, s.privacy_mode,
+			s.id, s.title, s.last_activity_at_ms, s.privacy_mode,
 			s.last_context, s.last_namespace
 		FROM sessions AS s
 		WHERE s.status = 'active'
@@ -88,7 +90,7 @@ const (
 				FROM messages AS m
 				WHERE m.session_id = s.id AND m.status = 'committed'
 			)
-		ORDER BY s.updated_at_ms DESC, s.id DESC
+		ORDER BY s.last_activity_at_ms DESC, s.id DESC
 		LIMIT 1
 	`
 	getSessionPersistenceStateSQL = `
@@ -99,6 +101,7 @@ const (
 	touchSessionSQL = `
 		UPDATE sessions
 		SET
+			last_activity_at_ms = CASE WHEN last_activity_at_ms < ? THEN ? ELSE last_activity_at_ms END,
 			updated_at_ms = CASE WHEN updated_at_ms < ? THEN ? ELSE updated_at_ms END,
 			version = version + 1
 		WHERE id = ?
@@ -121,16 +124,17 @@ type sessionRow struct {
 	Summary              sql.NullString `db:"summary"`
 	Version              int64          `db:"version"`
 	CreatedAtMS          int64          `db:"created_at_ms"`
+	LastActivityAtMS     int64          `db:"last_activity_at_ms"`
 	UpdatedAtMS          int64          `db:"updated_at_ms"`
 }
 
 type resumeCandidateRow struct {
-	ID            string         `db:"id"`
-	Title         string         `db:"title"`
-	UpdatedAtMS   int64          `db:"updated_at_ms"`
-	PrivacyMode   string         `db:"privacy_mode"`
-	LastContext   sql.NullString `db:"last_context"`
-	LastNamespace sql.NullString `db:"last_namespace"`
+	ID               string         `db:"id"`
+	Title            string         `db:"title"`
+	LastActivityAtMS int64          `db:"last_activity_at_ms"`
+	PrivacyMode      string         `db:"privacy_mode"`
+	LastContext      sql.NullString `db:"last_context"`
+	LastNamespace    sql.NullString `db:"last_namespace"`
 }
 
 type sessionPersistenceRow struct {
@@ -186,6 +190,7 @@ func (repository *SessionRepository) Create(ctx context.Context, value domain.Se
 		nullableString(optionalString(value.Summary)),
 		value.Version,
 		value.CreatedAt.UTC().UnixMilli(),
+		value.LastActivityAt.UTC().UnixMilli(),
 		value.UpdatedAt.UTC().UnixMilli(),
 	)
 	if err != nil {
@@ -242,6 +247,7 @@ func (repository *SessionRepository) Rename(ctx context.Context, command session
 			ctx,
 			renameSessionSQL,
 			command.Title,
+			command.UpdatedAt.UTC().UnixMilli(),
 			command.UpdatedAt.UTC().UnixMilli(),
 			command.ID,
 			command.ExpectedVersion,
@@ -315,7 +321,7 @@ func (repository *SessionRepository) ListResumable(ctx context.Context, request 
 	if request.Before == nil {
 		rows, err = repository.db.handle.QueryxContext(ctx, listResumableSessionsSQL, limit)
 	} else {
-		boundary := request.Before.UpdatedAt.UTC().UnixMilli()
+		boundary := request.Before.LastActivityAt.UTC().UnixMilli()
 		rows, err = repository.db.handle.QueryxContext(
 			ctx,
 			listResumableSessionsBeforeSQL,
@@ -350,7 +356,7 @@ func (repository *SessionRepository) ListResumable(ctx context.Context, request 
 	if len(values) > request.Limit {
 		page.Sessions = values[:request.Limit]
 		last := page.Sessions[len(page.Sessions)-1]
-		page.Next = &sessioncontract.ResumeCursor{UpdatedAt: last.UpdatedAt, ID: last.ID}
+		page.Next = &sessioncontract.ResumeCursor{LastActivityAt: last.LastActivityAt, ID: last.ID}
 	}
 	return page, nil
 }
@@ -400,6 +406,7 @@ func (row sessionRow) domainSession() (domain.Session, error) {
 		Summary:          stringPointer(row.Summary),
 		Version:          row.Version,
 		CreatedAt:        time.UnixMilli(row.CreatedAtMS).UTC(),
+		LastActivityAt:   time.UnixMilli(row.LastActivityAtMS).UTC(),
 		UpdatedAt:        time.UnixMilli(row.UpdatedAtMS).UTC(),
 	}
 	if err := value.Validate(); err != nil {
@@ -414,24 +421,25 @@ func (row resumeCandidateRow) resumeCandidate() (sessioncontract.ResumeCandidate
 		return sessioncontract.ResumeCandidate{}, err
 	}
 	value := domain.Session{
-		ID:          domain.SessionID(row.ID),
-		Title:       row.Title,
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: domain.PrivacyMode(row.PrivacyMode),
-		LastScope:   lastScope,
-		Version:     1,
-		CreatedAt:   time.UnixMilli(row.UpdatedAtMS).UTC(),
-		UpdatedAt:   time.UnixMilli(row.UpdatedAtMS).UTC(),
+		ID:             domain.SessionID(row.ID),
+		Title:          row.Title,
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    domain.PrivacyMode(row.PrivacyMode),
+		LastScope:      lastScope,
+		Version:        1,
+		CreatedAt:      time.UnixMilli(row.LastActivityAtMS).UTC(),
+		LastActivityAt: time.UnixMilli(row.LastActivityAtMS).UTC(),
+		UpdatedAt:      time.UnixMilli(row.LastActivityAtMS).UTC(),
 	}
 	if value.Validate() != nil || !value.HasResumableMetadata() {
 		return sessioncontract.ResumeCandidate{}, domain.ErrInvalidSession
 	}
 	return sessioncontract.ResumeCandidate{
-		ID:          value.ID,
-		Title:       value.Title,
-		UpdatedAt:   value.UpdatedAt,
-		PrivacyMode: value.PrivacyMode,
-		LastScope:   value.LastScope,
+		ID:             value.ID,
+		Title:          value.Title,
+		LastActivityAt: value.LastActivityAt,
+		PrivacyMode:    value.PrivacyMode,
+		LastScope:      value.LastScope,
 	}, nil
 }
 
@@ -470,7 +478,7 @@ func activeSessionPrivacyMode(ctx context.Context, getter strictGetter, id domai
 
 func touchSession(ctx context.Context, tx *sqlx.Tx, id domain.SessionID, activityAt time.Time) error {
 	millis := activityAt.UTC().UnixMilli()
-	result, err := tx.ExecContext(ctx, touchSessionSQL, millis, millis, id)
+	result, err := tx.ExecContext(ctx, touchSessionSQL, millis, millis, millis, millis, id)
 	if err != nil {
 		return err
 	}

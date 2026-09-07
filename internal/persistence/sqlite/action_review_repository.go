@@ -2,8 +2,13 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+
+	"github.com/jmoiron/sqlx"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const insertActionReviewSQL = `
@@ -25,19 +30,34 @@ func (repository *ApprovalRepository) AppendActionReview(
 	if record.Validate() != nil {
 		return application.ErrApprovalUnavailable
 	}
-	_, err := repository.db.handle.ExecContext(
-		ctx,
-		insertActionReviewSQL,
-		record.ApprovalID,
-		record.ModelRequestID,
-		record.Profile,
-		record.OriginHash,
-		record.PolicyGeneration,
-		record.Disposition,
-		nullableText(record.RationaleSummary),
-		nullableText(string(record.ErrorClass)),
-		record.OccurredAt.UnixMilli(),
-	)
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		if _, err := tx.ExecContext(
+			ctx,
+			insertActionReviewSQL,
+			record.ApprovalID,
+			record.ModelRequestID,
+			record.Profile,
+			record.OriginHash,
+			record.PolicyGeneration,
+			record.Disposition,
+			nullableText(record.RationaleSummary),
+			nullableText(string(record.ErrorClass)),
+			record.OccurredAt.UnixMilli(),
+		); err != nil {
+			return err
+		}
+		var sessionID string
+		if err := tx.GetContext(ctx, &sessionID, `SELECT session_id FROM approvals WHERE id = ?`, record.ApprovalID); errors.Is(err, sql.ErrNoRows) {
+			return application.ErrApprovalUnavailable
+		} else if err != nil {
+			return err
+		}
+		id := domain.SessionID(sessionID)
+		if !id.Valid() {
+			return application.ErrApprovalUnavailable
+		}
+		return touchSession(ctx, tx, id, record.OccurredAt)
+	})
 	return repository.translateError(
 		err,
 		"action_review_append_failed",

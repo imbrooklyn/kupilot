@@ -224,10 +224,9 @@ func TestContentFreeTerminalTitlesFollowOnlyAcceptedLifecycle(t *testing.T) {
 		t.Fatalf("approval title = %q", got)
 	}
 	model.clearApproval()
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "secret-answer-canary",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 3, "secret-answer-canary",
+	)})
 	if got := model.View().WindowTitle; got != "Kupilot — Complete" {
 		t.Fatalf("completion title = %q", got)
 	}
@@ -264,9 +263,7 @@ func TestFailedAndCancelledTitlesUseTheFixedFailureState(t *testing.T) {
 		model := newTestModel()
 		model.terminalStatusTitles = true
 		model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
-		model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-			Kind: kind, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "bounded failure",
-		}})
+		model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(kind, 2, "bounded failure")})
 		if got := model.View().WindowTitle; got != "Kupilot — Failed" {
 			t.Fatalf("%s title = %q", kind, got)
 		}

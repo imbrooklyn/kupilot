@@ -110,11 +110,9 @@ func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
 				assertCursorOnComposer(t, model, "streaming answer")
 			}
 
-			model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-				Kind: application.UIEventRunCompleted, RunID: testRunID,
-				ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 19,
-				Text: "The scheduling path is healthy.",
-			}})
+			model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+				application.UIEventRunCompleted, 19, "The scheduling path is healthy.",
+			)})
 			assertCursorOnComposer(t, model, "completed answer")
 		})
 	}
@@ -208,10 +206,9 @@ func TestWorkingLayoutKeepsNewestTurnVisibleAndFollowsCompletion(t *testing.T) {
 	}
 
 	answer := strings.Repeat("Diagnostic detail.\n", 8) + "Final visible answer."
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: answer,
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 2, answer,
+	)})
 	if view := model.transcript.View(); !strings.Contains(view, "Final visible answer.") {
 		t.Fatalf("completed turn did not remain attached to the live bottom: %q", view)
 	}
@@ -362,10 +359,7 @@ func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview
 	if cmd == nil || !strings.Contains(model.View().Content, "How many Nodes are Ready?") {
 		t.Fatal("run start removed user history from the managed frame")
 	}
-	terminalEvent := application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Three Nodes are Ready.",
-	}
+	terminalEvent := runTerminalEvent(application.UIEventRunCompleted, 2, "Three Nodes are Ready.")
 	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})
 	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
 		t.Fatal("pure TUI state lost terminal Agent history or emitted a runtime command")
@@ -412,9 +406,9 @@ func populatedViewModel(t *testing.T) Model {
 			Purpose: "Inspect the selected Pod.", Status: application.ToolStepSucceeded, EvidenceCount: 2,
 		},
 	}})
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "Final diagnosis.",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 4, "Final diagnosis.",
+	)})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/r"})
 	model.transcript.PageUp()
 	model.reflow()

@@ -14,7 +14,9 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
+	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
 
 func TestMigrateFreshDatabaseAndRepeatedOpen(t *testing.T) {
@@ -60,7 +62,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 14 {
+	if err != nil || len(migrations) != 16 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -364,7 +366,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 14 {
+	if err != nil || len(migrations) != 16 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -419,7 +421,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 14 {
+	if err != nil || len(migrations) != 16 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -505,7 +507,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 14 {
+	if err != nil || len(migrations) != 16 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -570,7 +572,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 14 {
+		if err != nil || len(migrations) != 16 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -651,7 +653,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 14 {
+		if err != nil || len(migrations) != 16 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -869,7 +871,7 @@ func openMigrationV12Fixture(t *testing.T, name string) (*sqlx.DB, []migration) 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 14 {
+	if err != nil || len(migrations) != 16 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 12; index++ {
@@ -901,6 +903,91 @@ func TestMigrateLegacyFixture(t *testing.T) {
 	db := openTestDB(t, context.Background(), stateDir, "legacy-upgrade")
 	assertInitialSchema(t, db.handle.DB)
 	assertMigrationRecord(t, db.handle.DB, testApplicationVersion)
+}
+
+func TestCompatibleBinaryUpgradePreservesSessionListingAndResumableHistory(t *testing.T) {
+	stateDir := testStateDir(t)
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
+	legacy := sqlx.NewDb(raw, driverName)
+	migrations, err := loadMigrations()
+	if err != nil || len(migrations) != 16 {
+		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
+	}
+	for index := 0; index < 14; index++ {
+		if err := applyMigration(context.Background(), legacy, migrations[index], "old-compatible-binary", index == 0); err != nil {
+			_ = legacy.Close()
+			t.Fatalf("apply legacy migration %d error = %v", index+1, err)
+		}
+	}
+
+	const (
+		sessionID = "00000000-0000-7000-8000-000000009971"
+		messageID = "00000000-0000-7000-8000-000000009972"
+	)
+	if _, err := legacy.ExecContext(context.Background(), `
+		INSERT INTO sessions (
+			id, title, status, privacy_mode, last_context, last_namespace,
+			version, created_at_ms, updated_at_ms
+		) VALUES (?, 'Compatible history', 'active', 'standard', 'historic-context', 'historic-namespace', 4, 1000, 2000)
+	`, sessionID); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("insert legacy Session error = %v", err)
+	}
+	if _, err := legacy.ExecContext(context.Background(), `
+		INSERT INTO messages (
+			id, session_id, role, content, content_format, status, content_hash, created_at_ms
+		) VALUES (?, ?, 'user', 'Compatible committed history', 'plain', 'committed', ?, 1500)
+	`, messageID, sessionID, domain.MessageContentHash("Compatible committed history")); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("insert legacy Message error = %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("legacy Close() error = %v", err)
+	}
+
+	upgraded, err := Open(context.Background(), OpenOptions{
+		StateDir: stateDir, ApplicationVersion: "new-compatible-binary", CorrelationID: "compatible-binary-upgrade",
+	})
+	if err != nil {
+		t.Fatalf("upgraded Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = upgraded.Close() })
+	sessions := NewSessionRepository(upgraded)
+	messages := NewMessageRepository(upgraded)
+	runs := NewAgentRunRepository(upgraded)
+
+	page, err := sessions.ListSessionMetadata(context.Background(), application.SessionListStoreRequest{Limit: 2})
+	if err != nil || len(page.Sessions) != 1 || page.Sessions[0].ID != domain.SessionID(sessionID) ||
+		page.Sessions[0].LastActiveUnixMillis != 2000 || page.Sessions[0].CommittedMessages != 1 {
+		t.Fatalf("upgraded Session list = %#v, %v", page, err)
+	}
+	service := sessioncontract.NewService(sessions, sessions, messages, runs, runs)
+	history, err := service.ResumeByID(context.Background(), domain.SessionID(sessionID))
+	if err != nil || history.Session.ID != domain.SessionID(sessionID) || len(history.Messages) != 1 ||
+		history.Messages[0].ID != domain.MessageID(messageID) || history.Messages[0].Content != "Compatible committed history" {
+		t.Fatalf("upgraded resumable history = %#v, %v", history, err)
+	}
+	if history.Session.LastScope == nil || history.Session.LastScope.Context != "historic-context" ||
+		history.Session.LastScope.Namespace != "historic-namespace" {
+		t.Fatalf("historic scope candidate = %#v", history.Session.LastScope)
+	}
+
+	var sessionCount, messageCount, migratedActivity int
+	if err := upgraded.handle.GetContext(context.Background(), &sessionCount, `SELECT count(id) FROM sessions WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("Session preservation query error = %v", err)
+	}
+	if err := upgraded.handle.GetContext(context.Background(), &messageCount, `SELECT count(id) FROM messages WHERE id = ?`, messageID); err != nil {
+		t.Fatalf("Message preservation query error = %v", err)
+	}
+	if err := upgraded.handle.GetContext(context.Background(), &migratedActivity, `SELECT last_activity_at_ms FROM sessions WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("Last active backfill query error = %v", err)
+	}
+	if sessionCount != 1 || messageCount != 1 || migratedActivity != 2000 {
+		t.Fatalf("preserved Session/Message/activity = %d/%d/%d", sessionCount, messageCount, migratedActivity)
+	}
 }
 
 func TestMigrateRejectsChecksumMismatch(t *testing.T) {
@@ -945,7 +1032,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 15, "000015_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 17, "000017_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -1201,6 +1288,8 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000012_observation_action_parameters.sql",
 		"000013_run_conversation_sequence.sql",
 		"000014_claim_coverage_and_plan.sql",
+		"000015_session_last_activity.sql",
+		"000016_answer_completeness.sql",
 	}
 	count := 0
 	for rows.Next() {

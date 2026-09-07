@@ -51,13 +51,18 @@ func TestEvidenceDetailUpdateRejectsLateRequestRunScopeAndSequence(t *testing.T)
 		strings.Contains(content, "partial:") || strings.Contains(content, "truncated:") {
 		t.Fatalf("matching Evidence detail is not visible: %q", content)
 	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.evidenceDialog.Open() || !model.transcript.EvidenceSelecting() || model.FocusedEditorCount() != 0 {
+		t.Fatalf("Evidence detail did not return to the exact claim selection: dialog=%v selecting=%v focused=%d",
+			model.evidenceDialog.Open(), model.transcript.EvidenceSelecting(), model.FocusedEditorCount())
+	}
 
 	late := accepted
 	late.Detail = cloneUIEvidenceDetail(accepted.Detail)
 	late.Detail.Projection = "Late replacement must be ignored."
 	model, _ = updateModel(t, model, EvidenceDetailResultMsg{Result: late})
 	if content := model.View().Content; strings.Contains(content, late.Detail.Projection) ||
-		!strings.Contains(content, accepted.Detail.Projection) {
+		strings.Contains(content, accepted.Detail.Projection) || !strings.Contains(content, "Observation 1/1") {
 		t.Fatalf("terminal Evidence detail accepted a late replacement: %q", content)
 	}
 }
@@ -99,8 +104,12 @@ func TestEvidenceDetailKeyboardNavigationAndCancellation(t *testing.T) {
 	t.Parallel()
 
 	model, first := modelWithEvidenceReference(t)
+	first.ClaimSequences = []int{1}
+	first.ClaimKinds = []domain.ClaimKind{domain.ClaimCurrentObservation}
 	second := first
 	second.EvidenceID = testEvidenceIDTwo
+	second.ClaimSequences = []int{1, 2}
+	second.ClaimKinds = []domain.ClaimKind{domain.ClaimCurrentObservation, domain.ClaimInference}
 	model = modelWithEvidenceReferences(t, []application.UIEvidenceReference{first, second})
 
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/r"})
@@ -111,7 +120,15 @@ func TestEvidenceDetailKeyboardNavigationAndCancellation(t *testing.T) {
 	if model.slashMenu.Open() || model.pickerOpen() {
 		t.Fatal("Evidence selection left a second navigation surface open")
 	}
+	if content := model.View().Content; !strings.Contains(content, "Claim index") ||
+		!strings.Contains(content, "#1, current observation") || !strings.Contains(content, "Evidence 1/2") {
+		t.Fatalf("claim-to-Evidence index is not visible: %q", content)
+	}
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyRight})
+	if content := model.View().Content; !strings.Contains(content, "#2, inference") || !strings.Contains(content, "Evidence 1/1") {
+		t.Fatalf("claim index did not move to the exact second claim: %q", content)
+	}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 	if query.Reference.EvidenceID != second.EvidenceID || model.EditorCount() != 1 || model.FocusedEditorCount() != 0 {
@@ -206,7 +223,7 @@ func TestEvidenceDetailReferencesSurviveSafeHistoryRestore(t *testing.T) {
 	model.applyAcceptedResume(application.UIResumedSession{
 		ResumeRequestID: 7,
 		Session: application.UISessionCandidate{
-			ID: testSessionID, Title: "Historic diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Historic diagnosis", LastActivityAtUnixMillis: 1,
 			PrivacyMode: domain.PrivacyModeStandard,
 		},
 		History: []application.UIHistoryMessage{{
@@ -244,15 +261,9 @@ func modelWithEvidenceReferences(t *testing.T, references []application.UIEviden
 	t.Helper()
 	model := newTestModel()
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind:               application.UIEventRunCompleted,
-		RunID:              testRunID,
-		ScopeGeneration:    7,
-		PolicyGeneration:   1,
-		Sequence:           2,
-		Text:               "Final diagnosis.",
-		EvidenceReferences: references,
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 2, "Final diagnosis.", references...,
+	)})
 	return model
 }
 

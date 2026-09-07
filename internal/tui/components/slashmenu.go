@@ -10,11 +10,11 @@ const MaxSlashCandidates = 8
 
 // SlashCandidate is one code-defined completion row and owns no editor state.
 type SlashCandidate struct {
-	Name           string
-	Usage          string
-	Summary        string
-	Enabled        bool
-	DisabledReason string
+	Name         string
+	Usage        string
+	Summary      string
+	Availability string
+	Reason       string
 }
 
 // SlashMenuStyles provides semantic styles without embedding command behavior.
@@ -137,10 +137,15 @@ func (menu SlashMenu) View() string {
 		if candidate.Summary != "" {
 			line += "  " + candidate.Summary
 		}
-		if !candidate.Enabled {
+		availability := candidate.Availability
+		if availability == "" {
+			availability = "available"
+		}
+		line += " · " + availability
+		if availability != "available" {
 			style = menu.styles.Disabled
-			if candidate.DisabledReason != "" {
-				line += " — " + candidate.DisabledReason
+			if candidate.Reason != "" {
+				line += " — " + candidate.Reason
 			}
 		}
 		lines = append(lines, style.Render(middleElideColumns(line, menu.width)))

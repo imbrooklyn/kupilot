@@ -238,6 +238,7 @@ func TestCoordinatorSerializesExportAgainstDeletionAndDoesNotReplayAfterRestart(
 		Kind: UICommandExportSession, RequestID: 84, PrivacyRevision: show.Privacy.Revision,
 		Export: &ExportSummaryIntent{SessionID: session.ID, TargetPath: "/private/export/race.md", ExpectedCurrent: true, Confirmed: true, SchemaVersion: ExportSummarySchemaVersion},
 	}
+	deletionReview := previewExactSessionDeletion(t, coordinator, session.ID, 85)
 	type exportResult struct {
 		outcome UICommandOutcome
 		err     error
@@ -248,12 +249,9 @@ func TestCoordinatorSerializesExportAgainstDeletionAndDoesNotReplayAfterRestart(
 		done <- exportResult{outcome: outcome, err: executeErr}
 	}()
 	<-reader.entered
-	_, deleteErr := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandDeleteSession, RequestID: 85,
-		Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
-	})
-	if !errors.Is(deleteErr, ErrCoordinatorBusy) || persistence.deleteWrites() != 0 {
-		t.Fatalf("concurrent delete error/writes = %v/%d", deleteErr, persistence.deleteWrites())
+	deleteOutcome, deleteErr := coordinator.ExecuteUICommand(context.Background(), confirmedSessionDeletion(deletionReview, 86))
+	if deleteErr != nil || deleteOutcome.Failure != UIQueryUnavailable || persistence.deleteWrites() != 0 {
+		t.Fatalf("concurrent delete outcome/error/writes = %#v/%v/%d", deleteOutcome, deleteErr, persistence.deleteWrites())
 	}
 	close(reader.release)
 	completed := <-done
@@ -335,7 +333,7 @@ func exportCoordinatorSnapshot(session domain.Session) SessionExportSnapshot {
 	return SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: session.ID, Title: "Safe Session", PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
+			CreatedAt: session.CreatedAt, LastActivityAt: session.LastActivityAt, UpdatedAt: session.UpdatedAt,
 		},
 		Messages: []ExportMessageRecord{{Role: domain.MessageRoleUser, Content: "A safe exported question.", CreatedAt: session.CreatedAt}},
 	}

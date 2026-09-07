@@ -261,11 +261,17 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 		if invocation.Validate() != nil {
 			return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 		}
+		var reuse *agent.ToolReuseMetadata
+		if metadata, reusable := state.reusableSafeRead(call, requestedAt); reusable {
+			copy := metadata
+			reuse = &copy
+		}
 		entries[index] = &boundExecution{
 			call:      call,
 			requested: invocation,
 			toolName:  call.Name(),
 			modelCall: safeSelection,
+			reuse:     reuse,
 		}
 	}
 	if policyFeedbackNeeded {
@@ -321,9 +327,14 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 	state.toolSequence += len(entries)
 	state.mu.Unlock()
 	for _, execution := range entries {
+		externalCallCost := execution.call.ExternalCallCost()
+		if execution.reuse != nil {
+			externalCallCost = 0
+		}
 		invocation := execution.requested
 		if err := state.publish(ctx, agent.RunEvent{
-			Kind: agent.RunEventToolCallRequested, ExternalCallCost: execution.call.ExternalCallCost(), ToolInvocation: &invocation,
+			Kind: agent.RunEventToolCallRequested, ExternalCallCost: externalCallCost,
+			ToolInvocation: &invocation, ToolReuse: execution.reuse,
 		}); err != nil {
 			return err
 		}
@@ -363,6 +374,9 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	}
 	if err := state.checkScope(ctx); err != nil {
 		return "", state.failToolForRuntime(ctx, execution, err)
+	}
+	if execution.reuse != nil {
+		return state.executeReusableSafeRead(ctx, execution)
 	}
 	reservation, err := state.budget.ReserveToolCall(ctx, execution.call)
 	if err != nil {
@@ -421,6 +435,43 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 		}
 	}
 	if err := state.addStepEvidence(newEvidence); err != nil {
+		return "", err
+	}
+	state.retainReusableSafeRead(execution.call, result, content)
+	return content, nil
+}
+
+func (state *runState) executeReusableSafeRead(ctx context.Context, execution *boundExecution) (string, error) {
+	current := state.now()
+	if !validRuntimeTime(current) || !state.reusableSafeReadStillCurrent(execution.call, *execution.reuse, current) {
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassStaleScope, "The reusable safe observation is no longer current.", nil)
+	}
+	content, resultBytes, err := agent.BuildSafeReadReuseContent(execution.call, *execution.reuse)
+	if err != nil {
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassInternal, safeInternalFailure, err)
+	}
+	if err := state.budget.RecordSafeReadReuse(ctx, execution.call, resultBytes); err != nil {
+		return "", state.failToolForRuntime(ctx, execution, runtimeFailureFromBudget(err))
+	}
+	finishedAt := state.now()
+	if !validRuntimeTime(finishedAt) {
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	summary := "Reused an earlier complete same-run safe observation."
+	terminal := execution.requested
+	terminal.Status = domain.ToolInvocationStatusSucceeded
+	terminal.ResultSummary = &summary
+	terminal.ReturnedBytes = resultBytes
+	terminal.FinishedAt = &finishedAt
+	if terminal.Validate() != nil {
+		return "", state.failTool(ctx, execution, domain.SafeErrorClassInternal, safeInternalFailure, nil)
+	}
+	if err := state.publish(ctx, agent.RunEvent{
+		Kind: agent.RunEventToolCallCompleted, ToolInvocation: &terminal, ToolReuse: execution.reuse,
+	}); err != nil {
+		return "", err
+	}
+	if err := state.addStepEvidence(0); err != nil {
 		return "", err
 	}
 	return content, nil

@@ -14,7 +14,7 @@ func TestCommandCatalogIsFixed(t *testing.T) {
 	}
 
 	commands := command.Commands()
-	want := []string{"cache", "help", "resume", "version"}
+	want := []string{"cache", "doctor", "help", "resume", "sessions", "version"}
 	if len(commands) != len(want) {
 		t.Fatalf("command count = %d, want %d", len(commands), len(want))
 	}
@@ -22,6 +22,70 @@ func TestCommandCatalogIsFixed(t *testing.T) {
 		if commands[i].Name() != expected {
 			t.Fatalf("command %d = %q, want %q", i, commands[i].Name(), expected)
 		}
+	}
+}
+
+func TestParseSessionManagementAndDoctorIntents(t *testing.T) {
+	t.Parallel()
+	const sessionID = "0198a46e-7d2a-7d34-9b6f-2df5f45a2a10"
+	tests := []struct {
+		name  string
+		args  []string
+		check func(t *testing.T, intent StartIntent)
+	}{
+		{name: "list defaults", args: []string{"sessions", "list"}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsList || intent.SessionList == nil || intent.SessionList.Limit != 20 || intent.SessionList.JSON {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "list page", args: []string{"sessions", "list", "--limit", "7", "--cursor", "opaque", "--json"}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsList || intent.SessionList == nil || intent.SessionList.Limit != 7 || intent.SessionList.Cursor != "opaque" || !intent.SessionList.JSON {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "exact delete", args: []string{"sessions", "delete", sessionID}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsDelete || intent.SessionDelete == nil || intent.SessionDelete.SessionID != sessionID {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "exact delete dry run", args: []string{"sessions", "delete", sessionID, "--dry-run"}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsDelete || intent.SessionDelete == nil || intent.SessionDelete.SessionID != sessionID || !intent.SessionDelete.DryRun {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "exact delete digest", args: []string{"sessions", "delete", sessionID, "--confirm", strings.Repeat("a", 64)}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsDelete || intent.SessionDelete == nil || intent.SessionDelete.SessionID != sessionID || len(intent.SessionDelete.Confirm) != 64 {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "batch preview", args: []string{"sessions", "delete", "--before", "30d", "--limit", "100", "--dry-run"}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsDelete || intent.SessionDelete == nil || intent.SessionDelete.Before != "30d" || intent.SessionDelete.Limit != 100 || !intent.SessionDelete.DryRun {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "batch confirm", args: []string{"sessions", "delete", "--before", "2026-09-01T00:00:00Z", "--confirm", strings.Repeat("a", 64)}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentSessionsDelete || intent.SessionDelete == nil || len(intent.SessionDelete.Confirm) != 64 {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+		{name: "doctor json", args: []string{"doctor", "--json"}, check: func(t *testing.T, intent StartIntent) {
+			if intent.Kind != IntentDoctor || intent.Doctor == nil || !intent.Doctor.JSON {
+				t.Fatalf("intent = %#v", intent)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			intent, err := Parse(test.args)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			test.check(t, intent)
+		})
+	}
+	if _, err := Parse([]string{"sessions", "delete", strings.ToUpper(sessionID)}); err == nil ||
+		!strings.Contains(err.Error(), "exact canonical UUIDv7") {
+		t.Fatalf("uppercase exact deletion ID error = %v", err)
 	}
 }
 
@@ -161,6 +225,18 @@ func TestParseRejectsInvalidArguments(t *testing.T) {
 		{name: "unknown cache command", args: []string{"cache", "prune"}, wantErr: "unknown cache command"},
 		{name: "cache clear argument", args: []string{"cache", "clear", "extra"}, wantErr: "cache clear does not accept arguments"},
 		{name: "cache clear startup option", args: []string{"cache", "clear", "--no-color"}, wantErr: "cache clear does not accept startup options"},
+		{name: "sessions missing child", args: []string{"sessions"}, wantErr: "sessions requires list or delete"},
+		{name: "sessions unbounded", args: []string{"sessions", "list", "--all"}, wantErr: "unknown sessions list option"},
+		{name: "sessions list zero", args: []string{"sessions", "list", "--limit", "0"}, wantErr: "sessions list options are invalid"},
+		{name: "delete missing selector", args: []string{"sessions", "delete"}, wantErr: "sessions delete requires one Session ID or --before"},
+		{name: "delete title", args: []string{"sessions", "delete", "a title"}, wantErr: "session ID must be an exact canonical UUIDv7"},
+		{name: "delete force", args: []string{"sessions", "delete", sessionID, "--force"}, wantErr: "unknown sessions delete option"},
+		{name: "delete yes", args: []string{"sessions", "delete", sessionID, "--yes"}, wantErr: "unknown sessions delete option"},
+		{name: "delete mixed", args: []string{"sessions", "delete", sessionID, "--before", "1d"}, wantErr: "exact Session deletion does not accept batch options"},
+		{name: "delete exact dry confirm", args: []string{"sessions", "delete", sessionID, "--dry-run", "--confirm", strings.Repeat("a", 64)}, wantErr: "--dry-run and --confirm are mutually exclusive"},
+		{name: "delete short digest", args: []string{"sessions", "delete", "--before", "1d", "--confirm", "abc"}, wantErr: "sessions delete options are invalid"},
+		{name: "delete uppercase digest", args: []string{"sessions", "delete", "--before", "1d", "--confirm", strings.Repeat("A", 64)}, wantErr: "sessions delete options are invalid"},
+		{name: "delete dry confirm", args: []string{"sessions", "delete", "--before", "1d", "--dry-run", "--confirm", strings.Repeat("a", 64)}, wantErr: "--dry-run and --confirm are mutually exclusive"},
 		{name: "resume Unicode-confusable ID", args: []string{"resume", "0198a46e-7d2a-" + string(rune(0xff17)) + "d34-9b6f-2df5f45a2a10"}, wantErr: "session ID must be a valid UUIDv7"},
 		{name: "version argument", args: []string{"version", "extra"}, wantErr: "version does not accept arguments"},
 		{name: "version option argument", args: []string{"--version", "extra"}, wantErr: "--version does not accept arguments"},

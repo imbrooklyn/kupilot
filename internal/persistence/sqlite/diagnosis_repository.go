@@ -18,8 +18,9 @@ const (
 		INSERT INTO diagnoses (
 			id, run_id, confirmed_json, hypotheses_json, missing_json,
 			actions_json, answer_markdown, validation_warnings_json, claim_coverage_json, plan_json,
+			answer_manifest_json, clarification_json,
 			observed_from_ms, observed_to_ms, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	getDiagnosisByRunIDSQL = `
 		SELECT
@@ -28,6 +29,8 @@ const (
 			d.actions_json AS actions_json, d.answer_markdown AS answer_markdown,
 			d.validation_warnings_json AS validation_warnings_json,
 			d.claim_coverage_json AS claim_coverage_json, d.plan_json AS plan_json,
+			d.answer_manifest_json AS answer_manifest_json,
+			d.clarification_json AS clarification_json,
 			d.observed_from_ms AS observed_from_ms,
 			d.observed_to_ms AS observed_to_ms, d.created_at_ms AS created_at_ms,
 			r.scope_context AS scope_context,
@@ -79,6 +82,8 @@ type diagnosisRow struct {
 	ValidationWarningsJSON sql.NullString `db:"validation_warnings_json"`
 	ClaimCoverageJSON      sql.NullString `db:"claim_coverage_json"`
 	PlanJSON               sql.NullString `db:"plan_json"`
+	AnswerManifestJSON     sql.NullString `db:"answer_manifest_json"`
+	ClarificationJSON      sql.NullString `db:"clarification_json"`
 	ObservedFromMS         sql.NullInt64  `db:"observed_from_ms"`
 	ObservedToMS           sql.NullInt64  `db:"observed_to_ms"`
 	CreatedAtMS            int64          `db:"created_at_ms"`
@@ -128,7 +133,7 @@ func (repository *DiagnosisRepository) Save(ctx context.Context, diagnosis domai
 	if err := diagnosis.Validate(); err != nil {
 		return err
 	}
-	confirmedJSON, hypothesesJSON, missingJSON, actionsJSON, warningsJSON, coverageJSON, planJSON, err := encodeDiagnosis(diagnosis)
+	confirmedJSON, hypothesesJSON, missingJSON, actionsJSON, warningsJSON, coverageJSON, planJSON, manifestJSON, clarificationJSON, err := encodeDiagnosis(diagnosis)
 	if err != nil {
 		return domain.ErrInvalidDiagnosis
 	}
@@ -167,6 +172,8 @@ func (repository *DiagnosisRepository) Save(ctx context.Context, diagnosis domai
 			nullableString(warningsJSON),
 			nullableString(coverageJSON),
 			nullableString(planJSON),
+			nullableString(manifestJSON),
+			nullableString(clarificationJSON),
 			nullableTime(diagnosis.ObservedFrom),
 			nullableTime(diagnosis.ObservedTo),
 			diagnosis.CreatedAt.UTC().UnixMilli(),
@@ -211,28 +218,28 @@ func (repository *DiagnosisRepository) GetByRunID(ctx context.Context, runID dom
 	return diagnosis, nil
 }
 
-func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string, string, string, string, error) {
+func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string, string, string, string, string, string, error) {
 	confirmed, err := json.Marshal(diagnosis.ConfirmedFacts)
 	if err != nil {
-		return "", "", "", "", "", "", "", err
+		return "", "", "", "", "", "", "", "", "", err
 	}
 	hypotheses, err := json.Marshal(diagnosis.Hypotheses)
 	if err != nil {
-		return "", "", "", "", "", "", "", err
+		return "", "", "", "", "", "", "", "", "", err
 	}
 	missing, err := json.Marshal(diagnosis.MissingInformation)
 	if err != nil {
-		return "", "", "", "", "", "", "", err
+		return "", "", "", "", "", "", "", "", "", err
 	}
 	actions, err := json.Marshal(diagnosis.RecommendedActions)
 	if err != nil {
-		return "", "", "", "", "", "", "", err
+		return "", "", "", "", "", "", "", "", "", err
 	}
 	warnings := ""
 	if diagnosis.ValidationWarnings != nil {
 		encoded, err := json.Marshal(diagnosis.ValidationWarnings)
 		if err != nil {
-			return "", "", "", "", "", "", "", err
+			return "", "", "", "", "", "", "", "", "", err
 		}
 		warnings = string(encoded)
 	}
@@ -240,7 +247,7 @@ func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string
 	if diagnosis.ClaimCoverage != nil {
 		encoded, err := json.Marshal(diagnosis.ClaimCoverage)
 		if err != nil {
-			return "", "", "", "", "", "", "", err
+			return "", "", "", "", "", "", "", "", "", err
 		}
 		coverage = string(encoded)
 	}
@@ -248,11 +255,27 @@ func encodeDiagnosis(diagnosis domain.Diagnosis) (string, string, string, string
 	if diagnosis.Plan != nil {
 		encoded, err := json.Marshal(diagnosis.Plan)
 		if err != nil {
-			return "", "", "", "", "", "", "", err
+			return "", "", "", "", "", "", "", "", "", err
 		}
 		plan = string(encoded)
 	}
-	return string(confirmed), string(hypotheses), string(missing), string(actions), warnings, coverage, plan, nil
+	manifest := ""
+	if !diagnosis.Completeness.Empty() {
+		encoded, err := json.Marshal(diagnosis.Completeness)
+		if err != nil {
+			return "", "", "", "", "", "", "", "", "", err
+		}
+		manifest = string(encoded)
+	}
+	clarification := ""
+	if diagnosis.Clarification != nil {
+		encoded, err := json.Marshal(diagnosis.Clarification)
+		if err != nil {
+			return "", "", "", "", "", "", "", "", "", err
+		}
+		clarification = string(encoded)
+	}
+	return string(confirmed), string(hypotheses), string(missing), string(actions), warnings, coverage, plan, manifest, clarification, nil
 }
 
 func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
@@ -292,6 +315,20 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 		}
 		plan = &value
 	}
+	var manifest domain.AnswerCompletenessManifest
+	if row.AnswerManifestJSON.Valid {
+		if err := decodeStrictJSON(row.AnswerManifestJSON.String, &manifest); err != nil {
+			return domain.Diagnosis{}, err
+		}
+	}
+	var clarification *domain.ClarificationRequest
+	if row.ClarificationJSON.Valid {
+		var value domain.ClarificationRequest
+		if err := decodeStrictJSON(row.ClarificationJSON.String, &value); err != nil {
+			return domain.Diagnosis{}, err
+		}
+		clarification = &value
+	}
 	value := domain.Diagnosis{
 		ID:                 domain.DiagnosisID(row.ID),
 		RunID:              domain.AgentRunID(row.RunID),
@@ -303,6 +340,8 @@ func (row diagnosisRow) domainDiagnosis() (domain.Diagnosis, error) {
 		AnswerMarkdown:     row.AnswerMarkdown,
 		ValidationWarnings: warnings,
 		ClaimCoverage:      coverage,
+		Completeness:       manifest,
+		Clarification:      clarification,
 		Plan:               plan,
 		ObservedFrom:       timePointerFromNull(row.ObservedFromMS),
 		ObservedTo:         timePointerFromNull(row.ObservedToMS),

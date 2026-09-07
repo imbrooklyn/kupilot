@@ -124,11 +124,11 @@ func (result UIStartResult) Validate() error {
 // ResumeSessionRecord is safe global picker metadata returned by a bounded
 // history or search adapter before delivery projection.
 type ResumeSessionRecord struct {
-	ID          domain.SessionID
-	Title       string
-	UpdatedAt   time.Time
-	PrivacyMode domain.PrivacyMode
-	LastScope   *domain.ScopeCandidate
+	ID             domain.SessionID
+	Title          string
+	LastActivityAt time.Time
+	PrivacyMode    domain.PrivacyMode
+	LastScope      *domain.ScopeCandidate
 }
 
 // ResumedSessionRecord contains only a validated standard Session and bounded
@@ -179,10 +179,11 @@ func (intent UIStartIntent) Validate() error {
 type UICompletionKind string
 
 const (
-	UICompletionContext   UICompletionKind = "context"
-	UICompletionNamespace UICompletionKind = "namespace"
-	UICompletionResource  UICompletionKind = "resource"
-	UICompletionSession   UICompletionKind = "session"
+	UICompletionContext           UICompletionKind = "context"
+	UICompletionNamespace         UICompletionKind = "namespace"
+	UICompletionResource          UICompletionKind = "resource"
+	UICompletionSession           UICompletionKind = "session"
+	UICompletionSessionManagement UICompletionKind = "session_management"
 )
 
 // UICompletionQuery requests bounded safe candidates for the sole composer.
@@ -202,7 +203,7 @@ func (query UICompletionQuery) Validate() error {
 		return ErrInvalidUIQuery
 	}
 	switch query.Kind {
-	case UICompletionContext, UICompletionSession:
+	case UICompletionContext, UICompletionSession, UICompletionSessionManagement:
 		if query.ResourceKind != "" {
 			return ErrInvalidUIQuery
 		}
@@ -263,12 +264,19 @@ type UIResourceCandidate struct {
 
 // UISessionCandidate contains safe resume metadata and no Message preview.
 type UISessionCandidate struct {
-	ID                  domain.SessionID
-	Title               string
-	UpdatedAtUnixMillis int64
-	Context             string
-	Namespace           string
-	PrivacyMode         domain.PrivacyMode
+	ID                       domain.SessionID
+	Title                    string
+	LastActivityAtUnixMillis int64
+	Context                  string
+	Namespace                string
+	PrivacyMode              domain.PrivacyMode
+	Status                   domain.SessionStatus
+	Management               bool
+	Current                  bool
+	Resumable                bool
+	Protected                bool
+	ProtectionReason         SessionProtectionReason
+	DeletionEligible         bool
 }
 
 // UICompletionResult contains exactly the payload selected by Kind.
@@ -315,7 +323,7 @@ func (result UICompletionResult) Validate() error {
 		if len(result.Contexts)+len(result.Namespaces)+len(result.Sessions) != 0 || !validResourceCandidates(result.Resources) {
 			return ErrInvalidUIQueryResult
 		}
-	case UICompletionSession:
+	case UICompletionSession, UICompletionSessionManagement:
 		if len(result.Contexts)+len(result.Namespaces)+len(result.Resources) != 0 || !validSessionCandidates(result.Sessions) {
 			return ErrInvalidUIQueryResult
 		}
@@ -325,7 +333,7 @@ func (result UICompletionResult) Validate() error {
 
 func validCompletionKind(kind UICompletionKind) bool {
 	return kind == UICompletionContext || kind == UICompletionNamespace ||
-		kind == UICompletionResource || kind == UICompletionSession
+		kind == UICompletionResource || kind == UICompletionSession || kind == UICompletionSessionManagement
 }
 
 func validContextCandidates(candidates []UIContextCandidate) bool {
@@ -368,11 +376,25 @@ func validResourceCandidates(candidates []UIResourceCandidate) bool {
 func validSessionCandidates(candidates []UISessionCandidate) bool {
 	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		if !candidate.ID.Valid() || candidate.PrivacyMode != domain.PrivacyModeStandard || candidate.UpdatedAtUnixMillis < 0 ||
+		if !candidate.ID.Valid() ||
 			!validUIBoundedText(candidate.Title, 0, 512) ||
 			(candidate.Context == "") != (candidate.Namespace == "") ||
 			candidate.Context != "" && (!validUIBoundedText(candidate.Context, 1, 253) || !validUIBoundedText(candidate.Namespace, 1, 63)) ||
 			duplicateUIValue(seen, string(candidate.ID)) {
+			return false
+		}
+		if !candidate.Management {
+			if candidate.LastActivityAtUnixMillis < 0 || candidate.PrivacyMode != domain.PrivacyModeStandard || candidate.Status != "" || candidate.Current ||
+				candidate.Protected || candidate.ProtectionReason != "" || candidate.DeletionEligible {
+				return false
+			}
+			continue
+		}
+		if (candidate.PrivacyMode != domain.PrivacyModeStandard && candidate.PrivacyMode != domain.PrivacyModeMinimal) ||
+			(candidate.Status != domain.SessionStatusActive && candidate.Status != domain.SessionStatusArchived) ||
+			!candidate.ProtectionReason.valid() || candidate.Protected != (candidate.ProtectionReason != SessionProtectionNone) ||
+			candidate.DeletionEligible == candidate.Protected || candidate.Current && candidate.ProtectionReason != SessionProtectionCurrent ||
+			candidate.LastActivityAtUnixMillis < 0 && candidate.ProtectionReason != SessionProtectionCorruptActivity {
 			return false
 		}
 	}
@@ -521,7 +543,7 @@ func validUIResumedSession(session UIResumedSession, requestID uint64) bool {
 
 func (record ResumeSessionRecord) valid() bool {
 	if !record.ID.Valid() || record.PrivacyMode != domain.PrivacyModeStandard ||
-		!validUIBoundedText(record.Title, 0, 512) || record.UpdatedAt.IsZero() || record.UpdatedAt.UnixMilli() < 0 {
+		!validUIBoundedText(record.Title, 0, 512) || record.LastActivityAt.IsZero() || record.LastActivityAt.UnixMilli() < 0 {
 		return false
 	}
 	return record.LastScope == nil || record.LastScope.Validate() == nil
@@ -543,7 +565,7 @@ func (record ResumedSessionRecord) valid() bool {
 func sessionRecordMatches(record ResumeSessionRecord, filter string) bool {
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	if filter == "" || strings.Contains(strings.ToLower(record.Title), filter) ||
-		strings.Contains(strings.ToLower(record.UpdatedAt.UTC().Format("2006-01-02 15:04Z")), filter) {
+		strings.Contains(strings.ToLower(record.LastActivityAt.UTC().Format("2006-01-02 15:04Z")), filter) {
 		return true
 	}
 	return record.LastScope != nil && (strings.Contains(strings.ToLower("ctx/"+record.LastScope.Context), filter) ||

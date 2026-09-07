@@ -255,7 +255,13 @@ func (state *runState) callSummaryModel(ctx context.Context, messages []*schema.
 	if err := validateSummaryConversation(messages); err != nil {
 		return nil, err
 	}
-	if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID}); err != nil {
+	preflight, err := state.projectModelCallPreflight(agent.ModelCallSummary, messages, reservation)
+	if err != nil {
+		return nil, err
+	}
+	if err := state.publish(ctx, agent.RunEvent{
+		Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID, ModelPreflight: &preflight,
+	}); err != nil {
 		return nil, err
 	}
 	if err := state.checkScope(ctx); err != nil {

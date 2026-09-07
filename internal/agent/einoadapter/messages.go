@@ -104,7 +104,42 @@ func (state *runState) validateConversation(messages []*schema.Message) error {
 			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 		}
 	}
-	return nil
+	return state.validateCurrentRunInputs(messages)
+}
+
+func (state *runState) validateCurrentRunInputs(messages []*schema.Message) error {
+	if state.input.Validate() != nil {
+		return nil
+	}
+	state.mu.Lock()
+	expected := make([]string, 1, 1+len(state.committedSteers))
+	expected[0] = state.input.Question()
+	for _, steer := range state.committedSteers {
+		expected = append(expected, steer.Content)
+	}
+	state.mu.Unlock()
+	users := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message != nil && message.Role == schema.User {
+			users = append(users, message.Content)
+		}
+	}
+	if len(users) < len(expected) {
+		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	}
+	for start := 0; start <= len(users)-len(expected); start++ {
+		matched := true
+		for index := range expected {
+			if users[start+index] != expected[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return nil
+		}
+	}
+	return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
 }
 
 func unsupportedMessageFields(message *schema.Message) bool {

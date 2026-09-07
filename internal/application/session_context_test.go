@@ -244,7 +244,7 @@ func TestCoordinatorSummaryStorageFailureRejectsBeforeMainModelWork(t *testing.T
 		}
 		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted})
 		requestID := domain.ModelRequestID(coordinatorUUID(51_001))
-		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID})
+		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID, ModelPreflight: testModelCallPreflightForInput(input, agent.ModelCallSummary)})
 		summary, summaryErr := summaryForRunInput(input, clock.Now(), 2)
 		if summaryErr != nil {
 			return agent.RunOutcome{Status: domain.AgentRunStatusFailed}
@@ -304,7 +304,7 @@ func TestCoordinatorRejectsSummaryReturnedAfterScopeGenerationChanged(t *testing
 		}
 		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted})
 		requestID := domain.ModelRequestID(coordinatorUUID(52_001))
-		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID})
+		_, _ = publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventSummaryStarted, ModelRequestID: &requestID, ModelPreflight: testModelCallPreflightForInput(input, agent.ModelCallSummary)})
 		close(summaryStarted)
 		<-continueRun
 		summary, summaryErr := summaryForRunInput(input, clock.Now(), 2)

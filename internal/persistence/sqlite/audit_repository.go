@@ -151,7 +151,17 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 		return auditcontract.ErrInvalidRepositoryRequest
 	}
 	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
-		return insertAuditEvent(ctx, tx, event)
+		if err := insertAuditEvent(ctx, tx, event); err != nil {
+			return err
+		}
+		if !auditAdvancesSessionActivity(event.Type) {
+			return nil
+		}
+		sessionID, err := auditSessionID(ctx, tx, event)
+		if err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, sessionID, event.OccurredAt)
 	})
 	if isAuditContractError(err) || isSessionContractError(err) {
 		return err
@@ -160,6 +170,10 @@ func (repository *AuditRepository) Append(ctx context.Context, event domain.Audi
 		return repositoryFailure(repository.db, "audit_event_append_failed", "append_audit_event", "Kupilot could not store the AuditEvent.", err)
 	}
 	return nil
+}
+
+func auditAdvancesSessionActivity(eventType domain.AuditEventType) bool {
+	return eventType == domain.AuditEventToolCompleted || eventType == domain.AuditEventToolDenied
 }
 
 // AppendWriteResult idempotently inserts one fixed post-attempt write audit.
@@ -193,8 +207,21 @@ func (repository *AuditRepository) appendWriteResults(ctx context.Context, event
 		seen[event.ID] = struct{}{}
 	}
 	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		activity := make(map[domain.SessionID]time.Time, len(events))
 		for _, event := range events {
 			if err := appendWriteResultUsing(ctx, tx, event); err != nil {
+				return err
+			}
+			sessionID, err := auditSessionID(ctx, tx, event)
+			if err != nil {
+				return err
+			}
+			if previous, exists := activity[sessionID]; !exists || event.OccurredAt.After(previous) {
+				activity[sessionID] = event.OccurredAt
+			}
+		}
+		for sessionID, occurredAt := range activity {
+			if err := touchSession(ctx, tx, sessionID, occurredAt); err != nil {
 				return err
 			}
 		}
@@ -207,6 +234,23 @@ func (repository *AuditRepository) appendWriteResults(ctx context.Context, event
 		return repositoryFailure(repository.db, "write_result_audit_append_failed", operation, "Kupilot could not store the write result AuditEvent.", err)
 	}
 	return nil
+}
+
+func auditSessionID(ctx context.Context, getter strictGetter, event domain.AuditEvent) (domain.SessionID, error) {
+	if event.SessionID != nil {
+		return *event.SessionID, nil
+	}
+	if event.RunID == nil {
+		return "", auditcontract.ErrInvalidRepositoryRequest
+	}
+	run, err := getAgentRun(ctx, getter, *event.RunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", sessioncontract.ErrAgentRunNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return run.SessionID, nil
 }
 
 const remoteDiagnosticResultAuditLimit = 5

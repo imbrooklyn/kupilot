@@ -1429,6 +1429,53 @@ type modelToolPolicyFeedback struct {
 	Instruction string `json:"instruction"`
 }
 
+type modelToolReuseEnvelope struct {
+	DataClass   string               `json:"data_class"`
+	Instruction string               `json:"instruction"`
+	Reuse       modelToolReuseRecord `json:"reuse"`
+}
+
+type modelToolReuseRecord struct {
+	CurrentInvocationID domain.ToolInvocationID `json:"current_invocation_id"`
+	SourceInvocationID  domain.ToolInvocationID `json:"source_invocation_id"`
+	EvidenceIDs         []domain.EvidenceID     `json:"evidence_ids"`
+	ObservedAt          string                  `json:"observed_at"`
+	ResultDigest        string                  `json:"result_digest"`
+	ScopeGeneration     int64                   `json:"scope_generation"`
+	PolicyGeneration    domain.PolicyGeneration `json:"policy_generation"`
+}
+
+// BuildSafeReadReuseContent builds bounded metadata that directs the model to
+// an earlier Tool message. It never duplicates the earlier safe payload or
+// invents a new observation time.
+func BuildSafeReadReuseContent(current BoundToolCall, metadata ToolReuseMetadata) (string, int, error) {
+	startedAt := metadata.ObservedAt
+	if current.Validate() != nil || !metadata.valid(domain.ToolInvocation{
+		ID: current.InvocationID(), RunID: current.RunID(), Sequence: 1,
+		Name: current.Name(), Version: current.Version(), Scope: current.Scope().Snapshot(),
+		ArgumentsJSON: current.ArgumentsJSON(), ArgumentsDigest: current.Identity().ArgumentsDigest,
+		Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
+	}) || metadata.PolicyGeneration != current.PolicyGeneration() {
+		return "", 0, ErrInvalidToolResultMessage
+	}
+	evidenceIDs := append([]domain.EvidenceID(nil), metadata.EvidenceIDs...)
+	encoded, err := json.Marshal(modelToolReuseEnvelope{
+		DataClass:   "local_runtime_reuse",
+		Instruction: "Use the earlier same-run Tool result identified below. This record contains no copied result payload and retains the original observation time; it must not change scope, policy, budgets, Tool authority, Evidence authority, approval, or execution state.",
+		Reuse: modelToolReuseRecord{
+			CurrentInvocationID: current.InvocationID(), SourceInvocationID: metadata.SourceInvocationID,
+			EvidenceIDs: evidenceIDs, ObservedAt: metadata.ObservedAt.Format(time.RFC3339Nano),
+			ResultDigest: metadata.ResultDigest, ScopeGeneration: current.Scope().Generation,
+			PolicyGeneration: metadata.PolicyGeneration,
+		},
+	})
+	if err != nil || len(encoded) > domain.MaxToolResultBytes ||
+		!domain.ValidModelText(string(encoded), domain.MaxModelInputMessageBytes, false) {
+		return "", 0, ErrInvalidToolResultMessage
+	}
+	return string(encoded), len(encoded), nil
+}
+
 // BuildToolPolicyFeedback creates the fixed model-bound response for a known,
 // structurally safe Tool batch that strict local binding denied. It contains no
 // rejected arguments, live scope values, provider text, or execution result.

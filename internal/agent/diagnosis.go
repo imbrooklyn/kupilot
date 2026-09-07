@@ -3,6 +3,8 @@ package agent
 import (
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,10 +32,19 @@ type EvidenceRegistry struct {
 	invocations map[domain.ToolInvocationID]struct{}
 	items       map[domain.EvidenceID]domain.Evidence
 	order       []domain.EvidenceID
+	sources     []evidenceSourceCheck
 	gaps        []domain.MissingInformation
 	truncated   bool
 	sealed      bool
 	revision    uint64
+}
+
+type evidenceSourceCheck struct {
+	sourceHash  string
+	subjectHash string
+	state       domain.SourceCoverageState
+	evidenceIDs []domain.EvidenceID
+	observedAt  time.Time
 }
 
 // NewEvidenceRegistry creates an empty runtime-owned registry for one run and
@@ -84,6 +95,7 @@ func (registry *EvidenceRegistry) AcceptToolResult(call BoundToolCall, result do
 			return 0, ErrInvalidEvidenceRegistry
 		}
 	}
+	registry.sources = append(registry.sources, sourceCheckForResult(call, result))
 	for _, evidence := range result.Evidence {
 		registry.items[evidence.ID] = cloneEvidence(evidence)
 		registry.order = append(registry.order, evidence.ID)
@@ -119,6 +131,7 @@ type evidenceSnapshot struct {
 	gaps      []domain.MissingInformation
 	truncated bool
 	revision  uint64
+	sources   []evidenceSourceCheck
 }
 
 func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
@@ -138,7 +151,48 @@ func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
 		items: items, order: append([]domain.EvidenceID(nil), registry.order...),
 		gaps:      append([]domain.MissingInformation(nil), registry.gaps...),
 		truncated: registry.truncated, revision: registry.revision,
+		sources: cloneEvidenceSourceChecks(registry.sources),
 	}, nil
+}
+
+func sourceCheckForResult(call BoundToolCall, result domain.ToolResult) evidenceSourceCheck {
+	identity := call.Identity()
+	sourceHash := domain.SHA256Hex(string(identity.Name) + "\x00" + identity.Version + "\x00" + identity.ArgumentsDigest)
+	check := evidenceSourceCheck{
+		sourceHash: sourceHash, subjectHash: domain.SHA256Hex(identity.ArgumentsDigest), observedAt: result.ObservedAt,
+		evidenceIDs: make([]domain.EvidenceID, len(result.Evidence)),
+	}
+	for index, evidence := range result.Evidence {
+		check.evidenceIDs[index] = evidence.ID
+	}
+	switch {
+	case result.Status == domain.ToolResultStatusDenied:
+		check.state = domain.SourceDenied
+	case result.Error != nil && result.Error.Class == domain.SafeErrorClassTimeout:
+		check.state = domain.SourceTimedOut
+	case result.Error != nil && result.Error.Class == domain.SafeErrorClassStaleScope:
+		check.state = domain.SourceStale
+	case result.Status == domain.ToolResultStatusError:
+		check.state = domain.SourceUnavailable
+	case result.Truncation.Truncated:
+		check.state = domain.SourceTruncated
+	case result.Status == domain.ToolResultStatusPartial || result.Truncation.ReturnedCount > len(result.Evidence):
+		check.state = domain.SourcePartial
+	case len(result.Evidence) == 0:
+		check.state = domain.SourceCheckedAbsent
+	default:
+		check.state = domain.SourceCheckedPresent
+	}
+	return check
+}
+
+func cloneEvidenceSourceChecks(checks []evidenceSourceCheck) []evidenceSourceCheck {
+	result := make([]evidenceSourceCheck, len(checks))
+	for index, check := range checks {
+		result[index] = check
+		result[index].evidenceIDs = append([]domain.EvidenceID(nil), check.evidenceIDs...)
+	}
+	return result
 }
 
 func (registry *EvidenceRegistry) seal(revision uint64) error {
@@ -176,13 +230,16 @@ func cloneEvidence(evidence domain.Evidence) domain.Evidence {
 // answer is free-form Markdown; ConfirmedFacts carry independent citation
 // metadata and RecommendedActions carry typed proposals.
 type DiagnosisDraft struct {
-	AnswerMarkdown     string
-	ConfirmedFacts     []domain.ConfirmedFact
-	Hypotheses         []domain.Hypothesis
-	MissingInformation []domain.MissingInformation
-	RecommendedActions []domain.RecommendedAction
-	ClaimCoverage      []ClaimCoverageDraft
-	Plan               *domain.Plan
+	AnswerMarkdown        string
+	ResponseSchemaVersion int
+	ConfirmedFacts        []domain.ConfirmedFact
+	Hypotheses            []domain.Hypothesis
+	MissingInformation    []domain.MissingInformation
+	RecommendedActions    []domain.RecommendedAction
+	ClaimCoverage         []ClaimCoverageDraft
+	SuggestedStopReason   domain.RunTerminalReason
+	Clarification         *domain.ClarificationRequest
+	Plan                  *domain.Plan
 }
 
 // ClaimCoverageDraft is untrusted model metadata before runtime provenance is
@@ -199,9 +256,10 @@ type ClaimCoverageDraft struct {
 // DiagnosisMetadata contains the two Application-generated fields needed to
 // finalize a Diagnosis.
 type DiagnosisMetadata struct {
-	ID               domain.DiagnosisID
-	CreatedAt        time.Time
-	PolicyGeneration domain.PolicyGeneration
+	ID                      domain.DiagnosisID
+	CreatedAt               time.Time
+	PolicyGeneration        domain.PolicyGeneration
+	AuthoritativeStopReason domain.RunTerminalReason
 }
 
 const (
@@ -232,6 +290,14 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	if draft.Plan != nil {
 		rendered, renderErr := RenderPlanMarkdown(*draft.Plan)
 		if renderErr != nil || rendered != draft.AnswerMarkdown || len(draft.RecommendedActions) != 0 {
+			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		}
+	}
+	if draft.Clarification != nil {
+		rendered, renderErr := RenderClarificationMarkdown(*draft.Clarification)
+		if renderErr != nil || rendered != draft.AnswerMarkdown || draft.SuggestedStopReason != domain.RunTerminalNeedsUserInput ||
+			len(draft.ConfirmedFacts) != 0 || len(draft.Hypotheses) != 0 || len(draft.MissingInformation) != 0 || len(draft.RecommendedActions) != 0 ||
+			len(draft.ClaimCoverage) != 0 {
 			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 		}
 	}
@@ -284,7 +350,7 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		truncated = true
 		detailState = domain.EvidenceDetailPartial
 	}
-	if len(snapshot.items) == 0 && !hasMissingKind(missing, domain.MissingInformationAbsent) {
+	if draft.Clarification == nil && len(snapshot.items) == 0 && len(snapshot.sources) == 0 && !hasMissingKind(missing, domain.MissingInformationAbsent) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationAbsent,
 			Detail: "No accepted cluster observation was collected for this diagnostic run.",
@@ -306,6 +372,15 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
 	}
 
+	responseSchemaVersion := draft.ResponseSchemaVersion
+	if responseSchemaVersion == 0 {
+		responseSchemaVersion = 1
+	}
+	manifest := buildAnswerCompleteness(coverage, missing, snapshot, draft.SuggestedStopReason, draft.Clarification != nil,
+		responseSchemaVersion, metadata.AuthoritativeStopReason)
+	if manifest.Validate() != nil {
+		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+	}
 	diagnosis := domain.Diagnosis{
 		ID:                   metadata.ID,
 		RunID:                registry.runID,
@@ -320,6 +395,8 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		CreatedAt:            metadata.CreatedAt,
 		EvidenceDetailsState: detailState,
 		ClaimCoverage:        coverage,
+		Completeness:         manifest,
+		Clarification:        cloneClarification(draft.Clarification),
 		Plan:                 clonePlan(draft.Plan),
 	}
 	diagnosis.AnswerMarkdown = draft.AnswerMarkdown
@@ -334,16 +411,41 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 
 func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 	result := DiagnosisDraft{
-		AnswerMarkdown:     draft.AnswerMarkdown,
-		ConfirmedFacts:     make([]domain.ConfirmedFact, len(draft.ConfirmedFacts)),
-		Hypotheses:         make([]domain.Hypothesis, len(draft.Hypotheses)),
-		MissingInformation: make([]domain.MissingInformation, len(draft.MissingInformation)),
-		RecommendedActions: make([]domain.RecommendedAction, len(draft.RecommendedActions)),
-		ClaimCoverage:      make([]ClaimCoverageDraft, len(draft.ClaimCoverage)),
+		AnswerMarkdown:        draft.AnswerMarkdown,
+		ResponseSchemaVersion: draft.ResponseSchemaVersion,
+		ConfirmedFacts:        make([]domain.ConfirmedFact, len(draft.ConfirmedFacts)),
+		Hypotheses:            make([]domain.Hypothesis, len(draft.Hypotheses)),
+		MissingInformation:    make([]domain.MissingInformation, len(draft.MissingInformation)),
+		RecommendedActions:    make([]domain.RecommendedAction, len(draft.RecommendedActions)),
+		ClaimCoverage:         make([]ClaimCoverageDraft, len(draft.ClaimCoverage)),
+		SuggestedStopReason:   draft.SuggestedStopReason,
 	}
 	if draft.Plan != nil {
 		result.Plan = clonePlan(draft.Plan)
 		if result.Plan == nil || result.Plan.Validate() != nil {
+			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+		}
+	}
+	if draft.Clarification != nil {
+		result.Clarification = cloneClarification(draft.Clarification)
+		if result.Clarification == nil || result.Clarification.Validate() != nil {
+			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+		}
+		for questionIndex := range result.Clarification.Questions {
+			prompt, err := sanitizeDiagnosisText(result.Clarification.Questions[questionIndex].Prompt)
+			if err != nil {
+				return DiagnosisDraft{}, err
+			}
+			result.Clarification.Questions[questionIndex].Prompt = prompt
+			for choiceIndex := range result.Clarification.Questions[questionIndex].Choices {
+				label, err := sanitizeDiagnosisText(result.Clarification.Questions[questionIndex].Choices[choiceIndex].Label)
+				if err != nil {
+					return DiagnosisDraft{}, err
+				}
+				result.Clarification.Questions[questionIndex].Choices[choiceIndex].Label = label
+			}
+		}
+		if result.Clarification.Validate() != nil {
 			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
 		}
 	}
@@ -502,6 +604,161 @@ func clonePlan(plan *domain.Plan) *domain.Plan {
 	copy.Steps = append([]domain.PlanStep(nil), plan.Steps...)
 	copy.Limitations = append([]string(nil), plan.Limitations...)
 	return &copy
+}
+
+func cloneClarification(request *domain.ClarificationRequest) *domain.ClarificationRequest {
+	if request == nil {
+		return nil
+	}
+	copy := *request
+	copy.Questions = append([]domain.ClarificationQuestion(nil), request.Questions...)
+	for index := range copy.Questions {
+		copy.Questions[index].Choices = append([]domain.ClarificationChoiceValue(nil), request.Questions[index].Choices...)
+	}
+	return &copy
+}
+
+// RenderClarificationMarkdown creates the only visible prose for a typed
+// clarification result. Model prose cannot simulate this interaction.
+func RenderClarificationMarkdown(request domain.ClarificationRequest) (string, error) {
+	if request.Validate() != nil {
+		return "", ErrInvalidDiagnosisDraft
+	}
+	var builder strings.Builder
+	builder.WriteString("More information is needed:\n")
+	for _, question := range request.Questions {
+		builder.WriteString("\n")
+		builder.WriteString(strconv.Itoa(question.Sequence))
+		builder.WriteString(". ")
+		builder.WriteString(question.Prompt)
+		for _, choice := range question.Choices {
+			builder.WriteString("\n   - ")
+			builder.WriteString(choice.ID)
+			builder.WriteString(": ")
+			builder.WriteString(choice.Label)
+		}
+	}
+	value := builder.String()
+	if !domain.ValidModelText(value, MaxAnswerMarkdownBytes, false) {
+		return "", ErrInvalidDiagnosisDraft
+	}
+	return value, nil
+}
+
+func buildAnswerCompleteness(
+	claims []domain.ClaimEvidenceCoverage,
+	limitations []domain.MissingInformation,
+	snapshot evidenceSnapshot,
+	suggested domain.RunTerminalReason,
+	clarification bool,
+	responseSchemaVersion int,
+	authoritative domain.RunTerminalReason,
+) domain.AnswerCompletenessManifest {
+	sources := make([]domain.AnswerSourceCoverage, 0, max(1, len(snapshot.sources)))
+	for index, check := range snapshot.sources {
+		from, through := check.observedAt, check.observedAt
+		sources = append(sources, domain.AnswerSourceCoverage{
+			Sequence: index + 1, SourceHash: check.sourceHash, SubjectHash: check.subjectHash,
+			State: check.state, EvidenceIDs: append([]domain.EvidenceID(nil), check.evidenceIDs...),
+			Freshness: sourceFreshness(check.state), Conflict: domain.EvidenceConflictNone,
+			ObservedFrom: &from, ObservedThrough: &through,
+		})
+	}
+	if len(sources) == 0 {
+		sources = append(sources, domain.AnswerSourceCoverage{
+			Sequence: 1, SourceHash: domain.SHA256Hex("not_checked"), SubjectHash: domain.SHA256Hex("not_checked"),
+			State: domain.SourceNotChecked, Freshness: domain.EvidenceFreshnessUnknown, Conflict: domain.EvidenceConflictNone,
+		})
+	}
+	applyTypedEvidenceConflicts(sources, snapshot.items)
+	// SuggestedStopReason is parsed and bounded but never carries terminal
+	// authority. Domain derives the reason solely from accepted typed coverage.
+	_ = suggested
+	basis := domain.RunTerminalReasonFromCoverage
+	reason, _ := domain.DeriveAnswerTerminalReason(claims, limitations, sources, false)
+	if clarification {
+		basis = domain.RunTerminalReasonFromClarification
+		reason, _ = domain.DeriveAnswerTerminalReason(claims, limitations, sources, true)
+	} else if authoritative == domain.RunTerminalBudgetExhausted {
+		basis = domain.RunTerminalReasonFromRuntimeBudget
+		reason = authoritative
+	} else if authoritative != "" {
+		return domain.AnswerCompletenessManifest{}
+	}
+	return domain.AnswerCompletenessManifest{
+		SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: responseSchemaVersion,
+		Claims:      append([]domain.ClaimEvidenceCoverage(nil), claims...),
+		Limitations: append([]domain.MissingInformation(nil), limitations...),
+		Sources:     sources, StopReason: reason, StopReasonBasis: basis,
+	}
+}
+
+func applyTypedEvidenceConflicts(sources []domain.AnswerSourceCoverage, evidence map[domain.EvidenceID]domain.Evidence) {
+	for left := range sources {
+		for right := left + 1; right < len(sources); right++ {
+			if sources[left].SourceHash != sources[right].SourceHash {
+				continue
+			}
+			for _, leftID := range sources[left].EvidenceIDs {
+				leftEvidence, leftOK := evidence[leftID]
+				for _, rightID := range sources[right].EvidenceIDs {
+					rightEvidence, rightOK := evidence[rightID]
+					if !leftOK || !rightOK || evidenceSubjectHash(leftEvidence) != evidenceSubjectHash(rightEvidence) ||
+						leftEvidence.Fingerprint == rightEvidence.Fingerprint {
+						continue
+					}
+					switch {
+					case leftEvidence.ObservedAt.Before(rightEvidence.ObservedAt):
+						markSourceSuperseded(&sources[left], rightID)
+					case rightEvidence.ObservedAt.Before(leftEvidence.ObservedAt):
+						markSourceSuperseded(&sources[right], leftID)
+					default:
+						markSourceConflicting(&sources[left])
+						markSourceConflicting(&sources[right])
+					}
+				}
+			}
+		}
+	}
+}
+
+func markSourceSuperseded(source *domain.AnswerSourceCoverage, successor domain.EvidenceID) {
+	if source.Conflict == domain.EvidenceConflictDetected {
+		return
+	}
+	source.Conflict = domain.EvidenceConflictSuperseded
+	for _, existing := range source.SupersededByEvidenceIDs {
+		if existing == successor {
+			return
+		}
+	}
+	source.SupersededByEvidenceIDs = append(source.SupersededByEvidenceIDs, successor)
+	sort.Slice(source.SupersededByEvidenceIDs, func(left, right int) bool {
+		return source.SupersededByEvidenceIDs[left] < source.SupersededByEvidenceIDs[right]
+	})
+}
+
+func markSourceConflicting(source *domain.AnswerSourceCoverage) {
+	source.Conflict = domain.EvidenceConflictDetected
+	source.State = domain.SourceConflicting
+	source.SupersededByEvidenceIDs = nil
+}
+
+func evidenceSubjectHash(evidence domain.Evidence) string {
+	sourcePath := ""
+	if evidence.SourcePath != nil {
+		sourcePath = *evidence.SourcePath
+	}
+	return domain.SHA256Hex(string(evidence.Category) + "\x00" + evidence.Resource.APIVersion + "\x00" +
+		evidence.Resource.Kind + "\x00" + evidence.Resource.Namespace + "\x00" + evidence.Resource.Name + "\x00" +
+		evidence.Resource.UID + "\x00" + sourcePath + "\x00" + evidence.Series)
+}
+
+func sourceFreshness(state domain.SourceCoverageState) domain.EvidenceFreshnessState {
+	if state == domain.SourceStale {
+		return domain.EvidenceStale
+	}
+	return domain.EvidenceFreshnessUnknown
 }
 
 func processModelMarkdown(value string, maximumBytes int) (string, error) {

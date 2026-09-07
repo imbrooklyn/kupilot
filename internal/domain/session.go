@@ -104,6 +104,7 @@ type Session struct {
 	Summary          *string
 	Version          int64
 	CreatedAt        time.Time
+	LastActivityAt   time.Time
 	UpdatedAt        time.Time
 }
 
@@ -115,8 +116,10 @@ func (session Session) Validate() error {
 		!validBoundedText(session.Title, 0, maxSessionTitleBytes) ||
 		session.Version < 1 ||
 		!validDurableTime(session.CreatedAt) ||
+		!validDurableTime(session.LastActivityAt) ||
 		!validDurableTime(session.UpdatedAt) ||
-		session.UpdatedAt.Before(session.CreatedAt) {
+		session.LastActivityAt.Before(session.CreatedAt) ||
+		session.UpdatedAt.Before(session.LastActivityAt) {
 		return ErrInvalidSession
 	}
 	if session.LastScope != nil {

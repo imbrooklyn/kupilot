@@ -1,12 +1,13 @@
 # Kupilot Product Contract
 
 - Status: Accepted `v0.5` target
-- Date: 2026-09-06
+- Date: 2026-09-07
 
 The checked-in implementation now includes the named-model, Eino ADK runtime,
 role-scoped consent, safe Session context and summarization, and deterministic
 permission/action foundation of ADR-0044 through ADR-0048. Active-run steering,
-bounded process-local follow-up input, and edit-last remain Application-owned
+bounded process-local follow-up input, edit-last, authoritative Session
+activity/deletion, invocation preflight, and typed terminal outcomes remain Application-owned
 while Eino retains the one in-run Agent loop. The supervised
 Deployment restart, typed scale/rollback/controller-owned-Pod delete/cordon/
 uncordon/drain actions, and default-off exact local argv and separate shell
@@ -65,6 +66,9 @@ dashboard, command palette, YAML editor, action menu, or shell console.
     commitment. Application commits a steer only at the next Eino model
     boundary, queues successor work only in the current process, and never
     automatically resends input after an unsafe or unknown outcome.
+12. **Bounded local supervision.** Session discovery, deletion, terminal
+    capabilities, diagnostics, search, editing history, and provenance stay
+    local, bounded, content-minimal, and separate from model authority.
 
 ## Intended user journey
 
@@ -273,6 +277,28 @@ Same-response stream continuation is unavailable with the pinned protocol.
 Kupilot does not retry, poll, checkpoint, or reissue content after an ambiguous
 disconnect.
 
+`/sessions` and the pre-TUI `kupilot sessions` CLI expose bounded sanitized
+Session metadata ordered by authoritative Last active. `/delete`, picker
+deletion, and CLI deletion share Application-owned preview and transaction
+semantics. Batch deletion freezes a strict `< cutoff` selection and content-free
+digest, excludes current or active/uncertain Sessions, and never cancels work.
+No successful deletion is reported before the complete graph cascade commits.
+
+The same screen also provides content-free model-egress preflight, fixed Slash
+availability reasons, a conservative run-local terminal capability profile,
+submitted-input reverse search, semantic committed-scrollback jumps, bounded
+composer undo/redo, and redacted local `/doctor`. Every safety state has text
+or a stable symbol in `NO_COLOR`, ANSI-16, reduced-motion, narrow, and restored-
+scrollback modes.
+
+Strict response schema 2 supports either an answer or one to three typed
+clarification questions. It carries a bounded completeness manifest with
+authoritative stop reason, source coverage, freshness, exact typed conflict or
+supersession, limitations, and claim/Evidence provenance. Application may
+reuse only an exact complete same-run safe read within its code-owned freshness
+window. Clarification, plans, cached reads, and model stop suggestions create
+no action or approval authority.
+
 ## Product identity and non-goals
 
 Kupilot remains intentionally not:
@@ -303,3 +329,6 @@ needed for daily operations.
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

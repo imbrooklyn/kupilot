@@ -27,7 +27,7 @@ decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v13`
+- System prompt: `kupilot-agent-policy-v15`
 - Capability catalog: `kupilot-operational-tools-v5`
 
 ## Frozen run input
@@ -48,6 +48,8 @@ Application currently creates an immutable RunInput containing:
   item, response-byte, aggregate-byte, and cost limits.
 - one run-local, vendor-free input bridge through which the Eino adapter may
   claim and commit an exact pending steer.
+- the frozen `ordinary` or `plan_only` mode plus the project-owned invocation
+  preflight facts and sink availability required before each model entry.
 
 The composition root separately binds the exact Agent profile and optional
 Reviewer profile. Application checks the current Agent role, canonical origin,
@@ -67,6 +69,11 @@ capability, Session-rule, relevant data-source, or origin-policy change
 invalidates policy generation. Both changes first clear dependent review,
 approval, and action state, then cancel old work and reject late results.
 
+Scope and policy generations are ephemeral current-process authority versions,
+not application, database, schema, migration, or Session versions. Historic
+values retained with Messages, runs, or Evidence are provenance only and are
+never reactivated after restart.
+
 ## Turn lifecycle
 
 1. Application durably creates the run before model or Kubernetes I/O.
@@ -79,7 +86,11 @@ approval, and action state, then cancel old work and reject late results.
    handler may then atomically claim one current pending steer in
    `BeforeModelRewriteState`, append one user Message, and use `WrapModel` to
    complete the Application persistence/event commit barrier before real model
-   I/O. A failed barrier delegates no call.
+   I/O. The same wrapper asks Application to validate the exact Session/Run,
+   input sequence, generations, profile/origin/consent, context coverage, Tool
+   catalog, storage, budgets, sink, mode, and recovery state and emits a
+   content-free preflight event before endpoint entry. A failed barrier or
+   preflight delegates no call.
 5. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
    iteration. The Eino boundary drains one bounded model stream and asks Eino
    to assemble exactly one assistant message. After each Eino-decoded content
@@ -105,6 +116,29 @@ approval, and action state, then cancel old work and reject late results.
    Kind without requiring the user to request formatting. When needed, Eino
    summarization middleware compacts eligible history through a separate
    Agent-profile summary budget and project-owned coverage finalizer.
+
+Before step 1, an ordinary TUI submit binds the exact Session ID, both expected
+generations, and selected-resource state. Application either admits that exact
+snapshot or returns a closed typed question-start reason and bounded current
+state. A denial restores the draft once in delivery, adds no optimistic Message
+or submitted-history entry, and performs no automatic send, queue, retarget, or
+retry. Active-run disagreement resynchronizes delivery to the exact current run;
+scope or resource disagreement uses the existing picker or a later explicit
+resubmit as projected by Application.
+
+A schema-2 final chooses exactly one `answer` or `needs_user_input` outcome.
+Clarification carries one to three bounded typed questions, creates no Tool,
+Evidence, ActionEnvelope, approval, Reviewer call, or execution, and suppresses
+queue drain. A user's response starts a new explicit run. For answers,
+Application validates the completeness manifest and derives the authoritative
+terminal reason; the model cannot label denied, partial, conflicting, unknown,
+or degraded work as completed.
+
+Every terminal outcome binds the fixed seventeen-category content-free budget
+snapshot. Run-local measured and reserved facts remain distinct; unavailable
+categories never appear as measured zero. The compact transcript keeps the
+typed reason and next action visible, while `/status` provides the detailed
+category projection.
 
 Runtime performs no automatic model, Reviewer, Kubernetes, data-source, remote-
 exec, or local-process retry. Local policy feedback
@@ -208,17 +242,21 @@ also binds the canonical source-origin hash, normalized series identity, and
 query window. Continuation tokens, generated PromQL/LogQL, and raw Kubernetes
 or data-source objects never enter Evidence.
 
-The final wire object contains these members in order so the answer can be
-projected without treating the rest of the envelope as visible text:
+The final strict response schema 2 wire object emits `answer_markdown` first so
+it can be projected without treating the rest of the envelope as visible text,
+then contains the remaining typed members:
 
 - `answer_markdown`;
-- `evidence_citations`; and
-- `proposed_actions`.
+- `evidence_citations` and `proposed_actions`; and
+- `response_schema_version`, `outcome`, `stop_reason`, `limitations`, and
+  `questions`.
 
 `answer_markdown` is bounded to 128 KiB before the complete Diagnosis ceiling
 is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
-without mandatory headings. Citation IDs must exist in the same run; invalid
-or duplicate references are removed and produce visible validation warnings.
+without mandatory headings. A missing, unknown, duplicate, cross-run,
+cross-generation, stale, out-of-order, hash-mismatched, or unauthorized
+claim/Evidence reference rejects a new final result before successful commit.
+Retained legacy records may still expose their bounded validation warnings.
 
 Provisional text is delivery-only. It is independently bounded, checked for
 the exact model credential and sensitive patterns across chunk boundaries,
@@ -370,6 +408,13 @@ not replayed. Historic scope, ResourceRef, Evidence, permission rules, Reviewer
 decisions, ActionEnvelopes, approvals, execution, clients, and generations are
 never restored as authority.
 
+Compatible forward migrations and binary restarts preserve eligible history.
+The resumed Context/Namespace is only a candidate. If it equals a scope already
+independently verified in the current process, Kupilot uses that current scope
+and generation without another Kubernetes request. Otherwise it enters the
+normal scope picker. Resume itself still performs zero model, Kubernetes, Tool,
+Reviewer, approval, process, or executor I/O.
+
 One eligible completed run contains one initial user Message, zero or more
 committed steer user Messages in commit order, and one final assistant Message.
 Coverage and summary cuts end only at complete-run boundaries. Pending,
@@ -455,6 +500,13 @@ executor activity. `/permissions` uses the same local status projection, a
 fixed five-profile picker, and a typed Application command; it performs no
 business I/O from Bubble Tea `Update` or `View`.
 
+The budget projection separates model input/output bytes, summary reserve,
+attempts, Tool and Kubernetes/data-source calls, Evidence items/bytes,
+pages/lines/samples, wall/idle time, queue items/bytes, and unavailable
+continuation counters. Each value says whether it is configured, reserved,
+measured, estimated, or unavailable; estimated data is never rendered as a
+measured token or cost fact.
+
 ## Local supervision and run modes
 
 Application exposes exact queue cancel and confirmed clear, content-free
@@ -470,6 +522,19 @@ New final responses use a typed claim manifest; invalid provenance prevents
 success rather than silently removing citations. Context pressure uses exact
 UTF-8 bytes/messages and published limits, never inferred tokens.
 
+Source coverage distinguishes checked-absent, not-checked, unavailable, denied,
+partial, truncated, timed-out, stale, and conflicting. Fresh/stale is used only
+when a code-owned source ceiling exists; otherwise freshness is unknown.
+Conflict and supersession require exact typed source, subject, field, revision,
+and value-digest relationships rather than prose interpretation.
+
+The adapter may reuse only one complete successful `safe` read in the same
+Session/Run/generations for the exact operation, canonical target and typed
+parameters within its fixed one-second freshness window. The original
+observation time and Evidence identity remain visible. Review/critical/deny,
+partial/failed/unknown, stale/conflicting, cross-run/generation, or mutation-
+invalidated results are never reused; the model controls neither key nor TTL.
+
 ## Failure classes
 
 Vendor, transport, Kubernetes, parsing, and persistence failures are translated
@@ -481,6 +546,19 @@ A failed durable run start prevents model and Tool I/O. A later read-side
 persistence failure may finish the in-memory answer with visible degraded state
 and no false resume claim. Any approval or pre-write audit failure produces zero
 executor calls.
+
+Application's fixed recovery matrix separately covers model transport,
+summarization, SQLite before/after commit, Tool/Kubernetes/data sources,
+approval/Reviewer, notification/title, clipboard, local searches, endpoint
+continuation, and terminal shutdown. It fixes terminal reason, persistence and
+input disposition, queue-drain denial, next action, and zero automatic model,
+Tool, or action retries. Optional delivery failure never changes an Agent
+result; unknown authority or side effects never become success.
+
+**Protocol continuation unavailable.** The pinned Chat Completions adapter has
+no stable replay identity/offset or same-response reattach operation. A stream
+disconnect remains unknown/recovered; Kupilot adds no retry, polling,
+checkpoint, persisted event, or second request.
 
 ## References
 
@@ -497,3 +575,6 @@ executor calls.
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

@@ -155,12 +155,18 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 		CoverageState domain.ClaimCoverageState `json:"coverage_state"`
 	}
 	result := struct {
-		AnswerMarkdown    string            `json:"answer_markdown"`
-		EvidenceCitations []citation        `json:"evidence_citations"`
-		ProposedActions   []json.RawMessage `json:"proposed_actions"`
+		AnswerMarkdown        string                         `json:"answer_markdown"`
+		EvidenceCitations     []citation                     `json:"evidence_citations"`
+		ProposedActions       []json.RawMessage              `json:"proposed_actions"`
+		ResponseSchemaVersion int                            `json:"response_schema_version"`
+		Outcome               string                         `json:"outcome"`
+		StopReason            domain.RunTerminalReason       `json:"stop_reason"`
+		Limitations           []domain.MissingInformation    `json:"limitations"`
+		Questions             []domain.ClarificationQuestion `json:"questions"`
 	}{
-		AnswerMarkdown:  source.AnswerMarkdown,
-		ProposedActions: source.ProposedActions,
+		AnswerMarkdown: source.AnswerMarkdown, ProposedActions: source.ProposedActions,
+		ResponseSchemaVersion: 2, Outcome: "answer", StopReason: domain.RunTerminalCompleted,
+		Limitations: []domain.MissingInformation{}, Questions: []domain.ClarificationQuestion{},
 	}
 	result.EvidenceCitations = make([]citation, len(source.EvidenceCitations))
 	for index, item := range source.EvidenceCitations {

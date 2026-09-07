@@ -110,7 +110,7 @@ func TestRootHelpListsOnlyFixedCommands(t *testing.T) {
 	t.Parallel()
 
 	help := Help(HelpRoot)
-	for _, want := range []string{"  resume ", "  cache  ", "  version", "  help   "} {
+	for _, want := range []string{"  resume ", "  sessions ", "  doctor ", "  cache  ", "  version", "  help   "} {
 		if !strings.Contains(help, want) {
 			t.Errorf("root help does not contain command entry %q", want)
 		}
@@ -138,7 +138,6 @@ func TestRootHelpListsOnlyFixedCommands(t *testing.T) {
 		"  fork ",
 		"  run ",
 		"  server ",
-		"  sessions ",
 	}
 	for _, value := range forbidden {
 		if strings.Contains(help, value) {

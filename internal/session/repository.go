@@ -74,13 +74,14 @@ type RenameSession struct {
 // Validate checks the closed rename command shape without exposing its values.
 func (command RenameSession) Validate() error {
 	probe := domain.Session{
-		ID:          command.ID,
-		Title:       command.Title,
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: domain.PrivacyModeStandard,
-		Version:     command.ExpectedVersion,
-		CreatedAt:   command.UpdatedAt,
-		UpdatedAt:   command.UpdatedAt,
+		ID:             command.ID,
+		Title:          command.Title,
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    domain.PrivacyModeStandard,
+		Version:        command.ExpectedVersion,
+		CreatedAt:      command.UpdatedAt,
+		LastActivityAt: command.UpdatedAt,
+		UpdatedAt:      command.UpdatedAt,
 	}
 	if probe.Validate() != nil {
 		return ErrInvalidRepositoryRequest
@@ -90,8 +91,8 @@ func (command RenameSession) Validate() error {
 
 // ResumeCursor is an exclusive descending keyset boundary.
 type ResumeCursor struct {
-	UpdatedAt time.Time
-	ID        domain.SessionID
+	LastActivityAt time.Time
+	ID             domain.SessionID
 }
 
 // ResumePageRequest selects one bounded global picker page.
@@ -106,7 +107,7 @@ func (request ResumePageRequest) Validate() error {
 		return ErrInvalidRepositoryRequest
 	}
 	if request.Before != nil &&
-		(!request.Before.ID.Valid() || request.Before.UpdatedAt.IsZero() || request.Before.UpdatedAt.UnixMilli() < 0) {
+		(!request.Before.ID.Valid() || request.Before.LastActivityAt.IsZero() || request.Before.LastActivityAt.UnixMilli() < 0) {
 		return ErrInvalidRepositoryRequest
 	}
 	return nil
@@ -114,11 +115,11 @@ func (request ResumePageRequest) Validate() error {
 
 // ResumeCandidate contains only safe picker metadata and no Message preview.
 type ResumeCandidate struct {
-	ID          domain.SessionID
-	Title       string
-	UpdatedAt   time.Time
-	PrivacyMode domain.PrivacyMode
-	LastScope   *domain.ScopeCandidate
+	ID             domain.SessionID
+	Title          string
+	LastActivityAt time.Time
+	PrivacyMode    domain.PrivacyMode
+	LastScope      *domain.ScopeCandidate
 }
 
 // ResumePage is one descending stable page and its exclusive continuation.

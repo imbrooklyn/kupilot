@@ -26,6 +26,9 @@ const helpText = `/help                 Show commands and key bindings
 /find [query]         Find committed transcript text locally
 /compact              Compact eligible safe Session context
 /plan [off]           Arm or cancel one-shot plan-only mode
+/delete               Preview deletion of the current Session
+/sessions             List and manage bounded local Sessions
+/doctor               Show local redacted diagnostics
 /new                  Start a new Session
 /resume [filter]      Resume a local Session
 /rename [title]       Rename the current Session
@@ -39,6 +42,8 @@ Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishab
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
 Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
 Ctrl+F reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
+Ctrl+R searches committed submitted input; Alt+Z and Alt+Y provide bounded composer undo and redo.
+Alt+U/A/F/P jumps to the previous user/final/failure/approval item; add Shift for the next item. Ctrl+E navigates cited Evidence.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
 // Update reduces one message into pure UI state. The TerminalRuntime wrapper,
@@ -109,12 +114,21 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			message.Result.Command == application.UICommandSelectContext ||
 			message.Result.Command == application.UICommandSelectNamespace) &&
 			model.pendingResumed != nil && model.pendingResumed.ResumeRequestID == message.Result.RequestID
-		model.acceptCommandOutcome(message.Result)
-		model.reflow()
-		if resumeScopeActivation {
-			return model, model.finishResumeScopeActivation(message.Result)
+		var resultCommand tea.Cmd
+		if message.Result.Command == application.UICommandSubmitQuestion {
+			resultCommand = model.acceptQuestionStartOutcome(message.Result)
+		} else {
+			model.acceptCommandOutcome(message.Result)
 		}
-		return model, nil
+		model.reflow()
+		if model.exitAfterSessionDeletion {
+			model.exitAfterSessionDeletion = false
+			return model, model.prepareQuit()
+		}
+		if resumeScopeActivation {
+			return model, combineCommands(resultCommand, model.finishResumeScopeActivation(message.Result))
+		}
+		return model, resultCommand
 	case ModelSetupResultMsg:
 		cmd := model.acceptModelSetupResult(message.Result)
 		model.reflow()
@@ -146,6 +160,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if body == "" {
 			body = "The requested operation could not be completed safely."
 		}
+		if message.Command == application.UICommandSubmitQuestion {
+			body = "Application delivery is busy — the question was not sent and your input was restored. Submit again explicitly when the current operation finishes."
+		}
 		model.showDialog("Operation unavailable", body)
 		if model.resumeOrigin == resumeOriginTopLevel && !model.startup.Ready {
 			model.startup.Failed = true
@@ -171,8 +188,12 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.PasteMsg:
 		if model.dialog.Open() || model.approvalDialog.Open() ||
-			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || !model.terminalFocused {
+			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() || !model.terminalFocused ||
+			model.pendingSubmitID != 0 {
 			return model, nil
+		}
+		if model.historySearchMode {
+			return model.updateSubmittedHistorySearchPaste(message)
 		}
 		return model.updatePaste(message)
 	case tea.KeyPressMsg:
@@ -180,6 +201,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		if model.dialog.Open() || model.approvalDialog.Open() ||
 			model.evidenceDialog.Open() || model.transcript.EvidenceSelecting() {
+			return model, nil
+		}
+		if model.historySearchMode {
 			return model, nil
 		}
 		updated, cmd, err := model.composer.Update(msg)
@@ -228,6 +252,13 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 		model.pendingPlanID = 0
 		return true
 	}
+	if message.Command == application.UICommandShowDoctor {
+		if model.pendingDoctorID == 0 || message.RequestID != model.pendingDoctorID {
+			return false
+		}
+		model.pendingDoctorID = 0
+		return true
+	}
 	if message.Command == application.UICommandApproveAction || message.Command == application.UICommandRejectAction ||
 		message.Command == application.UICommandCancelAction || message.Command == application.UICommandExpireAction {
 		if model.pendingApproval == nil || model.pendingApprovalID == 0 || message.RequestID != model.pendingApprovalID ||
@@ -265,14 +296,11 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 	}
 	if message.Command == application.UICommandSubmitQuestion {
 		if model.pendingSubmitID == 0 || message.RequestID != model.pendingSubmitID ||
-			message.ScopeGeneration != model.scope.Generation {
+			message.SessionID != model.pendingSubmitSessionID || message.ScopeGeneration != model.pendingSubmitScope ||
+			message.PolicyGeneration != model.pendingSubmitPolicy {
 			return false
 		}
-		model.pendingSubmitID = 0
-		if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
-			model.composer.SetValue(model.pendingSubmitDraft)
-		}
-		model.pendingSubmitDraft = ""
+		model.restorePendingSubmitDraft()
 		return true
 	}
 	switch message.Command {
@@ -288,7 +316,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 		model.lifecycleReview = nil
 		model.privacyPending = false
 		return true
-	case application.UICommandDeleteSession:
+	case application.UICommandPreviewSessionDeletion, application.UICommandDeleteSession:
 		if model.pendingDeleteID == 0 || message.RequestID != model.pendingDeleteID || model.sessionDelete == nil {
 			return false
 		}
@@ -298,7 +326,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 		model.lifecycleReview = nil
 		model.sessionDelete = nil
 		model.privacyPending = false
-		model.showDialog("Session not deleted", "The Session was not deleted. No partial deletion was reported.")
+		model.showDialog("Session not deleted", "The Session was not deleted. No partial deletion was reported, and in-memory input remains unchanged.")
 		model.reflow()
 		return false
 	case application.UICommandClearHistory, application.UICommandDeleteAllLocalState:
@@ -383,6 +411,187 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 	return true
 }
 
+func (model *Model) clearPendingSubmit() {
+	model.pendingSubmitID = 0
+	model.pendingSubmitDraft = ""
+	model.pendingSubmitSessionID = ""
+	model.pendingSubmitScope = 0
+	model.pendingSubmitPolicy = 0
+}
+
+func (model *Model) restorePendingSubmitDraft() string {
+	draft := model.pendingSubmitDraft
+	model.clearPendingSubmit()
+	if draft != "" && model.composer.Value() == "" {
+		model.composer.SetValue(draft)
+	}
+	return draft
+}
+
+func (model *Model) acceptQuestionStartOutcome(result application.UICommandOutcome) tea.Cmd {
+	if result.Validate() != nil || result.Command != application.UICommandSubmitQuestion ||
+		model.pendingSubmitID == 0 || result.RequestID != model.pendingSubmitID {
+		return nil
+	}
+	if result.QuestionStart == nil {
+		// The committed UIEventRunStarted owns transcript and submitted-history
+		// insertion. Keep the pending draft until that event arrives so event and
+		// result ordering cannot create a ghost or duplicate history row.
+		model.planArmed = false
+		return nil
+	}
+
+	draft := model.restorePendingSubmitDraft()
+	failure := *result.QuestionStart
+	model.applyQuestionStartCurrentState(failure.State)
+
+	switch failure.Reason {
+	case application.QuestionStartSessionUnavailable:
+		model.showDialog("Session unavailable", "Start or resume a Session before submitting. The question was not sent.")
+	case application.QuestionStartScopeNotVerified:
+		return model.beginQuestionStartRecovery(
+			application.UICompletionContext,
+			draft,
+			"Scope verification required — select and verify a scope before submitting again. The question was not sent.",
+		)
+	case application.QuestionStartScopeGenerationStale:
+		if failure.Recovery == application.QuestionStartRecoverSelectScope {
+			return model.beginQuestionStartRecovery(
+				application.UICompletionContext,
+				draft,
+				"Scope changed — review and verify the current Context and Namespace before submitting again. The question was not sent.",
+			)
+		}
+		model.showDialog("Scope changed", "Scope changed — review the current Context and Namespace, then submit again. The question was not sent.")
+	case application.QuestionStartSelectedResourceStale:
+		model.resource = ResourceView{}
+		if failure.State.ScopeState == application.ScopeStateActive {
+			return model.beginQuestionStartRecovery(
+				application.UICompletionResource,
+				draft,
+				"The selected Resource is stale or outside the working Namespace — select it again before submitting. The question was not sent.",
+			)
+		}
+		return model.beginQuestionStartRecovery(
+			application.UICompletionContext,
+			draft,
+			"Scope verification required — select and verify a scope before selecting a Resource. The question was not sent.",
+		)
+	case application.QuestionStartPolicyGenerationStale:
+		model.showDialog("Policy changed", "Policy changed — review /permissions, then submit again. The question was not sent.")
+	case application.QuestionStartPolicySnapshotInvalid:
+		model.showDialog("Policy unavailable", "The current policy snapshot is invalid — review /permissions or run /doctor. The question was not sent.")
+	case application.QuestionStartRunActive:
+		if model.syncQuestionStartActiveRun(failure.State) {
+			model.showDialog("Another run is active", "Another run is active — your input was restored; use Enter to steer or Tab to queue. The question was not sent.")
+			return workingTick(model.run, model.reducedMotion)
+		}
+		model.showDialog("Run state changed", "The run state changed — wait for current state to settle, then submit again. The question was not sent.")
+	case application.QuestionStartRunStarting:
+		model.showDialog("Another run is starting", "Another run is starting — your input was restored. Wait for it to become active, then use Enter to steer or Tab to queue. The question was not sent.")
+	case application.QuestionStartApplicationOperationActive:
+		model.showDialog("Application busy", "Another bounded Application operation is active — your input was restored. Wait, then submit again. The question was not sent.")
+	case application.QuestionStartPersistenceDegraded,
+		application.QuestionStartPrecommitPersistenceFailed:
+		model.showDialog("Storage is degraded", "Storage is degraded — the question was not sent. Run /doctor before trying again.")
+	case application.QuestionStartModelConfigurationMissing:
+		model.modelConfigured = false
+		model.showDialog("Model required", "Run /model to configure the model before submitting again. The question was not sent.")
+	case application.QuestionStartConsentRequired:
+		if result.Privacy == nil {
+			model.showDialog("Consent required", "Model consent is required — the question was not sent.")
+			return nil
+		}
+		model.pendingPrivacyID = result.RequestID
+		model.showPrivacyReview(*result.Privacy, nil)
+	case application.QuestionStartInputRejected:
+		model.showDialog("Input not accepted", "Review the restored input and submit again. The question was not sent.")
+	case application.QuestionStartUnknownSafeFailure:
+		model.showDialog("Question not sent", "An internal safe-state check failed — the question was not sent. Run /doctor before trying again.")
+	}
+	return nil
+}
+
+func (model *Model) applyQuestionStartCurrentState(state application.UIQuestionStartCurrentState) {
+	if state.ScopeState == application.ScopeStateActive {
+		model.scope = ScopeView{
+			Context: sanitizeExternalText(state.Context, 253), Namespace: sanitizeExternalText(state.Namespace, 63),
+			Generation: state.ScopeGeneration, ReadOnly: state.ReadOnly, Verified: true,
+		}
+	} else {
+		model.scope = ScopeView{
+			Generation: state.ScopeGeneration,
+			Switching:  state.ScopeState == application.ScopeStateActivating,
+		}
+	}
+	if state.PolicyGeneration.Valid() {
+		model.permission.PolicyGeneration = state.PolicyGeneration
+	}
+	model.permission.Healthy = state.PolicyHealthy
+	if state.ResourceState == application.QuestionStartResourceStale || state.ScopeState != application.ScopeStateActive {
+		model.resource = ResourceView{}
+	}
+}
+
+func (model *Model) syncQuestionStartActiveRun(state application.UIQuestionStartCurrentState) bool {
+	if state.RunState != application.QuestionStartRunStateRunning || !state.RunID.Valid() ||
+		state.RunScopeGeneration < 1 || !state.RunPolicyGeneration.Valid() || state.RunSequence < 0 {
+		return false
+	}
+	startedAt := model.now().UTC().Truncate(time.Millisecond)
+	model.run = RunView{
+		RunID: state.RunID, ScopeGeneration: state.RunScopeGeneration,
+		PolicyGeneration: state.RunPolicyGeneration, LastSequence: state.RunSequence,
+		StartedAt: startedAt, Active: true, Status: "active",
+	}
+	model.workingAt = startedAt
+	model.workingFrame = 0
+	model.closeEvidenceInteraction()
+	model.clearActionPresentation()
+	model.transcript.StartAgent()
+	return true
+}
+
+func (model *Model) beginQuestionStartRecovery(
+	kind application.UICompletionKind,
+	draft string,
+	notice string,
+) tea.Cmd {
+	model.closeDialog()
+	model.questionRecoveryDraft = draft
+	model.questionRecoveryKind = kind
+	model.composer.Reset()
+	switch kind {
+	case application.UICompletionContext:
+		model.composer.SetValue("/context ")
+	case application.UICompletionResource:
+		model.composer.SetValue("/resource ")
+	default:
+		model.clearQuestionStartRecovery()
+		return nil
+	}
+	model.transcript.AppendNotice(notice)
+	return model.openCompletion(kind, "", resumeOriginNone)
+}
+
+func (model *Model) restoreQuestionStartRecovery(kind application.UICompletionKind) bool {
+	if model.questionRecoveryKind == "" || model.questionRecoveryKind != kind {
+		return false
+	}
+	draft := model.questionRecoveryDraft
+	model.clearQuestionStartRecovery()
+	model.composer.Reset()
+	if draft != "" {
+		model.composer.SetValue(draft)
+	}
+	return true
+}
+
+func (model *Model) clearQuestionStartRecovery() {
+	model.questionRecoveryDraft = ""
+	model.questionRecoveryKind = ""
+}
+
 func (model *Model) acceptEvidenceFailure(message ApplicationFailureMsg) bool {
 	if message.Evidence.EvidenceID == "" || model.pendingEvidence.RequestID == 0 ||
 		message.RequestID != model.pendingEvidence.RequestID ||
@@ -447,12 +656,22 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.approvalDialog.Open() {
 		return model.updateApprovalDialogKey(message)
 	}
+	if model.pendingSubmitID != 0 {
+		// The sole draft is frozen until Application either commits the start
+		// barrier or returns a request-bound typed refusal. This prevents input
+		// typed during the short start window from being overwritten on restore.
+		return model, nil
+	}
 	if key.Matches(message, model.keymap.Quit) {
 		if command, handled := model.interruptModelSetup(); handled {
 			return model, command
 		}
 		if model.searchMode {
 			model.endTranscriptSearch()
+			return model, nil
+		}
+		if model.historySearchMode {
+			model.endSubmittedHistorySearch(false)
 			return model, nil
 		}
 		if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
@@ -505,9 +724,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.sessionExport != nil && model.sessionExport.Stage == sessionExportTargetEntry && !model.dialog.Open() {
 		return model.updateSessionExportTargetKey(message)
 	}
+	if model.sessionDelete != nil && model.sessionDelete.SessionID == "" && model.sessionDelete.Review == nil &&
+		model.pendingDeleteID == 0 && !model.dialog.Open() {
+		return model.updateBatchSessionDeleteKey(message)
+	}
 	if model.evidenceDialog.Open() {
-		if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
-			key.Matches(message, model.keymap.Evidence) {
+		if key.Matches(message, model.keymap.Submit) {
+			model.returnFromEvidenceDetail()
+		} else if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Evidence) {
 			model.closeEvidenceInteraction()
 		}
 		return model, nil
@@ -557,8 +781,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.searchMode {
 		return model.updateTranscriptSearchKey(message)
 	}
+	if model.historySearchMode {
+		return model.updateSubmittedHistorySearchKey(message)
+	}
 	if key.Matches(message, model.keymap.Find) {
 		return model.beginTranscriptSearch("", model.composer.Value())
+	}
+	if key.Matches(message, model.keymap.HistorySearch) {
+		return model.beginSubmittedHistorySearch()
 	}
 	if key.Matches(message, model.keymap.Evidence) {
 		if model.transcript.EvidenceSelecting() {
@@ -586,6 +816,10 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			model.transcript.MoveEvidence(-1)
 		case key.Matches(message, model.keymap.Next), key.Matches(message, model.keymap.NextAlt):
 			model.transcript.MoveEvidence(1)
+		case message.Code == tea.KeyLeft:
+			model.transcript.MoveEvidenceClaim(-1)
+		case message.Code == tea.KeyRight:
+			model.transcript.MoveEvidenceClaim(1)
 		case key.Matches(message, model.keymap.TranscriptUp):
 			model.transcript.PageUp()
 		case key.Matches(message, model.keymap.TranscriptDown):
@@ -621,10 +855,14 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if model.pickerOpen() {
 		switch {
-		case model.activePicker == application.UICompletionSession && isSessionPickerDeleteKey(message):
-			model.beginSelectedSessionDelete()
-			model.reflow()
-			return model, nil
+		case (model.activePicker == application.UICompletionSession || model.activePicker == application.UICompletionSessionManagement) && isSessionPickerDeleteKey(message):
+			updated, command := model.beginSelectedSessionDelete()
+			updated.reflow()
+			return updated, command
+		case model.activePicker == application.UICompletionSessionManagement && isSessionBatchDeleteKey(message):
+			updated, command := model.beginBatchSessionDelete()
+			updated.reflow()
+			return updated, command
 		case key.Matches(message, model.keymap.Reverse), key.Matches(message, model.keymap.Previous), key.Matches(message, model.keymap.PreviousAlt):
 			model.movePicker(-1)
 			return model, nil
@@ -666,6 +904,31 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	if model.pendingConversation != nil {
+		return model, nil
+	}
+	if model.modelSetup == nil && model.sessionExport == nil {
+		switch {
+		case key.Matches(message, model.keymap.Undo):
+			if model.composer.Undo() {
+				queryCmd := model.syncSuggestionsAfterEdit()
+				model.reflow()
+				return model, queryCmd
+			}
+			return model, nil
+		case key.Matches(message, model.keymap.Redo):
+			if model.composer.Redo() {
+				queryCmd := model.syncSuggestionsAfterEdit()
+				model.reflow()
+				return model, queryCmd
+			}
+			return model, nil
+		}
+	}
+	if landmark, delta, ok := model.semanticNavigation(message); ok {
+		model.closePickers()
+		model.slashMenu.Close()
+		model.transcript.JumpLandmark(landmark, delta)
+		model.reflow()
 		return model, nil
 	}
 	if key.Matches(message, model.keymap.EditFollowUp) {
@@ -855,34 +1118,47 @@ func (model Model) submitDraft() (tea.Model, tea.Cmd) {
 		model.showDialog("Scope switching", "Wait for scope activation to finish before sending a question.")
 		return model, nil
 	}
+	if !model.session.ID.Valid() {
+		model.showDialog("Session unavailable", "Start or resume a Session before submitting. The question was not sent.")
+		return model, nil
+	}
 	if !model.modelConfigured {
-		model.beginMissingModelSetup()
-		model.showDialog("Model required", "Configure the model endpoint, model identifier, and API key before sending a question.")
+		model.showDialog("Model required", "Run /model to configure the model before submitting. The question was not sent.")
 		return model, nil
 	}
 	if !model.scope.Verified || model.scope.Generation < 1 || !model.scope.ReadOnly {
-		model.showDialog("Scope required", "Select and verify one Context and Namespace before sending a question.")
-		return model, nil
+		command := model.beginQuestionStartRecovery(
+			application.UICompletionContext,
+			historyDraft,
+			"Scope verification required — select and verify a scope before submitting again. The question was not sent.",
+		)
+		model.reflow()
+		return model, command
 	}
 	if !model.startup.Ready {
 		model.showDialog("Session loading", "Finish or cancel the explicit Session resume before sending a question.")
 		return model, nil
 	}
 	command := application.UICommand{
-		Kind:                    application.UICommandSubmitQuestion,
-		RequestID:               model.nextUIRequestID(),
-		Text:                    draft,
-		ExpectedScopeGeneration: model.scope.Generation,
+		Kind:                     application.UICommandSubmitQuestion,
+		RequestID:                model.nextUIRequestID(),
+		SessionID:                model.session.ID,
+		Text:                     draft,
+		ExpectedScopeGeneration:  model.scope.Generation,
+		ExpectedPolicyGeneration: model.permission.PolicyGeneration,
+		Resource:                 resourceReference(model.resource),
 	}
 	if command.Validate() != nil {
 		model.showDialog("Cannot send", "The question could not be submitted safely.")
 		return model, nil
 	}
 	model.composer.Reset()
-	model.composer.RecordSubmission(historyDraft)
 	model.slashMenu.Close()
 	model.pendingSubmitID = command.RequestID
 	model.pendingSubmitDraft = historyDraft
+	model.pendingSubmitSessionID = command.SessionID
+	model.pendingSubmitScope = command.ExpectedScopeGeneration
+	model.pendingSubmitPolicy = command.ExpectedPolicyGeneration
 	model.reflow()
 	return model, applicationCommand(command)
 }
@@ -983,8 +1259,9 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		model.showDialog("Invalid command", "This Slash command does not accept an argument.")
 		return model, nil
 	}
-	if enabled, reason := model.slashAvailability(command); !enabled {
-		model.showDialog("Command unavailable", reason)
+	availability := model.slashAvailability(command)
+	if !availability.available() {
+		model.showDialog("Command unavailable", availability.Reason)
 		return model, nil
 	}
 	if command.Name == "resource" && argument == "clear" {
@@ -1048,6 +1325,16 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 		return model.requestManualCompaction()
 	case slashPlan:
 		return model.executePlanCommand(argument)
+	case slashDelete:
+		model.composer.Reset()
+		model.slashMenu.Close()
+		return model.beginCurrentSessionDeletion(deleteFromCommand)
+	case slashSessions:
+		model.composer.Reset()
+		model.slashMenu.Close()
+		return model, model.openCompletion(application.UICompletionSessionManagement, "", resumeOriginNone)
+	case slashDoctor:
+		return model.requestDoctor()
 	case slashQuit:
 		model.composer.Reset()
 		model.slashMenu.Close()
@@ -1085,42 +1372,91 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 	}
 }
 
-func (model Model) slashAvailability(command SlashCommand) (bool, string) {
+func (model Model) slashAvailability(command SlashCommand) slashAvailabilityProjection {
+	available := slashAvailabilityProjection{State: SlashAvailable}
 	if model.scope.Switching {
 		switch command.Name {
 		case "context", "namespace", "resource":
-			return false, "Wait for the current scope activation to finish."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the current scope activation to finish."}
 		}
 	}
 	switch command.Name {
+	case "model":
+		if model.pendingSubmitID != 0 || model.run.Active || model.pendingApproval != nil || model.actionPresentation != nil {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Finish the active or starting supervised work before changing model configuration."}
+		}
 	case "cancel":
 		if !model.run.Active {
-			return false, "There is no active diagnostic run to cancel."
+			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no active diagnostic run to cancel."}
 		}
-	case "new", "resume", "quit":
+	case "new", "resume", "delete", "sessions", "quit":
+		if model.pendingSubmitID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the starting diagnostic run to be accepted or rejected."}
+		}
 		if model.run.Active {
-			return false, "Cancel the active diagnostic run first."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Cancel the active diagnostic run first."}
+		}
+		if command.Name != "quit" && (model.pendingApproval != nil || model.actionPresentation != nil ||
+			model.approvalDialog.Open() || model.pendingDeleteID != 0 || model.pendingConversation != nil) {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Finish the current supervised or local state transition first."}
+		}
+		if command.Name == "delete" && model.session.ID == "" {
+			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no current Session to delete."}
 		}
 	case "compact":
+		if model.pendingSubmitID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the starting diagnostic run to be accepted or rejected."}
+		}
 		if model.run.Active || model.pendingApproval != nil || model.actionPresentation != nil {
-			return false, "Finish the active run or supervised action first."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Finish the active run or supervised action first."}
 		}
 		if model.pendingCompactionID != 0 {
-			return false, "Wait for the current manual compaction request to finish."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the current manual compaction request to finish."}
 		}
 	case "plan":
+		if model.pendingSubmitID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the starting diagnostic run to be accepted or rejected."}
+		}
 		if model.run.Active || model.pendingApproval != nil || model.actionPresentation != nil {
-			return false, "Finish the active run or supervised action first."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Finish the active run or supervised action first."}
 		}
 		if model.pendingPlanID != 0 {
-			return false, "Wait for the current plan-mode change to finish."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the current plan-mode change to finish."}
 		}
 	case "queue":
 		if model.pendingConversation != nil {
-			return false, "Wait for the current queue change to finish."
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the current queue change to finish."}
+		}
+		if model.conversationStatus.Editable == 0 {
+			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no editable queued, rejected, or recovered input."}
+		}
+	case "copy":
+		if !model.terminalClipboard {
+			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No verified terminal-native clipboard sink is available."}
+		}
+		if model.terminalCapabilities.NativeClipboard == TerminalCapabilityDisabled && model.terminalCapabilities.OSC52 == TerminalCapabilityDisabled {
+			return slashAvailabilityProjection{State: SlashDisabled, Reason: "Clipboard output is disabled."}
+		}
+		if !model.terminalCapabilities.clipboardAvailable() {
+			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No verified terminal-native clipboard sink is available."}
+		}
+		if _, ok := model.transcript.LatestCommittedAssistantFinal(); !ok {
+			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no committed assistant final answer to copy."}
+		}
+	case "find":
+		if !model.transcript.HasSearchableContent() {
+			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no committed transcript content to search."}
+		}
+	case "doctor":
+		if model.pendingDoctorID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the current local diagnostic check to finish."}
+		}
+	case "rename", "privacy", "permissions":
+		if model.pendingSubmitID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the starting diagnostic run to be accepted or rejected."}
 		}
 	}
-	return true, ""
+	return available
 }
 
 func (model *Model) syncSlashMenu() {
@@ -1134,10 +1470,10 @@ func (model *Model) syncSlashMenu() {
 	commands := FilterSlashCommands(query)
 	candidates := make([]components.SlashCandidate, 0, len(commands))
 	for _, command := range commands {
-		enabled, reason := model.slashAvailability(command)
+		availability := model.slashAvailability(command)
 		candidates = append(candidates, components.SlashCandidate{
 			Name: command.Name, Usage: command.Usage, Summary: command.Summary,
-			Enabled: enabled, DisabledReason: reason,
+			Availability: string(availability.State), Reason: availability.Reason,
 		})
 	}
 	model.slashMenu.SetCandidates(candidates)
@@ -1241,6 +1577,7 @@ func (model *Model) acceptEvidenceDetailResult(result application.UIEvidenceDeta
 			Status:            status,
 			SensitiveFiltered: detail.SensitiveFilter == application.UIEvidenceSensitiveFilterApplied,
 			Projection:        sanitizeExternalText(detail.Projection, application.MaxUIEvidenceProjectionBytes),
+			Claims:            formatClaimReferences(result.Reference),
 		}, partial)
 	}
 }
@@ -1260,6 +1597,7 @@ func (model *Model) appendEvidenceReferences(references []application.UIEvidence
 		model.evidenceReferences = append(model.evidenceReferences, reference)
 		display = append(display, components.EvidenceReference{
 			Index: index, ID: string(reference.EvidenceID), State: string(reference.State),
+			Claims: append([]int(nil), reference.ClaimSequences...), ClaimKinds: claimKindStrings(reference.ClaimKinds),
 		})
 	}
 	model.transcript.SetAgentEvidence(display)
@@ -1276,9 +1614,49 @@ func (model *Model) closeEvidenceInteraction() {
 	}
 }
 
+func (model *Model) returnFromEvidenceDetail() {
+	model.pendingEvidence = application.UIEvidenceDetailQuery{}
+	model.evidenceGeneration = 0
+	model.evidenceDialog.Close()
+	if model.terminalFocused && model.transcript.EvidenceSelecting() {
+		model.composer.Blur()
+		model.focus = FocusTranscript
+		model.reflow()
+	}
+}
+
 func sameUIEvidenceIdentity(left, right application.UIEvidenceReference) bool {
-	return left.EvidenceID == right.EvidenceID && left.RunID == right.RunID &&
-		left.Scope == right.Scope && left.Sequence == right.Sequence
+	if left.EvidenceID != right.EvidenceID || left.RunID != right.RunID || left.Scope != right.Scope ||
+		left.Sequence != right.Sequence || len(left.ClaimSequences) != len(right.ClaimSequences) ||
+		len(left.ClaimKinds) != len(right.ClaimKinds) {
+		return false
+	}
+	for index := range left.ClaimSequences {
+		if left.ClaimSequences[index] != right.ClaimSequences[index] || left.ClaimKinds[index] != right.ClaimKinds[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func formatClaimReferences(reference application.UIEvidenceReference) string {
+	values := make([]string, len(reference.ClaimSequences))
+	for index, sequence := range reference.ClaimSequences {
+		kind := "declared claim"
+		if index < len(reference.ClaimKinds) {
+			kind = strings.ReplaceAll(string(reference.ClaimKinds[index]), "_", " ")
+		}
+		values[index] = fmt.Sprintf("%d (%s)", sequence, kind)
+	}
+	return strings.Join(values, ", ")
+}
+
+func claimKindStrings(values []domain.ClaimKind) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = string(value)
+	}
+	return result
 }
 
 func quitCommand() tea.Cmd {
@@ -1299,6 +1677,9 @@ func (model *Model) clearComposerForInterrupt() bool {
 func (model *Model) prepareQuit() tea.Cmd {
 	model.closePickers()
 	model.slashMenu.Close()
+	model.clearPendingSubmit()
+	model.clearQuestionStartRecovery()
+	model.composer.Reset()
 	model.composer.Blur()
 	return quitCommand()
 }
@@ -1332,6 +1713,8 @@ func (model Model) cancelRunCommand() tea.Cmd {
 }
 
 func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
+	recoveryKind := model.questionRecoveryKind
+	restoreQuestion := recoveryKind != "" && recoveryKind == model.activePicker
 	isSession := model.activePicker == application.UICompletionSession
 	resumeScope := model.resumeScopeSelection && model.pendingResumed != nil &&
 		(model.activePicker == application.UICompletionContext || model.activePicker == application.UICompletionNamespace)
@@ -1344,6 +1727,9 @@ func (model Model) cancelPicker() (tea.Model, tea.Cmd) {
 		requestID = model.pendingResumed.ResumeRequestID
 	}
 	model.closePickers()
+	if restoreQuestion {
+		model.restoreQuestionStartRecovery(recoveryKind)
+	}
 	model.resumeScopeSelection = false
 	if isSession {
 		model.composer.Reset()
@@ -1526,47 +1912,14 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.clearActionPresentation()
 		model.clearApproval()
 		if model.run.Active && previousGeneration != model.permission.PolicyGeneration {
-			model.run.Active = false
-			model.run.Terminal = true
-			model.run.Status = "cancelled"
-			model.run.StreamedText = "The diagnostic run was cancelled because the permission policy changed."
-			model.transcript.FinishAgentWithDuration(model.run.StreamedText, model.currentRunElapsed())
+			model.finishRunForInvalidation(result.Permissions.InterruptedRun,
+				"The diagnostic run stopped because its frozen permission policy changed.")
 		}
 		model.transcript.AppendNotice(permissionChangeNotice(*result.Permissions))
 	case application.UICommandSubmitQuestion:
-		if model.pendingSubmitID == 0 || result.RequestID != model.pendingSubmitID {
-			return
-		}
-		model.pendingSubmitID = 0
-		if result.Failure == application.UIQueryConsentRequired && result.Privacy != nil {
-			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
-				model.composer.SetValue(model.pendingSubmitDraft)
-			}
-			model.pendingSubmitDraft = ""
-			model.pendingPrivacyID = result.RequestID
-			model.showPrivacyReview(*result.Privacy, nil)
-			return
-		}
-		if result.Failure == application.UIQueryModelRequired {
-			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
-				model.composer.SetValue(model.pendingSubmitDraft)
-			}
-			model.pendingSubmitDraft = ""
-			model.modelConfigured = false
-			model.beginMissingModelSetup()
-			model.showDialog("Model required", "Configure the model before sending another question.")
-			return
-		}
-		if result.Failure != "" {
-			if model.composer.Value() == "" && model.pendingSubmitDraft != "" {
-				model.composer.SetValue(model.pendingSubmitDraft)
-			}
-			model.pendingSubmitDraft = ""
-			model.showDialog("Model transfer unavailable", "The question could not start under the current safe state.")
-			return
-		}
-		model.pendingSubmitDraft = ""
-		model.planArmed = false
+		// Submit outcomes are handled by acceptQuestionStartOutcome so typed
+		// reason and current-state recovery cannot be collapsed into text.
+		return
 	case application.UICommandSubmitSteer, application.UICommandEnqueueFollowUp, application.UICommandPopFollowUp:
 		pending := model.pendingConversation
 		if pending == nil || result.RequestID != pending.RequestID || result.Command != pending.Kind ||
@@ -1581,7 +1934,7 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			}
 			return
 		}
-		model.composer.RecordSubmission(pending.Draft)
+		// Submitted-input history is updated only by the committed input event.
 	case application.UICommandCancelFollowUp, application.UICommandClearFollowUps:
 		pending := model.pendingConversation
 		if pending == nil || result.RequestID != pending.RequestID || result.Command != pending.Kind ||
@@ -1627,6 +1980,12 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		} else {
 			model.transcript.AppendNotice("Plan-only mode is off.")
 		}
+	case application.UICommandShowDoctor:
+		if model.pendingDoctorID == 0 || result.RequestID != model.pendingDoctorID || result.Doctor == nil {
+			return
+		}
+		model.pendingDoctorID = 0
+		model.showDoctor(*result.Doctor)
 	case application.UICommandShowPrivacy, application.UICommandToggleLogs, application.UICommandTightenRetention:
 		if model.pendingPrivacyID == 0 || result.RequestID != model.pendingPrivacyID || result.Privacy == nil || result.Lifecycle == nil {
 			return
@@ -1648,12 +2007,37 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 		model.transcript.AppendNotice("A new Session was started with the selected persistence mode. No model request was sent.")
 		model.privacyPending = false
 		model.showPrivacyReview(*result.Privacy, result.Lifecycle)
+	case application.UICommandPreviewSessionDeletion:
+		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.sessionDelete == nil {
+			return
+		}
+		model.pendingDeleteID = 0
+		if result.Failure != "" || result.DeletionReview == nil {
+			model.sessionDelete = nil
+			model.showDialog("Deletion unavailable", "The Session is active, protected, missing, or could not be snapshotted safely. No data was deleted.")
+			return
+		}
+		state := *model.sessionDelete
+		if state.SessionID != "" && (len(result.DeletionReview.Plan.Sessions) != 1 ||
+			result.DeletionReview.Plan.Sessions[0].ID != state.SessionID) {
+			return
+		}
+		state.ExpectedCurrent = result.DeletionReview.Current
+		state.Review = result.DeletionReview
+		model.sessionDelete = &state
+		title := "Delete selected Session?"
+		if result.DeletionReview.Plan.Snapshot.Request.Kind == application.SessionDeletionBefore {
+			title = "Delete inactive Sessions?"
+		} else if state.ExpectedCurrent {
+			title = "Delete current Session?"
+		}
+		model.showDialog(title, sessionDeleteConfirmationText(state))
 	case application.UICommandDeleteSession:
 		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.sessionDelete == nil {
 			return
 		}
 		state := *model.sessionDelete
-		if result.Failure == "" && (result.Deletion == nil || result.Deletion.SessionID != state.SessionID ||
+		if result.Failure == "" && (result.Deletion == nil || state.SessionID != "" && result.Deletion.SessionID != state.SessionID ||
 			result.Deletion.WasCurrent != state.ExpectedCurrent) {
 			return
 		}
@@ -1675,11 +2059,28 @@ func (model *Model) acceptCommandOutcome(result application.UICommandOutcome) {
 			model.privacyMode = domain.PrivacyModeStandard
 			model.resource = ResourceView{}
 			model.resetTranscript()
+			model.exitAfterSessionDeletion = true
 		} else {
-			model.sessionPicker.Remove(string(result.Deletion.SessionID))
-			model.showDialog("Session deleted", "The selected Session was deleted logically in one committed transaction. This is not forensic erasure.")
+			for _, id := range result.Deletion.SessionIDs {
+				model.sessionPicker.Remove(string(id))
+			}
+			if result.Deletion.Kind == application.SessionDeletionBefore {
+				model.showDialog("Sessions deleted", fmt.Sprintf(
+					"Deleted: %d · protected: %d · remaining: %d\n\nThe frozen batch was deleted logically in one committed transaction. This is not forensic erasure.",
+					result.Deletion.Deleted, result.Deletion.Protected, result.Deletion.Remaining,
+				))
+			} else {
+				model.showDialog("Session deleted", "The selected Session was deleted logically in one committed transaction. This is not forensic erasure.")
+			}
 		}
-		model.transcript.AppendNotice("The Session was deleted logically in one committed transaction. This is not forensic erasure.")
+		if result.Deletion.Kind == application.SessionDeletionBefore {
+			model.transcript.AppendNotice(fmt.Sprintf(
+				"%d inactive Session(s) were deleted logically in one committed transaction; %d were protected and %d remain. This is not forensic erasure.",
+				result.Deletion.Deleted, result.Deletion.Protected, result.Deletion.Remaining,
+			))
+		} else {
+			model.transcript.AppendNotice("The Session was deleted logically in one committed transaction. This is not forensic erasure.")
+		}
 	case application.UICommandClearHistory:
 		if model.pendingDeleteID == 0 || result.RequestID != model.pendingDeleteID || model.localDeletion == nil ||
 			model.localDeletion.Kind != clearLocalHistory {
@@ -1947,7 +2348,7 @@ func privacyReviewText(review application.PrivacyReview, lifecycle *application.
 			builder.WriteString(" | E export redacted summary")
 		}
 		if lifecycle.CurrentSession != nil {
-			builder.WriteString(" | D delete current Session")
+			builder.WriteString(" | D delete current Session (same as /delete)")
 		}
 		builder.WriteString(" | H clear history | X delete all database state")
 		builder.WriteString(" | Esc or Ctrl+C cancel")
@@ -2044,8 +2445,7 @@ func (model Model) updatePrivacyDialogKey(message tea.KeyPressMsg) (tea.Model, t
 		if model.lifecycleReview == nil || model.lifecycleReview.CurrentSession == nil {
 			return model, nil
 		}
-		model.beginCurrentSessionDelete()
-		return model, nil
+		return model.beginCurrentSessionDeletion(deleteFromPrivacy)
 	case message.Code == 'h' || message.Code == 'H':
 		if model.lifecycleReview == nil {
 			return model, nil
@@ -2114,6 +2514,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 		case domain.MessageRoleAssistant:
 			model.transcript.StartAgent()
 			model.transcript.FinishCommittedAgent(text)
+			model.transcript.SetAgentLandmark(components.TranscriptLandmarkAssistantFinal)
 			model.appendEvidenceReferences(message.EvidenceReferences)
 		default:
 			model.transcript.AppendNotice(text)
@@ -2142,9 +2543,19 @@ func (model *Model) resetTranscript() {
 	model.contextPressure = ""
 	model.searchMode = false
 	model.searchReturnDraft = ""
+	model.historySearchMode = false
+	model.historySearchReturnDraft = ""
+	model.historySearchQuery = ""
+	clear(model.historySearchEntries)
+	clear(model.historySearchMatches)
+	model.historySearchEntries = nil
+	model.historySearchMatches = nil
+	model.historySearchIndex = 0
+	model.composer.ClearHistory()
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
 	model.composer.ResetPlaceholder()
-	model.pendingSubmitDraft = ""
+	model.clearPendingSubmit()
+	model.clearQuestionStartRecovery()
 	model.conversationRevision = 0
 	model.conversationStatus = application.ConversationInputStatus{}
 	model.conversationPreview = nil
@@ -2167,20 +2578,23 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 		if changed {
 			model.clearApproval()
 			model.clearActionPresentation()
-			model.finishRunForScopeChange()
+			model.finishRunForInvalidation(result.InterruptedRun,
+				"The diagnostic run stopped because its frozen scope generation changed.")
 			model.resource = ResourceView{}
 			model.pendingResourceID = 0
 			model.pendingResource = ResourceView{}
 			model.closePickers()
 			model.scope = ScopeView{Generation: result.ScopeGeneration}
 		}
+		model.restoreQuestionStartRecovery(application.UICompletionContext)
 		model.showDialog("Scope unavailable", scopeFailureText(result.Failure))
 		return
 	}
 	if changed {
 		model.clearApproval()
 		model.clearActionPresentation()
-		model.finishRunForScopeChange()
+		model.finishRunForInvalidation(result.InterruptedRun,
+			"The diagnostic run stopped because its frozen scope generation changed.")
 		model.resource = ResourceView{}
 		model.pendingResourceID = 0
 		model.pendingResource = ResourceView{}
@@ -2197,18 +2611,22 @@ func (model *Model) applyScopeResult(result application.UIScopeResult) {
 	if result.ScopePreferenceDegraded {
 		model.transcript.AppendNotice("The scope is active, but Kupilot could not save this Context for the next start.")
 	}
+	model.restoreQuestionStartRecovery(application.UICompletionContext)
 }
 
-func (model *Model) finishRunForScopeChange() {
-	if !model.run.Active {
+func (model *Model) finishRunForInvalidation(outcome *application.UITerminalOutcome, text string) {
+	if !model.run.Active || outcome == nil || outcome.Reason != domain.RunTerminalStaleGeneration {
 		return
 	}
-	const cancellation = "The diagnostic run was cancelled because the scope changed."
 	model.run.Active = false
 	model.run.Terminal = true
-	model.run.Status = "cancelled"
-	model.run.StreamedText = cancellation
-	model.transcript.FinishAgentWithDuration(cancellation, model.currentRunElapsed())
+	model.run.Status = "failed"
+	model.run.StreamedText = text
+	model.run.TerminalReason = outcome.Reason
+	model.run.TerminalActions = append([]application.UINextAction(nil), outcome.NextActions...)
+	model.transcript.FinishAgentWithDuration(text, model.currentRunElapsed())
+	model.transcript.SetAgentLandmark(components.TranscriptLandmarkFailureUnknown)
+	model.transcript.SetAgentTerminalSummary(renderTerminalOutcome(*outcome))
 }
 
 func (model Model) currentRunElapsed() time.Duration {
@@ -2255,6 +2673,13 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		storage = "degraded"
 	}
 	budget := status.Budget
+	modelInputBudget := statusBudgetMeasure(budget, application.UIBudgetModelInputBytes)
+	modelOutputBudget := statusBudgetMeasure(budget, application.UIBudgetModelOutputBytes)
+	evidenceItemBudget := statusBudgetMeasure(budget, application.UIBudgetEvidenceItems)
+	evidenceByteBudget := statusBudgetMeasure(budget, application.UIBudgetEvidenceBytes)
+	queueItemBudget := statusBudgetMeasure(budget, application.UIBudgetQueueItems)
+	queueByteBudget := statusBudgetMeasure(budget, application.UIBudgetQueueBytes)
+	continuationBudget := statusBudgetMeasure(budget, application.UIBudgetContinuationAttempts)
 	modelContext := status.ModelContext
 	compression := "not compressed"
 	if modelContext.Compressed {
@@ -2409,6 +2834,13 @@ func statusText(status application.UIStatusResult, modelName string) string {
 		"Budget",
 		statusRow("Profile", string(budget.Profile)),
 		statusRow("Basis", budget.ModelEvidenceBasis),
+		statusRow("Model bytes", fmt.Sprintf("input %d/%d (%s) · output %s", modelInputBudget.Used,
+			modelInputBudget.Limit, modelInputBudget.Basis, modelOutputBudget.Basis)),
+		statusRow("Evidence budget", fmt.Sprintf("%d/%d items (%s) · bytes %s", evidenceItemBudget.Used,
+			evidenceItemBudget.Limit, evidenceItemBudget.Basis, evidenceByteBudget.Basis)),
+		statusRow("Queue budget", fmt.Sprintf("%d/%d items · %s/%s (%s)", queueItemBudget.Used,
+			queueItemBudget.Limit, statusBytes(int(queueByteBudget.Used)), statusBytes(int(queueByteBudget.Limit)), queueByteBudget.Basis)),
+		statusRow("Continuation", fmt.Sprintf("%d attempts (%s) · protocol unavailable", continuationBudget.Used, continuationBudget.Basis)),
 		statusRow("Time", statusDuration(budget.ElapsedMilliseconds)+" elapsed · "+statusDuration(budget.RemainingMilliseconds)+" remaining"),
 		statusRow("Calls", fmt.Sprintf("%d/%d steps · %d/%d tools · %d/%d model · %d/%d summary · %d/%d reviewer", budget.StepsUsed, budget.StepsMaximum,
 			budget.ToolCallsUsed, budget.ToolCallsMaximum, budget.ModelCallsUsed, budget.ModelCallsMaximum,
@@ -2434,6 +2866,15 @@ func statusText(status application.UIStatusResult, modelName string) string {
 			budget.ResourceScannedMaximum, budget.ResourceReturnedMaximum, statusBytes(budget.ResourceBytesMaximum))),
 	)
 	return strings.Join(lines, "\n")
+}
+
+func statusBudgetMeasure(status application.UIBudgetStatus, category application.UIBudgetCategory) application.UIBudgetMeasure {
+	for _, measure := range status.FineGrained {
+		if measure.Category == category {
+			return measure
+		}
+	}
+	return application.UIBudgetMeasure{Category: category, Basis: application.UIBudgetUnavailable}
 }
 
 func permissionStatusDescriptions(profile domain.PermissionProfile) (string, string, string) {
@@ -2582,7 +3023,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		if !model.acceptAutomaticActionEvent(execution.RequestID, execution.Digest, event.Sequence, execution.EventIndex) {
 			return nil
 		}
-		model.transcript.AppendNotice(restartExecutionStatus(execution))
+		model.transcript.AppendLandmarkNotice(restartExecutionStatus(execution), components.TranscriptLandmarkApproval)
 		if execution.State.Terminal() {
 			model.clearActionPresentation()
 		}
@@ -2592,7 +3033,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		if !model.acceptReviewerEvent(*event.Reviewer) {
 			return nil
 		}
-		model.transcript.AppendNotice(reviewerEventNotice(event.Reviewer.Status))
+		model.transcript.AppendLandmarkNotice(reviewerEventNotice(event.Reviewer.Status), components.TranscriptLandmarkApproval)
 		return nil
 	}
 	if event.Kind == application.UIEventApprovalClosed {
@@ -2602,14 +3043,14 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 				return nil
 			}
 			if state == domain.ApprovalStateConsumed {
-				model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
+				model.transcript.AppendLandmarkNotice(approvalExecutionStatus(*event.ApprovalResult), components.TranscriptLandmarkApproval)
 				if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
-					model.transcript.AppendNotice("Sanitized command output:\n" + event.ApprovalResult.ActionExecution.SafeOutput)
+					model.transcript.AppendLandmarkNotice("Sanitized command output:\n"+event.ApprovalResult.ActionExecution.SafeOutput, components.TranscriptLandmarkApproval)
 				}
 			} else if state == domain.ApprovalStateRejected {
-				model.transcript.AppendNotice("The action was denied before execution.")
+				model.transcript.AppendLandmarkNotice("The action was denied before execution.", components.TranscriptLandmarkApproval)
 			} else {
-				model.transcript.AppendNotice("The action closed without execution.")
+				model.transcript.AppendLandmarkNotice("The action closed without execution.", components.TranscriptLandmarkApproval)
 			}
 			model.clearActionPresentation()
 			return nil
@@ -2622,26 +3063,34 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.clearApproval()
 		model.clearActionPresentation()
 		if state == domain.ApprovalStateConsumed {
-			model.transcript.AppendNotice(approvalExecutionStatus(*event.ApprovalResult))
+			model.transcript.AppendLandmarkNotice(approvalExecutionStatus(*event.ApprovalResult), components.TranscriptLandmarkApproval)
 			if event.ApprovalResult.ActionExecution != nil && event.ApprovalResult.ActionExecution.SafeOutput != "" {
-				model.transcript.AppendNotice("Sanitized command output:\n" + event.ApprovalResult.ActionExecution.SafeOutput)
+				model.transcript.AppendLandmarkNotice("Sanitized command output:\n"+event.ApprovalResult.ActionExecution.SafeOutput, components.TranscriptLandmarkApproval)
 			}
 		} else if state == domain.ApprovalStateExpired {
-			model.transcript.AppendNotice("The action approval expired. No operation was executed.")
+			model.transcript.AppendLandmarkNotice("The action approval expired. No operation was executed.", components.TranscriptLandmarkApproval)
 		} else {
-			model.transcript.AppendNotice("The action approval was cancelled, denied, or invalidated. No operation was executed.")
+			model.transcript.AppendLandmarkNotice("The action approval was cancelled, denied, or invalidated. No operation was executed.", components.TranscriptLandmarkApproval)
 		}
 		return nil
 	}
 	if event.Kind == application.UIEventRunStarted {
-		if event.Sequence != 1 || model.run.Active || !model.startup.Ready || !model.scope.ReadOnly {
+		resyncedBeforeStart := model.run.Active && !model.run.Terminal && model.run.LastSequence == 0 &&
+			model.run.RunID == event.RunID && model.run.ScopeGeneration == event.ScopeGeneration &&
+			model.run.PolicyGeneration == event.PolicyGeneration
+		if event.Sequence != 1 || model.run.Active && !resyncedBeforeStart || !model.startup.Ready || !model.scope.ReadOnly {
 			return nil
 		}
 		startedAt := model.now().UTC().Truncate(time.Millisecond)
-		model.run = RunView{
-			RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
-			PolicyGeneration: event.PolicyGeneration, LastSequence: event.Sequence, StartedAt: startedAt,
-			Active: true, Status: "active",
+		if resyncedBeforeStart {
+			model.run.LastSequence = event.Sequence
+			model.run.StartedAt = startedAt
+		} else {
+			model.run = RunView{
+				RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
+				PolicyGeneration: event.PolicyGeneration, LastSequence: event.Sequence, StartedAt: startedAt,
+				Active: true, Status: "active",
+			}
 		}
 		model.clearActionPresentation()
 		model.workingAt = startedAt
@@ -2654,13 +3103,13 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 				history := editableConversationInput(text)
 				if model.pendingSubmitDraft != "" {
 					history = model.pendingSubmitDraft
-					model.pendingSubmitDraft = ""
 				}
 				model.composer.RecordSubmission(history)
 			}
 		}
+		model.clearPendingSubmit()
 		model.transcript.StartAgent()
-		return workingTick(model.run)
+		return workingTick(model.run, model.reducedMotion)
 	}
 	if !model.run.Active || model.run.Terminal || event.RunID != model.run.RunID ||
 		event.ScopeGeneration != model.run.ScopeGeneration || event.PolicyGeneration != model.run.PolicyGeneration {
@@ -2722,6 +3171,7 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		}
 		model.composer.Blur()
 		model.focus = FocusModal
+		model.transcript.AppendLandmarkNotice("Approval needed. No action has started.", components.TranscriptLandmarkApproval)
 		return approvalExpiry(request, now)
 	}
 	if event.Sequence != model.run.LastSequence+1 {
@@ -2729,6 +3179,10 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 	}
 
 	switch event.Kind {
+	case application.UIEventModelEgress:
+		projection := *event.ModelEgress
+		projection.EligibleCategories = append([]application.ModelDataCategory(nil), event.ModelEgress.EligibleCategories...)
+		model.run.ModelEgress = &projection
 	case application.UIEventTextDelta:
 		remaining := application.MaxAnswerMarkdownBytes - len(model.run.StreamedText)
 		if remaining < 0 {
@@ -2789,6 +3243,9 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		model.run.StreamedText = text
 		model.run.Active = false
 		model.run.Terminal = true
+		model.run.ModelEgress = nil
+		model.run.TerminalReason = event.TerminalOutcome.Reason
+		model.run.TerminalActions = append([]application.UINextAction(nil), event.TerminalOutcome.NextActions...)
 		switch event.Kind {
 		case application.UIEventRunCompleted:
 			model.run.Status = "completed"
@@ -2804,7 +3261,13 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		}
 		if event.Kind == application.UIEventRunCompleted {
 			model.appendEvidenceReferences(event.EvidenceReferences)
+			model.transcript.SetAgentProvenance(projectTranscriptProvenance(*event.AnswerProvenance))
+			model.transcript.SetAgentLandmark(components.TranscriptLandmarkAssistantFinal)
 		}
+		if event.TerminalOutcome.Reason != domain.RunTerminalCompleted && event.TerminalOutcome.Reason != domain.RunTerminalNeedsUserInput {
+			model.transcript.SetAgentLandmark(components.TranscriptLandmarkFailureUnknown)
+		}
+		model.transcript.SetAgentTerminalSummary(renderTerminalOutcome(*event.TerminalOutcome))
 	default:
 		return nil
 	}
@@ -2843,6 +3306,7 @@ func (model *Model) acceptConversationInputEvent(event application.UIEvent) {
 	}
 	model.committedConversation[input.Changed.ItemID] = struct{}{}
 	model.transcript.InsertUserBeforeActiveAgent(text)
+	model.composer.RecordSubmission(editableConversationInput(text))
 }
 
 func approvalTargetLabel(request application.UIApprovalRequest) string {
@@ -2988,8 +3452,10 @@ func (model *Model) acceptWorkingTick(message WorkingTickMsg) tea.Cmd {
 		return nil
 	}
 	model.workingAt = at
-	model.workingFrame++
-	return workingTick(model.run)
+	if !model.reducedMotion {
+		model.workingFrame++
+	}
+	return workingTick(model.run, model.reducedMotion)
 }
 
 func approvalOperationLabel(operation domain.ApprovalOperation) string {

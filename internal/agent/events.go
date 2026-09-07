@@ -13,6 +13,13 @@ import (
 // independent finite ceiling on the internal ordered stream.
 const MaxRunEvents = 32 * 1024
 
+const MaxModelPreflightMessages = 1024
+
+// SafeReadReuseWindow is the exact code-owned freshness ceiling for the
+// narrow same-run safe-read reuse policy. It is intentionally short and is
+// not a general cache TTL.
+const SafeReadReuseWindow = time.Second
+
 var (
 	// ErrInvalidRunEvent reports an invalid project event without echoing data.
 	ErrInvalidRunEvent = errors.New("RunEvent data is invalid")
@@ -50,6 +57,78 @@ type RunEventFailure struct {
 	SafeMessage string
 }
 
+// ModelCallKind distinguishes the main Agent request from the existing
+// non-streaming, Tool-free summarization request.
+type ModelCallKind string
+
+const (
+	ModelCallAgent   ModelCallKind = "agent"
+	ModelCallSummary ModelCallKind = "summary"
+)
+
+// ModelCallPreflight is the measured, content-free request projection emitted
+// synchronously before the adapter invokes its transport.
+type ModelCallPreflight struct {
+	Kind                 ModelCallKind
+	MessageCount         int
+	MessageBytes         int
+	CurrentInputCount    int
+	CurrentInputDigest   string
+	ReservedRequestBytes int
+	ReservedOutputBytes  int
+	ReservedStreamBytes  int
+	ReservedNanoseconds  int64
+	ReservedCostUnits    int
+}
+
+// ToolReuseMetadata links one logical Tool lifecycle to a previously accepted
+// complete safe read in the same run. It carries no Tool payload.
+type ToolReuseMetadata struct {
+	SourceInvocationID domain.ToolInvocationID
+	EvidenceIDs        []domain.EvidenceID
+	ObservedAt         time.Time
+	ResultDigest       string
+	PolicyGeneration   domain.PolicyGeneration
+	FreshnessWindow    time.Duration
+}
+
+func (metadata ToolReuseMetadata) valid(current domain.ToolInvocation) bool {
+	if !metadata.SourceInvocationID.Valid() || metadata.SourceInvocationID == current.ID ||
+		metadata.ObservedAt.IsZero() || metadata.ObservedAt.Location() != time.UTC ||
+		current.StartedAt == nil || metadata.ObservedAt.After(*current.StartedAt) || metadata.PolicyGeneration < 1 ||
+		metadata.FreshnessWindow != SafeReadReuseWindow ||
+		!validLowerSHA256Hex(metadata.ResultDigest) || len(metadata.EvidenceIDs) > domain.MaxEvidenceItemsPerResult {
+		return false
+	}
+	seen := make(map[domain.EvidenceID]struct{}, len(metadata.EvidenceIDs))
+	for _, id := range metadata.EvidenceIDs {
+		if !id.Valid() {
+			return false
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return false
+		}
+		seen[id] = struct{}{}
+	}
+	return true
+}
+
+func (preflight ModelCallPreflight) valid(eventKind RunEventKind) bool {
+	wantKind := ModelCallAgent
+	if eventKind == RunEventSummaryStarted {
+		wantKind = ModelCallSummary
+	}
+	return preflight.Kind == wantKind && preflight.MessageCount > 0 && preflight.MessageCount <= MaxModelPreflightMessages &&
+		preflight.MessageBytes > 0 && preflight.MessageBytes <= domain.MaxModelRequestBytes &&
+		preflight.CurrentInputCount > 0 && preflight.CurrentInputCount <= 1+domain.MaxCommittedSteerInputs &&
+		validLowerSHA256Hex(preflight.CurrentInputDigest) &&
+		preflight.ReservedRequestBytes >= preflight.MessageBytes && preflight.ReservedRequestBytes <= domain.MaxModelRequestBytes &&
+		preflight.ReservedOutputBytes > 0 && preflight.ReservedOutputBytes <= domain.MaxModelMessageBytes &&
+		preflight.ReservedStreamBytes >= 0 && preflight.ReservedStreamBytes <= domain.MaxModelStreamBytes &&
+		preflight.ReservedNanoseconds > 0 && preflight.ReservedNanoseconds <= int64(10*time.Minute) &&
+		preflight.ReservedCostUnits > 0
+}
+
 // RunTerminationReason is a code-defined non-failure terminal reason.
 type RunTerminationReason string
 
@@ -75,9 +154,11 @@ type RunEvent struct {
 	Kind              RunEventKind
 	ExternalCallCost  int
 	ModelRequestID    *domain.ModelRequestID
+	ModelPreflight    *ModelCallPreflight
 	Summary           *domain.SessionContextSummary
 	TextDelta         string
 	ToolInvocation    *domain.ToolInvocation
+	ToolReuse         *ToolReuseMetadata
 	Evidence          *domain.Evidence
 	Diagnosis         *domain.Diagnosis
 	Failure           *RunEventFailure
@@ -105,6 +186,9 @@ func (event RunEvent) Validate() error {
 	if event.ModelRequestID != nil {
 		payloads++
 	}
+	if event.ModelPreflight != nil {
+		payloads++
+	}
 	if event.Summary != nil {
 		payloads++
 	}
@@ -126,13 +210,17 @@ func (event RunEvent) Validate() error {
 	if event.TerminationReason != "" {
 		payloads++
 	}
+	if event.ToolReuse != nil && event.Kind != RunEventToolCallRequested && event.Kind != RunEventToolCallCompleted {
+		return ErrInvalidRunEvent
+	}
 	switch event.Kind {
 	case RunEventRunStarted, RunEventRunCompleted:
 		if payloads != 0 {
 			return ErrInvalidRunEvent
 		}
 	case RunEventModelStreamStarted, RunEventSummaryStarted:
-		if payloads != 1 || event.ModelRequestID == nil || !event.ModelRequestID.Valid() {
+		if payloads != 2 || event.ModelRequestID == nil || !event.ModelRequestID.Valid() ||
+			event.ModelPreflight == nil || !event.ModelPreflight.valid(event.Kind) {
 			return ErrInvalidRunEvent
 		}
 	case RunEventSummaryReady:
@@ -145,9 +233,16 @@ func (event RunEvent) Validate() error {
 		}
 	case RunEventToolCallRequested, RunEventToolCallStarted, RunEventToolCallCompleted, RunEventToolCallFailed, RunEventToolCallDenied:
 		if payloads != 1 || !event.validToolInvocation() ||
-			event.Kind == RunEventToolCallRequested && (event.ExternalCallCost < 1 || event.ExternalCallCost > MaxRunEvents) ||
+			event.Kind == RunEventToolCallRequested && event.ToolReuse == nil && (event.ExternalCallCost < 1 || event.ExternalCallCost > MaxRunEvents) ||
+			event.Kind == RunEventToolCallRequested && event.ToolReuse != nil && event.ExternalCallCost != 0 ||
 			event.Kind != RunEventToolCallRequested && event.ExternalCallCost != 0 {
 			return ErrInvalidRunEvent
+		}
+		if event.ToolReuse != nil {
+			if event.Kind != RunEventToolCallRequested && event.Kind != RunEventToolCallCompleted ||
+				!event.ToolReuse.valid(*event.ToolInvocation) {
+				return ErrInvalidRunEvent
+			}
 		}
 	case RunEventEvidenceCollected:
 		if payloads != 1 || event.Evidence == nil || event.Evidence.Validate() != nil ||

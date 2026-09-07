@@ -546,6 +546,31 @@ func (budget *RunBudget) ReserveToolRevalidation(ctx context.Context, call Bound
 	return budget.reserveToolCall(ctx, call, true)
 }
 
+// RecordSafeReadReuse accounts for one logical Tool result selected by the
+// trusted same-run reuse policy. It reserves no external call and does not
+// alter retry state; the adapter must have independently validated the cache
+// identity, freshness, and accepted Evidence linkage.
+func (budget *RunBudget) RecordSafeReadReuse(ctx context.Context, call BoundToolCall, resultBytes int) error {
+	if call.Validate() != nil || resultBytes < 0 {
+		return ErrInvalidRunBudget
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if _, err := budget.activeLocked(ctx); err != nil {
+		return err
+	}
+	if budget.toolCalls >= budget.limits.ToolCalls {
+		return budget.stopLocked(RunStopToolCallLimit)
+	}
+	if resultBytes > budget.limits.ToolResultBytes ||
+		resultBytes > budget.limits.RunToolResultBytes-budget.toolResultBytes {
+		return budget.stopLocked(RunStopToolResultBytes)
+	}
+	budget.toolCalls++
+	budget.toolResultBytes += resultBytes
+	return nil
+}
+
 func (budget *RunBudget) reserveToolCall(ctx context.Context, call BoundToolCall, revalidation bool) (CallReservation, error) {
 	if call.Validate() != nil {
 		return CallReservation{}, ErrInvalidRunBudget

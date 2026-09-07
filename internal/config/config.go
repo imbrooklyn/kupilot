@@ -69,6 +69,7 @@ type Config struct {
 	Context              string               `yaml:"context,omitempty" json:"context,omitempty"`
 	Namespace            string               `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 	NoColor              bool                 `yaml:"no_color" json:"no_color"`
+	ReducedMotion        bool                 `yaml:"reduced_motion" json:"reduced_motion"`
 	TerminalStatusTitles bool                 `yaml:"terminal_status_titles" json:"terminal_status_titles"`
 	Runtime              RuntimeConfig        `yaml:"runtime" json:"runtime"`
 	Models               ModelProfilesConfig  `yaml:"models" json:"models"`

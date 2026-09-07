@@ -71,6 +71,9 @@ type RunView struct {
 	PersistenceDegraded bool
 	StreamedText        string
 	Status              string
+	TerminalReason      domain.RunTerminalReason
+	TerminalActions     []application.UINextAction
+	ModelEgress         *application.UIModelEgressPreflight
 }
 
 // actionPresentation binds ordered automatic/Reviewer-only lifecycle events
@@ -107,6 +110,7 @@ type Config struct {
 	Theme                   ThemeMode
 	DarkBackground          bool
 	NoColor                 bool
+	ReducedMotion           bool
 	StartIntent             application.UIStartIntent
 	Scope                   ScopeView
 	Resource                ResourceView
@@ -119,6 +123,7 @@ type Config struct {
 	Permission              application.UIPermissionStatus
 	TerminalStatusTitles    bool
 	TerminalClipboard       bool
+	TerminalCapabilities    *TerminalCapabilityProfile
 	Now                     func() time.Time
 }
 
@@ -143,6 +148,7 @@ type Model struct {
 	run             RunView
 	workingAt       time.Time
 	workingFrame    uint64
+	reducedMotion   bool
 	modelName       string
 	modelEndpoint   string
 	modelConfigured bool
@@ -162,62 +168,76 @@ type Model struct {
 	approvalDialog   components.ApprovalDialog
 	footer           components.Footer
 
-	activePicker           application.UICompletionKind
-	pendingCompletion      application.UICompletionQuery
-	pendingResume          application.UIResumeRequest
-	pendingResumed         *application.UIResumedSession
-	resumeOrigin           resumeOrigin
-	resumeScopeSelection   bool
-	scopeSelectionRequired bool
-	nextRequestID          uint64
-	initialQuery           application.UICompletionQuery
-	initialResume          application.UIResumeRequest
-	pendingScopeID         uint64
-	pendingResourceID      uint64
-	pendingResource        ResourceView
-	pendingSubmitID        uint64
-	pendingSubmitDraft     string
-	pendingConversation    *pendingConversationInput
-	conversationRevision   int64
-	conversationStatus     application.ConversationInputStatus
-	conversationPreview    []application.ConversationInputProjection
-	committedConversation  map[domain.MessageID]struct{}
-	queueClearConfirmation *queueClearConfirmation
-	pendingCompactionID    uint64
-	pendingPlanID          uint64
-	planArmed              bool
-	contextPressure        application.ContextPressureState
-	searchMode             bool
-	searchReturnDraft      string
-	terminalStatusTitles   bool
-	terminalClipboard      bool
-	pendingPrivacyID       uint64
-	pendingDeleteID        uint64
-	pendingExportID        uint64
-	pendingApprovalID      uint64
-	pendingPermissionID    uint64
-	pendingModelSetupID    uint64
-	modelSetup             *modelSetupState
-	privacyReview          *application.PrivacyReview
-	lifecycleReview        *application.SessionLifecycleReview
-	sessionDelete          *sessionDeleteState
-	localDeletion          *localDeletionState
-	sessionExport          *sessionExportState
-	pendingApproval        *application.UIApprovalRequest
-	permission             application.UIPermissionStatus
-	permissionReviewer     application.UIModelRoleStatus
-	permissionConfirmation *domain.PermissionProfile
-	reviewerEvent          *application.UIReviewerEvent
-	actionPresentation     *actionPresentation
-	evidenceReferences     []application.UIEvidenceReference
-	pendingEvidence        application.UIEvidenceDetailQuery
-	evidenceGeneration     int64
-	approvalState          domain.ApprovalState
-	privacyPending         bool
-	quitAfterCancel        bool
-	quitAfterLocalDeletion bool
-	terminalFocused        bool
-	terminalHistoryRows    int
+	activePicker             application.UICompletionKind
+	pendingCompletion        application.UICompletionQuery
+	pendingResume            application.UIResumeRequest
+	pendingResumed           *application.UIResumedSession
+	resumeOrigin             resumeOrigin
+	resumeScopeSelection     bool
+	scopeSelectionRequired   bool
+	nextRequestID            uint64
+	initialQuery             application.UICompletionQuery
+	initialResume            application.UIResumeRequest
+	pendingScopeID           uint64
+	pendingResourceID        uint64
+	pendingResource          ResourceView
+	pendingSubmitID          uint64
+	pendingSubmitDraft       string
+	pendingSubmitSessionID   domain.SessionID
+	pendingSubmitScope       int64
+	pendingSubmitPolicy      domain.PolicyGeneration
+	questionRecoveryDraft    string
+	questionRecoveryKind     application.UICompletionKind
+	pendingConversation      *pendingConversationInput
+	conversationRevision     int64
+	conversationStatus       application.ConversationInputStatus
+	conversationPreview      []application.ConversationInputProjection
+	committedConversation    map[domain.MessageID]struct{}
+	queueClearConfirmation   *queueClearConfirmation
+	pendingCompactionID      uint64
+	pendingPlanID            uint64
+	pendingDoctorID          uint64
+	planArmed                bool
+	contextPressure          application.ContextPressureState
+	searchMode               bool
+	searchReturnDraft        string
+	historySearchMode        bool
+	historySearchReturnDraft string
+	historySearchQuery       string
+	historySearchEntries     []string
+	historySearchMatches     []int
+	historySearchIndex       int
+	terminalStatusTitles     bool
+	terminalClipboard        bool
+	terminalCapabilities     TerminalCapabilityProfile
+	pendingPrivacyID         uint64
+	pendingDeleteID          uint64
+	pendingExportID          uint64
+	pendingApprovalID        uint64
+	pendingPermissionID      uint64
+	pendingModelSetupID      uint64
+	modelSetup               *modelSetupState
+	privacyReview            *application.PrivacyReview
+	lifecycleReview          *application.SessionLifecycleReview
+	sessionDelete            *sessionDeleteState
+	localDeletion            *localDeletionState
+	sessionExport            *sessionExportState
+	pendingApproval          *application.UIApprovalRequest
+	permission               application.UIPermissionStatus
+	permissionReviewer       application.UIModelRoleStatus
+	permissionConfirmation   *domain.PermissionProfile
+	reviewerEvent            *application.UIReviewerEvent
+	actionPresentation       *actionPresentation
+	evidenceReferences       []application.UIEvidenceReference
+	pendingEvidence          application.UIEvidenceDetailQuery
+	evidenceGeneration       int64
+	approvalState            domain.ApprovalState
+	privacyPending           bool
+	quitAfterCancel          bool
+	quitAfterLocalDeletion   bool
+	exitAfterSessionDeletion bool
+	terminalFocused          bool
+	terminalHistoryRows      int
 
 	styles styleSet
 	keymap KeyMap
@@ -259,6 +279,10 @@ func NewModel(config Config) Model {
 			Configured: true, Profile: domain.PermissionProfileAsk, PolicyGeneration: 1, Healthy: true,
 		}
 	}
+	terminalCapabilities := defaultTerminalCapabilityProfile(theme, config.TerminalClipboard, config.TerminalStatusTitles)
+	if config.TerminalCapabilities != nil && config.TerminalCapabilities.valid() {
+		terminalCapabilities = *config.TerminalCapabilities
+	}
 	model := Model{
 		width: width, height: height, theme: theme, focus: FocusComposer,
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
@@ -266,8 +290,10 @@ func NewModel(config Config) Model {
 		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
 		modelConfigured: modelConfigured,
 		privacyMode:     privacy, permission: permission, now: now,
-		terminalStatusTitles: config.TerminalStatusTitles,
-		terminalClipboard:    config.TerminalClipboard,
+		reducedMotion:        config.ReducedMotion,
+		terminalStatusTitles: terminalCapabilities.Title == TerminalCapabilityAvailable,
+		terminalClipboard:    terminalCapabilities.clipboardAvailable(),
+		terminalCapabilities: terminalCapabilities,
 		composer:             components.NewComposer(styles.composer, application.MaxQuestionBytes),
 		transcript:           components.NewTranscript(styles.transcript, styles.toolSteps),
 		slashMenu:            components.NewSlashMenu(styles.slashMenu),
@@ -327,6 +353,20 @@ func sanitizedResource(resource ResourceView) ResourceView {
 		return ResourceView{}
 	}
 	return resource
+}
+
+func resourceReference(view ResourceView) *domain.ResourceRef {
+	if view == (ResourceView{}) {
+		return nil
+	}
+	reference := domain.ResourceRef{
+		APIVersion: view.APIVersion, Kind: view.Kind,
+		Namespace: view.Namespace, Name: view.Name,
+	}
+	if domain.ValidateLiveResourceRef(reference) != nil {
+		return nil
+	}
+	return &reference
 }
 
 func (model *Model) configureStartup(intent application.UIStartIntent) {

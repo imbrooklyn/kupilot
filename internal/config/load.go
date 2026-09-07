@@ -327,6 +327,7 @@ type configV2Document struct {
 	Context              *string                `yaml:"context,omitempty"`
 	Namespace            *string                `yaml:"namespace,omitempty"`
 	NoColor              *bool                  `yaml:"no_color,omitempty"`
+	ReducedMotion        *bool                  `yaml:"reduced_motion,omitempty"`
 	TerminalStatusTitles *bool                  `yaml:"terminal_status_titles,omitempty"`
 	Runtime              *runtimeDocument       `yaml:"runtime,omitempty"`
 	Models               *modelsDocument        `yaml:"models"`
@@ -469,6 +470,9 @@ func applyRootDocument(config *Config, document configV2Document) {
 	}
 	if document.NoColor != nil {
 		config.NoColor = *document.NoColor
+	}
+	if document.ReducedMotion != nil {
+		config.ReducedMotion = *document.ReducedMotion
 	}
 	if document.TerminalStatusTitles != nil {
 		config.TerminalStatusTitles = *document.TerminalStatusTitles
@@ -762,7 +766,7 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 			if !yamlString(value) {
 				return false
 			}
-		case "no_color":
+		case "no_color", "reduced_motion":
 			if !yamlScalar(value, "!!bool") {
 				return false
 			}

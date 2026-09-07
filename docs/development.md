@@ -1,7 +1,7 @@
 # Development and CI Gates
 
 - Status: Accepted `v0.5` development contract
-- Date: 2026-09-04
+- Date: 2026-09-07
 
 The commands below describe the currently implemented repository gates. Named
 model profiles, the stable Eino ADK Session-context/summarization slice, the
@@ -221,6 +221,12 @@ prohibited-data absence. It also covers steering lifecycle, FIFO one-at-a-time
 drain, LIFO edit, exact queue limits and one-over, generation invalidation,
 complete-run Session grammar, model-input exact-once, and every no-auto-send
 terminal state. Every denial asserts the relevant external call count is zero.
+It additionally covers authoritative Last active and transactional exact/batch
+deletion; terminal capabilities, reverse search, semantic navigation,
+undo/redo, doctor and accessibility; typed clarification and terminal reasons;
+preflight and category budgets; Evidence freshness/conflict/negative coverage;
+narrow safe-read reuse; strict completeness; the synthetic injection corpus;
+and the unified recovery matrix.
 
 ## Hosted CI
 
@@ -301,7 +307,7 @@ The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
 a future `v0.5` release requires a fresh review of the actually reachable
 composition; Accepted documentation alone is not release evidence.
 
-The S07 deterministic quality harness uses only synthetic response and
+The deterministic quality harness uses only synthetic response and
 Evidence fixtures. It reports reference validity, unsupported current-state
 claims, stale/cross-run rejection, uncertainty/limitation handling, and
 response/citation bounds. It must not open a network connection, construct a
@@ -309,6 +315,14 @@ model client, or be reported as live model quality. Stream continuation
 compatibility tests are source/loopback checks; with the pinned protocol they
 assert unavailable, unknown/recovered, and zero retry rather than simulating a
 nonexistent resume API.
+
+The loopback endpoint-conformance fixtures exercise strict final output, Tool
+call identity, stream ordering and usage, cancellation, timeout, malformed,
+duplicate and out-of-order events, unknown outcome, continuation capability,
+and no cross-origin retry. The injection corpus places synthetic hostile text
+in every admitted untrusted source class and asserts that authority remains
+unchanged. Neither suite runs at startup or constitutes live endpoint/model
+quality evidence.
 
 ## References
 
@@ -318,3 +332,6 @@ nonexistent resume API.
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

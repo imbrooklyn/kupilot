@@ -26,13 +26,14 @@ func TestEventBridgeCoalescesDeltasAndPreservesStructuralOrdering(t *testing.T) 
 	if err != nil {
 		t.Fatalf("newEventBridge() error = %v", err)
 	}
+	configureTestModelEgress(bridge)
 	now := time.UnixMilli(1_000).UTC()
 	inputs := []agent.RunEvent{
 		{RunID: runID, ScopeGeneration: 7, Sequence: 1, OccurredAt: now, Kind: agent.RunEventRunStarted},
 		{RunID: runID, ScopeGeneration: 7, Sequence: 2, OccurredAt: now, Kind: agent.RunEventTextDelta, TextDelta: "first "},
 		{RunID: runID, ScopeGeneration: 7, Sequence: 3, OccurredAt: now, Kind: agent.RunEventTextDelta, TextDelta: "second "},
 		{RunID: runID, ScopeGeneration: 7, Sequence: 4, OccurredAt: now, Kind: agent.RunEventTextDelta, TextDelta: "third"},
-		{RunID: runID, ScopeGeneration: 7, Sequence: 5, OccurredAt: now, Kind: agent.RunEventModelStreamStarted, ModelRequestID: pointer(requestID)},
+		{RunID: runID, ScopeGeneration: 7, Sequence: 5, OccurredAt: now, Kind: agent.RunEventModelStreamStarted, ModelRequestID: pointer(requestID), ModelPreflight: testModelCallPreflight(agent.ModelCallAgent)},
 	}
 	for _, event := range inputs {
 		if err := bridge.accept(context.Background(), event); err != nil {
@@ -52,7 +53,7 @@ func TestEventBridgeCoalescesDeltasAndPreservesStructuralOrdering(t *testing.T) 
 		t.Fatalf("accept(terminal) error = %v", err)
 	}
 	wantKinds := []UIEventKind{
-		UIEventRunStarted, UIEventTextDelta, UIEventTextDelta, UIEventPersistenceDegraded, UIEventRunFailed,
+		UIEventRunStarted, UIEventTextDelta, UIEventTextDelta, UIEventModelEgress, UIEventPersistenceDegraded, UIEventRunFailed,
 	}
 	if len(events) != len(wantKinds) {
 		t.Fatalf("UI event count = %d, want %d", len(events), len(wantKinds))
@@ -68,6 +69,22 @@ func TestEventBridgeCoalescesDeltasAndPreservesStructuralOrdering(t *testing.T) 
 	if !events[len(events)-1].Terminal() {
 		t.Fatal("last UI event is not terminal")
 	}
+	terminal := events[len(events)-1].TerminalOutcome
+	if terminal == nil || terminalBudgetMeasure(terminal.Budget, UIBudgetModelInputBytes).Used != 128 ||
+		terminalBudgetMeasure(terminal.Budget, UIBudgetModelAttempts).Used != 1 ||
+		terminalBudgetMeasure(terminal.Budget, UIBudgetWallMilliseconds).Used != 0 ||
+		terminalBudgetMeasure(terminal.Budget, UIBudgetQueueItems).Basis != UIBudgetUnavailable {
+		t.Fatalf("terminal budget projection = %#v", terminal)
+	}
+}
+
+func terminalBudgetMeasure(values []UIBudgetMeasure, category UIBudgetCategory) UIBudgetMeasure {
+	for _, value := range values {
+		if value.Category == category {
+			return value
+		}
+	}
+	return UIBudgetMeasure{}
 }
 
 func TestEventBridgeDoesNotConsumeSequenceOrDeltaOnSinkFailure(t *testing.T) {
@@ -294,6 +311,8 @@ func TestCompletedUIEventAcceptsAnswerAboveQuestionLimit(t *testing.T) {
 	event := UIEvent{
 		Kind: UIEventRunCompleted, RunID: "00000000-0000-7000-8000-000000000141",
 		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: answer,
+		TerminalOutcome:  testTerminalOutcome(domain.RunTerminalCompleted),
+		AnswerProvenance: testAnswerProvenance(7, 1),
 	}
 	if len(answer) > MaxAnswerMarkdownBytes || event.Validate() != nil {
 		t.Fatalf("validated final answer length = %d; event error = %v", len(answer), event.Validate())

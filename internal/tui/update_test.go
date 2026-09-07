@@ -97,6 +97,7 @@ func TestStatusTextShowsDetailedBudgetWithoutFixedFooterCounters(t *testing.T) {
 			DataSourceBytesMaximum: 512 * 1024, DataSourceWindowMillis: 21_600_000, DataSourceStepMillis: 300_000,
 			ResourcePagesMaximum: 4, ResourcePageItemsMaximum: 50, ResourcePageBytesMaximum: 256 * 1024,
 			ResourceScannedMaximum: 200, ResourceReturnedMaximum: 50, ResourceBytesMaximum: 1024 * 1024,
+			FineGrained: application.NewUIBudgetMeasures(agent.DefaultRunBudgetLimits()),
 		},
 	}
 	got := statusText(status, "diagnostic-model")
@@ -235,7 +236,8 @@ func TestUpdateSubmitsChatThroughDeferredTypedCommand(t *testing.T) {
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	intent := commandFromCmd(t, cmd)
 	if intent.Kind != application.UICommandSubmitQuestion || intent.Text != "Why is the Pod restarting?" ||
-		intent.ExpectedScopeGeneration != 7 {
+		intent.SessionID != testSessionID || intent.ExpectedScopeGeneration != 7 ||
+		intent.ExpectedPolicyGeneration != 1 || intent.Resource != nil {
 		t.Fatalf("command = %#v", intent)
 	}
 	if model.composer.Value() != "" {
@@ -305,10 +307,14 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	}
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
+	model.clearPendingSubmit()
+	model.composer.RecordSubmission("one\ntwo\nthree\nfour\nfive")
 
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "second"})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = commandFromCmd(t, cmd)
+	model.clearPendingSubmit()
+	model.composer.RecordSubmission("second")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
 	if got := model.composer.Value(); got != "second" {
 		t.Fatalf("plain Up did not recall the newest input: %q", got)
@@ -433,6 +439,8 @@ func TestUpdateEscapedSlashHistoryPreservesChatMeaning(t *testing.T) {
 	if intent := commandFromCmd(t, cmd); intent.Kind != application.UICommandSubmitQuestion || intent.Text != "/help" {
 		t.Fatalf("first escaped intent = %#v", intent)
 	}
+	model.clearPendingSubmit()
+	model.composer.RecordSubmission("//help")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
 	if model.composer.Value() != "//help" {
 		t.Fatalf("escaped history draft = %q", model.composer.Value())
@@ -624,9 +632,9 @@ func TestUpdateActiveRunSteersAndRejectsLateEvents(t *testing.T) {
 	if got := model.transcript.ToolSteps(); len(got) != 1 || got[0].Status != string(application.ToolStepSucceeded) {
 		t.Fatalf("terminal Tool step regressed: %#v", got)
 	}
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 6, Text: "Final diagnosis.",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 6, "Final diagnosis.",
+	)})
 	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 7, Text: "late",
 	}})
@@ -667,10 +675,9 @@ func TestRequestedToolClearsOnlyThePreToolProvisionalAnswer(t *testing.T) {
 		Kind: application.UIEventTextDelta, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4,
 		Text: "Keep this final answer.",
 	}})
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 5,
-		Text: "Keep this final answer.",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 5, "Keep this final answer.",
+	)})
 	if model.run.StreamedText != "Keep this final answer." ||
 		strings.Contains(model.TerminalTranscript(), "Discard this pre-Tool draft.") ||
 		!strings.Contains(model.TerminalTranscript(), "Keep this final answer.") {
@@ -729,7 +736,7 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 }
 
 func newTestModel() Model {
-	return NewModel(Config{
+	model := NewModel(Config{
 		Width:  80,
 		Height: 24,
 		Theme:  ThemeNoColor,
@@ -741,6 +748,8 @@ func newTestModel() Model {
 			Verified:   true,
 		},
 	})
+	model.session = SessionView{ID: testSessionID, Title: "Test Session"}
+	return model
 }
 
 func runStartedEvent(sequence int64, text ...string) application.UIEvent {
@@ -753,6 +762,42 @@ func runStartedEvent(sequence int64, text ...string) application.UIEvent {
 	}
 	if len(text) > 0 {
 		event.Text = text[0]
+	}
+	return event
+}
+
+func runTerminalEvent(kind application.UIEventKind, sequence int64, text string, references ...application.UIEvidenceReference) application.UIEvent {
+	return terminalEventFor(testRunID, 7, 1, kind, sequence, text, references...)
+}
+
+func terminalEventFor(runID domain.AgentRunID, scopeGeneration int64, policyGeneration domain.PolicyGeneration, kind application.UIEventKind, sequence int64, text string, references ...application.UIEvidenceReference) application.UIEvent {
+	reason := domain.RunTerminalFailed
+	switch kind {
+	case application.UIEventRunCompleted:
+		reason = domain.RunTerminalCompleted
+	case application.UIEventRunCancelled:
+		reason = domain.RunTerminalCancelled
+	}
+	outcome, err := application.ProjectTerminalOutcome(reason)
+	if err != nil {
+		panic(err)
+	}
+	event := application.UIEvent{
+		Kind: kind, RunID: runID, ScopeGeneration: scopeGeneration, PolicyGeneration: policyGeneration,
+		Sequence: sequence, Text: text, TerminalOutcome: &outcome,
+	}
+	if kind == application.UIEventRunCompleted {
+		coverage := application.UIAnswerCoverageUnavailable
+		checked := 0
+		if len(references) > 0 {
+			coverage = application.UIAnswerCoverageComplete
+			checked = 1
+		}
+		event.EvidenceReferences = append([]application.UIEvidenceReference(nil), references...)
+		event.AnswerProvenance = &application.UIAnswerProvenance{
+			EvidenceCount: len(references), ScopeGeneration: scopeGeneration, PolicyGeneration: policyGeneration,
+			CoverageState: coverage, CheckedSourceCount: checked,
+		}
 	}
 	return event
 }

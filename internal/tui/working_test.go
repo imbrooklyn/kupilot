@@ -61,15 +61,40 @@ func TestWorkingTickRejectsStaleAndTerminalMessages(t *testing.T) {
 		t.Fatal("stale Working tick changed live render state or rescheduled itself")
 	}
 
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Ready.",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 2, "Ready.",
+	)})
 	model, command = updateModel(t, model, WorkingTickMsg{
 		RunID: testRunID, ScopeGeneration: 7, Sequence: 1,
 		At: startedAt.Add(2 * time.Second),
 	})
 	if command != nil || strings.Contains(model.View().Content, "Working (") {
 		t.Fatalf("terminal run accepted or rendered a late Working tick: %q", model.View().Content)
+	}
+}
+
+func TestReducedMotionKeepsWorkingIndicatorStatic(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 31, 8, 0, 0, 0, time.UTC)
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor, ReducedMotion: true,
+		Scope: ScopeView{Context: "test-context", Namespace: "test-namespace", Generation: 7, ReadOnly: true, Verified: true},
+		Now:   func() time.Time { return startedAt },
+	})
+	model, command := updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	if command == nil || !strings.Contains(model.View().Content, "• Working (0s • esc to interrupt)") {
+		t.Fatalf("reduced-motion run start = %q", model.View().Content)
+	}
+	model.workingFrame = 20
+	if view := model.workingView(); strings.Contains(view, "◦") {
+		t.Fatalf("reduced-motion working view animated its marker: %q", view)
+	}
+
+	model, command = updateModel(t, model, WorkingTickMsg{
+		RunID: testRunID, ScopeGeneration: 7, Sequence: 1, At: startedAt.Add(time.Second),
+	})
+	if command == nil || model.workingFrame != 20 || !model.workingAt.Equal(startedAt.Add(time.Second)) {
+		t.Fatalf("reduced-motion tick changed animation frame or lost elapsed time: frame=%d at=%s", model.workingFrame, model.workingAt)
 	}
 }

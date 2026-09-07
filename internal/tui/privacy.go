@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -16,6 +17,8 @@ type sessionDeleteOrigin uint8
 const (
 	deleteFromPrivacy sessionDeleteOrigin = iota + 1
 	deleteFromResumePicker
+	deleteFromSessionsPicker
+	deleteFromCommand
 )
 
 type sessionDeleteState struct {
@@ -23,6 +26,7 @@ type sessionDeleteState struct {
 	Title           string
 	ExpectedCurrent bool
 	Origin          sessionDeleteOrigin
+	Review          *application.SessionDeletionReview
 }
 
 type localDeletionKind uint8
@@ -214,28 +218,35 @@ func (model *Model) clearSessionExportState() {
 	model.dialog.Close()
 }
 
-func (model *Model) beginCurrentSessionDelete() {
-	if model.lifecycleReview == nil || model.lifecycleReview.CurrentSession == nil {
-		return
+func (model Model) beginCurrentSessionDeletion(origin sessionDeleteOrigin) (Model, tea.Cmd) {
+	if model.session.ID == "" || origin != deleteFromPrivacy && origin != deleteFromCommand && origin != deleteFromSessionsPicker {
+		return model, nil
 	}
-	current := model.lifecycleReview.CurrentSession
-	model.beginSessionDelete(sessionDeleteState{
-		SessionID: current.ID, Title: current.Title, ExpectedCurrent: true, Origin: deleteFromPrivacy,
+	return model.beginSessionDelete(sessionDeleteState{
+		SessionID: model.session.ID, Title: model.session.Title, ExpectedCurrent: true, Origin: origin,
 	})
 }
 
-func (model *Model) beginSelectedSessionDelete() {
-	if model.activePicker != application.UICompletionSession {
-		return
+func (model Model) beginSelectedSessionDelete() (Model, tea.Cmd) {
+	if model.activePicker != application.UICompletionSession && model.activePicker != application.UICompletionSessionManagement {
+		return model, nil
 	}
 	candidate, ok := model.sessionPicker.Selected()
 	if !ok {
-		return
+		return model, nil
 	}
-	model.beginSessionDelete(sessionDeleteState{
+	if model.activePicker == application.UICompletionSessionManagement && !candidate.Deletable && !candidate.Current {
+		model.showDialog("Deletion unavailable", "The selected Session is protected and was not added to a deletion plan.")
+		return model, nil
+	}
+	origin := deleteFromResumePicker
+	if model.activePicker == application.UICompletionSessionManagement {
+		origin = deleteFromSessionsPicker
+	}
+	return model.beginSessionDelete(sessionDeleteState{
 		SessionID: domain.SessionID(candidate.ID), Title: candidate.Title,
 		ExpectedCurrent: model.session.ID != "" && model.session.ID == domain.SessionID(candidate.ID),
-		Origin:          deleteFromResumePicker,
+		Origin:          origin,
 	})
 }
 
@@ -244,46 +255,160 @@ func isSessionPickerDeleteKey(message tea.KeyPressMsg) bool {
 		message.ShiftedCode == 'D' && message.Mod&tea.ModShift != 0
 }
 
-func (model *Model) beginSessionDelete(state sessionDeleteState) {
-	if !state.SessionID.Valid() || state.Origin != deleteFromPrivacy && state.Origin != deleteFromResumePicker {
-		return
+func isSessionBatchDeleteKey(message tea.KeyPressMsg) bool {
+	return message.Text == "B" || message.Code == 'B' ||
+		message.ShiftedCode == 'B' && message.Mod&tea.ModShift != 0
+}
+
+func (model Model) beginBatchSessionDelete() (Model, tea.Cmd) {
+	if model.activePicker != application.UICompletionSessionManagement {
+		return model, nil
+	}
+	model.closePickers()
+	model.slashMenu.Close()
+	model.sessionDelete = &sessionDeleteState{Origin: deleteFromSessionsPicker}
+	model.composer.Reset()
+	model.composer.SetPlaceholder("Enter 1d, 2w, or a timezone-qualified RFC3339 cutoff")
+	if model.terminalFocused {
+		_ = model.composer.Focus()
+	}
+	model.focus = FocusComposer
+	return model, nil
+}
+
+func (model Model) updateBatchSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if model.sessionDelete == nil || model.sessionDelete.SessionID != "" || model.sessionDelete.Review != nil ||
+		model.pendingDeleteID != 0 || model.dialog.Open() {
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Quit) {
+		model.sessionDelete = nil
+		model.composer.Reset()
+		model.composer.ResetPlaceholder()
+		return model, model.openCompletion(application.UICompletionSessionManagement, "", resumeOriginNone)
+	}
+	if key.Matches(message, model.keymap.Newline) {
+		model.showDialog("Invalid cutoff", "The inactive-Session cutoff must be one exact single-line relative duration or timezone-qualified RFC3339 value.")
+		return model, nil
+	}
+	if key.Matches(message, model.keymap.Submit) {
+		requestID := model.nextUIRequestID()
+		command := application.UICommand{
+			Kind: application.UICommandPreviewSessionDeletion, RequestID: requestID,
+			Lifecycle: &application.SessionLifecycleIntent{
+				DeletionKind: application.SessionDeletionBefore, Cutoff: model.composer.Value(),
+				Limit: application.SessionDeleteDefaultLimit,
+			},
+		}
+		if command.Validate() != nil {
+			model.showDialog("Invalid cutoff", "Use a positive whole-number d/w duration or an RFC3339 timestamp with a timezone.")
+			return model, nil
+		}
+		model.pendingDeleteID = requestID
+		model.composer.Reset()
+		model.composer.ResetPlaceholder()
+		model.showDialog("Preparing batch preview", "Resolving one frozen UTC cutoff and bounded content-free selection. No data has been deleted.")
+		return model, applicationCommand(command)
+	}
+	updated, command, err := model.composer.Update(message)
+	if err == nil && len(updated.Value()) <= 64 {
+		model.composer = updated
+	}
+	return model, command
+}
+
+func (model Model) beginSessionDelete(state sessionDeleteState) (Model, tea.Cmd) {
+	if !state.SessionID.Valid() || state.Origin < deleteFromPrivacy || state.Origin > deleteFromCommand {
+		return model, nil
 	}
 	copy := state
 	copy.Title = sanitizeExternalText(copy.Title, 512)
 	model.sessionDelete = &copy
-	title := "Delete selected Session?"
-	if copy.ExpectedCurrent {
-		title = "Delete current Session?"
+	requestID := model.nextUIRequestID()
+	command := application.UICommand{
+		Kind: application.UICommandPreviewSessionDeletion, RequestID: requestID,
+		Lifecycle: &application.SessionLifecycleIntent{
+			SessionID: copy.SessionID, DeletionKind: application.SessionDeletionExact,
+			Limit: 1,
+		},
 	}
-	model.showDialog(title, sessionDeleteConfirmationText(copy))
+	if command.Validate() != nil {
+		model.sessionDelete = nil
+		model.showDialog("Deletion unavailable", "The deletion preview could not be constructed safely.")
+		return model, nil
+	}
+	model.pendingDeleteID = requestID
+	model.showDialog("Preparing deletion preview", "Waiting for the bounded Application-owned Session snapshot. No data has been deleted.")
+	return model, applicationCommand(command)
 }
 
 func sessionDeleteConfirmationText(state sessionDeleteState) string {
+	if state.Review == nil {
+		return "The deletion preview is unavailable."
+	}
+	if state.Review.Plan.Snapshot.Request.Kind == application.SessionDeletionBefore {
+		return batchSessionDeleteConfirmationText(*state.Review)
+	}
+	if len(state.Review.Plan.Sessions) != 1 {
+		return "The deletion preview is unavailable."
+	}
+	selected := state.Review.Plan.Sessions[0]
 	var builder strings.Builder
-	if state.Title != "" {
-		fmt.Fprintf(&builder, "Session: %s\n", state.Title)
+	if selected.Title != "" {
+		fmt.Fprintf(&builder, "Session: %s\n", sanitizeExternalText(selected.Title, 512))
 	}
-	fmt.Fprintf(&builder, "Session ID: %s\n\n", state.SessionID)
+	fmt.Fprintf(&builder, "Session ID: %s\n", selected.ID)
+	fmt.Fprintf(&builder, "Last active: %s · %s\n", relativeSessionActivity(selected.LastActivityAt, state.Review.Plan.Snapshot.Request.FrozenNow),
+		selected.LastActivityAt.Local().Format(time.RFC3339Nano+" MST"))
+	fmt.Fprintf(&builder, "Last active UTC: %s\n", selected.LastActivityAt.UTC().Format(time.RFC3339Nano))
+	if state.Review.Current {
+		fmt.Fprintf(&builder, "Editable in-memory input: %d item(s), %d bytes\n", state.Review.QueueItems, state.Review.QueueBytes)
+	}
+	builder.WriteString("\n")
 	builder.WriteString("This removes the Session's messages, runs, model metadata, cluster-read details, observations, diagnoses, approvals, decisions, and linked read/write audit in one transaction.\n\n")
-	if state.ExpectedCurrent {
-		builder.WriteString("An active diagnostic run and any pending or approved-but-not-executed approval must be cancelled first.\n\n")
+	builder.WriteString("It does not remove exported files, terminal scrollback, logs, backups, configuration, credentials, cache, or SQLite free pages. Logical deletion is not forensic erasure.\n\nY confirms deletion. Esc, Ctrl+C, or Enter cancels.")
+	return builder.String()
+}
+
+func batchSessionDeleteConfirmationText(review application.SessionDeletionReview) string {
+	plan := review.Plan
+	request := plan.Snapshot.Request
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Frozen cutoff local: %s\n", request.Cutoff.Local().Format(time.RFC3339Nano+" MST"))
+	fmt.Fprintf(&builder, "Frozen cutoff UTC: %s\n", request.Cutoff.UTC().Format(time.RFC3339Nano))
+	fmt.Fprintf(&builder, "Matched: %d · eligible: %d · protected: %d · selected: %d\n",
+		plan.Snapshot.Matched, plan.Snapshot.Eligible, plan.Snapshot.Protected, len(plan.Sessions))
+	fmt.Fprintf(&builder, "Batch limit: %d · selection digest: %s\n", request.Limit, plan.Digest)
+	if plan.Oldest != nil && plan.Newest != nil {
+		fmt.Fprintf(&builder, "Selected activity UTC: %s through %s\n", plan.Oldest.UTC().Format(time.RFC3339Nano), plan.Newest.UTC().Format(time.RFC3339Nano))
 	}
-	builder.WriteString("Logical deletion does not guarantee forensic erasure from SQLite free pages, WAL, backups, snapshots, swap, or storage media.\n\nY confirms deletion. Esc, Ctrl+C, or Enter cancels.")
+	builder.WriteString("\nThe current Session, active runs, pending/approved actions, corrupt or future activity, exported files, terminal scrollback, logs, backups, configuration, credentials, cache, and SQLite free pages are excluded. Deletion is logical, not forensic.\n\n")
+	if plan.Snapshot.OverLimit {
+		builder.WriteString("The eligible set exceeds the bounded batch limit. No data can be deleted; use a narrower cutoff. Esc closes this preview.")
+	} else if len(plan.Sessions) == 0 {
+		builder.WriteString("No eligible Session was selected. No data was deleted. Esc closes this preview.")
+	} else {
+		builder.WriteString("Y confirms this exact snapshot. Esc, Ctrl+C, or Enter cancels.")
+	}
 	return builder.String()
 }
 
 func (model Model) updateSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if model.sessionDelete == nil || model.pendingDeleteID != 0 {
+	if model.sessionDelete == nil || model.pendingDeleteID != 0 || model.sessionDelete.Review == nil {
 		return model, nil
 	}
 	if key.Matches(message, model.keymap.Close) || key.Matches(message, model.keymap.Submit) ||
 		key.Matches(message, model.keymap.Quit) {
 		origin := model.sessionDelete.Origin
+		wasBatch := model.sessionDelete.SessionID == ""
 		model.sessionDelete = nil
 		if origin == deleteFromPrivacy && model.privacyReview != nil && model.lifecycleReview != nil {
 			model.showDialog("Privacy and local data", privacyReviewText(*model.privacyReview, model.lifecycleReview))
 		} else {
 			model.closeDialog()
+		}
+		if origin == deleteFromSessionsPicker && wasBatch {
+			return model, model.openCompletion(application.UICompletionSessionManagement, "", resumeOriginNone)
 		}
 		return model, nil
 	}
@@ -292,10 +417,13 @@ func (model Model) updateSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, t
 	}
 	requestID := model.nextUIRequestID()
 	state := *model.sessionDelete
+	if state.Review.Plan.Snapshot.OverLimit || len(state.Review.Plan.Sessions) == 0 {
+		return model, nil
+	}
 	command := application.UICommand{
 		Kind: application.UICommandDeleteSession, RequestID: requestID,
 		Lifecycle: &application.SessionLifecycleIntent{
-			SessionID: state.SessionID, ExpectedCurrent: state.ExpectedCurrent, Confirmed: true,
+			Confirmed: true, DeletionPlan: &state.Review.Plan, Confirmation: state.Review.Plan.Digest,
 		},
 	}
 	if command.Validate() != nil {
@@ -304,7 +432,7 @@ func (model Model) updateSessionDeleteKey(message tea.KeyPressMsg) (tea.Model, t
 		return model, nil
 	}
 	model.pendingDeleteID = requestID
-	model.dialog.Show("Deleting Session", "Waiting for Application to cancel unsafe state and commit the deletion transaction.")
+	model.dialog.Show("Deleting Session", "Waiting for the exact snapshot recheck and all-or-nothing deletion transaction.")
 	return model, applicationCommand(command)
 }
 

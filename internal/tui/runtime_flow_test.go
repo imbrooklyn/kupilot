@@ -39,7 +39,16 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 	submit := applicationCommandFromCmd(t, cmd)
 	blocked, _ = updateModel(t, blocked, CommandResultMsg{Result: application.UICommandOutcome{
 		Command: application.UICommandSubmitQuestion, RequestID: submit.RequestID,
-		Failure: application.UIQueryConsentRequired, Privacy: &review,
+		QuestionStart: &application.UIQuestionStartFailure{
+			Reason: application.QuestionStartConsentRequired, Recovery: application.QuestionStartRecoverReviewConsent,
+			State: application.UIQuestionStartCurrentState{
+				SessionID: testSessionID, ScopeState: application.ScopeStateActive, ScopeGeneration: 7,
+				Context: "test-context", Namespace: "test-namespace", ReadOnly: true,
+				PolicyGeneration: 1, PolicyHealthy: true, RunState: application.QuestionStartRunStateIdle,
+				ResourceState: application.QuestionStartResourceNone,
+			},
+		},
+		Privacy: &review,
 	}})
 	if !blocked.dialog.Open() || blocked.pendingPrivacyID != submit.RequestID ||
 		!strings.Contains(blocked.render(), "https://model.example") {
@@ -132,6 +141,7 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 	for _, want := range []string{
 		"Session storage: history saved", "Operational details: kept for 30 days", "Read and lifecycle audit: 90 days",
 		"Approval and write audit: 180 days", "memory-only Sessions cannot be resumed", "not forensic erasure",
+		"same as /delete",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("privacy lifecycle frame missing %q", want)
@@ -181,19 +191,33 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 
 	model.privacyPending = false
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'd'})
-	if cmd != nil || !model.dialog.Open() || model.sessionDelete == nil || !strings.Contains(model.render(), "Delete current Session?") {
-		t.Fatal("delete key did not open an explicit current-Session confirmation")
+	preview := applicationCommandFromCmd(t, cmd)
+	if preview.Kind != application.UICommandPreviewSessionDeletion || !model.dialog.Open() || model.sessionDelete == nil ||
+		!strings.Contains(model.render(), "Preparing deletion preview") {
+		t.Fatal("delete key did not request an explicit current-Session preview")
+	}
+	review := testSessionDeletionReview(t, testSessionID, "Current Session", true)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
+	if !strings.Contains(model.render(), "Delete current Session?") {
+		t.Fatal("current-Session preview did not open confirmation")
 	}
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil || model.sessionDelete != nil || !model.dialog.Open() {
 		t.Fatal("delete cancellation dispatched or failed to restore privacy review")
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'd'})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'd'})
+	preview = applicationCommandFromCmd(t, cmd)
+	review = testSessionDeletionReview(t, testSessionID, "Current Session", true)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
 	deleteCommand := applicationCommandFromCmd(t, cmd)
 	if deleteCommand.Kind != application.UICommandDeleteSession || deleteCommand.Lifecycle == nil ||
-		deleteCommand.Lifecycle.SessionID != testSessionID || !deleteCommand.Lifecycle.ExpectedCurrent ||
-		!deleteCommand.Lifecycle.Confirmed {
+		deleteCommand.Lifecycle.DeletionPlan == nil || deleteCommand.Lifecycle.DeletionPlan.Snapshot.Request.SessionID != testSessionID ||
+		!deleteCommand.Lifecycle.Confirmed || deleteCommand.Lifecycle.Confirmation == "" {
 		t.Fatalf("delete command = %#v", deleteCommand)
 	}
 }
@@ -233,7 +257,7 @@ func TestSessionDeleteOutcomeChangesCurrentSessionOnlyAfterMatchingCommit(t *tes
 	t.Run("mismatched result", func(t *testing.T) {
 		model, _ := updateModel(t, newPendingModel(), CommandResultMsg{Result: application.UICommandOutcome{
 			Command: application.UICommandDeleteSession, RequestID: 73,
-			Deletion: &application.SessionDeletionResult{SessionID: domain.SessionID("0192a6aa-77bc-7def-8123-456789abcdef"), WasCurrent: true},
+			Deletion: testSessionDeletionResult(domain.SessionID("0192a6aa-77bc-7def-8123-456789abcdef"), true),
 		}})
 		if model.session.ID != testSessionID || model.pendingDeleteID != 73 || model.sessionDelete == nil {
 			t.Fatal("mismatched committed result changed request-bound deletion state")
@@ -243,7 +267,7 @@ func TestSessionDeleteOutcomeChangesCurrentSessionOnlyAfterMatchingCommit(t *tes
 	t.Run("committed success", func(t *testing.T) {
 		model, _ := updateModel(t, newPendingModel(), CommandResultMsg{Result: application.UICommandOutcome{
 			Command: application.UICommandDeleteSession, RequestID: 73,
-			Deletion: &application.SessionDeletionResult{SessionID: testSessionID, WasCurrent: true},
+			Deletion: testSessionDeletionResult(testSessionID, true),
 		}})
 		entries := model.transcript.Entries()
 		if model.session.ID != "" || model.pendingDeleteID != 0 || model.sessionDelete != nil ||
@@ -405,7 +429,7 @@ func TestFakeEventStreamCoversDeltaToolCompletionCancellationAndError(t *testing
 					InvocationID: testInvocationID, Name: domain.ToolNameGetResource,
 					Status: application.ToolStepSucceeded, Summary: "Safe projected status.", EvidenceCount: 2,
 				}},
-				{Kind: tt.terminal, RunID: testRunID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 6, Text: tt.text},
+				runTerminalEvent(tt.terminal, 6, tt.text),
 			}
 			for _, event := range stream {
 				model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
@@ -438,10 +462,7 @@ func TestPersistenceDegradedEventRemainsVisibleThroughTerminalState(t *testing.T
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 			Text: "Local persistence is degraded; this run may not be resumable.",
 		},
-		{
-			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "In-memory diagnosis.",
-		},
+		runTerminalEvent(application.UIEventRunCompleted, 3, "In-memory diagnosis."),
 	}
 	for _, event := range stream {
 		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
@@ -479,10 +500,7 @@ func TestAnswerValidationWarningRemainsVisibleWithoutChangingStorageState(t *tes
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2,
 			Text: "Kupilot removed unsupported final-answer metadata.",
 		},
-		{
-			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: answer,
-		},
+		runTerminalEvent(application.UIEventRunCompleted, 3, answer),
 	}
 	for _, event := range stream {
 		model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
@@ -519,10 +537,9 @@ func TestActiveRunEnterSteersAndCancelRemainsAvailable(t *testing.T) {
 	if command.Kind != application.UICommandCancelRun || command.RunID != testRunID || model.composer.Value() != "draft for later" {
 		t.Fatalf("cancel command = %#v", command)
 	}
-	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
-	}})
+	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCancelled, 2, "The diagnostic run was cancelled.",
+	)})
 	if cmd != nil || model.run.Status != "cancelled" || model.composer.Value() != "draft for later" ||
 		!strings.Contains(model.View().Content, "The diagnostic run was cancelled.") {
 		t.Fatal("ordinary cancellation exited or discarded the draft")
@@ -541,10 +558,9 @@ func TestCtrlCCancelsActiveRunThenExitsAfterTerminalEvent(t *testing.T) {
 	if command := applicationCommandFromCmd(t, cmd); command.Kind != application.UICommandCancelRun || !model.quitAfterCancel {
 		t.Fatalf("Ctrl+C command = %#v", command)
 	}
-	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCancelled, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
-	}})
+	model, cmd = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCancelled, 2, "The diagnostic run was cancelled.",
+	)})
 	terminalTranscript := model.TerminalTranscript()
 	if !commandQuits(cmd) || model.quitAfterCancel ||
 		!strings.Contains(strings.ReplaceAll(terminalTranscript, "\n", " "), "The diagnostic run was cancelled.") {

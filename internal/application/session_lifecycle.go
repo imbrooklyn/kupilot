@@ -19,11 +19,12 @@ const (
 )
 
 const (
-	UICommandTightenRetention    UICommandKind = "tighten_retention"
-	UICommandSetPersistenceMode  UICommandKind = "set_persistence_mode"
-	UICommandDeleteSession       UICommandKind = "delete_session"
-	UICommandClearHistory        UICommandKind = "clear_history"
-	UICommandDeleteAllLocalState UICommandKind = "delete_all_local_state"
+	UICommandTightenRetention       UICommandKind = "tighten_retention"
+	UICommandSetPersistenceMode     UICommandKind = "set_persistence_mode"
+	UICommandPreviewSessionDeletion UICommandKind = "preview_session_deletion"
+	UICommandDeleteSession          UICommandKind = "delete_session"
+	UICommandClearHistory           UICommandKind = "clear_history"
+	UICommandDeleteAllLocalState    UICommandKind = "delete_all_local_state"
 )
 
 var (
@@ -62,7 +63,6 @@ func (update RetentionSettingUpdate) Validate() error {
 type SessionLifecyclePersistence interface {
 	LoadOperationalDetailRetention(context.Context) (days int, found bool, err error)
 	TightenOperationalDetailRetention(context.Context, RetentionSettingUpdate) error
-	DeleteSessionGraph(context.Context, domain.SessionID) error
 	ClearHistory(context.Context) error
 }
 
@@ -79,6 +79,11 @@ type SessionLifecycleIntent struct {
 	Confirmed       bool
 	RetentionDays   *int
 	PrivacyMode     domain.PrivacyMode
+	DeletionKind    SessionDeletionKind
+	Cutoff          string
+	Limit           int
+	DeletionPlan    *SessionDeletionPlan
+	Confirmation    string
 }
 
 func (intent SessionLifecycleIntent) validateFor(kind UICommandKind) error {
@@ -86,27 +91,51 @@ func (intent SessionLifecycleIntent) validateFor(kind UICommandKind) error {
 	case UICommandTightenRetention:
 		if intent.RetentionDays == nil || *intent.RetentionDays < 0 ||
 			*intent.RetentionDays > DefaultOperationalDetailRetentionDays ||
-			intent.SessionID != "" || intent.ExpectedCurrent || intent.Confirmed || intent.PrivacyMode != "" {
+			intent.SessionID != "" || intent.ExpectedCurrent || intent.Confirmed || intent.PrivacyMode != "" || intent.hasDeletionPayload() {
 			return ErrInvalidUICommand
 		}
 	case UICommandSetPersistenceMode:
-		if intent.RetentionDays != nil || intent.SessionID != "" || intent.ExpectedCurrent || intent.Confirmed ||
+		if intent.RetentionDays != nil || intent.SessionID != "" || intent.ExpectedCurrent || intent.Confirmed || intent.hasDeletionPayload() ||
 			(intent.PrivacyMode != domain.PrivacyModeStandard && intent.PrivacyMode != domain.PrivacyModeMinimal) {
 			return ErrInvalidUICommand
 		}
+	case UICommandPreviewSessionDeletion:
+		if intent.RetentionDays != nil || intent.PrivacyMode != "" || intent.ExpectedCurrent || intent.Confirmed ||
+			intent.DeletionPlan != nil || intent.Confirmation != "" || intent.Limit < 1 || intent.Limit > SessionDeleteMaximumLimit {
+			return ErrInvalidUICommand
+		}
+		switch intent.DeletionKind {
+		case SessionDeletionExact:
+			if !intent.SessionID.Valid() || intent.Cutoff != "" {
+				return ErrInvalidUICommand
+			}
+		case SessionDeletionBefore:
+			if intent.SessionID != "" || !validUICommandText(intent.Cutoff, 64) {
+				return ErrInvalidUICommand
+			}
+		default:
+			return ErrInvalidUICommand
+		}
 	case UICommandDeleteSession:
-		if intent.RetentionDays != nil || intent.PrivacyMode != "" || !intent.SessionID.Valid() || !intent.Confirmed {
+		if intent.RetentionDays != nil || intent.PrivacyMode != "" || intent.SessionID != "" || intent.ExpectedCurrent ||
+			!intent.Confirmed || intent.DeletionKind != "" || intent.Cutoff != "" || intent.Limit != 0 ||
+			intent.DeletionPlan == nil || intent.DeletionPlan.Validate() != nil || intent.Confirmation != intent.DeletionPlan.Digest {
 			return ErrInvalidUICommand
 		}
 	case UICommandClearHistory, UICommandDeleteAllLocalState:
 		if intent.RetentionDays != nil || intent.PrivacyMode != "" || intent.SessionID != "" ||
-			intent.ExpectedCurrent || !intent.Confirmed {
+			intent.ExpectedCurrent || !intent.Confirmed || intent.hasDeletionPayload() {
 			return ErrInvalidUICommand
 		}
 	default:
 		return ErrInvalidUICommand
 	}
 	return nil
+}
+
+func (intent SessionLifecycleIntent) hasDeletionPayload() bool {
+	return intent.DeletionKind != "" || intent.Cutoff != "" || intent.Limit != 0 ||
+		intent.DeletionPlan != nil || intent.Confirmation != ""
 }
 
 // SessionLifecycleReview is the exact local-persistence state shown in /privacy.
@@ -134,13 +163,70 @@ func (review SessionLifecycleReview) Validate() error {
 
 // SessionDeletionResult identifies one committed graph deletion without content.
 type SessionDeletionResult struct {
+	Kind       SessionDeletionKind
 	SessionID  domain.SessionID
+	SessionIDs []domain.SessionID
 	WasCurrent bool
+	Deleted    int
+	Protected  int
+	Remaining  int
 }
 
 // Validate checks the bounded deletion result.
 func (result SessionDeletionResult) Validate() error {
-	if !result.SessionID.Valid() {
+	if !result.Kind.valid() || result.Deleted < 1 || result.Deleted > SessionDeleteMaximumLimit ||
+		len(result.SessionIDs) != result.Deleted || result.Protected < 0 || result.Remaining < 0 {
+		return ErrInvalidUIEvent
+	}
+	seen := make(map[domain.SessionID]struct{}, len(result.SessionIDs))
+	for _, id := range result.SessionIDs {
+		if !id.Valid() {
+			return ErrInvalidUIEvent
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return ErrInvalidUIEvent
+		}
+		seen[id] = struct{}{}
+	}
+	if result.Kind == SessionDeletionExact {
+		if result.Deleted != 1 || !result.SessionID.Valid() || result.SessionIDs[0] != result.SessionID {
+			return ErrInvalidUIEvent
+		}
+	} else if result.SessionID != "" || result.WasCurrent {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+// SessionDeletionReview is the sole Application-owned preview used by
+// /delete, /privacy, /sessions, and historical picker deletion.
+type SessionDeletionReview struct {
+	Plan       SessionDeletionPlan
+	Current    bool
+	QueueItems int
+	QueueBytes int
+}
+
+// Validate checks the content-free current-process additions to the durable
+// selection snapshot.
+func (review SessionDeletionReview) Validate() error {
+	if review.Plan.Validate() != nil || review.QueueItems < 0 || review.QueueItems > MaxConversationInputItems ||
+		review.QueueBytes < 0 || review.QueueBytes > MaxConversationInputAggregateBytes ||
+		(!review.Current && (review.QueueItems != 0 || review.QueueBytes != 0)) {
+		return ErrInvalidUIEvent
+	}
+	if review.Plan.Snapshot.Request.Kind == SessionDeletionExact {
+		return boolValidationError(len(review.Plan.Sessions) == 1 &&
+			review.Current == (review.Plan.Sessions[0].ID == review.Plan.Snapshot.Request.CurrentSessionID))
+	}
+	if review.Current {
+		return ErrInvalidUIEvent
+	}
+	return nil
+}
+
+func boolValidationError(valid bool) error {
+	if !valid {
 		return ErrInvalidUIEvent
 	}
 	return nil
@@ -193,6 +279,23 @@ func (coordinator *ApprovalCoordinator) PrepareSessionDeletion(ctx context.Conte
 	return coordinator.closeMatching(ctx, func(tracked trackedApproval) bool {
 		return tracked.request.SessionID == sessionID
 	}, domain.ApprovalReasonUserCancelled)
+}
+
+// SessionDeletionBusy reports whether current-process approval, review, or
+// execution authority is still attached to the exact Session. It is a
+// content-free preflight check and never cancels or mutates that authority.
+func (coordinator *ApprovalCoordinator) SessionDeletionBusy(sessionID domain.SessionID) bool {
+	if coordinator == nil || !sessionID.Valid() {
+		return true
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	for _, tracked := range coordinator.active {
+		if tracked.request.SessionID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // PrepareHistoryDeletion durably cancels every unexecuted approval and rejects
@@ -353,75 +456,129 @@ func (coordinator *Coordinator) requirePrivacyChallenge(command UICommand) error
 	return nil
 }
 
-func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+func (coordinator *Coordinator) executePreviewSessionDeletionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
 	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
 	intent := *command.Lifecycle
-	if err := coordinator.beginUIOperation(false); err != nil {
-		return UICommandOutcome{}, err
-	}
-	coordinator.mu.Lock()
-	coordinator.deletingSession = intent.SessionID
-	coordinator.mu.Unlock()
-	defer func() {
-		coordinator.mu.Lock()
-		if coordinator.deletingSession == intent.SessionID {
-			coordinator.deletingSession = ""
-		}
-		coordinator.mu.Unlock()
-		coordinator.finishOperation()
-	}()
-
-	coordinator.mu.Lock()
-	current := coordinator.currentSession != nil && coordinator.currentSession.ID == intent.SessionID
-	startingCancel := coordinator.startingCancel
-	startingDone := coordinator.startingDone
-	coordinator.mu.Unlock()
-	if current != intent.ExpectedCurrent {
+	if err := coordinator.beginUIOperation(true); err != nil {
 		result.Failure = UIQueryUnavailable
 		return result, nil
 	}
-	if current && startingCancel != nil {
-		startingCancel()
-		select {
-		case <-ctx.Done():
-			return UICommandOutcome{}, ctx.Err()
-		case <-startingDone:
-		}
+	defer coordinator.finishOperation()
+
+	coordinator.mu.Lock()
+	manager := coordinator.sessionManager
+	currentID := domain.SessionID("")
+	if coordinator.currentSession != nil {
+		currentID = coordinator.currentSession.ID
 	}
-	if coordinator.approvals != nil {
-		if err := coordinator.approvals.PrepareSessionDeletion(ctx, intent.SessionID); err != nil {
+	queueStatus := coordinator.conversationInputStatusLocked()
+	degraded := coordinator.persistenceDegraded
+	coordinator.mu.Unlock()
+	if manager == nil || degraded {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	if intent.DeletionKind == SessionDeletionExact && coordinator.approvals != nil && coordinator.approvals.SessionDeletionBusy(intent.SessionID) {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	request := SessionDeletionSelectionRequest{
+		Kind: intent.DeletionKind, SessionID: intent.SessionID, FrozenNow: coordinator.now(),
+		Limit: intent.Limit, CurrentSessionID: currentID,
+	}
+	if request.Kind == SessionDeletionBefore {
+		cutoff, err := ParseSessionDeletionCutoff(intent.Cutoff, request.FrozenNow)
+		if err != nil {
 			result.Failure = UIQueryUnavailable
 			return result, nil
 		}
+		request.Cutoff = cutoff
 	}
+	plan, err := manager.PreviewDeletion(ctx, request)
+	if err != nil || request.Kind == SessionDeletionExact && len(plan.Sessions) != 1 {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return UICommandOutcome{}, contextErr
+		}
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	current := request.Kind == SessionDeletionExact && intent.SessionID == currentID
+	review := SessionDeletionReview{Plan: plan, Current: current}
 	if current {
+		review.QueueItems = queueStatus.Items
+		review.QueueBytes = queueStatus.Bytes
+	}
+	if review.Validate() != nil {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	result.DeletionReview = &review
+	return result, nil
+}
+
+func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context, command UICommand) (UICommandOutcome, error) {
+	result := UICommandOutcome{Command: command.Kind, RequestID: command.RequestID}
+	intent := *command.Lifecycle
+	if err := coordinator.beginUIOperation(true); err != nil {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	plan := *intent.DeletionPlan
+	selectedIDs := make([]domain.SessionID, len(plan.Snapshot.Selected))
+	for index, record := range plan.Snapshot.Selected {
+		selectedIDs[index] = record.ID
+	}
+	coordinator.mu.Lock()
+	manager := coordinator.sessionManager
+	currentID := domain.SessionID("")
+	if coordinator.currentSession != nil {
+		currentID = coordinator.currentSession.ID
+	}
+	if plan.Snapshot.Request.Kind == SessionDeletionExact {
+		coordinator.deletingSession = plan.Snapshot.Request.SessionID
+	}
+	coordinator.mu.Unlock()
+	defer func() {
 		coordinator.mu.Lock()
-		state := coordinator.active
+		coordinator.deletingSession = ""
 		coordinator.mu.Unlock()
-		if state != nil && state.run.SessionID == intent.SessionID {
-			state.cancel()
-			_, waitErr := coordinator.WaitRun(ctx, state.run.ID)
-			if waitErr != nil {
-				if ctx.Err() != nil {
-					return UICommandOutcome{}, ctx.Err()
-				}
+		coordinator.finishOperation()
+	}()
+	if manager == nil || plan.Snapshot.Request.CurrentSessionID != currentID {
+		result.Failure = UIQueryUnavailable
+		return result, nil
+	}
+	if coordinator.approvals != nil {
+		for _, id := range selectedIDs {
+			if coordinator.approvals.SessionDeletionBusy(id) {
 				result.Failure = UIQueryUnavailable
 				return result, nil
 			}
 		}
 	}
-	if err := coordinator.persist(ctx, func(operationContext context.Context) error {
-		return coordinator.sessions.DeleteSessionGraph(operationContext, intent.SessionID)
-	}); err != nil {
+	var committed SessionDeletionCommitResult
+	err := coordinator.persist(ctx, func(operationContext context.Context) error {
+		var commitErr error
+		committed, commitErr = manager.CommitDeletion(operationContext, plan, intent.Confirmation)
+		return commitErr
+	})
+	if err != nil {
 		if ctx.Err() != nil {
 			return UICommandOutcome{}, ctx.Err()
 		}
 		result.Failure = UIQueryUnavailable
 		return result, nil
 	}
+	current := false
+	for _, id := range selectedIDs {
+		if id == currentID {
+			current = true
+			break
+		}
+	}
 
 	coordinator.mu.Lock()
-	if current && coordinator.currentSession != nil && coordinator.currentSession.ID == intent.SessionID {
+	if current && coordinator.currentSession != nil && coordinator.currentSession.ID == currentID {
 		coordinator.currentSession = nil
 		coordinator.currentResumed = false
 		coordinator.conversationInputs.reset()
@@ -430,8 +587,13 @@ func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context,
 		coordinator.lastEvidence = nil
 		coordinator.modelContext.clear()
 	}
-	if coordinator.pendingResume != nil && coordinator.pendingResume.record.Session.ID == intent.SessionID {
-		coordinator.pendingResume = nil
+	if coordinator.pendingResume != nil {
+		for _, id := range selectedIDs {
+			if coordinator.pendingResume.record.Session.ID == id {
+				coordinator.pendingResume = nil
+				break
+			}
+		}
 	}
 	coordinator.privacyChallenge = nil
 	coordinator.mu.Unlock()
@@ -440,7 +602,13 @@ func (coordinator *Coordinator) executeDeleteSessionCommand(ctx context.Context,
 			clearScopeResource(coordinator.uiScopes, scope)
 		}
 	}
-	deletion := SessionDeletionResult{SessionID: intent.SessionID, WasCurrent: current}
+	deletion := SessionDeletionResult{
+		Kind: plan.Snapshot.Request.Kind, SessionIDs: selectedIDs, WasCurrent: current,
+		Deleted: committed.Deleted, Protected: committed.Protected, Remaining: committed.Remaining,
+	}
+	if deletion.Kind == SessionDeletionExact {
+		deletion.SessionID = selectedIDs[0]
+	}
 	result.Deletion = &deletion
 	return result, nil
 }

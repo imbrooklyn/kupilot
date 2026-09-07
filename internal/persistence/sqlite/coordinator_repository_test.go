@@ -134,6 +134,100 @@ func TestCoordinatorRepositoriesRunMinimalSessionWithoutContentPersistence(t *te
 	}
 }
 
+func TestCoordinatorRepositoriesUseOnlyContractualLastActivityTransitions(t *testing.T) {
+	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-last-activity")
+	base := time.UnixMilli(8_550).UTC()
+	session := testSession(
+		"00000000-0000-7000-8000-000000008551",
+		"Last active contract",
+		domain.PrivacyModeStandard,
+		base,
+	)
+	sessions := NewSessionRepository(database)
+	if err := sessions.Create(context.Background(), session); err != nil {
+		t.Fatalf("Create(Session) error = %v", err)
+	}
+	requestAt := base.Add(time.Millisecond)
+	request, run := testRunningPair(
+		"00000000-0000-7000-8000-000000008552",
+		"00000000-0000-7000-8000-000000008553",
+		session.ID,
+		requestAt,
+	)
+	runStartedAt := base.Add(5 * time.Millisecond)
+	run.StartedAt = &runStartedAt
+	if err := NewAgentRunRepository(database).BeginWithAudit(context.Background(), request, run, coordinatedRunAudit(
+		"00000000-0000-7000-8000-000000008554",
+		run,
+		domain.AuditEventRunStarted,
+		runStartedAt,
+	)); err != nil {
+		t.Fatalf("BeginWithAudit() error = %v", err)
+	}
+	stored, err := sessions.GetByID(context.Background(), session.ID)
+	if err != nil || !stored.LastActivityAt.Equal(requestAt) {
+		t.Fatalf("Last active after initial input = %v/%v, want %v", stored.LastActivityAt, err, requestAt)
+	}
+
+	invocation := testToolInvocation(
+		"00000000-0000-7000-8000-000000008555",
+		run,
+		1,
+		base.Add(6*time.Millisecond),
+	)
+	evidence := testEvidence(
+		"00000000-0000-7000-8000-000000008556",
+		invocation,
+		base.Add(7*time.Millisecond),
+	)
+	invocation.EvidenceCount = 1
+	toolAudit := coordinatedToolAudit(
+		"00000000-0000-7000-8000-000000008557",
+		run,
+		invocation,
+		base.Add(12*time.Millisecond),
+	)
+	if err := NewToolInvocationRepository(database).SaveWithAudit(
+		context.Background(), invocation, []domain.Evidence{evidence}, toolAudit,
+	); err != nil {
+		t.Fatalf("SaveWithAudit() error = %v", err)
+	}
+	stored, err = sessions.GetByID(context.Background(), session.ID)
+	if err != nil || invocation.FinishedAt == nil || !stored.LastActivityAt.Equal(*invocation.FinishedAt) {
+		t.Fatalf("Last active after accepted Tool/Evidence = %v/%v, want %v", stored.LastActivityAt, err, invocation.FinishedAt)
+	}
+
+	auditOnlyAt := base.Add(20 * time.Millisecond)
+	auditOnlyInvocation := testToolInvocation(
+		"00000000-0000-7000-8000-000000008558",
+		run,
+		2,
+		base.Add(13*time.Millisecond),
+	)
+	auditOnly := coordinatedToolAudit(
+		"00000000-0000-7000-8000-000000008559",
+		run,
+		auditOnlyInvocation,
+		auditOnlyAt,
+	)
+	if err := NewAuditRepository(database).Append(context.Background(), auditOnly); err != nil {
+		t.Fatalf("Append(Tool lifecycle only) error = %v", err)
+	}
+	stored, err = sessions.GetByID(context.Background(), session.ID)
+	if err != nil || !stored.LastActivityAt.Equal(auditOnlyAt) {
+		t.Fatalf("Last active after retained audit-only Tool lifecycle = %v/%v, want %v", stored.LastActivityAt, err, auditOnlyAt)
+	}
+
+	minimalDetailAt := base.Add(21 * time.Millisecond)
+	if err := sessions.AdvanceLastActivity(context.Background(), session.ID, minimalDetailAt); err != nil {
+		t.Fatalf("AdvanceLastActivity(minimal detail) error = %v", err)
+	}
+	stored, err = sessions.GetByID(context.Background(), session.ID)
+	if err != nil || !stored.LastActivityAt.Equal(minimalDetailAt) {
+		t.Fatalf("Last active after content-free minimal lifecycle = %v/%v, want %v", stored.LastActivityAt, err, minimalDetailAt)
+	}
+}
+
 func TestCoordinatorRepositoryCommitsSequentialRunInputsAtomically(t *testing.T) {
 	database := openTestDB(t, context.Background(), testStateDir(t), "coordinator-run-input-sequence")
 	base := time.UnixMilli(8_600).UTC()
@@ -438,7 +532,7 @@ func TestCoordinatorRepositoryClearHistoryIsAtomicAndPreservesPreferences(t *tes
 		"sessions": 0, "messages": 0, "agent_runs": 0, "model_requests": 0,
 		"tool_invocations": 0, "evidence_items": 0, "diagnoses": 0,
 		"approvals": 0, "approval_decisions": 0, "audit_events": 0,
-		"settings": 2, "privacy_consents": 1, "schema_migrations": 14,
+		"settings": 2, "privacy_consents": 1, "schema_migrations": 16,
 	} {
 		var got int
 		if err := database.handle.GetContext(context.Background(), &got, "SELECT count(rowid) FROM "+table); err != nil || got != want {

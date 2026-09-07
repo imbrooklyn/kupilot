@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -67,14 +68,21 @@ func TestTypedPickerQueriesAndSelectionsReuseTheComposer(t *testing.T) {
 
 	t.Run("Session", func(t *testing.T) {
 		model, query := openPickerFromDraft(t, "/resume payment", application.UICompletionSession)
+		model.now = func() time.Time { return time.UnixMilli(60_001).UTC() }
 		model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
 			RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 			Sessions: []application.UISessionCandidate{{
-				ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+				ID: testSessionID, Title: "Payment diagnosis", LastActivityAtUnixMillis: 1,
 				Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 			}},
 		}})
-		assertPersistentInputLabel(t, model, "Session · type to filter")
+		assertPersistentInputLabel(t, model, "Session · Enter resume · D delete selected · Esc close")
+		model.sessionPicker.SetWidth(240)
+		picker := model.sessionPicker.View()
+		if !strings.Contains(picker, "Last active: 1m ago · ") || !strings.Contains(picker, "UTC: 1970-01-01T00:00:00.001Z") ||
+			!strings.Contains(picker, "resumable") {
+			t.Fatalf("resume picker omitted authoritative Last active metadata: %q", picker)
+		}
 		model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 		request := resumeRequestFromCmd(t, cmd)
 		if request.Mode != application.UIResumeExact || request.SessionID != testSessionID {
@@ -119,30 +127,43 @@ func TestResumePickerDeletesOnlyAfterExplicitConfirmation(t *testing.T) {
 	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
 		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 		Sessions: []application.UISessionCandidate{{
-			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Payment diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		}},
 	}})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	if cmd != nil || model.sessionDelete == nil || model.sessionDelete.ExpectedCurrent ||
-		!strings.Contains(model.render(), "Delete selected Session?") {
-		t.Fatal("resume Picker delete did not open a bound confirmation")
+	preview := applicationCommandFromCmd(t, cmd)
+	if preview.Kind != application.UICommandPreviewSessionDeletion || model.sessionDelete == nil ||
+		!strings.Contains(model.render(), "Preparing deletion preview") {
+		t.Fatal("resume Picker delete did not request a bound preview")
+	}
+	review := testSessionDeletionReview(t, testSessionID, "Payment diagnosis", false)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
+	if !strings.Contains(model.render(), "Delete selected Session?") {
+		t.Fatal("resume Picker preview did not open confirmation")
 	}
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd != nil || model.sessionDelete != nil || !model.sessionPicker.Open() {
 		t.Fatal("resume Picker delete cancellation changed history or closed the Picker")
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	preview = applicationCommandFromCmd(t, cmd)
+	review = testSessionDeletionReview(t, testSessionID, "Payment diagnosis", false)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
 	command := applicationCommandFromCmd(t, cmd)
 	if command.Kind != application.UICommandDeleteSession || command.Lifecycle == nil ||
-		command.Lifecycle.SessionID != testSessionID || command.Lifecycle.ExpectedCurrent ||
-		!command.Lifecycle.Confirmed {
+		command.Lifecycle.DeletionPlan == nil || command.Lifecycle.DeletionPlan.Snapshot.Request.SessionID != testSessionID ||
+		!command.Lifecycle.Confirmed || command.Lifecycle.Confirmation == "" {
 		t.Fatalf("resume Picker delete command = %#v", command)
 	}
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
 		Command: application.UICommandDeleteSession, RequestID: command.RequestID,
-		Deletion: &application.SessionDeletionResult{SessionID: testSessionID},
+		Deletion: testSessionDeletionResult(testSessionID, false),
 	}})
 	if !model.sessionPicker.Open() || model.sessionPicker.SourceCount() != 0 ||
 		!strings.Contains(model.render(), "Session deleted") {
@@ -159,7 +180,7 @@ func TestResumePickerKeepsLowercaseDeleteLetterInTheComposerFilter(t *testing.T)
 	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
 		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 		Sessions: []application.UISessionCandidate{{
-			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Payment diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		}},
 	}})
@@ -168,6 +189,116 @@ func TestResumePickerKeepsLowercaseDeleteLetterInTheComposerFilter(t *testing.T)
 	updated := completionQueryFromCmd(t, cmd)
 	if model.sessionDelete != nil || model.composer.Value() != "/resume paymentd" || updated.Filter != "paymentd" {
 		t.Fatalf("lowercase filter state = delete %#v draft %q query %#v", model.sessionDelete, model.composer.Value(), updated)
+	}
+}
+
+func TestSessionManagementPickerPreviewsAndCommitsOneFrozenBatch(t *testing.T) {
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/sessions"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	query := completionQueryFromCmd(t, cmd)
+	if query.Kind != application.UICompletionSessionManagement {
+		t.Fatalf("management query = %#v", query)
+	}
+	historicalID := domain.SessionID("0192a6aa-77bc-7def-8123-456789abcdef")
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: historicalID, Title: "Inactive diagnosis", LastActivityAtUnixMillis: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC).UnixMilli(),
+			PrivacyMode: domain.PrivacyModeStandard, Status: domain.SessionStatusActive,
+			Management: true, Resumable: true, DeletionEligible: true,
+		}},
+	}})
+	assertPersistentInputLabel(t, model, "Sessions · Enter resume · D delete selected · B delete inactive · Esc close")
+
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'B', Text: "B"})
+	if cmd != nil || model.sessionDelete == nil || model.sessionPicker.Open() ||
+		!strings.Contains(model.render(), "timezone-qualified RFC3339") {
+		t.Fatal("batch deletion did not reuse the sole composer for one bounded cutoff")
+	}
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "1d"})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	preview := applicationCommandFromCmd(t, cmd)
+	if preview.Kind != application.UICommandPreviewSessionDeletion || preview.Lifecycle == nil ||
+		preview.Lifecycle.DeletionKind != application.SessionDeletionBefore || preview.Lifecycle.Cutoff != "1d" ||
+		preview.Lifecycle.Limit != application.SessionDeleteDefaultLimit {
+		t.Fatalf("batch preview = %#v", preview)
+	}
+	review := testBatchSessionDeletionReview(t, historicalID, "Inactive diagnosis")
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
+	frame := model.render()
+	for _, want := range []string{"Delete inactive Sessions?", "Frozen cutoff local:", "Frozen cutoff UTC:", "selected: 1", "selection digest:"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("batch preview missing %q: %q", want, frame)
+		}
+	}
+
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	query = completionQueryFromCmd(t, cmd)
+	if query.Kind != application.UICompletionSessionManagement || model.sessionDelete != nil || !model.sessionPicker.Open() {
+		t.Fatal("cancelling the frozen batch preview did not return to a fresh management picker")
+	}
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: historicalID, Title: "Inactive diagnosis", LastActivityAtUnixMillis: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC).UnixMilli(),
+			PrivacyMode: domain.PrivacyModeStandard, Status: domain.SessionStatusActive,
+			Management: true, Resumable: true, DeletionEligible: true,
+		}},
+	}})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'B', Text: "B"})
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "1d"})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	preview = applicationCommandFromCmd(t, cmd)
+	review = testBatchSessionDeletionReview(t, historicalID, "Inactive diagnosis")
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+	deletion := applicationCommandFromCmd(t, cmd)
+	if deletion.Kind != application.UICommandDeleteSession || deletion.Lifecycle == nil ||
+		deletion.Lifecycle.DeletionPlan == nil || deletion.Lifecycle.Confirmation != review.Plan.Digest {
+		t.Fatalf("batch deletion = %#v", deletion)
+	}
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandDeleteSession, RequestID: deletion.RequestID,
+		Deletion: &application.SessionDeletionResult{
+			Kind: application.SessionDeletionBefore, SessionIDs: []domain.SessionID{historicalID},
+			Deleted: 1, Protected: 2, Remaining: 3,
+		},
+	}})
+	frame = model.render()
+	for _, want := range []string{"Sessions deleted", "Deleted: 1", "protected: 2", "remaining: 3", "not forensic erasure"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("batch result missing %q: %q", want, frame)
+		}
+	}
+	if model.EditorCount() != 1 || model.FocusedEditorCount() != 0 {
+		t.Fatalf("batch result editor invariant = total %d focused %d", model.EditorCount(), model.FocusedEditorCount())
+	}
+}
+
+func TestSessionManagementPickerLabelsCorruptActivityAsProtected(t *testing.T) {
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 240, Height: 30})
+	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/sessions"})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	query := completionQueryFromCmd(t, cmd)
+	corruptID := domain.SessionID("0192a6aa-77bc-7def-8123-456789abcdea")
+	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
+		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
+		Sessions: []application.UISessionCandidate{{
+			ID: corruptID, Title: "Protected metadata", LastActivityAtUnixMillis: -1,
+			PrivacyMode: domain.PrivacyModeStandard, Status: domain.SessionStatusActive, Management: true,
+			Protected: true, ProtectionReason: application.SessionProtectionCorruptActivity,
+		}},
+	}})
+	frame := model.render()
+	if !strings.Contains(frame, "protected timestamp") || !strings.Contains(frame, "protected: corrupt_activity") ||
+		strings.Contains(frame, "deletion eligible") {
+		t.Fatalf("corrupt Last active projection = %q", frame)
 	}
 }
 
@@ -181,16 +312,21 @@ func TestTopLevelResumePickerDeletionNeverFallsBackToANewSession(t *testing.T) {
 	model, _ = updateModel(t, model, CompletionResultMsg{Result: application.UICompletionResult{
 		RequestID: query.RequestID, Kind: query.Kind, ScopeGeneration: query.ScopeGeneration,
 		Sessions: []application.UISessionCandidate{{
-			ID: testSessionID, Title: "Payment diagnosis", UpdatedAtUnixMillis: 1,
+			ID: testSessionID, Title: "Payment diagnosis", LastActivityAtUnixMillis: 1,
 			Context: "test-context", Namespace: "test-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		}},
 	}})
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
-	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: 'D', Text: "D"})
+	preview := applicationCommandFromCmd(t, cmd)
+	review := testSessionDeletionReview(t, testSessionID, "Payment diagnosis", false)
+	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
+		Command: application.UICommandPreviewSessionDeletion, RequestID: preview.RequestID, DeletionReview: &review,
+	}})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'y'})
 	command := applicationCommandFromCmd(t, cmd)
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
 		Command: application.UICommandDeleteSession, RequestID: command.RequestID,
-		Deletion: &application.SessionDeletionResult{SessionID: testSessionID},
+		Deletion: testSessionDeletionResult(testSessionID, false),
 	}})
 	if model.startup.Ready || model.resumeOrigin != resumeOriginTopLevel || !model.sessionPicker.Open() || model.session.ID != "" {
 		t.Fatal("top-level deletion created or implied a fallback Session")
@@ -277,11 +413,16 @@ func TestScopeSwitchDiscardsLateRunEventsAndTerminatesOldRunProjection(t *testin
 	if model.run.StreamedText != "" || model.run.LastSequence != 1 {
 		t.Fatal("scope-switching UI accepted a late old-generation event")
 	}
+	interrupted, err := application.ProjectTerminalOutcome(domain.RunTerminalStaleGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
 	model, _ = updateModel(t, model, ScopeResultMsg{Result: application.UIScopeResult{
 		RequestID: 15, ExpectedGeneration: 7, ScopeGeneration: 8,
-		Context: "development", Namespace: "payments", ReadOnly: true,
+		Context: "development", Namespace: "payments", ReadOnly: true, InterruptedRun: &interrupted,
 	}})
-	if model.run.Active || !model.run.Terminal || model.run.Status != "cancelled" ||
+	if model.run.Active || !model.run.Terminal || model.run.Status != "failed" ||
+		model.run.TerminalReason != domain.RunTerminalStaleGeneration ||
 		strings.Contains(model.run.StreamedText, "late old-scope") {
 		t.Fatalf("old run projection after scope switch = %#v", model.run)
 	}

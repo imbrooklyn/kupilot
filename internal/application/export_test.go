@@ -26,7 +26,7 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, Title: "Incident " + credentialCanary,
 			PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt:   createdAt, UpdatedAt: createdAt.Add(time.Minute),
+			CreatedAt:   createdAt, LastActivityAt: createdAt.Add(time.Minute), UpdatedAt: createdAt.Add(time.Minute),
 			LastScope: &domain.ScopeCandidate{Context: "production", Namespace: "payments"},
 		},
 		Messages: []ExportMessageRecord{
@@ -81,6 +81,9 @@ func TestExportSummaryUsesVersionedAllowlistAndRemovesSensitiveCanaries(t *testi
 	if summary.SchemaVersion != ExportSummarySchemaVersion || !bytes.HasPrefix(content, []byte("# Kupilot Session Summary\n")) {
 		t.Fatalf("versioned export = %#v\n%s", summary, content)
 	}
+	if !bytes.Contains(content, []byte("- Last active: `")) || bytes.Contains(content, []byte("- Updated at:")) {
+		t.Fatalf("export did not use authoritative Last active metadata: %s", content)
+	}
 	if !bytes.Contains(content, []byte("REDACTED")) || bytes.Contains(content, []byte(credentialCanary)) {
 		t.Fatalf("credential processing failed: %s", content)
 	}
@@ -104,7 +107,7 @@ func TestExportSummaryRejectsInvalidContextSummary(t *testing.T) {
 	snapshot := SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		ContextSummary: &domain.SessionContextSummary{
 			SessionID: "0198a46e-7d2a-7d34-9b6f-2df5f45a3299", Text: "Wrong Session context.",
@@ -129,7 +132,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 	snapshot := SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, Title: "# forged heading [link](file:///private/value)\nSchema: forged",
-			PrivacyMode: domain.PrivacyModeStandard, CreatedAt: createdAt, UpdatedAt: createdAt,
+			PrivacyMode: domain.PrivacyModeStandard, CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: []ExportMessageRecord{{
 			Role: domain.MessageRoleUser, Content: "<script>unsafe</script>\n# not a heading", CreatedAt: createdAt,
@@ -149,7 +152,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderExportSummary() error = %v", err)
 	}
-	for _, want := range []string{"Schema: `kupilot.export-summary.v3`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
+	for _, want := range []string{"Schema: `kupilot.export-summary.v4`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
 		if !bytes.Contains(content, []byte(want)) {
 			t.Fatalf("export missing %q:\n%s", want, content)
 		}
@@ -166,7 +169,7 @@ func TestExportSummaryRejectsUnsafeEvidenceResourceProjection(t *testing.T) {
 	snapshot := SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: []ExportMessageRecord{{
 			Role: domain.MessageRoleUser, Content: "Inspect the workload.", CreatedAt: createdAt,
@@ -198,7 +201,7 @@ func TestExportSummaryAcceptsPartialClusterScopedCRDEvidence(t *testing.T) {
 	snapshot := SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: []ExportMessageRecord{{
 			Role: domain.MessageRoleUser, Content: "Inspect the cluster-scoped Widget.", CreatedAt: createdAt,
@@ -244,7 +247,7 @@ func TestExportSummaryAcceptsExactObservabilityEvidence(t *testing.T) {
 	snapshot := SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Diagnoses: []ExportDiagnosisRecord{{
 			AnswerMarkdown: "The CPU sample was observed.", CreatedAt: createdAt,
@@ -293,7 +296,7 @@ func TestExportSummaryEnforcesSourceAndAggregateLimits(t *testing.T) {
 	summary, err := ProjectExportSummary(SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: messages,
 	}, createdAt.Add(time.Hour), security.NewRedactor())
@@ -320,7 +323,7 @@ func TestExportSummaryPreservesAnswerAboveQuestionLimit(t *testing.T) {
 	summary, err := ProjectExportSummary(SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Diagnoses: []ExportDiagnosisRecord{{AnswerMarkdown: answer, CreatedAt: createdAt}},
 	}, createdAt.Add(time.Second), security.NewRedactor())
@@ -347,7 +350,7 @@ func TestExportSummaryRejectsAnUnboundedEvidenceSource(t *testing.T) {
 	_, err := ProjectExportSummary(SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: []ExportMessageRecord{{
 			Role: domain.MessageRoleUser, Content: "Inspect the workload.", CreatedAt: createdAt,
@@ -365,7 +368,7 @@ func TestExportSummaryMarksEvidencePartialWhenExportFieldIsTruncated(t *testing.
 	summary, err := ProjectExportSummary(SessionExportSnapshot{
 		Session: ExportSessionRecord{
 			ID: exportTestSessionID, PrivacyMode: domain.PrivacyModeStandard,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
+			CreatedAt: createdAt, LastActivityAt: createdAt, UpdatedAt: createdAt,
 		},
 		Messages: []ExportMessageRecord{{
 			Role: domain.MessageRoleUser, Content: "Inspect the workload.", CreatedAt: createdAt,
@@ -389,5 +392,28 @@ func TestExportSummaryMarksEvidencePartialWhenExportFieldIsTruncated(t *testing.
 	if len(summary.Evidence) != 1 || summary.Evidence[0].State != domain.EvidenceDetailPartial ||
 		!summary.Evidence[0].Truncated || !summary.Truncated {
 		t.Fatalf("truncated Evidence state = %#v document truncated=%t", summary.Evidence, summary.Truncated)
+	}
+}
+
+func TestExportCompletenessPreservesSchemaAndRevalidatesProjectionTruncation(t *testing.T) {
+	manifest := domain.AnswerCompletenessManifest{
+		SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 2,
+		Sources: []domain.AnswerSourceCoverage{{
+			Sequence: 1, SourceHash: domain.SHA256Hex("not-checked"), SubjectHash: domain.SHA256Hex("not-checked"),
+			State: domain.SourceNotChecked, Freshness: domain.EvidenceFreshnessUnknown, Conflict: domain.EvidenceConflictNone,
+		}},
+		StopReason: domain.RunTerminalCompleted, StopReasonBasis: domain.RunTerminalReasonFromCoverage,
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("fixture manifest error = %v", err)
+	}
+	projected, err := projectExportCompleteness(manifest, nil, nil, true)
+	if err != nil {
+		t.Fatalf("projectExportCompleteness() error = %v", err)
+	}
+	if projected.ResponseSchemaVersion != 2 || projected.StopReason != domain.RunTerminalPartialResult ||
+		projected.StopReasonBasis != domain.RunTerminalReasonFromCoverage ||
+		!hasExportMissingInformation(projected.Limitations, domain.MissingInformationTruncated) || projected.Validate() != nil {
+		t.Fatalf("projected completeness = %#v", projected)
 	}
 }

@@ -160,10 +160,7 @@ func TestTerminalRuntimeCommitsHistoryOnceWithoutMouseOrAlternateScreen(t *testi
 				Status:       application.ToolStepSucceeded,
 			},
 		},
-		application.UIEvent{
-			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "Three Nodes are Ready.",
-		},
+		runTerminalEvent(application.UIEventRunCompleted, 3, "Three Nodes are Ready."),
 	)
 	if final.run.Status != "completed" || !final.run.Terminal {
 		t.Fatalf("final runtime state = %#v", final.run)
@@ -389,11 +386,9 @@ func TestTerminalRuntimeSettlesCompactFrameBeforePrintingCompletedTurn(t *testin
 	runtime := newTerminalRuntime(model, immediateTerminalFrameBarrier)
 	runtime.cleared = true
 	runtime.sized = true
-	next, command := runtime.Update(ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3,
-		Text: "| Resource | State |\n|---|---|\n| node-a | Ready |",
-	}})
+	next, command := runtime.Update(ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 3, "| Resource | State |\n|---|---|\n| node-a | Ready |",
+	)})
 	prepared, ok := next.(TerminalRuntime)
 	if !ok || command == nil || !prepared.commitPending {
 		t.Fatalf("completed turn was not staged: state=%T command=%t pending=%t",
@@ -514,10 +509,7 @@ func TestTerminalRuntimeBlocksUnsafeControlsBeforeHistoryInsertion(t *testing.T)
 
 	rendered, final := runTerminalRuntime(t, model,
 		runStartedEvent(1, "safe tail"),
-		application.UIEvent{
-			Kind: application.UIEventRunCompleted, RunID: testRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Ready\x1b]52;c;answer-canary\x07.",
-		},
+		runTerminalEvent(application.UIEventRunCompleted, 2, "Ready\x1b]52;c;answer-canary\x07."),
 	)
 	if strings.Contains(rendered, "question-canary") || strings.Contains(rendered, "answer-canary") ||
 		strings.Contains(rendered, "\x1b]52;") || strings.Contains(final.TerminalTranscript(), "canary") {
@@ -539,10 +531,7 @@ func TestTerminalRuntimeCommitsTerminalCancellationWithoutLiveState(t *testing.T
 
 	_, final := runTerminalRuntime(t, model,
 		runStartedEvent(1, "Inspect the active run."),
-		application.UIEvent{
-			Kind: application.UIEventRunCancelled, RunID: testRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "The diagnostic run was cancelled.",
-		},
+		runTerminalEvent(application.UIEventRunCancelled, 2, "The diagnostic run was cancelled."),
 	)
 	transcript := final.TerminalTranscript()
 	if !strings.Contains(transcript, "The diagnostic run was cancelled.") ||

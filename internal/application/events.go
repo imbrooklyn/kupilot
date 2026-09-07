@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -22,11 +23,16 @@ type UIScopeResult struct {
 	ReadOnly                bool
 	ScopePreferenceDegraded bool
 	Failure                 UIQueryFailureCode
+	InterruptedRun          *UITerminalOutcome
 }
 
 // Validate checks success and fail-closed scope result shapes.
 func (result UIScopeResult) Validate() error {
 	if result.RequestID == 0 || result.ExpectedGeneration < 0 || result.ScopeGeneration < result.ExpectedGeneration {
+		return ErrInvalidUIEvent
+	}
+	if result.InterruptedRun != nil && (!result.InterruptedRun.valid() ||
+		result.InterruptedRun.Reason != domain.RunTerminalStaleGeneration || result.ScopeGeneration == result.ExpectedGeneration) {
 		return ErrInvalidUIEvent
 	}
 	if result.Failure != "" {
@@ -186,12 +192,13 @@ type UIActionStatus struct {
 // permission changes. It performs no model, Kubernetes, repository, Tool, or
 // executor I/O.
 type UIPermissionsResult struct {
-	RequestID   uint64
-	Permission  UIPermissionStatus
-	Reviewer    UIModelRoleStatus
-	Action      *UIActionStatus
-	Changed     bool
-	RuleCreated bool
+	RequestID      uint64
+	Permission     UIPermissionStatus
+	Reviewer       UIModelRoleStatus
+	Action         *UIActionStatus
+	Changed        bool
+	RuleCreated    bool
+	InterruptedRun *UITerminalOutcome
 }
 
 // UIModelContextStatus contains counts and coverage only, never content.
@@ -297,6 +304,46 @@ type UIBudgetStatus struct {
 	ResourceScannedMaximum   int
 	ResourceReturnedMaximum  int
 	ResourceBytesMaximum     int
+	FineGrained              []UIBudgetMeasure
+}
+
+type UIBudgetValueBasis string
+
+const (
+	UIBudgetMeasured    UIBudgetValueBasis = "measured"
+	UIBudgetConfigured  UIBudgetValueBasis = "configured"
+	UIBudgetReserved    UIBudgetValueBasis = "reserved"
+	UIBudgetUnavailable UIBudgetValueBasis = "unavailable"
+	UIBudgetEstimated   UIBudgetValueBasis = "estimated"
+)
+
+type UIBudgetCategory string
+
+const (
+	UIBudgetModelInputBytes      UIBudgetCategory = "model_input_bytes"
+	UIBudgetModelOutputBytes     UIBudgetCategory = "model_output_bytes"
+	UIBudgetSummaryReserveBytes  UIBudgetCategory = "summary_reserve_bytes"
+	UIBudgetModelAttempts        UIBudgetCategory = "model_attempts"
+	UIBudgetToolCalls            UIBudgetCategory = "tool_calls"
+	UIBudgetExternalReadCalls    UIBudgetCategory = "kubernetes_data_source_calls"
+	UIBudgetEvidenceItems        UIBudgetCategory = "evidence_items"
+	UIBudgetEvidenceBytes        UIBudgetCategory = "evidence_bytes"
+	UIBudgetPages                UIBudgetCategory = "pages"
+	UIBudgetLines                UIBudgetCategory = "lines"
+	UIBudgetSamples              UIBudgetCategory = "samples"
+	UIBudgetWallMilliseconds     UIBudgetCategory = "wall_time_ms"
+	UIBudgetIdleMilliseconds     UIBudgetCategory = "idle_time_ms"
+	UIBudgetQueueItems           UIBudgetCategory = "queue_items"
+	UIBudgetQueueBytes           UIBudgetCategory = "queue_bytes"
+	UIBudgetContinuationAttempts UIBudgetCategory = "continuation_attempts"
+	UIBudgetContinuationTime     UIBudgetCategory = "continuation_time_ms"
+)
+
+type UIBudgetMeasure struct {
+	Category UIBudgetCategory
+	Used     int64
+	Limit    int64
+	Basis    UIBudgetValueBasis
 }
 
 // UICommandOutcome contains only the typed result shapes used by delivery.
@@ -309,8 +356,10 @@ type UICommandOutcome struct {
 	Scope              *UIScopeResult
 	Resource           *UIResourceSelectionResult
 	Status             *UIStatusResult
+	Doctor             *UIDoctorResult
 	Privacy            *PrivacyReview
 	Lifecycle          *SessionLifecycleReview
+	DeletionReview     *SessionDeletionReview
 	Deletion           *SessionDeletionResult
 	HistoryDeletion    *HistoryDeletionResult
 	LocalStateDeletion *LocalStateDeletionResult
@@ -320,6 +369,7 @@ type UICommandOutcome struct {
 	ConversationInput  *ConversationInputProjection
 	ConversationChange *ConversationInputMutationResult
 	Compaction         *UIManualCompactionResult
+	QuestionStart      *UIQuestionStartFailure
 	PlanArmed          *bool
 	RunMode            agent.RunMode
 	RunID              domain.AgentRunID
@@ -342,6 +392,9 @@ func (result UICommandOutcome) Validate() error {
 		result.Failure == UIQueryNotResumable && result.Command != UICommandResumeSession) {
 		return ErrInvalidUIEvent
 	}
+	if result.QuestionStart != nil && (result.Command != UICommandSubmitQuestion || result.QuestionStart.Validate() != nil) {
+		return ErrInvalidUIEvent
+	}
 	planCommand := result.Command == UICommandArmPlan || result.Command == UICommandCancelPlan
 	if planCommand != (result.PlanArmed != nil) {
 		return ErrInvalidUIEvent
@@ -350,7 +403,8 @@ func (result UICommandOutcome) Validate() error {
 		if result.Privacy.Validate() != nil ||
 			result.Command != UICommandShowPrivacy && result.Command != UICommandToggleLogs &&
 				result.Command != UICommandTightenRetention && result.Command != UICommandSetPersistenceMode &&
-				!(result.Command == UICommandSubmitQuestion && result.Failure == UIQueryConsentRequired) {
+				!(result.Command == UICommandSubmitQuestion && result.QuestionStart != nil &&
+					result.QuestionStart.Reason == QuestionStartConsentRequired) {
 			return ErrInvalidUIEvent
 		}
 	}
@@ -364,6 +418,9 @@ func (result UICommandOutcome) Validate() error {
 	if result.Deletion != nil && (result.Deletion.Validate() != nil || result.Command != UICommandDeleteSession) {
 		return ErrInvalidUIEvent
 	}
+	if result.DeletionReview != nil && (result.DeletionReview.Validate() != nil || result.Command != UICommandPreviewSessionDeletion) {
+		return ErrInvalidUIEvent
+	}
 	if result.HistoryDeletion != nil && (result.HistoryDeletion.Validate() != nil || result.Command != UICommandClearHistory) {
 		return ErrInvalidUIEvent
 	}
@@ -371,6 +428,9 @@ func (result UICommandOutcome) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	if result.Export != nil && (result.Export.Validate() != nil || result.Command != UICommandExportSession) {
+		return ErrInvalidUIEvent
+	}
+	if result.Doctor != nil && (result.Doctor.Validate() != nil || result.Command != UICommandShowDoctor) {
 		return ErrInvalidUIEvent
 	}
 	conversationCommand := result.Command == UICommandSubmitSteer || result.Command == UICommandEnqueueFollowUp ||
@@ -389,6 +449,11 @@ func (result UICommandOutcome) Validate() error {
 		return ErrInvalidUIEvent
 	}
 	switch result.Command {
+	case UICommandShowDoctor:
+		if result.RequestID == 0 || result.Failure != "" || result.Doctor == nil || result.Session != nil ||
+			result.Resumed != nil || result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
+			return ErrInvalidUIEvent
+		}
 	case UICommandAcceptResume:
 		if result.RequestID == 0 {
 			return ErrInvalidUIEvent
@@ -462,18 +527,17 @@ func (result UICommandOutcome) Validate() error {
 		}
 	case UICommandSubmitQuestion:
 		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
-			result.Resource != nil || result.Status != nil {
+			result.Resource != nil || result.Status != nil || result.Failure != "" {
 			return ErrInvalidUIEvent
 		}
-		if result.Failure == "" {
+		if result.QuestionStart == nil {
 			if !result.RunID.Valid() || result.Privacy != nil || !result.RunMode.Valid() {
 				return ErrInvalidUIEvent
 			}
 			return nil
 		}
-		if result.RunID != "" || result.RunMode != "" || result.Failure != UIQueryConsentRequired && result.Failure != UIQueryUnavailable ||
-			result.Failure == UIQueryConsentRequired && result.Privacy == nil ||
-			result.Failure != UIQueryConsentRequired && result.Privacy != nil {
+		if result.RunID != "" || result.RunMode != "" ||
+			(result.QuestionStart.Reason == QuestionStartConsentRequired) != (result.Privacy != nil) {
 			return ErrInvalidUIEvent
 		}
 	case UICommandSubmitSteer, UICommandEnqueueFollowUp, UICommandPopFollowUp:
@@ -544,9 +608,25 @@ func (result UICommandOutcome) Validate() error {
 			result.Scope != nil || result.Resource != nil || result.Status != nil || result.RunID != "" {
 			return ErrInvalidUIEvent
 		}
+	case UICommandPreviewSessionDeletion:
+		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil ||
+			result.RunID != "" || result.Deletion != nil {
+			return ErrInvalidUIEvent
+		}
+		if result.Failure != "" {
+			if !result.Failure.validOperational() || result.DeletionReview != nil {
+				return ErrInvalidUIEvent
+			}
+			return nil
+		}
+		if result.DeletionReview == nil {
+			return ErrInvalidUIEvent
+		}
 	case UICommandDeleteSession:
 		if result.RequestID == 0 || result.Session != nil || result.Resumed != nil || result.Scope != nil ||
-			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.RunID != "" {
+			result.Resource != nil || result.Status != nil || result.Privacy != nil || result.Lifecycle != nil || result.RunID != "" ||
+			result.DeletionReview != nil {
 			return ErrInvalidUIEvent
 		}
 		if result.Failure != "" {
@@ -720,7 +800,9 @@ func (rule UISessionPermissionRuleStatus) Validate() error {
 
 func (result UIPermissionsResult) valid() error {
 	if result.RequestID == 0 || !result.Permission.valid(true) || !result.Reviewer.valid(false) ||
-		result.Changed && result.RuleCreated || result.Action != nil && !result.Action.valid() {
+		result.Changed && result.RuleCreated || result.Action != nil && !result.Action.valid() ||
+		result.InterruptedRun != nil && (!result.InterruptedRun.valid() || result.InterruptedRun.Reason != domain.RunTerminalStaleGeneration ||
+			!result.Changed && !result.RuleCreated) {
 		return ErrInvalidUIEvent
 	}
 	if result.Action != nil && result.Action.PolicyGeneration != result.Permission.PolicyGeneration {
@@ -819,7 +901,8 @@ func (status UIBudgetStatus) valid() bool {
 		status.ElapsedMilliseconds+status.RemainingMilliseconds != status.RunMilliseconds {
 		return false
 	}
-	return validBudgetCounter(status.StepsUsed, status.StepsMaximum) &&
+	return validFineGrainedBudget(status.FineGrained) &&
+		validBudgetCounter(status.StepsUsed, status.StepsMaximum) &&
 		validBudgetCounter(status.ToolCallsUsed, status.ToolCallsMaximum) &&
 		validBudgetCounter(status.ModelCallsUsed, status.ModelCallsMaximum) &&
 		validBudgetCounter(status.ModelCostUnitsUsed, status.ModelCostUnitsMaximum) &&
@@ -859,12 +942,95 @@ func (status UIBudgetStatus) valid() bool {
 		status.ResourcePageBytesMaximum <= status.ResourceBytesMaximum
 }
 
+func validFineGrainedBudget(values []UIBudgetMeasure) bool {
+	want := [...]UIBudgetCategory{
+		UIBudgetModelInputBytes, UIBudgetModelOutputBytes, UIBudgetSummaryReserveBytes,
+		UIBudgetModelAttempts, UIBudgetToolCalls, UIBudgetExternalReadCalls,
+		UIBudgetEvidenceItems, UIBudgetEvidenceBytes, UIBudgetPages, UIBudgetLines,
+		UIBudgetSamples, UIBudgetWallMilliseconds, UIBudgetIdleMilliseconds,
+		UIBudgetQueueItems, UIBudgetQueueBytes, UIBudgetContinuationAttempts, UIBudgetContinuationTime,
+	}
+	if len(values) != len(want) {
+		return false
+	}
+	for index, measure := range values {
+		if measure.Category != want[index] || measure.Used < 0 || measure.Limit < 0 {
+			return false
+		}
+		switch measure.Basis {
+		case UIBudgetMeasured, UIBudgetReserved, UIBudgetEstimated:
+			if measure.Used > measure.Limit {
+				return false
+			}
+		case UIBudgetConfigured:
+			if measure.Used != 0 {
+				return false
+			}
+		case UIBudgetUnavailable:
+			if measure.Used != 0 || measure.Limit != 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ModelBudgetEvidenceBasis is the exact content-free status value used while
 // no selected-endpoint token or monetary-cost evidence is available.
 const ModelBudgetEvidenceBasis = "bytes_calls_time_cost_units_no_endpoint_token_claim"
 
 func validBudgetCounter(used, maximum int) bool {
 	return used >= 0 && maximum > 0 && used <= maximum
+}
+
+// NewUIBudgetMeasures returns the fixed ordered content-free projection for a
+// validated runtime profile. Delivery tests use the same catalog.
+func NewUIBudgetMeasures(limits agent.RunBudgetLimits) []UIBudgetMeasure {
+	if limits.Validate() != nil {
+		return nil
+	}
+	return []UIBudgetMeasure{
+		{Category: UIBudgetModelInputBytes, Limit: int64(limits.ModelCalls+limits.SummaryCalls) * int64(limits.ModelRequestBytes), Basis: UIBudgetMeasured},
+		{Category: UIBudgetModelOutputBytes, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetSummaryReserveBytes, Limit: int64(limits.SummaryCalls) * int64(limits.SummaryRequestBytes+limits.SummaryOutputBytes), Basis: UIBudgetReserved},
+		{Category: UIBudgetModelAttempts, Limit: int64(limits.ModelCalls), Basis: UIBudgetMeasured},
+		{Category: UIBudgetToolCalls, Limit: int64(limits.ToolCalls), Basis: UIBudgetMeasured},
+		{Category: UIBudgetExternalReadCalls, Limit: int64(limits.ToolCalls), Basis: UIBudgetMeasured},
+		{Category: UIBudgetEvidenceItems, Limit: int64(limits.ToolCalls * domain.MaxEvidenceItemsPerResult), Basis: UIBudgetMeasured},
+		{Category: UIBudgetEvidenceBytes, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetPages, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetLines, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetSamples, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetWallMilliseconds, Limit: limits.RunDuration.Milliseconds(), Basis: UIBudgetMeasured},
+		{Category: UIBudgetIdleMilliseconds, Basis: UIBudgetUnavailable},
+		{Category: UIBudgetQueueItems, Limit: int64(MaxConversationInputItems), Basis: UIBudgetMeasured},
+		{Category: UIBudgetQueueBytes, Limit: int64(MaxConversationInputAggregateBytes), Basis: UIBudgetMeasured},
+		{Category: UIBudgetContinuationAttempts, Basis: UIBudgetMeasured},
+		{Category: UIBudgetContinuationTime, Basis: UIBudgetMeasured},
+	}
+}
+
+func setBudgetMeasure(values []UIBudgetMeasure, category UIBudgetCategory, used int64, basis UIBudgetValueBasis) {
+	for index := range values {
+		if values[index].Category == category {
+			values[index].Used = used
+			values[index].Basis = basis
+			return
+		}
+	}
+}
+
+func setBudgetUnavailable(values []UIBudgetMeasure, category UIBudgetCategory) {
+	for index := range values {
+		if values[index].Category == category {
+			values[index].Used = 0
+			values[index].Limit = 0
+			values[index].Basis = UIBudgetUnavailable
+			return
+		}
+	}
 }
 
 // UIResourceSelectionResult accepts or rejects one request-bound ResourceRef.
@@ -904,6 +1070,7 @@ type UIEventKind string
 
 const (
 	UIEventRunStarted        UIEventKind = "run_started"
+	UIEventModelEgress       UIEventKind = "model_egress_preflight"
 	UIEventTextDelta         UIEventKind = "text_delta"
 	UIEventToolStep          UIEventKind = "tool_step"
 	UIEventRunCompleted      UIEventKind = "run_completed"
@@ -953,6 +1120,223 @@ type ToolStep struct {
 	Truncated     bool
 }
 
+// UIContextSummaryState distinguishes an absent retained summary from an
+// already verified or newly generated summary without exposing its text.
+type UIContextSummaryState string
+
+const (
+	UIContextSummaryAbsent    UIContextSummaryState = "absent"
+	UIContextSummaryRetained  UIContextSummaryState = "retained"
+	UIContextSummaryGenerated UIContextSummaryState = "generated"
+)
+
+// UIModelEgressPreflight is a content-free projection accepted before the
+// adapter can invoke its transport. It is visibility, never authority.
+type UIModelEgressPreflight struct {
+	CallKind             agent.ModelCallKind
+	Role                 domain.ModelRole
+	OriginHash           string
+	Consented            bool
+	ContextMode          domain.PrivacyMode
+	RunMode              agent.RunMode
+	MessageCount         int
+	MessageBytes         int
+	SummaryState         UIContextSummaryState
+	RecentTailMessages   int
+	EligibleCategories   []ModelDataCategory
+	ReservedRequestBytes int
+	ReservedOutputBytes  int
+	ReservedStreamBytes  int
+	ReservedNanoseconds  int64
+	ReservedCostUnits    int
+	BudgetProfile        agent.BudgetProfile
+}
+
+// UINextAction is a fixed content-free action hint. It never mints retry,
+// execution, approval, or recovery authority.
+type UINextAction string
+
+const (
+	UINextAskNewQuestion     UINextAction = "ask_new_question"
+	UINextProvideInput       UINextAction = "provide_explicit_input"
+	UINextEditRecoveredInput UINextAction = "edit_recovered_input"
+	UINextInspectEvidence    UINextAction = "inspect_evidence"
+	UINextReviewScopePolicy  UINextAction = "review_scope_policy"
+	UINextReviewBudget       UINextAction = "review_budget"
+	UINextRunDoctor          UINextAction = "run_doctor"
+	UINextSubmitExplicitly   UINextAction = "submit_explicitly"
+	UINextDoNotRetryBlindly  UINextAction = "do_not_retry_blindly"
+)
+
+// UITerminalOutcome is Application-authoritative and deliberately contains no
+// dynamic error, scope, resource, or answer text.
+type UITerminalOutcome struct {
+	Reason      domain.RunTerminalReason
+	NextActions []UINextAction
+	Budget      []UIBudgetMeasure
+}
+
+// UIAnswerCoverageState is the fixed top-level declared source condition.
+type UIAnswerCoverageState string
+
+const (
+	UIAnswerCoverageComplete    UIAnswerCoverageState = "complete"
+	UIAnswerCoveragePartial     UIAnswerCoverageState = "partial"
+	UIAnswerCoverageTruncated   UIAnswerCoverageState = "truncated"
+	UIAnswerCoverageUnavailable UIAnswerCoverageState = "unavailable"
+)
+
+// UIAnswerProvenance is a bounded metadata strip for one committed final. It
+// intentionally excludes Evidence payloads and claim text.
+type UIAnswerProvenance struct {
+	EvidenceCount        int
+	ObservedFrom         *time.Time
+	ObservedThrough      *time.Time
+	ScopeGeneration      int64
+	PolicyGeneration     domain.PolicyGeneration
+	CoverageState        UIAnswerCoverageState
+	HasInference         bool
+	HasUncertainty       bool
+	HasConflict          bool
+	HasSuperseded        bool
+	CheckedSourceCount   int
+	UncheckedSourceCount int
+}
+
+func (provenance UIAnswerProvenance) valid(runScope int64, policy domain.PolicyGeneration) bool {
+	if provenance.EvidenceCount < 0 || provenance.EvidenceCount > 100 || provenance.ScopeGeneration != runScope ||
+		provenance.PolicyGeneration != policy || provenance.CheckedSourceCount < 0 ||
+		provenance.UncheckedSourceCount < 0 || provenance.CheckedSourceCount+provenance.UncheckedSourceCount > domain.MaxAnswerSources ||
+		(provenance.ObservedFrom == nil) != (provenance.ObservedThrough == nil) {
+		return false
+	}
+	if provenance.ObservedFrom != nil && (!validCoordinatorTime(*provenance.ObservedFrom) ||
+		!validCoordinatorTime(*provenance.ObservedThrough) || provenance.ObservedThrough.Before(*provenance.ObservedFrom)) {
+		return false
+	}
+	switch provenance.CoverageState {
+	case UIAnswerCoverageComplete, UIAnswerCoveragePartial, UIAnswerCoverageTruncated, UIAnswerCoverageUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProjectTerminalOutcome returns the sole fixed next-action projection for a
+// terminal reason.
+func ProjectTerminalOutcome(reason domain.RunTerminalReason) (UITerminalOutcome, error) {
+	actions := terminalNextActions(reason)
+	if !reason.Valid() || len(actions) == 0 || len(actions) > 3 {
+		return UITerminalOutcome{}, ErrInvalidUIEvent
+	}
+	return UITerminalOutcome{Reason: reason, NextActions: actions, Budget: NewUnavailableUIBudgetMeasures()}, nil
+}
+
+func (outcome UITerminalOutcome) valid() bool {
+	want, err := ProjectTerminalOutcome(outcome.Reason)
+	if err != nil || len(want.NextActions) != len(outcome.NextActions) || !validFineGrainedBudget(outcome.Budget) {
+		return false
+	}
+	for index := range want.NextActions {
+		if want.NextActions[index] != outcome.NextActions[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// NewUnavailableUIBudgetMeasures returns every fixed category without
+// inventing usage or ceilings when a terminal invalidation has no run-local
+// accounting snapshot.
+func NewUnavailableUIBudgetMeasures() []UIBudgetMeasure {
+	categories := [...]UIBudgetCategory{
+		UIBudgetModelInputBytes, UIBudgetModelOutputBytes, UIBudgetSummaryReserveBytes,
+		UIBudgetModelAttempts, UIBudgetToolCalls, UIBudgetExternalReadCalls,
+		UIBudgetEvidenceItems, UIBudgetEvidenceBytes, UIBudgetPages, UIBudgetLines,
+		UIBudgetSamples, UIBudgetWallMilliseconds, UIBudgetIdleMilliseconds,
+		UIBudgetQueueItems, UIBudgetQueueBytes, UIBudgetContinuationAttempts, UIBudgetContinuationTime,
+	}
+	result := make([]UIBudgetMeasure, len(categories))
+	for index, category := range categories {
+		result[index] = UIBudgetMeasure{Category: category, Basis: UIBudgetUnavailable}
+	}
+	return result
+}
+
+func terminalNextActions(reason domain.RunTerminalReason) []UINextAction {
+	switch reason {
+	case domain.RunTerminalCompleted:
+		return []UINextAction{UINextAskNewQuestion}
+	case domain.RunTerminalNeedsUserInput:
+		return []UINextAction{UINextProvideInput}
+	case domain.RunTerminalCancelled:
+		return []UINextAction{UINextEditRecoveredInput, UINextSubmitExplicitly}
+	case domain.RunTerminalRecovered:
+		return []UINextAction{UINextEditRecoveredInput, UINextSubmitExplicitly}
+	case domain.RunTerminalTimedOut, domain.RunTerminalBudgetExhausted:
+		return []UINextAction{UINextReviewBudget, UINextSubmitExplicitly}
+	case domain.RunTerminalUnknown:
+		return []UINextAction{UINextDoNotRetryBlindly, UINextRunDoctor}
+	case domain.RunTerminalPersistenceDegraded:
+		return []UINextAction{UINextRunDoctor, UINextDoNotRetryBlindly}
+	case domain.RunTerminalStaleGeneration, domain.RunTerminalPolicyDenied:
+		return []UINextAction{UINextReviewScopePolicy, UINextSubmitExplicitly}
+	case domain.RunTerminalInsufficientEvidence, domain.RunTerminalConflictingEvidence, domain.RunTerminalPartialResult:
+		return []UINextAction{UINextInspectEvidence, UINextSubmitExplicitly}
+	case domain.RunTerminalSourceUnavailable:
+		return []UINextAction{UINextRunDoctor, UINextSubmitExplicitly}
+	case domain.RunTerminalFailed:
+		return []UINextAction{UINextRunDoctor, UINextSubmitExplicitly}
+	default:
+		return nil
+	}
+}
+
+func (projection UIModelEgressPreflight) valid() bool {
+	if projection.CallKind != agent.ModelCallAgent && projection.CallKind != agent.ModelCallSummary ||
+		projection.Role != domain.ModelRoleAgent || !validPrivacyDigest(projection.OriginHash) || !projection.Consented ||
+		(projection.ContextMode != domain.PrivacyModeStandard && projection.ContextMode != domain.PrivacyModeMinimal) ||
+		!projection.RunMode.Valid() || projection.MessageCount < 1 || projection.MessageCount > agent.MaxModelPreflightMessages ||
+		projection.MessageBytes < 1 || projection.MessageBytes > domain.MaxModelRequestBytes ||
+		projection.ReservedRequestBytes < projection.MessageBytes || projection.ReservedRequestBytes > domain.MaxModelRequestBytes ||
+		projection.ReservedOutputBytes < 1 || projection.ReservedOutputBytes > domain.MaxModelMessageBytes ||
+		projection.ReservedStreamBytes < 0 || projection.ReservedStreamBytes > domain.MaxModelStreamBytes ||
+		projection.ReservedNanoseconds < 1 || projection.ReservedCostUnits < 1 || !projection.BudgetProfile.Valid() ||
+		projection.RecentTailMessages < 0 || projection.RecentTailMessages > domain.MaxSessionContextMessages ||
+		!validEgressCategories(projection.EligibleCategories) {
+		return false
+	}
+	switch projection.SummaryState {
+	case UIContextSummaryAbsent:
+	case UIContextSummaryRetained, UIContextSummaryGenerated:
+		if projection.ContextMode != domain.PrivacyModeStandard {
+			return false
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func validEgressCategories(values []ModelDataCategory) bool {
+	if len(values) < 1 || len(values) > len(privacyCategoryCatalog) {
+		return false
+	}
+	position := make(map[ModelDataCategory]int, len(privacyCategoryCatalog))
+	for index, definition := range privacyCategoryCatalog {
+		position[definition.ID] = index
+	}
+	previous := -1
+	for _, value := range values {
+		current, exists := position[value]
+		if !exists || current <= previous {
+			return false
+		}
+		previous = current
+	}
+	return true
+}
+
 // UIEvent carries publisher-owned identity and exactly one projected payload.
 type UIEvent struct {
 	Kind               UIEventKind
@@ -968,6 +1352,9 @@ type UIEvent struct {
 	Reviewer           *UIReviewerEvent
 	RestartExecution   *UIRestartExecution
 	ConversationInput  *UIConversationInputEvent
+	ModelEgress        *UIModelEgressPreflight
+	TerminalOutcome    *UITerminalOutcome
+	AnswerProvenance   *UIAnswerProvenance
 }
 
 // UIConversationInputEvent is a revisioned, bounded working-area snapshot.
@@ -1008,6 +1395,15 @@ func (event UIEvent) Terminal() bool {
 
 // Validate checks identity, payload exclusivity, and fixed event states.
 func (event UIEvent) Validate() error {
+	if event.Kind != UIEventModelEgress && event.ModelEgress != nil {
+		return ErrInvalidUIEvent
+	}
+	if !event.Terminal() && event.TerminalOutcome != nil {
+		return ErrInvalidUIEvent
+	}
+	if event.Kind != UIEventRunCompleted && event.AnswerProvenance != nil {
+		return ErrInvalidUIEvent
+	}
 	if event.Kind == UIEventConversationInput {
 		if !event.RunID.Valid() || event.ScopeGeneration < 1 || !event.PolicyGeneration.Valid() ||
 			event.Sequence != 0 || event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil ||
@@ -1026,8 +1422,16 @@ func (event UIEvent) Validate() error {
 		if event.Text != "" && !validUICommandText(event.Text, MaxQuestionBytes) || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
+	case UIEventModelEgress:
+		if event.Text != "" || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil ||
+			event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil ||
+			event.ModelEgress == nil || !event.ModelEgress.valid() {
+			return ErrInvalidUIEvent
+		}
 	case UIEventRunCompleted:
-		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
+		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) > 100 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil ||
+			event.TerminalOutcome == nil || !event.TerminalOutcome.valid() || event.AnswerProvenance == nil ||
+			!event.AnswerProvenance.valid(event.ScopeGeneration, event.PolicyGeneration) {
 			return ErrInvalidUIEvent
 		}
 		for _, reference := range event.EvidenceReferences {
@@ -1040,7 +1444,12 @@ func (event UIEvent) Validate() error {
 		if event.Text == "" || len(event.Text) > MaxAnswerMarkdownBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
-	case UIEventRunFailed, UIEventRunCancelled, UIEventValidationWarning, UIEventPersistenceDegraded:
+	case UIEventRunFailed, UIEventRunCancelled:
+		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil ||
+			event.TerminalOutcome == nil || !event.TerminalOutcome.valid() {
+			return ErrInvalidUIEvent
+		}
+	case UIEventValidationWarning, UIEventPersistenceDegraded:
 		if event.Text == "" || len(event.Text) > MaxQuestionBytes || len(event.EvidenceReferences) != 0 || event.ToolStep != nil || event.Approval != nil || event.ApprovalResult != nil || event.Reviewer != nil || event.RestartExecution != nil {
 			return ErrInvalidUIEvent
 		}
@@ -1507,20 +1916,57 @@ const (
 // It owns no goroutine or channel, never drops structural events, and assigns a
 // UI-local sequence so coalesced Agent deltas cannot create ambiguous ordering.
 type eventBridge struct {
-	runID            domain.AgentRunID
-	scopeGeneration  int64
-	policyGeneration domain.PolicyGeneration
-	sink             UIEventSink
-	sequence         int64
-	started          bool
-	terminal         bool
-	pendingDelta     string
-	lastDeltaAt      time.Time
-	lastDeltaFlush   time.Time
-	deltaEvents      int
-	deltaBytes       int
-	diagnosis        *domain.Diagnosis
-	initialInput     string
+	runID             domain.AgentRunID
+	scopeGeneration   int64
+	policyGeneration  domain.PolicyGeneration
+	sink              UIEventSink
+	sequence          int64
+	publishedSequence atomic.Int64
+	started           bool
+	terminal          bool
+	pendingDelta      string
+	lastDeltaAt       time.Time
+	lastDeltaFlush    time.Time
+	deltaEvents       int
+	deltaBytes        int
+	diagnosis         *domain.Diagnosis
+	initialInput      string
+	egressBase        *modelEgressBase
+	persistenceBad    bool
+	terminalBudget    []UIBudgetMeasure
+	startedAt         time.Time
+	lastOccurredAt    time.Time
+	modelAttempts     int64
+	modelInputBytes   int64
+	summaryReserved   int64
+	toolCalls         int64
+	externalCalls     int64
+	evidenceItems     int64
+}
+
+func (bridge *eventBridge) currentSequence() int64 {
+	if bridge == nil {
+		return 0
+	}
+	return bridge.publishedSequence.Load()
+}
+
+func (bridge *eventBridge) commitSequence(sequence int64) {
+	bridge.sequence = sequence
+	bridge.publishedSequence.Store(sequence)
+}
+
+type modelEgressBase struct {
+	role               domain.ModelRole
+	originHash         string
+	consented          bool
+	contextMode        domain.PrivacyMode
+	runMode            agent.RunMode
+	summaryState       UIContextSummaryState
+	recentTailMessages int
+	coverageMessages   int
+	eligibleCategories []ModelDataCategory
+	budgetProfile      agent.BudgetProfile
 }
 
 func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, policyGeneration domain.PolicyGeneration, sink UIEventSink, initialInput ...string) (*eventBridge, error) {
@@ -1535,11 +1981,44 @@ func newEventBridge(runID domain.AgentRunID, scopeGeneration int64, policyGenera
 	return bridge, nil
 }
 
+func (bridge *eventBridge) configureModelEgress(
+	input agent.RunInput,
+	contextMode domain.PrivacyMode,
+	privacy PrivacyBindingSnapshot,
+	categories []ModelDataCategory,
+) error {
+	if bridge == nil || input.RunID() != bridge.runID || input.Scope().Generation != bridge.scopeGeneration ||
+		input.PolicyGeneration() != bridge.policyGeneration || privacy.Role != domain.ModelRoleAgent ||
+		!privacy.Loaded || !privacy.Accepted || !validPrivacyDigest(privacy.OriginHash) ||
+		(contextMode != domain.PrivacyModeStandard && contextMode != domain.PrivacyModeMinimal) ||
+		!validEgressCategories(categories) {
+		return ErrInvalidUIEvent
+	}
+	conversation := input.Conversation()
+	summaryState := UIContextSummaryAbsent
+	if conversation.Summary() != nil {
+		summaryState = UIContextSummaryRetained
+	}
+	bridge.egressBase = &modelEgressBase{
+		role: privacy.Role, originHash: privacy.OriginHash, consented: true,
+		contextMode: contextMode, runMode: input.Mode(), summaryState: summaryState,
+		recentTailMessages: len(conversation.Turns()),
+		coverageMessages:   len(conversation.Coverage()),
+		eligibleCategories: append([]ModelDataCategory(nil), categories...),
+		budgetProfile:      input.BudgetLimits().Profile,
+	}
+	bridge.terminalBudget = NewUIBudgetMeasures(input.BudgetLimits())
+	setBudgetUnavailable(bridge.terminalBudget, UIBudgetQueueItems)
+	setBudgetUnavailable(bridge.terminalBudget, UIBudgetQueueBytes)
+	return nil
+}
+
 func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) error {
 	if bridge == nil || ctx == nil || ctx.Err() != nil || event.Validate() != nil ||
 		event.RunID != bridge.runID || event.ScopeGeneration != bridge.scopeGeneration || bridge.terminal {
 		return ErrInvalidUIEvent
 	}
+	bridge.lastOccurredAt = event.OccurredAt
 	if event.Kind == agent.RunEventTextDelta {
 		if !bridge.started {
 			return ErrInvalidUIEvent
@@ -1574,8 +2053,44 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 			return ErrInvalidUIEvent
 		}
 		bridge.started = true
+		bridge.startedAt = event.OccurredAt
 		return bridge.emit(ctx, UIEvent{Kind: UIEventRunStarted, Text: bridge.initialInput})
-	case agent.RunEventModelStreamStarted, agent.RunEventSummaryStarted, agent.RunEventSummaryReady, agent.RunEventEvidenceCollected:
+	case agent.RunEventModelStreamStarted, agent.RunEventSummaryStarted:
+		if bridge.egressBase == nil || event.ModelPreflight == nil {
+			return ErrInvalidUIEvent
+		}
+		base := bridge.egressBase
+		preflight := event.ModelPreflight
+		projection := UIModelEgressPreflight{
+			CallKind: preflight.Kind, Role: base.role, OriginHash: base.originHash, Consented: base.consented,
+			ContextMode: base.contextMode, RunMode: base.runMode,
+			MessageCount: preflight.MessageCount, MessageBytes: preflight.MessageBytes,
+			SummaryState: base.summaryState, RecentTailMessages: base.recentTailMessages,
+			EligibleCategories:   append([]ModelDataCategory(nil), base.eligibleCategories...),
+			ReservedRequestBytes: preflight.ReservedRequestBytes, ReservedOutputBytes: preflight.ReservedOutputBytes,
+			ReservedStreamBytes: preflight.ReservedStreamBytes, ReservedNanoseconds: preflight.ReservedNanoseconds,
+			ReservedCostUnits: preflight.ReservedCostUnits, BudgetProfile: base.budgetProfile,
+		}
+		bridge.modelInputBytes += int64(preflight.MessageBytes)
+		if preflight.Kind == agent.ModelCallAgent {
+			bridge.modelAttempts++
+		} else {
+			bridge.summaryReserved += int64(preflight.ReservedRequestBytes + preflight.ReservedOutputBytes)
+		}
+		setBudgetMeasure(bridge.terminalBudget, UIBudgetModelInputBytes, bridge.modelInputBytes, UIBudgetMeasured)
+		setBudgetMeasure(bridge.terminalBudget, UIBudgetModelAttempts, bridge.modelAttempts, UIBudgetMeasured)
+		setBudgetMeasure(bridge.terminalBudget, UIBudgetSummaryReserveBytes, bridge.summaryReserved, UIBudgetReserved)
+		return bridge.emit(ctx, UIEvent{Kind: UIEventModelEgress, ModelEgress: &projection})
+	case agent.RunEventSummaryReady:
+		if bridge.egressBase == nil || event.Summary == nil {
+			return ErrInvalidUIEvent
+		}
+		bridge.egressBase.summaryState = UIContextSummaryGenerated
+		bridge.egressBase.recentTailMessages = max(0, bridge.egressBase.coverageMessages-event.Summary.CoveredCount)
+		return nil
+	case agent.RunEventEvidenceCollected:
+		bridge.evidenceItems++
+		setBudgetMeasure(bridge.terminalBudget, UIBudgetEvidenceItems, bridge.evidenceItems, UIBudgetMeasured)
 		return nil
 	case agent.RunEventDiagnosisReady:
 		diagnosis := cloneDiagnosis(*event.Diagnosis)
@@ -1594,6 +2109,12 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 			return err
 		}
 		if event.Kind == agent.RunEventToolCallRequested {
+			if event.ToolReuse == nil {
+				bridge.toolCalls++
+				bridge.externalCalls += int64(event.ExternalCallCost)
+				setBudgetMeasure(bridge.terminalBudget, UIBudgetToolCalls, bridge.toolCalls, UIBudgetMeasured)
+				setBudgetMeasure(bridge.terminalBudget, UIBudgetExternalReadCalls, bridge.externalCalls, UIBudgetMeasured)
+			}
 			bridge.deltaBytes = 0
 		}
 		return nil
@@ -1601,23 +2122,100 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 		if bridge.diagnosis == nil {
 			return ErrInvalidUIEvent
 		}
+		reason := domain.RunTerminalCompleted
+		if !bridge.diagnosis.Completeness.Empty() {
+			reason = bridge.diagnosis.Completeness.StopReason
+		}
+		terminal, err := bridge.projectTerminal(reason)
+		if err != nil {
+			return err
+		}
+		provenance := projectAnswerProvenance(*bridge.diagnosis, bridge.policyGeneration)
 		return bridge.emitTerminal(ctx, UIEvent{
 			Kind: UIEventRunCompleted, Text: bridge.diagnosis.AnswerMarkdown,
 			EvidenceReferences: projectUIEvidenceReferences(*bridge.diagnosis, bridge.sequence+1),
+			TerminalOutcome:    &terminal,
+			AnswerProvenance:   &provenance,
 		})
 	case agent.RunEventRunFailed:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage})
+		terminal, err := bridge.projectTerminal(terminalReasonForFailure(event.Failure.Class))
+		if err != nil {
+			return err
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage, TerminalOutcome: &terminal})
 	case agent.RunEventRunCancelled:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The diagnostic run was cancelled."})
+		terminal, err := bridge.projectTerminal(domain.RunTerminalCancelled)
+		if err != nil {
+			return err
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The diagnostic run was cancelled.", TerminalOutcome: &terminal})
 	case agent.RunEventRunTimedOut:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run reached its time limit."})
+		terminal, err := bridge.projectTerminal(domain.RunTerminalTimedOut)
+		if err != nil {
+			return err
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run reached its time limit.", TerminalOutcome: &terminal})
 	case agent.RunEventRunStaleScope:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run stopped because the Kubernetes context or namespace changed."})
+		terminal, err := bridge.projectTerminal(domain.RunTerminalStaleGeneration)
+		if err != nil {
+			return err
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run stopped because the Kubernetes context or namespace changed.", TerminalOutcome: &terminal})
 	case agent.RunEventRunInterrupted:
-		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run was interrupted."})
+		terminal, err := bridge.projectTerminal(domain.RunTerminalUnknown)
+		if err != nil {
+			return err
+		}
+		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run was interrupted.", TerminalOutcome: &terminal})
 	default:
 		return ErrInvalidUIEvent
 	}
+}
+
+func projectAnswerProvenance(diagnosis domain.Diagnosis, policy domain.PolicyGeneration) UIAnswerProvenance {
+	projection := UIAnswerProvenance{
+		EvidenceCount: len(diagnosis.ReferencedEvidenceIDs()), ScopeGeneration: diagnosis.Scope.Generation,
+		PolicyGeneration: policy, CoverageState: UIAnswerCoverageComplete,
+	}
+	if diagnosis.ObservedFrom != nil {
+		value := diagnosis.ObservedFrom.UTC().Truncate(time.Millisecond)
+		projection.ObservedFrom = &value
+	}
+	if diagnosis.ObservedTo != nil {
+		value := diagnosis.ObservedTo.UTC().Truncate(time.Millisecond)
+		projection.ObservedThrough = &value
+	}
+	if diagnosis.EvidenceDetailsState == domain.EvidenceDetailPartial || diagnosis.EvidenceDetailsState == domain.EvidenceDetailExpired {
+		projection.CoverageState = UIAnswerCoveragePartial
+	}
+	for _, claim := range diagnosis.ClaimCoverage {
+		projection.HasInference = projection.HasInference || claim.Kind == domain.ClaimInference || claim.Kind == domain.ClaimRecommendation
+		projection.HasUncertainty = projection.HasUncertainty || claim.Kind == domain.ClaimUncertainty || claim.Kind == domain.ClaimUnsupportedObservation
+	}
+	for _, source := range diagnosis.Completeness.Sources {
+		switch source.State {
+		case domain.SourceCheckedPresent, domain.SourceCheckedAbsent, domain.SourcePartial,
+			domain.SourceTruncated, domain.SourceStale, domain.SourceConflicting:
+			projection.CheckedSourceCount++
+		default:
+			projection.UncheckedSourceCount++
+		}
+		projection.HasConflict = projection.HasConflict || source.Conflict == domain.EvidenceConflictDetected || source.State == domain.SourceConflicting
+		projection.HasSuperseded = projection.HasSuperseded || source.Conflict == domain.EvidenceConflictSuperseded
+		switch source.State {
+		case domain.SourceUnavailable, domain.SourceDenied, domain.SourceTimedOut:
+			projection.CoverageState = UIAnswerCoverageUnavailable
+		case domain.SourceTruncated:
+			if projection.CoverageState != UIAnswerCoverageUnavailable {
+				projection.CoverageState = UIAnswerCoverageTruncated
+			}
+		case domain.SourcePartial, domain.SourceStale, domain.SourceConflicting:
+			if projection.CoverageState == UIAnswerCoverageComplete {
+				projection.CoverageState = UIAnswerCoveragePartial
+			}
+		}
+	}
+	return projection
 }
 
 func (bridge *eventBridge) persistenceDegraded(ctx context.Context) error {
@@ -1627,6 +2225,7 @@ func (bridge *eventBridge) persistenceDegraded(ctx context.Context) error {
 	if err := bridge.flushDelta(ctx); err != nil {
 		return err
 	}
+	bridge.persistenceBad = true
 	return bridge.emit(ctx, UIEvent{
 		Kind: UIEventPersistenceDegraded,
 		Text: "Local persistence is degraded; this run may not be resumable.",
@@ -1644,7 +2243,59 @@ func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) 
 		}
 	}
 	bridge.pendingDelta = ""
-	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: safeMessage})
+	terminal, err := bridge.projectTerminal(domain.RunTerminalFailed)
+	if err != nil {
+		return err
+	}
+	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: safeMessage, TerminalOutcome: &terminal})
+}
+
+func (bridge *eventBridge) projectTerminal(reason domain.RunTerminalReason) (UITerminalOutcome, error) {
+	if bridge.persistenceBad {
+		reason = domain.RunTerminalPersistenceDegraded
+	}
+	outcome, err := ProjectTerminalOutcome(reason)
+	if err != nil {
+		return UITerminalOutcome{}, err
+	}
+	if validFineGrainedBudget(bridge.terminalBudget) {
+		if !bridge.startedAt.IsZero() && !bridge.lastOccurredAt.Before(bridge.startedAt) {
+			elapsed := bridge.lastOccurredAt.Sub(bridge.startedAt).Milliseconds()
+			for _, measure := range bridge.terminalBudget {
+				if measure.Category == UIBudgetWallMilliseconds && measure.Limit > 0 && elapsed > measure.Limit {
+					elapsed = measure.Limit
+					break
+				}
+			}
+			setBudgetMeasure(bridge.terminalBudget, UIBudgetWallMilliseconds, elapsed, UIBudgetMeasured)
+		}
+		outcome.Budget = append([]UIBudgetMeasure(nil), bridge.terminalBudget...)
+	}
+	return outcome, nil
+}
+
+func terminalReasonForFailure(class domain.SafeErrorClass) domain.RunTerminalReason {
+	switch class {
+	case domain.SafeErrorClassBudgetExhausted:
+		return domain.RunTerminalBudgetExhausted
+	case domain.SafeErrorClassConsentRequired, domain.SafeErrorClassPermissionDenied, domain.SafeErrorClassPolicyDenied:
+		return domain.RunTerminalPolicyDenied
+	case domain.SafeErrorClassUnavailable, domain.SafeErrorClassAuthenticationFailed, domain.SafeErrorClassRateLimited,
+		domain.SafeErrorClassUnsupported:
+		return domain.RunTerminalSourceUnavailable
+	case domain.SafeErrorClassPersistenceUnavailable:
+		return domain.RunTerminalPersistenceDegraded
+	case domain.SafeErrorClassStaleScope:
+		return domain.RunTerminalStaleGeneration
+	case domain.SafeErrorClassTimeout:
+		return domain.RunTerminalTimedOut
+	case domain.SafeErrorClassCancelled:
+		return domain.RunTerminalCancelled
+	case domain.SafeErrorClassConflict:
+		return domain.RunTerminalConflictingEvidence
+	default:
+		return domain.RunTerminalFailed
+	}
 }
 
 func (bridge *eventBridge) flushDelta(ctx context.Context) error {
@@ -1685,7 +2336,7 @@ func (bridge *eventBridge) emit(ctx context.Context, event UIEvent) error {
 	if err := bridge.sink.PublishUIEvent(ctx, event); err != nil {
 		return err
 	}
-	bridge.sequence = nextSequence
+	bridge.commitSequence(nextSequence)
 	return nil
 }
 

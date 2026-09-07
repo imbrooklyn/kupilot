@@ -25,6 +25,7 @@ type EvidenceDetailContent struct {
 	Status            string
 	SensitiveFiltered bool
 	Projection        string
+	Claims            string
 }
 
 type evidenceDialogState uint8
@@ -130,6 +131,9 @@ func (dialog EvidenceDetailDialog) View(width, height int) string {
 			dialog.styles.Body.Render("Type: "+observationCategoryLabel(content.Category)),
 			dialog.styles.Body.Render("Status: "+content.Status),
 		)
+		if content.Claims != "" {
+			lines = append(lines, dialog.styles.Body.Render("Referenced by claims: "+content.Claims))
+		}
 		if content.SensitiveFiltered {
 			lines = append(lines, dialog.styles.Warning.Render("Sensitive values were filtered."))
 		}

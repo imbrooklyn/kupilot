@@ -46,7 +46,7 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 	minimalID := domain.SessionID("0198a46e-7d2a-7d34-9b6f-2df5f45a2b03")
 	if err := sessions.Create(ctx, domain.Session{
 		ID: minimalID, Status: domain.SessionStatusActive, PrivacyMode: domain.PrivacyModeMinimal,
-		Version: 1, CreatedAt: now, UpdatedAt: now,
+		Version: 1, CreatedAt: now, LastActivityAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("minimal Session Create() error = %v", err)
 	}
@@ -449,7 +449,7 @@ func seedIntegrationResumeHistoryForScope(
 	session := domain.Session{
 		ID: integrationSessionID, Title: "Historic diagnosis", Status: domain.SessionStatusActive,
 		PrivacyMode: domain.PrivacyModeStandard, LastScope: &scope, SelectedResource: &reference,
-		Version: 1, CreatedAt: now.Add(-time.Hour), UpdatedAt: now,
+		Version: 1, CreatedAt: now.Add(-time.Hour), LastActivityAt: now, UpdatedAt: now,
 	}
 	if err := sessions.Create(ctx, session); err != nil {
 		t.Fatalf("SessionRepository.Create() error = %v", err)

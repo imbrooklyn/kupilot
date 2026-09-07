@@ -422,9 +422,13 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	}
 
 	runID := domain.AgentRunID("00000000-0000-7000-8000-000000000932")
+	terminal, err := application.ProjectTerminalOutcome(domain.RunTerminalFailed)
+	if err != nil {
+		t.Fatal("safe terminal projection is invalid")
+	}
 	uiEvents := []application.UIEvent{
 		{Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 1},
-		{Kind: application.UIEventRunFailed, RunID: runID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: boundary.err.Error()},
+		{Kind: application.UIEventRunFailed, RunID: runID, ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: boundary.err.Error(), TerminalOutcome: &terminal},
 	}
 	for _, event := range uiEvents {
 		if event.Validate() != nil {

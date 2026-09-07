@@ -1,9 +1,9 @@
 # Kupilot Data Retention Contract
 
 - Status: Accepted target for `v0.5`
-- Date: 2026-09-05
+- Date: 2026-09-07
 
-The checked-in SQLite schema is now at forward-only migration 12. It implements
+The checked-in SQLite schema is now at forward-only migration 16. It implements
 the safe Session-summary/coverage record, role-scoped consent, named
 model-request metadata, and minimal generalized ActionEnvelope, approval, and
 Reviewer-decision metadata described here. Migration 8 adds bounded exact API
@@ -29,6 +29,11 @@ remote diagnostics, typed remediation, and default-off local-process actions
 use the shared action lifecycle. No raw argv, shell command, executable or
 working-directory path, child environment, credential value, Kubernetes
 response, or process output is eligible for SQLite, audit, logs, or export.
+Migration 13 records committed user-message sequence, migration 14 stores the
+bounded claim/plan projection, migration 15 adds authoritative Session Last
+active initialized conservatively from prior metadata time, and migration 16
+adds bounded answer-completeness and clarification projections. None creates a
+queue, search, terminal, retry, raw model-response, or second history store.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -81,6 +86,13 @@ disk encryption, and backup lifecycle remain the user's controls.
     export retention. Unknown lifecycle metadata is not persisted, but its
     already committed Message follows ordinary Message retention and export;
     its incomplete or failed run group is excluded from model replay.
+13. Last active is dedicated Session metadata. Only accepted committed
+    lifecycle transitions and explicit rename advance it; read-only discovery,
+    resume, status, doctor, export, maintenance, preview, and failed deletion do
+    not.
+14. Search state, undo/redo, terminal capabilities, deletion plans, egress
+    preflight, safe-read reuse, and recovery projections are process-local and
+    never durable authority.
 
 ## 2. Standard-persistence defaults
 
@@ -93,7 +105,7 @@ disk encryption, and backup lifecycle remain the user's controls.
 | Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. The public control may only shorten the current value, including to 0 days, which keeps detail only in process memory. |
 | Ordinary read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
 | Terminal permission and decision records, and ActionEnvelope, pre-operation intent, execution-attempt, cleanup, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because Kupilot is not a compliance ledger. Pending authority is first made terminal by its owning lifecycle, never by retention cleanup. |
-| Explicit `kupilot.export-summary.v3` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
+| Explicit `kupilot.export-summary.v4` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
 | Optional plaintext model profile in `KUPILOT_HOME/config.yaml` | Until the user overwrites or removes the local configuration | This user-selected credential copy is outside SQLite and Session retention. Process-only setup and environment loading do not create it. |
 | Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, model role, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any profile, role, origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
@@ -404,7 +416,7 @@ generic payload.
 The current implementation uses 64 KiB for one user or system-notice Message,
 128 KiB for one final assistant Message or complete Diagnosis, 16 KiB for one
 safe Session-context summary, 2 KiB for one Evidence fact, and 2 MiB for one
-`kupilot.export-summary.v3` document. Safe model-context selection is capped at
+`kupilot.export-summary.v4` document. Safe model-context selection is capped at
 4,096 eligible Messages and 4 MiB. The Eino compaction working-set resource
 trigger counts UTF-8 content bytes against 128 KiB; it is deliberately not a
 token estimate or a model context-window claim.
@@ -498,19 +510,27 @@ The deletion command follows this fail-closed state machine:
 
 | State before deletion | Required transition | Result visible to the user |
 | --- | --- | --- |
-| Confirmation is cancelled | Send no Application deletion command and perform no repository or executor call. | The current `/privacy` review or resume picker remains open. |
-| Current Session has a starting or active AgentRun | Cancel the exact run and wait for bounded termination before the graph transaction. | Failure or caller cancellation reports not deleted; no new run may start inside the deletion operation. |
-| Session has a pending or approved-but-not-executed approval | Durably cancel each approval before the graph transaction. If that durable close fails, remove in-memory authority and deny deletion. | No approval left by the deletion path is executable, and the executor receives no call from deletion. |
-| A matching approval is already consuming | Deny graph deletion; do not reinterpret or retry the already consumed operation. | The Session remains and deletion reports failure. |
-| Repository deletion fails or the Context is cancelled | Roll back the Session graph transaction. Prerequisite run or approval cancellation that already committed remains terminal. | The UI keeps the Session and reports not deleted, never partial success. |
-| Repository deletion commits | Accept only the matching request and Session identity, then clear current or picker state. | The UI reports logical deletion and no forensic-erasure claim. |
+| Confirmation is cancelled | Send no Application deletion command and perform no repository or executor call. | The current `/delete`, `/privacy`, or Session picker interaction remains available. |
+| Current Session has a starting/active AgentRun, commit barrier, Reviewer, approval, action, execution, or verification | Refuse deletion without cancelling or mutating the work. | The Session, queue, composer, and authority remain unchanged; the user must finish or cancel through the existing owning interaction. |
+| Historical Session has a queued/running AgentRun, pending/approved/consuming authority, an accepted attempt without a terminal outcome, or unproved state | Mark the Session protected and exclude it from deletion. | Listing and preview expose only a fixed protection reason; deletion performs zero external calls. |
+| Repository deletion fails or the Context is cancelled | Roll back the complete Session graph transaction. | The UI keeps the Session, queue, and composer and reports not deleted, never partial success. |
+| Repository deletion commits | Accept only the matching request and Session identity, then clear current-process state or remove the historical picker row. | The UI reports logical deletion and no forensic-erasure claim. |
 | Process restarts before a later deletion attempt | Normal startup recovery makes persisted running runs interrupted and pending or approved-but-not-executed approvals terminal. It restores no execution authority. | A new explicit confirmation is required. |
 | Retention cleanup races with explicit deletion | SQLite serializes the transactions. If cleanup commits first and removes the target shell, the explicit delete cannot claim that it deleted one Session; if explicit deletion commits first, cleanup observes no graph. | Only a committed matching delete is reported as deletion success. |
+| Inactive batch preview is confirmed | Resolve the relative cutoff once, use strict `< cutoff`, exclude the current/protected Sessions, bind the exact ordered snapshot and schema revision to a digest, acquire exclusive process isolation, then reselect and delete in one transaction. | Any activity, authority, order, count, version, digest, or schema change is stale and deletes nothing. |
 
 <!-- markdownlint-enable MD013 -->
 
 Deletion stores and logs no deleted content and creates no content-bearing
 tombstone. Delivery and repository errors use stable content-free classes.
+
+`/delete`, the `/privacy` `D` key, picker `D`, and exact CLI deletion use this
+same Application-owned state machine. `kupilot sessions list` is bounded and
+read-only. `sessions delete --before` accepts only a positive integer `d`/`w`
+duration or timezone-bearing RFC3339 cutoff; equality is retained. Non-TTY
+automation must first use `--dry-run`, then submit its resolved absolute cutoff
+and exact content-free digest with `--confirm`. Plans and confirmations are not
+persisted, and deletion never runs `VACUUM`.
 
 ### 8.2 Clear history and delete all local state
 
@@ -570,6 +590,20 @@ executable. Startup never resumes an Agent loop, ToolInvocation, model stream,
 Kubernetes call, Reviewer decision, Session rule, approval wait, process, or
 execution request.
 
+Binary and compatible schema changes do not turn process-local generation
+values into Session-version gates. Forward migration preserves eligible
+historic Session rows and initializes only the explicitly defined new columns.
+Resume may reconstruct eligible context and an unverified scope candidate, but
+never historic generation, client, ResourceRef, Evidence, approval, action, or
+retry authority. The next explicit question uses only independently verified
+current-process authority.
+
+A denied question start persists no draft, queue entry, search/history entry,
+Message, or run solely because of the denial. Its typed current-state projection
+is process-local and is not logged, exported, or stored as resumable authority.
+A BeginRun/precommit transaction failure leaves the question unsent and marks
+storage degraded according to Section 9.
+
 Kupilot does not automatically delete, rename, overwrite, or recreate a database
 it cannot validate. Recovery that could discard data requires an explicit user
 operation and a separately reviewed implementation.
@@ -615,7 +649,7 @@ fake clock, and failure injection:
 The pure-Go driver, PRAGMA, sqlx bind type, checkpoint, sidecar, and permission
 behavior must satisfy ADR-0018 and ADR-0030.
 
-## 11. S07 local interaction and coverage data
+## 11. Local interaction and coverage data
 
 Editable queue items, search query and matches, clipboard state, terminal title
 state, plan arm, compaction intent, and any stream handle are process-local and
@@ -629,6 +663,14 @@ Manual compaction replaces the committed summary only after the complete
 summary and coverage transaction succeeds. Failure preserves the previous
 summary and all Messages. Clipboard and terminal scrollback are external
 surfaces and are not deleted by Kupilot.
+
+Authoritative Last active is durable content-free Session metadata. The strict
+answer-completeness manifest and optional typed clarification follow Diagnosis
+retention in standard mode and are absent in minimal mode. Source freshness,
+conflict, supersession, negative-coverage, and reuse fields store only bounded
+project-owned enums, identifiers, hashes, and timestamps; no raw source or
+model payload becomes eligible. Export schema 4 can represent these safe fields
+without restoring Evidence or action authority.
 
 ## 12. Revisit triggers
 
@@ -664,3 +706,6 @@ before:
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

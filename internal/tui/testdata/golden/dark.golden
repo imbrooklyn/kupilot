@@ -1,5 +1,4 @@
 palette enabled=true base=default muted=default surface=#1e1e1e border=default accent=#008080 success=#008000 warning=#808000 danger=#800000
-<blank rows=1>
 › Why is payment-api unavailable?
 <blank rows=2>
 • Inspect resource · done
@@ -9,8 +8,10 @@ palette enabled=true base=default muted=default surface=#1e1e1e border=default a
 <blank rows=1>
 The Deployment has no available replicas.
 <blank rows=1>
+Provenance · Evidence 1 · complete …vailable · Next: ask a new question
+<blank rows=1>
 ─ Worked for 20s ──────────────────────────────────────────────────────
-<blank rows=2>
+<blank rows=1>
 Resource · type to filter
 <blank rows=1>
 › /resource pay

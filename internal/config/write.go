@@ -20,6 +20,7 @@ type writableConfig struct {
 	Context              string                      `yaml:"context,omitempty"`
 	Namespace            string                      `yaml:"namespace,omitempty"`
 	NoColor              bool                        `yaml:"no_color"`
+	ReducedMotion        bool                        `yaml:"reduced_motion"`
 	TerminalStatusTitles bool                        `yaml:"terminal_status_titles"`
 	Runtime              RuntimeConfig               `yaml:"runtime"`
 	Models               writableModelProfiles       `yaml:"models"`
@@ -113,6 +114,7 @@ func SaveModelProfilesWithDataSources(
 	}
 	document := writableConfig{
 		Version: base.Version, Context: base.Context, Namespace: base.Namespace, NoColor: base.NoColor,
+		ReducedMotion:        base.ReducedMotion,
 		TerminalStatusTitles: base.TerminalStatusTitles, Runtime: base.Runtime,
 		Models: writableModelProfiles{Agent: writableProfile(base.Models.Agent)}, Kubernetes: base.Kubernetes,
 		LocalExecution: cloneLocalExecutionConfig(base.LocalExecution),

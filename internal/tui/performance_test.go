@@ -65,10 +65,9 @@ func benchmarkBoundedStreamRender(b *testing.B) {
 				Summary: "The synthetic projection was collected.", EvidenceCount: 2,
 			},
 		})
-		view = applyPerformanceEvent(b, &model, application.UIEvent{
-			Kind: application.UIEventRunCompleted, RunID: performanceRunID,
-			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 4, Text: terminal,
-		})
+		view = applyPerformanceEvent(b, &model, terminalEventFor(
+			performanceRunID, 7, 1, application.UIEventRunCompleted, deltaCount+4, terminal,
+		))
 		view = applyPerformanceEvent(b, &model, application.UIEvent{
 			Kind: application.UIEventTextDelta, RunID: performanceRunID,
 			ScopeGeneration: 7, PolicyGeneration: 1, Sequence: deltaCount + 5, Text: "late",
@@ -101,7 +100,7 @@ func benchmarkRetainedHistory(b *testing.B) {
 		ResumeRequestID: 1,
 		Session: application.UISessionCandidate{
 			ID: performanceSessionID, Title: "Synthetic performance history",
-			UpdatedAtUnixMillis: 1_700_000_000_000, Context: "example-context",
+			LastActivityAtUnixMillis: 1_700_000_000_000, Context: "example-context",
 			Namespace: "example-namespace", PrivacyMode: domain.PrivacyModeStandard,
 		},
 		History: history,

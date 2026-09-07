@@ -57,11 +57,13 @@ func (state UIEvidenceSensitiveFilter) valid() bool {
 // UIEvidenceReference binds one transcript citation to its exact run, historic
 // scope, and UI sequence. It carries no observation content.
 type UIEvidenceReference struct {
-	EvidenceID domain.EvidenceID
-	RunID      domain.AgentRunID
-	Scope      domain.ScopeSnapshot
-	Sequence   int64
-	State      UIEvidenceDetailState
+	EvidenceID     domain.EvidenceID
+	RunID          domain.AgentRunID
+	Scope          domain.ScopeSnapshot
+	Sequence       int64
+	State          UIEvidenceDetailState
+	ClaimSequences []int
+	ClaimKinds     []domain.ClaimKind
 }
 
 // Validate checks complete citation correlation and a fixed display state.
@@ -71,7 +73,27 @@ func (reference UIEvidenceReference) Validate() error {
 		reference.Scope.Generation < 1 || reference.Sequence < 1 || reference.Sequence > 4096 || !reference.State.valid() {
 		return ErrInvalidUIEvent
 	}
+	if len(reference.ClaimSequences) != len(reference.ClaimKinds) {
+		return ErrInvalidUIEvent
+	}
+	previous := 0
+	for index, sequence := range reference.ClaimSequences {
+		if sequence < 1 || sequence > 100 || sequence <= previous || !validUIClaimKind(reference.ClaimKinds[index]) {
+			return ErrInvalidUIEvent
+		}
+		previous = sequence
+	}
 	return nil
+}
+
+func validUIClaimKind(kind domain.ClaimKind) bool {
+	switch kind {
+	case domain.ClaimCurrentObservation, domain.ClaimInference, domain.ClaimRecommendation,
+		domain.ClaimUncertainty, domain.ClaimUnsupportedObservation:
+		return true
+	default:
+		return false
+	}
 }
 
 // UIEvidenceDetailQuery requests only the safe detail for one accepted
@@ -504,12 +526,25 @@ func projectUIEvidenceReferences(diagnosis domain.Diagnosis, sequence int64) []U
 	ids := diagnosis.ReferencedEvidenceIDs()
 	result := make([]UIEvidenceReference, 0, len(ids))
 	for _, id := range ids {
+		claims := make([]int, 0, len(diagnosis.ClaimCoverage))
+		claimKinds := make([]domain.ClaimKind, 0, len(diagnosis.ClaimCoverage))
+		for _, claim := range diagnosis.ClaimCoverage {
+			for _, claimEvidenceID := range claim.EvidenceIDs {
+				if claimEvidenceID == id {
+					claims = append(claims, claim.Sequence)
+					claimKinds = append(claimKinds, claim.Kind)
+					break
+				}
+			}
+		}
 		result = append(result, UIEvidenceReference{
-			EvidenceID: id,
-			RunID:      diagnosis.RunID,
-			Scope:      diagnosis.Scope,
-			Sequence:   sequence,
-			State:      uiEvidenceState(diagnosis.EvidenceDetailsState),
+			EvidenceID:     id,
+			RunID:          diagnosis.RunID,
+			Scope:          diagnosis.Scope,
+			Sequence:       sequence,
+			State:          uiEvidenceState(diagnosis.EvidenceDetailsState),
+			ClaimSequences: claims,
+			ClaimKinds:     claimKinds,
 		})
 	}
 	return result

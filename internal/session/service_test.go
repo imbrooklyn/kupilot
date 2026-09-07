@@ -12,12 +12,13 @@ import (
 func TestResumeByIDRejectsMinimalAndMissingSessionsBeforeHistoryRead(t *testing.T) {
 	now := time.UnixMilli(1).UTC()
 	minimal := domain.Session{
-		ID:          "00000000-0000-7000-8000-000000000001",
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: domain.PrivacyModeMinimal,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "00000000-0000-7000-8000-000000000001",
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    domain.PrivacyModeMinimal,
+		Version:        1,
+		CreatedAt:      now,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	sessions := &fakeSessionStore{session: minimal}
 	messages := &fakeMessageStore{}
@@ -49,13 +50,14 @@ func TestResumeByIDRejectsMinimalAndMissingSessionsBeforeHistoryRead(t *testing.
 func TestResumeByIDReturnsOnlyBoundedCommittedHistory(t *testing.T) {
 	now := time.UnixMilli(2).UTC()
 	standard := domain.Session{
-		ID:          "00000000-0000-7000-8000-000000000011",
-		Title:       "Resumable",
-		Status:      domain.SessionStatusActive,
-		PrivacyMode: domain.PrivacyModeStandard,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "00000000-0000-7000-8000-000000000011",
+		Title:          "Resumable",
+		Status:         domain.SessionStatusActive,
+		PrivacyMode:    domain.PrivacyModeStandard,
+		Version:        1,
+		CreatedAt:      now,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	message := domain.Message{
 		ID:        "00000000-0000-7000-8000-000000000012",

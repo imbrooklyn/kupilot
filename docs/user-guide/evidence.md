@@ -20,11 +20,22 @@ Pressing `Ctrl+E` explicitly enters observation inspection and shows only the
 selected position and a friendly state such as `ready` or `partial` before the
 safe detail is opened.
 
-- Press `Ctrl+E` to select a supporting observation in the transcript.
-- Press `Up` or `Ctrl+P` and `Down` or `Ctrl+N` to move between references.
+- Press `Ctrl+E` to open the newest committed final's claim index. Legacy
+  retained answers without claim metadata open their supporting observations
+  directly.
+- Press `Left` and `Right` to move between declared claims. Press `Up` or
+  `Ctrl+P` and `Down` or `Ctrl+N` to move only between the exact Evidence
+  references cited by the selected claim.
 - Press `Enter` to request the selected safe detail.
-- Press `Esc`, `Enter`, or `Ctrl+E` to close the detail. `Esc` also cancels a
-  pending display request; a later result is discarded.
+- Press `Enter` in an open detail to return to the exact claim selection.
+  Press `Esc` or `Ctrl+E` to leave inspection. `Esc` also cancels a pending
+  display request; a later result is discarded.
+
+A final answer's claim index opens the exact Evidence IDs cited by that claim.
+The Evidence detail includes a bounded “Referenced by claims” list with each
+claim number and fixed claim type, so the same accepted relationship works in
+both directions. It never searches raw payload text, and pending, queued,
+recovered, failed, or streaming content cannot enter the index.
 
 The root screen always retains its single composer. Observation selection and
 the detail overlay are non-editable keyboard surfaces.
@@ -95,3 +106,16 @@ This proves reference integrity for the declared manifest. It does not prove
 that the prose matches the manifest or that model reasoning is correct. The
 offline synthetic quality scores exercise this validator only; no live model
 quality evaluation is implied.
+
+Each committed final also has a compact textual provenance strip: Evidence
+count, observed-at range, frozen scope/policy generations, complete/partial/
+truncated/unavailable state, inference/uncertainty and conflict/supersession
+presence, checked/not-checked source counts, authoritative terminal reason, and
+fixed safe next action. It displays no raw Evidence payload.
+
+Source coverage distinguishes checked-and-absent, not checked, unavailable,
+denied, partial, truncated, timed out, stale, and conflicting. An absent item in
+a bounded list is not global nonexistence unless runtime proves that exact query
+complete. Freshness is unknown unless a code-owned source policy supplies an
+exact ceiling. Conflict and supersession require typed subject/field/revision
+identity; model prose cannot create them.

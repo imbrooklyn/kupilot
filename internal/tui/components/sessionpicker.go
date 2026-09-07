@@ -4,12 +4,18 @@ import "strings"
 
 // SessionCandidate contains safe resume metadata without a Message preview.
 type SessionCandidate struct {
-	ID        string
-	Title     string
-	UpdatedAt string
-	Context   string
-	Namespace string
-	Privacy   string
+	ID           string
+	Title        string
+	LastActivity string
+	LastUTC      string
+	Context      string
+	Namespace    string
+	Privacy      string
+	State        string
+	Current      bool
+	Resumable    bool
+	Protected    bool
+	Deletable    bool
 }
 
 // SessionPicker renders eligible Session candidates and owns no editor.
@@ -25,14 +31,23 @@ func NewSessionPicker(styles PickerStyles) SessionPicker {
 			title = "Untitled Session"
 		}
 		parts := []string{title}
-		if candidate.UpdatedAt != "" {
-			parts = append(parts, candidate.UpdatedAt)
+		if candidate.ID != "" {
+			parts = append(parts, candidate.ID)
+		}
+		if candidate.LastActivity != "" {
+			parts = append(parts, "Last active: "+candidate.LastActivity)
+		}
+		if candidate.LastUTC != "" {
+			parts = append(parts, "UTC: "+candidate.LastUTC)
 		}
 		if candidate.Context != "" && candidate.Namespace != "" {
 			parts = append(parts, candidate.Context+" / "+candidate.Namespace)
 		}
 		if privacy := sessionPrivacyLabel(candidate.Privacy); privacy != "" {
 			parts = append(parts, privacy)
+		}
+		if candidate.State != "" {
+			parts = append(parts, candidate.State)
 		}
 		return strings.Join(parts, " · ")
 	}, styles)}

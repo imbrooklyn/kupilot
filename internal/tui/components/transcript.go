@@ -3,6 +3,7 @@ package components
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,6 +21,17 @@ const (
 	EntryNotice
 )
 
+// TranscriptLandmark is a fixed semantic navigation class. It carries no
+// content, authority, or persistence semantics.
+type TranscriptLandmark uint8
+
+const (
+	TranscriptLandmarkUser TranscriptLandmark = 1 << iota
+	TranscriptLandmarkAssistantFinal
+	TranscriptLandmarkFailureUnknown
+	TranscriptLandmarkApproval
+)
+
 // Entry is one bounded, non-editable transcript item.
 type Entry struct {
 	Kind               EntryKind
@@ -28,6 +40,9 @@ type Entry struct {
 	CommittedFinal     bool
 	ToolSteps          []ToolStep
 	EvidenceReferences []EvidenceReference
+	Provenance         AnswerProvenance
+	TerminalSummary    string
+	Landmark           TranscriptLandmark
 	WorkedFor          time.Duration
 	ShowWorkedFor      bool
 	markdownCache      string
@@ -38,9 +53,22 @@ type Entry struct {
 // EvidenceReference is a display-only transcript citation. Index maps back to
 // the TUI-owned typed reference without carrying observation content here.
 type EvidenceReference struct {
-	Index int
-	ID    string
-	State string
+	Index      int
+	ID         string
+	State      string
+	Claims     []int
+	ClaimKinds []string
+}
+
+// AnswerProvenance is already content-free display metadata from Application.
+type AnswerProvenance struct {
+	Visible        bool
+	EvidenceCount  int
+	ObservedRange  string
+	Generation     string
+	Coverage       string
+	Reasoning      string
+	SourceCoverage string
 }
 
 // TranscriptStyles defines only semantic surfaces and prose styles.
@@ -59,24 +87,28 @@ type TranscriptStyles struct {
 
 // Transcript is a continuous scrollable conversation projection.
 type Transcript struct {
-	entries     []Entry
-	activeAgent int
-	committed   int
-	prepared    int
-	viewport    viewport.Model
-	width       int
-	height      int
-	maxHeight   int
-	styles      TranscriptStyles
-	toolSteps   ToolSteps
-	selecting   bool
-	selected    int
-	searching   bool
-	search      []SearchMatch
-	searchIndex int
-	searchNow   func() time.Time
-	reviewing   bool
-	visible     bool
+	entries       []Entry
+	activeAgent   int
+	committed     int
+	prepared      int
+	viewport      viewport.Model
+	width         int
+	height        int
+	maxHeight     int
+	styles        TranscriptStyles
+	toolSteps     ToolSteps
+	selecting     bool
+	selected      int
+	selectedEntry int
+	selectedClaim int
+	searching     bool
+	search        []SearchMatch
+	searchIndex   int
+	searchNow     func() time.Time
+	reviewing     bool
+	landmarkEntry int
+	landmarkKind  TranscriptLandmark
+	visible       bool
 }
 
 const (
@@ -108,14 +140,16 @@ func NewTranscript(styles TranscriptStyles, toolStyles ToolStepStyles) Transcrip
 	view.FillHeight = true
 	view.MouseWheelEnabled = false
 	return Transcript{
-		activeAgent: -1,
-		searchNow:   time.Now,
-		viewport:    view,
-		width:       80,
-		height:      12,
-		maxHeight:   12,
-		styles:      styles,
-		toolSteps:   NewToolSteps(toolStyles),
+		activeAgent:   -1,
+		landmarkEntry: -1,
+		selectedEntry: -1,
+		searchNow:     time.Now,
+		viewport:      view,
+		width:         80,
+		height:        12,
+		maxHeight:     12,
+		styles:        styles,
+		toolSteps:     NewToolSteps(toolStyles),
 	}
 }
 
@@ -142,7 +176,7 @@ func (transcript *Transcript) SetSize(width, height int) {
 
 // AppendUser adds a historic user surface; it never adds an editor.
 func (transcript *Transcript) AppendUser(text string) {
-	transcript.entries = append(transcript.entries, Entry{Kind: EntryUser, Text: text})
+	transcript.entries = append(transcript.entries, Entry{Kind: EntryUser, Text: text, Landmark: TranscriptLandmarkUser})
 	transcript.activeAgent = -1
 	transcript.reviewing = false
 	transcript.refresh(false)
@@ -161,7 +195,7 @@ func (transcript *Transcript) InsertUserBeforeActiveAgent(text string) {
 	index := transcript.activeAgent
 	transcript.entries = append(transcript.entries, Entry{})
 	copy(transcript.entries[index+1:], transcript.entries[index:len(transcript.entries)-1])
-	transcript.entries[index] = Entry{Kind: EntryUser, Text: text}
+	transcript.entries[index] = Entry{Kind: EntryUser, Text: text, Landmark: TranscriptLandmarkUser}
 	transcript.activeAgent++
 	transcript.reviewing = false
 	transcript.refresh(false)
@@ -171,6 +205,17 @@ func (transcript *Transcript) InsertUserBeforeActiveAgent(text string) {
 // AppendNotice adds muted typed status or failure text.
 func (transcript *Transcript) AppendNotice(text string) {
 	transcript.entries = append(transcript.entries, Entry{Kind: EntryNotice, Text: text})
+	transcript.refresh(true)
+}
+
+// AppendLandmarkNotice records a typed navigable status without parsing its
+// prose. Only fixed delivery call sites select the landmark class.
+func (transcript *Transcript) AppendLandmarkNotice(text string, landmark TranscriptLandmark) {
+	if landmark != TranscriptLandmarkFailureUnknown && landmark != TranscriptLandmarkApproval {
+		transcript.AppendNotice(text)
+		return
+	}
+	transcript.entries = append(transcript.entries, Entry{Kind: EntryNotice, Text: text, Landmark: landmark})
 	transcript.refresh(true)
 }
 
@@ -260,6 +305,77 @@ func (transcript *Transcript) SetAgentEvidence(references []EvidenceReference) {
 	transcript.refresh(true)
 }
 
+// SetAgentProvenance adds the low-chrome content-free provenance strip to the
+// current terminal Agent entry.
+func (transcript *Transcript) SetAgentProvenance(provenance AnswerProvenance) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		transcript.entries[transcript.activeAgent].Streaming || !provenance.Visible {
+		return
+	}
+	transcript.entries[transcript.activeAgent].Provenance = provenance
+	transcript.refresh(true)
+}
+
+// SetAgentTerminalSummary records Application-selected reason and next actions.
+func (transcript *Transcript) SetAgentTerminalSummary(summary string) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		transcript.entries[transcript.activeAgent].Streaming || summary == "" {
+		return
+	}
+	transcript.entries[transcript.activeAgent].TerminalSummary = summary
+	transcript.refresh(true)
+}
+
+// SetAgentLandmark assigns an Application-projected semantic class to the
+// current terminal Agent entry. It never derives a class from answer prose.
+func (transcript *Transcript) SetAgentLandmark(landmark TranscriptLandmark) {
+	if transcript.activeAgent < 0 || transcript.activeAgent >= len(transcript.entries) ||
+		transcript.entries[transcript.activeAgent].Streaming ||
+		(landmark != TranscriptLandmarkAssistantFinal && landmark != TranscriptLandmarkFailureUnknown) {
+		return
+	}
+	transcript.entries[transcript.activeAgent].Landmark |= landmark
+	transcript.refresh(true)
+}
+
+// JumpLandmark moves to the previous or next entry in one fixed semantic
+// class. Selection is rendered with a textual marker, never color alone.
+func (transcript *Transcript) JumpLandmark(landmark TranscriptLandmark, delta int) bool {
+	if len(transcript.entries) == 0 || delta == 0 ||
+		(landmark != TranscriptLandmarkUser && landmark != TranscriptLandmarkAssistantFinal &&
+			landmark != TranscriptLandmarkFailureUnknown && landmark != TranscriptLandmarkApproval) {
+		return false
+	}
+	indexes := make([]int, 0, len(transcript.entries))
+	for index, entry := range transcript.entries {
+		if entry.Landmark&landmark != 0 {
+			indexes = append(indexes, index)
+		}
+	}
+	if len(indexes) == 0 {
+		return false
+	}
+	position := -1
+	for index, value := range indexes {
+		if value == transcript.landmarkEntry && transcript.landmarkKind == landmark {
+			position = index
+			break
+		}
+	}
+	if position < 0 {
+		if delta < 0 {
+			position = len(indexes)
+		}
+	}
+	position = (position + delta%len(indexes) + len(indexes)) % len(indexes)
+	transcript.landmarkEntry = indexes[position]
+	transcript.landmarkKind = landmark
+	transcript.reviewing = true
+	transcript.refresh(false)
+	transcript.revealEntry(transcript.landmarkEntry)
+	return true
+}
+
 // BeginEvidenceSelection selects the first citation in the newest Agent item.
 func (transcript *Transcript) BeginEvidenceSelection() bool {
 	for entryIndex := len(transcript.entries) - 1; entryIndex >= 0; entryIndex-- {
@@ -267,7 +383,15 @@ func (transcript *Transcript) BeginEvidenceSelection() bool {
 			continue
 		}
 		transcript.selecting = true
-		transcript.selected = transcript.entries[entryIndex].EvidenceReferences[0].Index
+		transcript.selectedEntry = entryIndex
+		claims := claimSequences(transcript.entries[entryIndex].EvidenceReferences)
+		if len(claims) > 0 {
+			transcript.selectedClaim = claims[0]
+			transcript.selected = evidenceIndexesForClaim(transcript.entries[entryIndex].EvidenceReferences, claims[0])[0]
+		} else {
+			transcript.selectedClaim = 0
+			transcript.selected = transcript.entries[entryIndex].EvidenceReferences[0].Index
+		}
 		transcript.reviewing = true
 		transcript.refresh(false)
 		transcript.viewport.GotoBottom()
@@ -280,6 +404,8 @@ func (transcript *Transcript) BeginEvidenceSelection() bool {
 func (transcript *Transcript) EndEvidenceSelection() {
 	transcript.selecting = false
 	transcript.selected = 0
+	transcript.selectedEntry = -1
+	transcript.selectedClaim = 0
 	transcript.reviewing = false
 	transcript.refresh(true)
 }
@@ -287,9 +413,10 @@ func (transcript *Transcript) EndEvidenceSelection() {
 // EvidenceSelecting reports whether citation navigation owns arrow keys.
 func (transcript Transcript) EvidenceSelecting() bool { return transcript.selecting }
 
-// MoveEvidence moves through all visible citations with deterministic wrap.
+// MoveEvidence moves through the exact citations for the selected claim, or
+// through the selected final's citations when legacy metadata has no claims.
 func (transcript *Transcript) MoveEvidence(delta int) {
-	indexes := transcript.evidenceIndexes()
+	indexes := transcript.selectedEvidenceIndexes()
 	if !transcript.selecting || len(indexes) == 0 {
 		return
 	}
@@ -305,12 +432,38 @@ func (transcript *Transcript) MoveEvidence(delta int) {
 	transcript.refresh(false)
 }
 
+// MoveEvidenceClaim moves through the bounded claim index for one committed
+// final and selects the first exact Evidence reference for the new claim.
+func (transcript *Transcript) MoveEvidenceClaim(delta int) {
+	if !transcript.selecting || transcript.selectedEntry < 0 || transcript.selectedEntry >= len(transcript.entries) || delta == 0 {
+		return
+	}
+	claims := claimSequences(transcript.entries[transcript.selectedEntry].EvidenceReferences)
+	if len(claims) == 0 {
+		return
+	}
+	position := 0
+	for index, sequence := range claims {
+		if sequence == transcript.selectedClaim {
+			position = index
+			break
+		}
+	}
+	position = (position + delta%len(claims) + len(claims)) % len(claims)
+	transcript.selectedClaim = claims[position]
+	indexes := evidenceIndexesForClaim(transcript.entries[transcript.selectedEntry].EvidenceReferences, transcript.selectedClaim)
+	if len(indexes) > 0 {
+		transcript.selected = indexes[0]
+	}
+	transcript.refresh(false)
+}
+
 // SelectedEvidence returns the TUI-owned typed-reference index.
 func (transcript Transcript) SelectedEvidence() (int, bool) {
 	if !transcript.selecting {
 		return 0, false
 	}
-	for _, index := range transcript.evidenceIndexes() {
+	for _, index := range transcript.selectedEvidenceIndexes() {
 		if index == transcript.selected {
 			return index, true
 		}
@@ -335,6 +488,10 @@ func (transcript Transcript) Entries() []Entry {
 	for index := range entries {
 		entries[index].ToolSteps = append([]ToolStep(nil), entries[index].ToolSteps...)
 		entries[index].EvidenceReferences = append([]EvidenceReference(nil), entries[index].EvidenceReferences...)
+		for referenceIndex := range entries[index].EvidenceReferences {
+			entries[index].EvidenceReferences[referenceIndex].Claims = append([]int(nil), entries[index].EvidenceReferences[referenceIndex].Claims...)
+			entries[index].EvidenceReferences[referenceIndex].ClaimKinds = append([]string(nil), entries[index].EvidenceReferences[referenceIndex].ClaimKinds...)
+		}
 		entries[index].markdownCache = ""
 		entries[index].markdownCacheWidth = 0
 		entries[index].markdownCacheValid = false
@@ -356,6 +513,17 @@ func (transcript Transcript) LatestCommittedAssistantFinal() (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// HasSearchableContent reports whether the bounded local transcript contains
+// a committed ordinary user message or committed assistant final.
+func (transcript Transcript) HasSearchableContent() bool {
+	for _, entry := range transcript.entries {
+		if entry.Kind == EntryUser || entry.Kind == EntryAgent && entry.CommittedFinal && !entry.Streaming {
+			return true
+		}
+	}
+	return false
 }
 
 // BeginSearch scans only committed user messages and successful assistant
@@ -429,6 +597,8 @@ func (transcript *Transcript) EndSearch() {
 	transcript.search = nil
 	transcript.searchIndex = 0
 	transcript.reviewing = false
+	transcript.landmarkEntry = -1
+	transcript.landmarkKind = 0
 	transcript.refresh(true)
 }
 
@@ -559,6 +729,8 @@ func (transcript *Transcript) PageDown() {
 	transcript.viewport.PageDown()
 	if transcript.reviewing && transcript.viewport.AtBottom() && !transcript.selecting {
 		transcript.reviewing = false
+		transcript.landmarkEntry = -1
+		transcript.landmarkKind = 0
 		transcript.refresh(true)
 	}
 }
@@ -574,6 +746,8 @@ func (transcript *Transcript) ScrollDown(rows int) {
 	transcript.viewport.ScrollDown(max(1, rows))
 	if transcript.reviewing && transcript.viewport.AtBottom() && !transcript.selecting {
 		transcript.reviewing = false
+		transcript.landmarkEntry = -1
+		transcript.landmarkKind = 0
 		transcript.refresh(true)
 	}
 }
@@ -613,12 +787,12 @@ func (transcript *Transcript) refresh(follow bool) {
 }
 
 func (transcript *Transcript) renderContent() string {
-	return transcript.renderRange(0, len(transcript.entries), transcript.selecting)
+	return transcript.renderRange(0, len(transcript.entries), transcript.selecting || transcript.landmarkEntry >= 0)
 }
 
 func (transcript *Transcript) renderVisibleContent() string {
 	if transcript.reviewing || transcript.selecting || transcript.searching {
-		return transcript.renderRange(0, len(transcript.entries), transcript.selecting || transcript.searching)
+		return transcript.renderRange(0, len(transcript.entries), transcript.selecting || transcript.searching || transcript.landmarkEntry >= 0)
 	}
 	return transcript.renderRange(max(transcript.committed, transcript.prepared), len(transcript.entries), false)
 }
@@ -648,7 +822,7 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 			content := transcript.renderUserEntry(entryText)
 			rendered = transcript.styles.UserSurface.Width(transcript.width).Render(content)
 		case EntryAgent:
-			blocks := make([]string, 0, 5)
+			blocks := make([]string, 0, 7)
 			stepRenderer := transcript.toolSteps
 			stepRenderer.steps = append([]ToolStep(nil), entry.ToolSteps...)
 			steps := stepRenderer.View()
@@ -668,8 +842,11 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 					blocks = append(blocks, transcript.renderMarkdown(&selected))
 				}
 			}
-			if references := transcript.renderEvidenceReferences(entry.EvidenceReferences, includeSelection); references != "" {
+			if references := transcript.renderEvidenceReferences(entryIndex, entry.EvidenceReferences, includeSelection); references != "" {
 				blocks = append(blocks, references)
+			}
+			if metadata := transcript.renderAnswerMetadata(entry.Provenance, entry.TerminalSummary); metadata != "" {
+				blocks = append(blocks, metadata)
 			}
 			if entry.ShowWorkedFor && !entry.Streaming {
 				blocks = append(blocks, renderWorkedFor(entry.WorkedFor, transcript.width, transcript.styles.Timing))
@@ -680,6 +857,9 @@ func (transcript *Transcript) renderRange(start, end int, includeSelection bool)
 		}
 		if searchLabel != "" && rendered != "" {
 			rendered = searchLabel + "\n" + rendered
+		}
+		if includeSelection && transcript.landmarkEntry == entryIndex && rendered != "" {
+			rendered = transcript.styles.Selected.Render("Jump target · "+landmarkLabel(transcript.landmarkKind)) + "\n" + rendered
 		}
 		if rendered != "" {
 			parts = append(parts, rendered)
@@ -700,6 +880,33 @@ func (transcript *Transcript) revealSearchMatch() {
 		line++
 	}
 	transcript.viewport.SetYOffset(max(0, line-1))
+}
+
+func (transcript *Transcript) revealEntry(entryIndex int) {
+	if entryIndex < 0 || entryIndex >= len(transcript.entries) {
+		return
+	}
+	prefix := transcript.renderRange(0, entryIndex, true)
+	line := lipgloss.Height(prefix)
+	if entryIndex > 0 && prefix != "" {
+		line++
+	}
+	transcript.viewport.SetYOffset(max(0, line-1))
+}
+
+func landmarkLabel(landmark TranscriptLandmark) string {
+	switch landmark {
+	case TranscriptLandmarkUser:
+		return "user message"
+	case TranscriptLandmarkAssistantFinal:
+		return "assistant final"
+	case TranscriptLandmarkFailureUnknown:
+		return "failure or unknown outcome"
+	case TranscriptLandmarkApproval:
+		return "approval"
+	default:
+		return "transcript item"
+	}
 }
 
 func (transcript Transcript) renderUserEntry(text string) string {
@@ -783,21 +990,73 @@ func renderWorkedFor(duration time.Duration, width int, style lipgloss.Style) st
 	return style.Render(label)
 }
 
-func (transcript Transcript) renderEvidenceReferences(references []EvidenceReference, includeSelection bool) string {
-	if len(references) == 0 || !includeSelection || !transcript.selecting {
+func (transcript Transcript) renderEvidenceReferences(entryIndex int, references []EvidenceReference, includeSelection bool) string {
+	if len(references) == 0 || !includeSelection || !transcript.selecting || entryIndex != transcript.selectedEntry {
 		return ""
 	}
+	indexes := transcript.selectedEvidenceIndexes()
 	for position, reference := range references {
 		if reference.Index == transcript.selected {
+			evidencePosition := 0
+			for index, value := range indexes {
+				if value == reference.Index {
+					evidencePosition = index
+					break
+				}
+			}
+			claims := claimSequences(references)
+			if transcript.selectedClaim > 0 && len(claims) > 0 {
+				claimPosition := 0
+				for index, sequence := range claims {
+					if sequence == transcript.selectedClaim {
+						claimPosition = index
+						break
+					}
+				}
+				return transcript.styles.Selected.Render(fmt.Sprintf(
+					"Claim index · claim %d/%d (#%d, %s) · Evidence %d/%d · %s\n←/→ claim · ↑/↓ Evidence · Enter detail",
+					claimPosition+1, len(claims), transcript.selectedClaim,
+					claimKindForSequence(references, transcript.selectedClaim),
+					evidencePosition+1, len(indexes), observationReferenceStatus(reference.State),
+				))
+			}
 			return transcript.styles.Selected.Render(fmt.Sprintf(
-				"› Observation %d/%d · %s",
-				position+1,
-				len(references),
-				observationReferenceStatus(reference.State),
+				"› Observation %d/%d · %s · ↑/↓ select · Enter detail",
+				position+1, len(references), observationReferenceStatus(reference.State),
 			))
 		}
 	}
 	return ""
+}
+
+func (transcript Transcript) renderAnswerMetadata(provenance AnswerProvenance, terminalSummary string) string {
+	metadata := make([]string, 0, 2)
+	if provenance.Visible {
+		metadata = append(metadata, transcript.provenanceText(provenance))
+	}
+	if terminalSummary != "" {
+		metadata = append(metadata, terminalSummary)
+	}
+	if len(metadata) == 0 {
+		return ""
+	}
+	return transcript.styles.NoticeText.Render(middleElideColumns(strings.Join(metadata, " · "), transcript.width))
+}
+
+func (transcript Transcript) provenanceText(provenance AnswerProvenance) string {
+	parts := []string{
+		fmt.Sprintf("Evidence %d", provenance.EvidenceCount),
+		provenance.Coverage,
+		provenance.SourceCoverage,
+		provenance.Generation,
+	}
+	if provenance.ObservedRange != "" {
+		parts = append(parts, provenance.ObservedRange)
+	}
+	if provenance.Reasoning != "" {
+		parts = append(parts, provenance.Reasoning)
+	}
+	return "Provenance · " + strings.Join(parts, " · ")
 }
 
 func observationReferenceStatus(state string) string {
@@ -813,12 +1072,57 @@ func observationReferenceStatus(state string) string {
 	}
 }
 
-func (transcript Transcript) evidenceIndexes() []int {
-	var result []int
-	for _, entry := range transcript.entries {
-		for _, reference := range entry.EvidenceReferences {
-			result = append(result, reference.Index)
+func (transcript Transcript) selectedEvidenceIndexes() []int {
+	if transcript.selectedEntry < 0 || transcript.selectedEntry >= len(transcript.entries) {
+		return nil
+	}
+	references := transcript.entries[transcript.selectedEntry].EvidenceReferences
+	if transcript.selectedClaim > 0 {
+		return evidenceIndexesForClaim(references, transcript.selectedClaim)
+	}
+	result := make([]int, 0, len(references))
+	for _, reference := range references {
+		result = append(result, reference.Index)
+	}
+	return result
+}
+
+func claimSequences(references []EvidenceReference) []int {
+	seen := make(map[int]struct{}, len(references))
+	result := make([]int, 0, len(references))
+	for _, reference := range references {
+		for _, sequence := range reference.Claims {
+			if _, exists := seen[sequence]; exists {
+				continue
+			}
+			seen[sequence] = struct{}{}
+			result = append(result, sequence)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
+func evidenceIndexesForClaim(references []EvidenceReference, sequence int) []int {
+	result := make([]int, 0, len(references))
+	for _, reference := range references {
+		for _, claim := range reference.Claims {
+			if claim == sequence {
+				result = append(result, reference.Index)
+				break
+			}
 		}
 	}
 	return result
+}
+
+func claimKindForSequence(references []EvidenceReference, sequence int) string {
+	for _, reference := range references {
+		for index, claim := range reference.Claims {
+			if claim == sequence && index < len(reference.ClaimKinds) && reference.ClaimKinds[index] != "" {
+				return strings.ReplaceAll(reference.ClaimKinds[index], "_", " ")
+			}
+		}
+	}
+	return "declared claim"
 }

@@ -9,7 +9,10 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/application"
 )
 
-const workingFrameInterval = 100 * time.Millisecond
+const (
+	workingFrameInterval        = 100 * time.Millisecond
+	reducedMotionStatusInterval = time.Second
+)
 
 // ApplicationConsumer is the minimal delivery-owned command/query surface.
 // It contains no persistence, Kubernetes, model, Tool, or framework type.
@@ -89,6 +92,7 @@ func applicationFailure(message tea.Msg, safeMessage string) ApplicationFailureM
 		result.Evidence = request.Query.Reference
 	case ApplicationCommandMsg:
 		result.RequestID = request.Command.RequestID
+		result.SessionID = request.Command.SessionID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
 		result.PolicyGeneration = request.Command.ExpectedPolicyGeneration
 		result.RunID = request.Command.RunID
@@ -153,8 +157,12 @@ func approvalExpiry(request application.UIApprovalRequest, now time.Time) tea.Cm
 	})
 }
 
-func workingTick(run RunView) tea.Cmd {
-	return tea.Tick(workingFrameInterval, func(at time.Time) tea.Msg {
+func workingTick(run RunView, reducedMotion bool) tea.Cmd {
+	interval := workingFrameInterval
+	if reducedMotion {
+		interval = reducedMotionStatusInterval
+	}
+	return tea.Tick(interval, func(at time.Time) tea.Msg {
 		return WorkingTickMsg{
 			RunID: run.RunID, ScopeGeneration: run.ScopeGeneration,
 			Sequence: run.LastSequence, Terminal: run.Terminal,

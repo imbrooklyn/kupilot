@@ -2,7 +2,7 @@
 
 - Status: Accepted `v0.5` contract with named-model, read, observability,
   remote-diagnostic, and local-execution policy configuration implemented
-- Date: 2026-09-05
+- Date: 2026-09-07
 
 The current parser writes strict schema version 2 and reads schema version 1
 through a deterministic in-memory compatibility migration. Loading never
@@ -160,6 +160,14 @@ title changes. Its fixed title allowlist and teardown behavior cannot be
 expanded by configuration. There is no notification command, clipboard
 command, continuation, automatic-retry, plan Tool, or compaction-profile
 setting.
+
+Session listing/deletion, Last active, local doctor, terminal capability
+projection, reverse search, semantic navigation, undo/redo, clarification,
+preflight, safe-read reuse, completeness, and recovery add no configuration
+fields. Their bounds and authority are compile-time fixed. Terminal
+notifications remain disabled; there is no notification command, external
+clipboard helper, deletion bypass, retry, continuation, cache TTL, dynamic
+command, or per-run budget selector.
 
 ## Implemented version 2 fields
 

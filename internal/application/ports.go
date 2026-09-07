@@ -17,6 +17,7 @@ var ErrIdentifierUnavailable = errors.New("an application identifier is unavaila
 // SessionPersistence owns Session creation plus the current lifecycle controls.
 type SessionPersistence interface {
 	CreateWithAudit(context.Context, domain.Session, domain.AuditEvent) error
+	AdvanceLastActivity(context.Context, domain.SessionID, time.Time) error
 	SessionLifecyclePersistence
 }
 

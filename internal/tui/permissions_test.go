@@ -153,11 +153,15 @@ func TestPermissionGenerationChangeTerminatesOldRunAndRejectsLateEvents(t *testi
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: string(domain.PermissionProfileReadOnly)})
 	model, command := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	change := applicationCommandFromCmd(t, command)
-	model, _ = updateModel(t, model, CommandResultMsg{Result: permissionOutcome(
-		application.UICommandChangePermission, change.RequestID, domain.PermissionProfileReadOnly, 2, false,
-	)})
-	if model.run.Active || !model.run.Terminal || model.run.Status != "cancelled" ||
-		model.permission.PolicyGeneration != 2 {
+	outcome := permissionOutcome(application.UICommandChangePermission, change.RequestID, domain.PermissionProfileReadOnly, 2, false)
+	interrupted, err := application.ProjectTerminalOutcome(domain.RunTerminalStaleGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome.Permissions.InterruptedRun = &interrupted
+	model, _ = updateModel(t, model, CommandResultMsg{Result: outcome})
+	if model.run.Active || !model.run.Terminal || model.run.Status != "failed" ||
+		model.run.TerminalReason != domain.RunTerminalStaleGeneration || model.permission.PolicyGeneration != 2 {
 		t.Fatalf("permission change state = run %#v permission %#v", model.run, model.permission)
 	}
 	before := len(model.transcript.Entries())

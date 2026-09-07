@@ -135,6 +135,9 @@ func (model *steeringModel) prepare(
 		if err := claimed.bridge.CommitSteer(ctx, claimed.claim); err != nil {
 			return nil, ctx, claimed, failedRuntime(domain.SafeErrorClassPersistenceUnavailable, safeEventRejected, err)
 		}
+		if err := model.state.recordCommittedSteer(claimed.claim); err != nil {
+			return nil, ctx, claimed, err
+		}
 	}
 	return prepared, withPreparedModelCall(ctx, prepared), claimed, nil
 }

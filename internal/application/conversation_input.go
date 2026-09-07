@@ -791,13 +791,15 @@ func (coordinator *Coordinator) ResolveSteer(
 func (coordinator *Coordinator) finishConversationInputRunLocked(
 	state *activeRun,
 	clean bool,
+	allowDrain bool,
 ) (*UIEvent, *conversationInput) {
 	if coordinator == nil || state == nil {
 		return nil, nil
 	}
 	queue := &coordinator.conversationInputs
 	queue.initialize()
-	safeToDrain := clean
+	safeToDrain := clean && allowDrain
+	preserveQueued := clean && !allowDrain
 	if safeToDrain {
 		for _, item := range queue.items {
 			if item == nil || item.sessionID != state.run.SessionID || item.runID != state.run.ID {
@@ -815,7 +817,7 @@ func (coordinator *Coordinator) finishConversationInputRunLocked(
 		if item == nil || item.sessionID != state.run.SessionID {
 			continue
 		}
-		if !safeToDrain && item.state == ConversationInputQueued {
+		if !safeToDrain && !preserveQueued && item.state == ConversationInputQueued {
 			// A failed link stops the entire successor chain. Older queued
 			// items must not become eligible again after some unrelated later
 			// success in the same process.
@@ -841,7 +843,7 @@ func (coordinator *Coordinator) finishConversationInputRunLocked(
 			item.revision = queue.nextRevision()
 			changed = true
 		case ConversationInputQueued:
-			if !safeToDrain {
+			if !safeToDrain && !preserveQueued {
 				item.state = ConversationInputRecovered
 				item.revision = queue.nextRevision()
 				changed = true
@@ -914,6 +916,8 @@ func (coordinator *Coordinator) startQueuedSuccessor(ctx context.Context, item *
 	}
 	_, err := coordinator.startRun(ctx, StartRunCommand{
 		SessionID: item.sessionID, Question: item.text, Resource: cloneResource(item.resource),
+	}, &runStartExpectation{
+		scopeGeneration: item.scope.Generation, policyGeneration: item.policy, resource: cloneResource(item.resource),
 	}, item.id, nil)
 	if err != nil {
 		coordinator.recoverRemovedSuccessor(ctx, item, index)

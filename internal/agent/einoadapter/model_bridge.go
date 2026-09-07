@@ -184,7 +184,13 @@ func (state *runState) executePreparedModelCall(
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
 	requestID, reservation := prepared.requestID, prepared.reservation
-	if err := state.publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID}); err != nil {
+	preflight, err := state.projectModelCallPreflight(agent.ModelCallAgent, safeMessages, reservation)
+	if err != nil {
+		return nil, err
+	}
+	if err := state.publish(ctx, agent.RunEvent{
+		Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID, ModelPreflight: &preflight,
+	}); err != nil {
 		return nil, err
 	}
 	if err := state.checkScope(ctx); err != nil {
@@ -222,6 +228,20 @@ func (state *runState) executePreparedModelCall(
 		return nil, runtimeFailureFromModel(modelError)
 	}
 	return state.acceptModelMessage(ctx, message)
+}
+
+func (state *runState) projectModelCallPreflight(kind agent.ModelCallKind, messages []*schema.Message, reservation agent.CallReservation) (agent.ModelCallPreflight, error) {
+	manifest, err := state.runInputManifest()
+	if err != nil {
+		return agent.ModelCallPreflight{}, err
+	}
+	return agent.ModelCallPreflight{
+		Kind: kind, MessageCount: len(messages), MessageBytes: minimumModelPayloadBytes(messages),
+		CurrentInputCount: manifest.Count, CurrentInputDigest: manifest.Digest,
+		ReservedRequestBytes: reservation.RequestBytes, ReservedOutputBytes: reservation.OutputBytes,
+		ReservedStreamBytes: reservation.StreamBytes,
+		ReservedNanoseconds: reservation.Timeout.Nanoseconds(), ReservedCostUnits: reservation.CostUnits,
+	}, nil
 }
 
 func stripRunnerMessageMetadata(messages []*schema.Message) []*schema.Message {

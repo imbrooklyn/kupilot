@@ -47,6 +47,39 @@ func TestCommittedSteerStaysBeforeTheActiveAgentWithoutDetachingIt(t *testing.T)
 	}
 }
 
+func TestSemanticLandmarkNavigationUsesOnlyCommittedTypedEntries(t *testing.T) {
+	t.Parallel()
+
+	transcript := NewTranscript(TranscriptStyles{}, ToolStepStyles{})
+	transcript.AppendUser("First committed question.")
+	transcript.StartAgent()
+	transcript.AppendAgent("Uncommitted provisional text.")
+	transcript.InsertUserBeforeActiveAgent("Committed steer.")
+	transcript.FinishCommittedAgent("Committed final answer.")
+	transcript.SetAgentLandmark(TranscriptLandmarkAssistantFinal)
+	transcript.AppendLandmarkNotice("Approval required.", TranscriptLandmarkApproval)
+	transcript.AppendLandmarkNotice("Outcome unknown.", TranscriptLandmarkFailureUnknown)
+
+	tests := []struct {
+		landmark  TranscriptLandmark
+		wantIndex int
+	}{
+		{TranscriptLandmarkUser, 1},
+		{TranscriptLandmarkAssistantFinal, 2},
+		{TranscriptLandmarkApproval, 3},
+		{TranscriptLandmarkFailureUnknown, 4},
+	}
+	for _, test := range tests {
+		if !transcript.JumpLandmark(test.landmark, -1) || transcript.landmarkEntry != test.wantIndex ||
+			transcript.landmarkKind != test.landmark || !transcript.reviewing {
+			t.Fatalf("landmark %d selected entry %d/kind %d", test.landmark, transcript.landmarkEntry, transcript.landmarkKind)
+		}
+	}
+	if transcript.JumpLandmark(0, 1) {
+		t.Fatal("unknown landmark was accepted")
+	}
+}
+
 func TestTranscriptMatchesUserSurfaceAndFinalRunTimeline(t *testing.T) {
 	t.Parallel()
 

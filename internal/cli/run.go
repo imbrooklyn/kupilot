@@ -24,6 +24,10 @@ const rootHelp = `Kupilot is a local Kubernetes diagnostic Agent.
 Usage:
   kupilot
   kupilot resume [SESSION_ID | --last]
+  kupilot sessions list [--limit N] [--cursor CURSOR] [--json]
+  kupilot sessions delete SESSION_ID
+  kupilot sessions delete --before CUTOFF [--limit N] [--dry-run | --confirm DIGEST]
+  kupilot doctor [--json]
   kupilot cache clear
   kupilot version
   kupilot help [COMMAND]
@@ -34,6 +38,8 @@ the content-free local permission, action, Reviewer, budget, and Session state.
 
 Commands:
   resume   Resume by picker, exact Session ID, or --last.
+  sessions List or transactionally delete bounded local Sessions.
+  doctor   Show local redacted configuration, storage, and capability health.
   cache    Manage the local Kupilot cache.
   version  Print non-sensitive build information.
   help     Show help for a command.
@@ -59,6 +65,25 @@ const cacheHelp = `Usage:
 
 Clear entries below the fixed KUPILOT_HOME cache directory.
 A missing cache is a successful no-op.
+`
+
+const sessionsHelp = `Usage:
+  kupilot sessions list [--limit N] [--cursor CURSOR] [--json]
+  kupilot sessions delete SESSION_ID
+  kupilot sessions delete --before 1d [--limit N] [--dry-run]
+  kupilot sessions delete --before RFC3339 --confirm DIGEST
+
+List safe bounded metadata or delete an exact frozen Session selection. Relative
+d means 24 hours and w means seven 24-hour days. Batch deletion always excludes
+the current Session and protected authority. Non-TTY automation requires a
+dry-run followed by an absolute cutoff and the exact selection digest.
+`
+
+const doctorHelp = `Usage:
+  kupilot doctor [--json]
+
+Run local redacted checks without model, Kubernetes, Tool, Reviewer, approval,
+process, or executor I/O.
 `
 
 const versionHelp = `Usage:
@@ -92,6 +117,10 @@ func Help(topic HelpTopic) string {
 		return resumeHelp
 	case HelpCache:
 		return cacheHelp
+	case HelpSessions:
+		return sessionsHelp
+	case HelpDoctor:
+		return doctorHelp
 	case HelpVersion:
 		return versionHelp
 	case HelpHelp:
@@ -151,10 +180,17 @@ func Run(
 
 		var unavailable UnavailableError
 		if errors.As(err, &unavailable) {
-			if intent.Kind == IntentNew {
+			switch intent.Kind {
+			case IntentNew:
 				writeSafe(stderr, "Starting a new Session is unavailable.\n")
-			} else {
+			case IntentResumePicker, IntentResumeID, IntentResumeLast:
 				writeSafe(stderr, "Session resume is unavailable.\n")
+			case IntentSessionsList, IntentSessionsDelete:
+				writeSafe(stderr, "Session management is unavailable.\n")
+			case IntentDoctor:
+				writeSafe(stderr, "Local diagnostics are unavailable.\n")
+			default:
+				writeSafe(stderr, "Kupilot could not start.\n")
 			}
 			return ExitUnavailable
 		}

@@ -158,6 +158,9 @@ func (adapter *Adapter) Run(ctx context.Context, input agent.RunInput, sink agen
 		boundCalls:        make(map[string]*boundExecution),
 		modelRequestIDs:   make(map[domain.ModelRequestID]struct{}),
 		toolInvocationIDs: make(map[domain.ToolInvocationID]struct{}),
+		safeReadReuse:     make(map[agent.ToolCallIdentity]safeReadCacheEntry),
+		safeReadSubjects:  make(map[string]string),
+		conflictSubjects:  make(map[string]struct{}),
 	}
 
 	startCtx := runCtx

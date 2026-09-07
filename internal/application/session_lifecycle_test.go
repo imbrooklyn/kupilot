@@ -276,6 +276,7 @@ func TestCoordinatorMinimalSessionCompletesWithLifecycleOnly(t *testing.T) {
 		modelRequestID := domain.ModelRequestID(coordinatorUUID(970))
 		if _, err := publisher.Publish(ctx, agent.RunEvent{
 			Kind: agent.RunEventModelStreamStarted, ModelRequestID: &modelRequestID,
+			ModelPreflight: testModelCallPreflightForInput(input, agent.ModelCallAgent),
 		}); err != nil {
 			t.Fatalf("Publish(model started) error = %v", err)
 		}
@@ -361,26 +362,27 @@ func TestCoordinatorDeleteSessionHandlesConfirmationCancellationAndDatabaseFailu
 	}))
 	session := createCoordinatorSession(t, coordinator)
 
-	invalid := UICommand{
-		Kind: UICommandDeleteSession, RequestID: 51,
-		Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true},
-	}
+	invalid := UICommand{Kind: UICommandDeleteSession, RequestID: 51, Lifecycle: &SessionLifecycleIntent{Confirmed: true}}
 	if _, err := coordinator.ExecuteUICommand(context.Background(), invalid); !errors.Is(err, ErrInvalidUICommand) || persistence.deleteWrites() != 0 {
 		t.Fatalf("unconfirmed delete error/writes = %v/%d", err, persistence.deleteWrites())
 	}
+	review := previewExactSessionDeletion(t, coordinator, session.ID, 52)
+	confirmed := confirmedSessionDeletion(review, 53)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	confirmed := invalid
-	confirmed.Lifecycle.Confirmed = true
 	if _, err := coordinator.ExecuteUICommand(cancelled, confirmed); !errors.Is(err, context.Canceled) || persistence.deleteWrites() != 0 {
 		t.Fatalf("cancelled delete error/writes = %v/%d", err, persistence.deleteWrites())
 	}
-	stale, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandDeleteSession, RequestID: 52,
-		Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: false, Confirmed: true},
-	})
-	if err != nil || stale.Failure != UIQueryUnavailable || persistence.deleteWrites() != 0 {
-		t.Fatalf("stale current binding outcome/error/writes = %#v/%v/%d", stale, err, persistence.deleteWrites())
+	stalePlan := *confirmed.Lifecycle.DeletionPlan
+	stale := confirmed
+	stale.Lifecycle = &SessionLifecycleIntent{Confirmed: true, DeletionPlan: &stalePlan}
+	stale.RequestID++
+	stale.Lifecycle.DeletionPlan.Snapshot.Request.CurrentSessionID = domain.SessionID(coordinatorUUID(999))
+	stale.Lifecycle.DeletionPlan.Digest = sessionDeletionDigest(stale.Lifecycle.DeletionPlan.Snapshot)
+	stale.Lifecycle.Confirmation = stale.Lifecycle.DeletionPlan.Digest
+	staleOutcome, err := coordinator.ExecuteUICommand(context.Background(), stale)
+	if err != nil || staleOutcome.Failure != UIQueryUnavailable || persistence.deleteWrites() != 0 {
+		t.Fatalf("stale current binding outcome/error/writes = %#v/%v/%d", staleOutcome, err, persistence.deleteWrites())
 	}
 
 	persistence.setDeleteFailure(true)
@@ -389,7 +391,7 @@ func TestCoordinatorDeleteSessionHandlesConfirmationCancellationAndDatabaseFailu
 		t.Fatalf("failed delete outcome/error/writes/current = %#v/%v/%d/%#v", failed, err, persistence.deleteWrites(), coordinator.CurrentUISession())
 	}
 	persistence.setDeleteFailure(false)
-	confirmed.RequestID++
+	confirmed.RequestID += 2
 	deleted, err := coordinator.ExecuteUICommand(context.Background(), confirmed)
 	if err != nil || deleted.Deletion == nil || deleted.Deletion.SessionID != session.ID || !deleted.Deletion.WasCurrent ||
 		persistence.deleteWrites() != 2 || coordinator.CurrentUISession() != nil {
@@ -556,10 +558,8 @@ func TestCoordinatorDeleteHistoricalSessionKeepsCurrentSession(t *testing.T) {
 	historical := createCoordinatorSession(t, coordinator)
 	current := createCoordinatorSession(t, coordinator)
 
-	result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandDeleteSession, RequestID: 53,
-		Lifecycle: &SessionLifecycleIntent{SessionID: historical.ID, ExpectedCurrent: false, Confirmed: true},
-	})
+	review := previewExactSessionDeletion(t, coordinator, historical.ID, 53)
+	result, err := coordinator.ExecuteUICommand(context.Background(), confirmedSessionDeletion(review, 54))
 	persistence.mu.Lock()
 	_, historicalStillStored := persistence.sessions[historical.ID]
 	persistence.mu.Unlock()
@@ -571,10 +571,9 @@ func TestCoordinatorDeleteHistoricalSessionKeepsCurrentSession(t *testing.T) {
 	}
 }
 
-func TestCoordinatorDeleteCurrentSessionCancelsActiveRunBeforeRepositoryWrite(t *testing.T) {
+func TestCoordinatorDeleteCurrentSessionIsUnavailableDuringActiveRun(t *testing.T) {
 	clock := newCoordinatorClock()
 	started := make(chan struct{})
-	terminated := make(chan struct{})
 	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
 		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
 		if err != nil {
@@ -589,11 +588,9 @@ func TestCoordinatorDeleteCurrentSessionCancelsActiveRunBeforeRepositoryWrite(t 
 			Kind: agent.RunEventRunCancelled, TerminationReason: agent.RunTerminationUserCancelled,
 		})
 		class := domain.SafeErrorClassCancelled
-		close(terminated)
 		return agent.RunOutcome{Status: domain.AgentRunStatusCancelled, ErrorClass: &class, SafeMessage: "The AgentRun was cancelled."}
 	})
 	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
-	persistence.setDeleteReady(terminated)
 	session := createCoordinatorSession(t, coordinator)
 	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Inspect the selected Pod."})
 	if err != nil {
@@ -601,11 +598,14 @@ func TestCoordinatorDeleteCurrentSessionCancelsActiveRunBeforeRepositoryWrite(t 
 	}
 	<-started
 	result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandDeleteSession, RequestID: 61,
-		Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
+		Kind: UICommandPreviewSessionDeletion, RequestID: 61,
+		Lifecycle: &SessionLifecycleIntent{DeletionKind: SessionDeletionExact, SessionID: session.ID, Limit: 1},
 	})
-	if err != nil || result.Deletion == nil || persistence.deleteWrites() != 1 {
+	if err != nil || result.Failure != UIQueryUnavailable || result.DeletionReview != nil || persistence.deleteWrites() != 0 {
 		t.Fatalf("active delete outcome/error/delete writes = %#v/%v/%d", result, err, persistence.deleteWrites())
+	}
+	if err := coordinator.CancelRun(context.Background(), CancelRunCommand{RunID: runID, ScopeGeneration: 7}); err != nil {
+		t.Fatalf("CancelRun() error = %v", err)
 	}
 	run, err := coordinator.WaitRun(context.Background(), runID)
 	if err != nil || run.Status != domain.AgentRunStatusCancelled {
@@ -613,7 +613,7 @@ func TestCoordinatorDeleteCurrentSessionCancelsActiveRunBeforeRepositoryWrite(t 
 	}
 }
 
-func TestCoordinatorDeleteCurrentSessionWaitsForTerminalRunToQuiesce(t *testing.T) {
+func TestCoordinatorDeleteCurrentSessionDoesNotCancelTerminalRun(t *testing.T) {
 	clock := newCoordinatorClock()
 	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
 		return agent.RunOutcome{}
@@ -637,34 +637,21 @@ func TestCoordinatorDeleteCurrentSessionWaitsForTerminalRunToQuiesce(t *testing.
 	coordinator.active = state
 	coordinator.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	type deletionAttempt struct {
-		outcome UICommandOutcome
-		err     error
+	result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandPreviewSessionDeletion, RequestID: 65,
+		Lifecycle: &SessionLifecycleIntent{DeletionKind: SessionDeletionExact, SessionID: session.ID, Limit: 1},
+	})
+	if err != nil || result.Failure != UIQueryUnavailable || persistence.deleteWrites() != 0 {
+		t.Fatalf("terminal run deletion outcome/error/writes = %#v/%v/%d", result, err, persistence.deleteWrites())
 	}
-	completed := make(chan deletionAttempt, 1)
-	go func() {
-		outcome, err := coordinator.ExecuteUICommand(ctx, UICommand{
-			Kind: UICommandDeleteSession, RequestID: 65,
-			Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
-		})
-		completed <- deletionAttempt{outcome: outcome, err: err}
-	}()
-
 	select {
 	case <-cancelCalled:
-		cancel()
-	case result := <-completed:
-		cancel()
-		t.Fatalf("deletion returned before terminal run quiescence: %#v/%v", result.outcome, result.err)
-	}
-	result := <-completed
-	if !errors.Is(result.err, context.Canceled) || persistence.deleteWrites() != 0 {
-		t.Fatalf("terminal quiescence deletion outcome/error/writes = %#v/%v/%d", result.outcome, result.err, persistence.deleteWrites())
+		t.Fatal("Session deletion cancelled the terminal run")
+	default:
 	}
 }
 
-func TestCoordinatorDeleteSessionInvalidatesPendingAndApprovedApprovalBeforeDelete(t *testing.T) {
+func TestCoordinatorDeleteSessionIsUnavailableDuringPendingAndApprovedApproval(t *testing.T) {
 	for _, state := range []domain.ApprovalState{domain.ApprovalStatePending, domain.ApprovalStateApproved} {
 		t.Run(string(state), func(t *testing.T) {
 			clock := newCoordinatorClock()
@@ -686,11 +673,11 @@ func TestCoordinatorDeleteSessionInvalidatesPendingAndApprovedApprovalBeforeDele
 			}
 			coordinator.approvals = approvalFixture.coordinator
 			result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-				Kind: UICommandDeleteSession, RequestID: 62,
-				Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
+				Kind: UICommandPreviewSessionDeletion, RequestID: 62,
+				Lifecycle: &SessionLifecycleIntent{DeletionKind: SessionDeletionExact, SessionID: session.ID, Limit: 1},
 			})
-			if err != nil || result.Deletion == nil || persistence.deleteWrites() != 1 ||
-				approvalFixture.persistence.lastCloseExpected != state || approvalFixture.executor.calls != 0 {
+			if err != nil || result.Failure != UIQueryUnavailable || result.DeletionReview != nil || persistence.deleteWrites() != 0 ||
+				approvalFixture.persistence.closes != 0 || approvalFixture.executor.calls != 0 {
 				t.Fatalf("delete outcome/error/delete/close/executor = %#v/%v/%d/%s/%d", result, err, persistence.deleteWrites(), approvalFixture.persistence.lastCloseExpected, approvalFixture.executor.calls)
 			}
 		})
@@ -731,8 +718,8 @@ func TestCoordinatorDeleteSessionApprovalFailureAndConsumingStateFailClosed(t *t
 			test.configure(approvalFixture, request)
 			coordinator.approvals = approvalFixture.coordinator
 			result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-				Kind: UICommandDeleteSession, RequestID: 63,
-				Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
+				Kind: UICommandPreviewSessionDeletion, RequestID: 63,
+				Lifecycle: &SessionLifecycleIntent{DeletionKind: SessionDeletionExact, SessionID: session.ID, Limit: 1},
 			})
 			if err != nil || result.Failure != UIQueryUnavailable || persistence.deleteWrites() != 0 ||
 				approvalFixture.executor.calls != 0 || coordinator.CurrentUISession() == nil {
@@ -742,7 +729,7 @@ func TestCoordinatorDeleteSessionApprovalFailureAndConsumingStateFailClosed(t *t
 	}
 }
 
-func TestCoordinatorDeleteSessionDatabaseFailureKeepsApprovalNonExecutable(t *testing.T) {
+func TestCoordinatorDeleteSessionDatabaseFailureKeepsCurrentState(t *testing.T) {
 	clock := newCoordinatorClock()
 	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runnerFunc(func(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome {
 		return agent.RunOutcome{}
@@ -750,23 +737,34 @@ func TestCoordinatorDeleteSessionDatabaseFailureKeepsApprovalNonExecutable(t *te
 	session := createCoordinatorSession(t, coordinator)
 	approvalFixture := newApprovalCoordinatorFixture(t)
 	approvalFixture.bindSession(t, session.ID)
-	request := approvalFixture.submit(t, 38)
-	coordinator.approvals = approvalFixture.coordinator
 	persistence.setDeleteFailure(true)
-
-	result, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
-		Kind: UICommandDeleteSession, RequestID: 64,
-		Lifecycle: &SessionLifecycleIntent{SessionID: session.ID, ExpectedCurrent: true, Confirmed: true},
-	})
-	approvalFixture.coordinator.mu.Lock()
-	_, approvalStillActive := approvalFixture.coordinator.active[request.ID]
-	approvalFixture.coordinator.mu.Unlock()
+	review := previewExactSessionDeletion(t, coordinator, session.ID, 64)
+	result, err := coordinator.ExecuteUICommand(context.Background(), confirmedSessionDeletion(review, 65))
 	if err != nil || result.Failure != UIQueryUnavailable || persistence.deleteWrites() != 1 ||
-		approvalFixture.persistence.lastCloseExpected != domain.ApprovalStatePending ||
-		approvalStillActive || approvalFixture.executor.calls != 0 || coordinator.CurrentUISession() == nil {
-		t.Fatalf("failed graph outcome/error/delete/close/active/executor/current = %#v/%v/%d/%s/%t/%d/%#v",
-			result, err, persistence.deleteWrites(), approvalFixture.persistence.lastCloseExpected,
-			approvalStillActive, approvalFixture.executor.calls, coordinator.CurrentUISession())
+		approvalFixture.persistence.closes != 0 || approvalFixture.executor.calls != 0 || coordinator.CurrentUISession() == nil {
+		t.Fatalf("failed graph outcome/error/delete/close/executor/current = %#v/%v/%d/%d/%d/%#v",
+			result, err, persistence.deleteWrites(), approvalFixture.persistence.closes,
+			approvalFixture.executor.calls, coordinator.CurrentUISession())
+	}
+}
+
+func previewExactSessionDeletion(t *testing.T, coordinator *Coordinator, sessionID domain.SessionID, requestID uint64) SessionDeletionReview {
+	t.Helper()
+	outcome, err := coordinator.ExecuteUICommand(context.Background(), UICommand{
+		Kind: UICommandPreviewSessionDeletion, RequestID: requestID,
+		Lifecycle: &SessionLifecycleIntent{DeletionKind: SessionDeletionExact, SessionID: sessionID, Limit: 1},
+	})
+	if err != nil || outcome.DeletionReview == nil || outcome.Failure != "" {
+		t.Fatalf("PreviewSessionDeletion() = %#v, %v", outcome, err)
+	}
+	return *outcome.DeletionReview
+}
+
+func confirmedSessionDeletion(review SessionDeletionReview, requestID uint64) UICommand {
+	plan := review.Plan
+	return UICommand{
+		Kind: UICommandDeleteSession, RequestID: requestID,
+		Lifecycle: &SessionLifecycleIntent{Confirmed: true, DeletionPlan: &plan, Confirmation: plan.Digest},
 	}
 }
 

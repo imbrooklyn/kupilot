@@ -196,6 +196,32 @@ func TestAdapterCompletesGeneralAnswerWithoutToolCall(t *testing.T) {
 	}
 }
 
+func TestModelInvocationPreflightRejectionPerformsZeroModelCalls(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	model := &recordingModel{scripts: []modelScript{scriptedChunks(diagnosisChunks(readFixture(t, "agent-runtime-valid-diagnosis.json"))...)}}
+	recorder := newEventRecorder()
+	sink := agent.EventSinkFunc(func(ctx context.Context, event agent.RunEvent) agent.EventSinkResult {
+		result := recorder.Publish(ctx, event)
+		if event.Kind == agent.RunEventModelStreamStarted {
+			return agent.EventSinkRejected
+		}
+		return result
+	})
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, sink)
+	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
+		*outcome.ErrorClass != domain.SafeErrorClassPersistenceUnavailable || len(model.Requests()) != 0 {
+		t.Fatalf("preflight rejection outcome/model calls = %#v/%d", outcome, len(model.Requests()))
+	}
+	events := recorder.Events()
+	if len(events) != 3 || events[0].Kind != agent.RunEventRunStarted || events[1].Kind != agent.RunEventModelStreamStarted ||
+		events[1].ModelPreflight == nil || events[1].Validate() != nil || events[2].Kind != agent.RunEventRunFailed {
+		t.Fatalf("preflight event sequence = %#v", events)
+	}
+}
+
 func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *testing.T) {
 	t.Parallel()
 
@@ -238,14 +264,14 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 		if currentCount != 1 {
 			t.Fatalf("current question count = %d, want 1", currentCount)
 		}
-		historic, historyErr := diagnosisDraft(request.Messages[2])
-		if historyErr != nil {
-			// This mirrors the observed endpoint behavior: a raw Markdown assistant
-			// history item primes a plain-text response that the strict decoder must reject.
-			return scriptedChunks(diagnosisChunks("The previous answer was supplied as plain text.")...)(ctx, request)
+		var historic struct {
+			AnswerMarkdown    string            `json:"answer_markdown"`
+			EvidenceCitations []json.RawMessage `json:"evidence_citations"`
+			ProposedActions   []json.RawMessage `json:"proposed_actions"`
 		}
-		if historic.AnswerMarkdown != turns[1].Content || len(historic.ConfirmedFacts) != 0 || len(historic.RecommendedActions) != 0 {
-			t.Fatalf("historic final answer = %#v", historic)
+		if historyErr := json.Unmarshal([]byte(request.Messages[2].Content), &historic); historyErr != nil ||
+			historic.AnswerMarkdown != turns[1].Content || len(historic.EvidenceCitations) != 0 || len(historic.ProposedActions) != 0 {
+			t.Fatalf("historic final answer = %#v, error = %v", historic, historyErr)
 		}
 		return scriptedChunks(diagnosisChunks(`{"answer_markdown":"The ordered Session context was supplied once.","evidence_citations":[],"proposed_actions":[]}`)...)(ctx, request)
 	}}}

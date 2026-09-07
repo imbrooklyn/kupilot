@@ -1,7 +1,7 @@
 # Kupilot Security Threat Model
 
 - Status: Accepted target for Kupilot `v0.5`
-- Last updated: 2026-09-05
+- Last updated: 2026-09-07
 
 The checked-in implementation now includes named model roles, role-scoped
 consent, safe Session context/summarization, deterministic permission routing,
@@ -61,6 +61,10 @@ Kupilot must:
 9. render all external text safely in a terminal and keep meaning independent
    of color; and
 10. retain and delete only the data admitted by the public retention contract.
+
+Local Session discovery, doctor, egress preflight, terminal capability state,
+and budget explanations are content-free or bounded safe projections. They do
+not grant consent, action authority, retry permission, or execution authority.
 
 Kupilot does not claim prevention of all model error, complete sensitive-value
 detection, encrypted local storage, tamper-resistant audit, forensic erasure,
@@ -337,6 +341,14 @@ interrupted and unexecuted approvals terminal. Resume restores safe history and
 unverified candidates only. Retention and deletion use bounded transactional
 operations with visible failures.
 
+Question start is a separate fail-closed boundary. Delivery binds exact
+Session, scope generation, policy generation, and selected-resource state;
+Application compares them with current process-local authority and returns only
+a fixed typed reason, recovery action, and safe state projection on denial.
+Unsatisfied or mismatched state produces zero model calls and cannot
+automatically retarget, queue, retry, or send the input. Raw causes remain
+internal and never control TUI behavior through string matching.
+
 The follow-up queue is current-process and current-Session only. Pending,
 committing, queued, rejected, and recovered drafts are absent from SQLite and
 export. Unknown lifecycle metadata is also process-local, while its already
@@ -407,6 +419,37 @@ of a pre-existing Pod. Bundle shutdown preserves the transport until bounded
 exact cleanup joins. An image allowlist is not a network
 sandbox; actual NetworkPolicy and CNI behavior remain operator-provided
 deployment evidence that Kupilot does not verify.
+
+### T15: Stale or over-broad Session deletion
+
+**Threat.** A title is mistaken for identity, Last active drifts with viewing,
+an active or uncertain Session enters an inactive batch, a preview changes
+before confirmation, or deletion clears UI state before storage commits.
+
+**Controls.** Exact deletion accepts only canonical UUIDv7 identity. The
+dedicated Last active field changes only on admitted committed lifecycle
+transitions. Relative cutoffs freeze once, equality is retained, and corrupt or
+future times are protected. Batch plans bind ordered IDs, activity times,
+Session versions, count, cutoff, and schema revision to a content-free digest;
+SQLite reselects and commits the complete graph atomically. Current Sessions,
+active runs, approvals/actions, consuming or merely attempted work, and unknown
+state are excluded. Batch commit also requires exclusive process isolation.
+Delivery clears current-process state only after a matching committed result.
+
+### T16: Model-declared completeness or recovery authority
+
+**Threat.** Injected text, a model stop label, a stale citation, or an optional
+terminal failure makes incomplete, denied, conflicting, or unknown work look
+complete or causes a blind retry.
+
+**Controls.** Application performs a content-free invocation preflight before
+model entry and derives the terminal reason from accepted lifecycle, policy,
+budget, storage, and coverage state. Strict response schema 2 separates answers
+from typed clarification, checks same-run/generation Evidence and exact typed
+freshness/conflict/source coverage, and carries no action authority. A fixed
+recovery matrix authorizes zero automatic model, Tool, or action retries.
+Notification, title, clipboard, and local-search failures remain optional
+delivery failures rather than successful or failed Agent evidence.
 
 ## 7. Kubernetes access matrix
 
@@ -533,7 +576,14 @@ barriers, and temporary databases. Required proof includes:
   restore a run, stream, live generation, Evidence, permission rule,
   ActionEnvelope, approval authority, or execution retry; and
 - every typed action's revalidation, one-attempt, ambiguous-outcome, audit, and
-  independent verification states.
+  independent verification states;
+- authoritative Last active updates and non-updates, strict cutoff/digest
+  deletion races and rollback, protected active/uncertain Sessions, and zero
+  operational calls from listing, preview, doctor, or failed deletion; and
+- strict clarification and completeness bounds, preflight zero-call denials,
+  Evidence freshness/conflict/negative coverage, narrow safe-read reuse,
+  injection canaries, terminal capabilities, accessibility, and the fixed
+  degraded/recovery matrix.
 
 ## 11. Residual risks
 
@@ -560,6 +610,9 @@ barriers, and temporary databases. Required proof includes:
   explicit and committed-answer-only; title output is fixed and content-free.
 - Deterministic claim coverage proves reference integrity, not that an
   inference, recommendation, or answer is semantically correct.
+- Session deletion is logical rather than forensic erasure; exports, terminal
+  scrollback, logs, backups, configuration, credentials, cache, and SQLite free
+  pages remain outside its scope.
 - The pinned streaming protocol cannot prove same-response continuation.
   Ambiguous disconnects therefore remain unknown and are never retried.
 
@@ -585,3 +638,6 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

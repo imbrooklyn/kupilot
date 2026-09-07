@@ -162,11 +162,11 @@ without sending an export command. To export a historical Session, resume it
 explicitly first and then use `/privacy`. Minimal Sessions have no retained
 conversation to export and do not offer this action.
 
-The deterministic `kupilot.export-summary.v3` Markdown projection may contain:
+The deterministic `kupilot.export-summary.v4` Markdown projection may contain:
 
 - The schema version, export and truncation state, Session ID, sanitized title,
-  timestamps, standard persistence mode, and historic display-only Context and
-  Namespace.
+  Created at and authoritative Last active timestamps, standard persistence
+  mode, and historic display-only Context and Namespace.
 - Bounded, redacted committed user and final assistant text.
 - The bounded safe summary and coverage explanation, without raw framework or
   model state.
@@ -276,22 +276,29 @@ enable or disable the local application log.
 
 ## Remove local history
 
-Press `D` in `/privacy` to request deletion of the current Session. In the
-resume picker, select a historical Session and press `D`. Both paths reuse the
-existing non-editable dialog and sole composer. Deletion requires a second,
-explicit `Y`; `Esc` or `Enter` cancels without sending an Application command.
+Press `D` in `/privacy` to request deletion of the current Session; this is the
+same operation as `/delete`. In `/sessions` or the resume picker, select a
+historical Session and press `D`. Every path reuses the same Application-owned
+preview and existing non-editable dialog. Deletion requires `Y`; `Esc`,
+`Ctrl+C`, or `Enter` cancels without a deletion command.
 
-For the current Session, Application first cancels and waits for a starting,
-active, or terminal-but-not-yet-quiesced AgentRun. Pending and
-approved-but-not-executed approvals become terminal and non-executable before
-deletion. A consuming approval, cancellation, or failure
-to persist that safe state denies deletion. The SQLite adapter then removes the
-Session-owned Messages, runs, model metadata, Tool detail, Evidence, Diagnoses,
-approval and decision records, linked read/write audit, and Session row in one
-transaction. The UI changes current or picker state only after a matching
-committed result. A database failure rolls back the graph deletion and reports
-the Session as not deleted; an approval already invalidated remains
-non-executable.
+Current-Session deletion is unavailable while a starting/active AgentRun,
+commit barrier, Reviewer, approval, action, execution, or verification is
+active. It does not cancel or mutate that work. The SQLite adapter removes the
+Session-owned Messages, summaries, runs, model metadata, Tool detail, Evidence,
+Diagnoses, approval and decision records, linked read/write audit, and Session
+row in one transaction. Queue, composer, context, current Session, and picker
+state change only after a matching committed result. A database failure rolls
+back the graph and leaves every draft intact.
+
+`kupilot sessions list` exposes bounded safe metadata and authoritative Last
+active without changing it. Exact and inactive-batch CLI deletion use the same
+transactional graph operation. Batch dry-run freezes a strict cutoff and
+content-free selection digest; non-TTY confirmation must return that digest
+with its resolved absolute cutoff. Current, active, merely attempted, corrupt,
+future, or otherwise unproved Sessions are protected. No path removes exports,
+terminal scrollback, logs, backups, configuration, credentials, cache, or
+SQLite free pages.
 
 Press `H` in `/privacy`, then `Y`, to clear all Session history. Application
 cancels and awaits starting or active AgentRun work and durably makes every

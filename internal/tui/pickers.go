@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -101,6 +102,9 @@ func (model *Model) completePickerSelection() {
 		if candidate, ok := model.sessionPicker.Selected(); ok {
 			model.composer.SetValue("/resume " + candidate.ID)
 		}
+	case application.UICompletionSessionManagement:
+		// The management picker is action-oriented; Tab does not copy an ID
+		// into the sole editor or turn metadata into model input.
 	}
 }
 
@@ -190,6 +194,21 @@ func (model *Model) selectPickerCandidate() tea.Cmd {
 		}
 		model.composer.Reset()
 		return model.beginResume(application.UIResumeExact, domain.SessionID(candidate.ID), origin)
+	case application.UICompletionSessionManagement:
+		candidate, ok := model.sessionPicker.Selected()
+		if !ok {
+			return nil
+		}
+		if candidate.Current {
+			model.showDialog("Current Session", "This Session is already current. Press D to preview deletion or Esc to return.")
+			return nil
+		}
+		if !candidate.Resumable {
+			model.showDialog("Session not resumable", "This Session is memory-only, empty, protected, or otherwise not eligible for resume.")
+			return nil
+		}
+		model.composer.Reset()
+		return model.beginResume(application.UIResumeExact, domain.SessionID(candidate.ID), resumeOriginInTUI)
 	default:
 		return nil
 	}
@@ -305,15 +324,65 @@ func (model *Model) acceptCompletionResult(result application.UICompletionResult
 	case application.UICompletionSession:
 		values := make([]components.SessionCandidate, 0, len(result.Sessions))
 		for _, candidate := range result.Sessions {
+			observed := time.UnixMilli(candidate.LastActivityAtUnixMillis)
 			values = append(values, components.SessionCandidate{
 				ID: string(candidate.ID), Title: sanitizeExternalText(candidate.Title, 512),
-				UpdatedAt: time.UnixMilli(candidate.UpdatedAtUnixMillis).UTC().Format("2006-01-02 15:04Z"),
-				Context:   sanitizeExternalText(candidate.Context, 253), Namespace: sanitizeExternalText(candidate.Namespace, 63),
-				Privacy: string(candidate.PrivacyMode),
+				LastActivity: relativeSessionActivity(observed, model.now()) + " · " + observed.Local().Format(time.RFC3339Nano+" MST"),
+				LastUTC:      observed.UTC().Format(time.RFC3339Nano),
+				Context:      sanitizeExternalText(candidate.Context, 253), Namespace: sanitizeExternalText(candidate.Namespace, 63),
+				Privacy: string(candidate.PrivacyMode), State: "resumable", Resumable: true,
+			})
+		}
+		model.sessionPicker.SetCandidates(values)
+	case application.UICompletionSessionManagement:
+		values := make([]components.SessionCandidate, 0, len(result.Sessions))
+		for _, candidate := range result.Sessions {
+			observed := time.UnixMilli(candidate.LastActivityAtUnixMillis)
+			state := sessionManagementState(candidate)
+			values = append(values, components.SessionCandidate{
+				ID: string(candidate.ID), Title: sanitizeExternalText(candidate.Title, 512),
+				LastActivity: relativeSessionActivity(observed, model.now()) + " · " + observed.Local().Format(time.RFC3339Nano+" MST"),
+				LastUTC:      observed.UTC().Format(time.RFC3339Nano), Privacy: string(candidate.PrivacyMode), State: state,
+				Current: candidate.Current, Resumable: candidate.Resumable, Protected: candidate.Protected,
+				Deletable: candidate.DeletionEligible,
 			})
 		}
 		model.sessionPicker.SetCandidates(values)
 	}
+}
+
+func relativeSessionActivity(observed, now time.Time) string {
+	if observed.IsZero() || observed.UnixMilli() < 0 || now.IsZero() || observed.After(now) {
+		return "protected timestamp"
+	}
+	delta := now.Sub(observed)
+	switch {
+	case delta < time.Minute:
+		return "just now"
+	case delta < time.Hour:
+		return fmt.Sprintf("%dm ago", int(delta/time.Minute))
+	case delta < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(delta/time.Hour))
+	default:
+		return fmt.Sprintf("%dd ago", int(delta/(24*time.Hour)))
+	}
+}
+
+func sessionManagementState(candidate application.UISessionCandidate) string {
+	parts := make([]string, 0, 3)
+	if candidate.Current {
+		parts = append(parts, "current")
+	} else if candidate.Resumable {
+		parts = append(parts, "resumable")
+	} else {
+		parts = append(parts, "not resumable")
+	}
+	if candidate.Protected {
+		parts = append(parts, "protected: "+string(candidate.ProtectionReason))
+	} else if candidate.DeletionEligible {
+		parts = append(parts, "deletion eligible")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (model *Model) acceptResourceSelectionResult(result application.UIResourceSelectionResult) {
@@ -324,12 +393,14 @@ func (model *Model) acceptResourceSelectionResult(result application.UIResourceS
 	model.pendingResourceID = 0
 	if result.Failure != "" {
 		model.pendingResource = ResourceView{}
+		model.restoreQuestionStartRecovery(application.UICompletionResource)
 		model.showDialog("Resource unavailable", "The Resource selection could not be accepted safely.")
 		return
 	}
 	if result.Cleared {
 		model.resource = ResourceView{}
 		model.pendingResource = ResourceView{}
+		model.restoreQuestionStartRecovery(application.UICompletionResource)
 		model.transcript.AppendNotice("The current Resource was cleared.")
 		return
 	}
@@ -338,6 +409,7 @@ func (model *Model) acceptResourceSelectionResult(result application.UIResourceS
 		Namespace: result.Resource.Namespace, Name: result.Resource.Name,
 	})
 	model.pendingResource = ResourceView{}
+	model.restoreQuestionStartRecovery(application.UICompletionResource)
 	model.transcript.AppendNotice("Resource selected for the next question. Selection does not verify that it currently exists.")
 }
 
@@ -414,7 +486,7 @@ func (model *Model) setPickerLoading(kind application.UICompletionKind) {
 		model.namespacePicker.SetLoading()
 	case application.UICompletionResource:
 		model.resourcePicker.SetLoading()
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		model.sessionPicker.SetLoading()
 	}
 }
@@ -427,7 +499,7 @@ func (model *Model) setPickerFailed(kind application.UICompletionKind) {
 		model.namespacePicker.SetFailed()
 	case application.UICompletionResource:
 		model.resourcePicker.SetFailed()
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		model.sessionPicker.SetFailed()
 	}
 }
@@ -457,7 +529,7 @@ func (model Model) pickerOpen() bool {
 		return model.namespacePicker.Open()
 	case application.UICompletionResource:
 		return model.resourcePicker.Open()
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		return model.sessionPicker.Open()
 	default:
 		return false
@@ -475,7 +547,7 @@ func (model Model) pickerView() string {
 		return model.namespacePicker.View()
 	case application.UICompletionResource:
 		return model.resourcePicker.View()
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		return model.sessionPicker.View()
 	default:
 		return ""
@@ -493,7 +565,7 @@ func (model Model) pickerHeight() int {
 		return model.namespacePicker.Height()
 	case application.UICompletionResource:
 		return model.resourcePicker.Height()
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		return model.sessionPicker.Height()
 	default:
 		return 0
@@ -512,7 +584,7 @@ func (model *Model) movePicker(delta int) {
 		model.namespacePicker.Move(delta)
 	case application.UICompletionResource:
 		model.resourcePicker.Move(delta)
-	case application.UICompletionSession:
+	case application.UICompletionSession, application.UICompletionSessionManagement:
 		model.sessionPicker.Move(delta)
 	}
 }

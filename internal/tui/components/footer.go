@@ -26,6 +26,7 @@ type FooterStatus struct {
 	Approval        string
 	ContextPressure string
 	Plan            string
+	Egress          string
 }
 
 // Footer renders scope-first status without owning application state.
@@ -65,7 +66,7 @@ func (footer Footer) View(width int, status FooterStatus) string {
 	if status.ScopeSwitching {
 		access = "scope switching · " + permission
 	}
-	ambient := strings.Trim(strings.Join([]string{status.ContextPressure, status.Plan}, " · "), " ·")
+	ambient := strings.Trim(strings.Join([]string{status.ContextPressure, status.Plan, status.Egress}, " · "), " ·")
 
 	lineOne, accessOnSecond := requiredFooterLine(width, contextName, namespace, access)
 	lineTwo := ""

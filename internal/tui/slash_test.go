@@ -13,7 +13,7 @@ func TestSlashRegistryIsFixedAndReadOnly(t *testing.T) {
 	wantNames := []string{
 		"help", "model", "context", "namespace", "resource", "permissions", "status",
 		"queue", "copy", "find", "compact", "plan",
-		"new", "resume", "rename", "privacy", "cancel", "quit",
+		"delete", "sessions", "doctor", "new", "resume", "rename", "privacy", "cancel", "quit",
 	}
 	if len(commands) != len(wantNames) {
 		t.Fatalf("command count = %d, want %d", len(commands), len(wantNames))
@@ -33,7 +33,7 @@ func TestSlashRegistryIsFixedAndReadOnly(t *testing.T) {
 		if !slices.Equal(command.Aliases, wantAliases[command.Name]) {
 			t.Errorf("aliases for %q = %v, want %v", command.Name, command.Aliases, wantAliases[command.Name])
 		}
-		for _, forbidden := range []string{"shell", "kubectl", "exec", "delete", "patch", "apply", "restart", "approve"} {
+		for _, forbidden := range []string{"shell", "kubectl", "exec", "patch", "apply", "restart", "approve"} {
 			if command.Name == forbidden || slices.Contains(command.Aliases, forbidden) {
 				t.Errorf("registry contains forbidden command %q", forbidden)
 			}

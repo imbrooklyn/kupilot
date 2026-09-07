@@ -194,7 +194,10 @@ func (repository *ApprovalRepository) CreateWithAudit(
 		if err := insertApproval(ctx, tx, stored); err != nil {
 			return err
 		}
-		return insertAuditEvent(ctx, tx, audit)
+		if err := insertAuditEvent(ctx, tx, audit); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, stored.SessionID, stored.StateChangedAt)
 	})
 	return repository.translateError(err, "approval_request_create_failed", "create_approval_request", "Kupilot could not store the approval request.")
 }
@@ -316,7 +319,10 @@ func (repository *ApprovalRepository) ConsumeWithAudit(
 		if err := updateStoredApprovalState(ctx, tx, expected.State, consumed); err != nil {
 			return err
 		}
-		return insertAuditEvent(ctx, tx, audit)
+		if err := insertAuditEvent(ctx, tx, audit); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, consumed.SessionID, consumed.StateChangedAt)
 	})
 	return repository.translateError(err, "approval_request_consume_failed", "consume_approved_request", "Kupilot could not store the pre-write approval intent.")
 }
@@ -359,7 +365,10 @@ func (repository *ApprovalRepository) ResolveWithAudit(
 		); err != nil {
 			return err
 		}
-		return insertAuditEvent(ctx, tx, audit)
+		if err := insertAuditEvent(ctx, tx, audit); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, stored.SessionID, stored.StateChangedAt)
 	})
 	return repository.translateError(err, "approval_request_resolve_failed", "resolve_approval_request", "Kupilot could not store the approval decision.")
 }
@@ -384,7 +393,10 @@ func (repository *ApprovalRepository) CloseWithAudit(
 		if err := updateApprovalState(ctx, tx, expectedState, stored); err != nil {
 			return err
 		}
-		return insertAuditEvent(ctx, tx, audit)
+		if err := insertAuditEvent(ctx, tx, audit); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, stored.SessionID, stored.StateChangedAt)
 	})
 	return repository.translateError(err, "approval_request_close_failed", "close_approval_request", "Kupilot could not close the approval request.")
 }

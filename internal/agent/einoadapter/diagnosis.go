@@ -61,6 +61,20 @@ func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agen
 	for _, coverage := range draft.ClaimCoverage {
 		values = append(values, coverage.Text, coverage.TextHash, string(coverage.Kind), string(coverage.State))
 	}
+	for _, hypothesis := range draft.Hypotheses {
+		values = append(values, hypothesis.Statement, hypothesis.Falsifier)
+	}
+	for _, limitation := range draft.MissingInformation {
+		values = append(values, limitation.Detail, limitation.Impact)
+	}
+	if draft.Clarification != nil {
+		for _, question := range draft.Clarification.Questions {
+			values = append(values, question.Prompt)
+			for _, choice := range question.Choices {
+				values = append(values, choice.ID, choice.Label)
+			}
+		}
+	}
 	if draft.Plan != nil {
 		values = append(values, draft.Plan.Title)
 		for _, step := range draft.Plan.Steps {

@@ -9,7 +9,8 @@ integration or release artifact.
 - [Getting Started](getting-started.md): build, configure, start, and use the
   single-screen TUI.
 - [Sessions and Scope](sessions-and-scope.md): new Sessions, explicit resume,
-  saved-scope conflicts, and ResourceRef revalidation.
+  authoritative Last active, `/sessions`, exact/batch deletion, saved-scope
+  conflicts, and ResourceRef revalidation.
 - [Steering and Queued Follow-Ups](conversation-input.md): active-run `Enter`,
   FIFO `Tab` queueing, `Alt+Up` edit-last, commitment states, recovery, and
   no-auto-send failures, plus exact cancel and confirmed clear.
@@ -42,3 +43,10 @@ Fixed `/copy`, `/find`, `/compact`, and `/plan` interactions remain on this one
 screen. Copy and search see committed transcript content only. Context pressure
 is a byte/message signal, not a token estimate. A plan is bounded ordinary
 assistant content and never runs automatically.
+
+`/delete`, `/sessions`, and `/doctor` are fixed local interactions. The same
+screen provides typed terminal reasons, claim/Evidence provenance and
+navigation, content-free egress/budget state, command availability, a
+conservative terminal profile, committed-input reverse search, semantic jumps,
+and bounded undo/redo. Strict answers may instead return one to three typed
+clarification questions; no clarification or stop label creates authority.

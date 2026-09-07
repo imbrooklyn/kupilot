@@ -12,10 +12,14 @@ import (
 )
 
 const (
-	MinComposerRows    = 1
-	MaxComposerRows    = 8
-	maxContentRows     = 65_536
-	defaultPlaceholder = "Ask a question, or type / for commands"
+	MinComposerRows          = 1
+	MaxComposerRows          = 8
+	MaxComposerUndoOps       = 100
+	MaxComposerUndoBytes     = 1024 * 1024
+	MaxSubmittedHistoryItems = 4096
+	MaxSubmittedHistoryBytes = 4 * 1024 * 1024
+	maxContentRows           = 65_536
+	defaultPlaceholder       = "Ask a question, or type / for commands"
 )
 
 // ErrComposerLimit reports that an edit would exceed the bounded draft size.
@@ -30,14 +34,25 @@ type ComposerStyles struct {
 
 // Composer owns the TUI's sole editable textarea and its local draft history.
 type Composer struct {
-	input       textarea.Model
-	styles      ComposerStyles
-	width       int
-	maxBytes    int
-	history     []string
-	historyAt   int
-	historyOpen bool
-	secretMode  bool
+	input        textarea.Model
+	styles       ComposerStyles
+	width        int
+	maxBytes     int
+	history      []string
+	historyBytes int
+	historyAt    int
+	historyOpen  bool
+	secretMode   bool
+	undo         []composerSnapshot
+	redo         []composerSnapshot
+	undoBytes    int
+	redoBytes    int
+}
+
+type composerSnapshot struct {
+	value  string
+	line   int
+	column int
 }
 
 // NewComposer creates a focused one-to-eight-row multiline editor.
@@ -90,6 +105,8 @@ func (composer *Composer) SetStyles(styles ComposerStyles) {
 // Update applies one already-sanitized input message without exceeding maxBytes.
 func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 	original := composer.input.Value()
+	originalLine := composer.input.Line()
+	originalColumn := composer.input.Column()
 	additional := 0
 	switch value := msg.(type) {
 	case tea.PasteMsg:
@@ -113,6 +130,10 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 		return composer, nil, ErrComposerLimit
 	}
 	if composer.input.Value() != original {
+		if !composer.secretMode {
+			composer.pushUndo(composerSnapshot{value: original, line: originalLine, column: originalColumn})
+			composer.clearRedo()
+		}
 		composer.closeHistory()
 	}
 	return composer, cmd, nil
@@ -145,12 +166,14 @@ func (composer *Composer) SetValue(value string) {
 	composer.input.SetValue(value)
 	composer.input.MoveToEnd()
 	composer.closeHistory()
+	composer.clearEdits()
 }
 
 // Reset clears the draft without changing the retained history.
 func (composer *Composer) Reset() {
 	composer.input.Reset()
 	composer.closeHistory()
+	composer.clearEdits()
 }
 
 // SetPlaceholder changes only the code-authored purpose hint for the one editor.
@@ -175,17 +198,121 @@ func (composer *Composer) SetMaxBytes(limit int) {
 func (composer *Composer) SetSecretMode(enabled bool) {
 	composer.secretMode = enabled
 	composer.closeHistory()
+	composer.clearEdits()
+}
+
+// Undo restores one complete Unicode draft snapshot. It never records or
+// persists secret-mode input and keeps a fixed operation and byte budget.
+func (composer *Composer) Undo() bool {
+	if composer.secretMode || len(composer.undo) == 0 {
+		return false
+	}
+	current := composer.snapshot()
+	index := len(composer.undo) - 1
+	snapshot := composer.undo[index]
+	composer.undo = composer.undo[:index]
+	composer.undoBytes -= len(snapshot.value)
+	composer.pushRedo(current)
+	composer.restoreSnapshot(snapshot)
+	composer.closeHistory()
+	return true
+}
+
+// Redo reapplies one complete Unicode draft snapshot after Undo.
+func (composer *Composer) Redo() bool {
+	if composer.secretMode || len(composer.redo) == 0 {
+		return false
+	}
+	current := composer.snapshot()
+	index := len(composer.redo) - 1
+	snapshot := composer.redo[index]
+	composer.redo = composer.redo[:index]
+	composer.redoBytes -= len(snapshot.value)
+	composer.pushUndo(current)
+	composer.restoreSnapshot(snapshot)
+	composer.closeHistory()
+	return true
+}
+
+func (composer Composer) snapshot() composerSnapshot {
+	return composerSnapshot{value: composer.input.Value(), line: composer.input.Line(), column: composer.input.Column()}
+}
+
+func (composer *Composer) restoreSnapshot(snapshot composerSnapshot) {
+	composer.input.SetValue(snapshot.value)
+	composer.input.MoveToBegin()
+	for line := 0; line < snapshot.line && line+1 < composer.input.LineCount(); line++ {
+		composer.input.CursorDown()
+	}
+	composer.input.SetCursorColumn(max(0, snapshot.column))
+}
+
+func (composer *Composer) pushUndo(snapshot composerSnapshot) {
+	composer.undo = append(composer.undo, snapshot)
+	composer.undoBytes += len(snapshot.value)
+	composer.trimEditHistory()
+}
+
+func (composer *Composer) pushRedo(snapshot composerSnapshot) {
+	composer.redo = append(composer.redo, snapshot)
+	composer.redoBytes += len(snapshot.value)
+	composer.trimEditHistory()
+}
+
+func (composer *Composer) trimEditHistory() {
+	for len(composer.undo)+len(composer.redo) > MaxComposerUndoOps ||
+		composer.undoBytes+composer.redoBytes > MaxComposerUndoBytes {
+		if len(composer.undo) > 0 {
+			composer.undoBytes -= len(composer.undo[0].value)
+			clear(composer.undo[:1])
+			composer.undo = composer.undo[1:]
+			continue
+		}
+		composer.redoBytes -= len(composer.redo[0].value)
+		clear(composer.redo[:1])
+		composer.redo = composer.redo[1:]
+	}
+}
+
+func (composer *Composer) clearRedo() {
+	clear(composer.redo)
+	composer.redo = nil
+	composer.redoBytes = 0
+}
+
+func (composer *Composer) clearEdits() {
+	clear(composer.undo)
+	clear(composer.redo)
+	composer.undo = nil
+	composer.redo = nil
+	composer.undoBytes = 0
+	composer.redoBytes = 0
 }
 
 // RecordSubmission adds one submitted message to local prompt history.
 func (composer *Composer) RecordSubmission(value string) {
-	if composer.secretMode || strings.TrimSpace(value) == "" {
+	if composer.secretMode || strings.TrimSpace(value) == "" || len(value) > composer.maxBytes {
 		return
 	}
 	if len(composer.history) == 0 || composer.history[len(composer.history)-1] != value {
 		composer.history = append(composer.history, value)
+		composer.historyBytes += len(value)
+	}
+	for len(composer.history) > MaxSubmittedHistoryItems || composer.historyBytes > MaxSubmittedHistoryBytes {
+		composer.historyBytes -= len(composer.history[0])
+		clear(composer.history[:1])
+		composer.history = composer.history[1:]
 	}
 	composer.closeHistory()
+}
+
+// SubmittedHistory returns a bounded defensive copy of committed ordinary
+// input. Search interaction state is owned by the caller and is never saved.
+func (composer Composer) SubmittedHistory() []string {
+	if composer.secretMode {
+		return nil
+	}
+	return append([]string(nil), composer.history...)
 }
 
 // ClearHistory removes every submitted input associated with the previous
@@ -193,6 +320,7 @@ func (composer *Composer) RecordSubmission(value string) {
 func (composer *Composer) ClearHistory() {
 	clear(composer.history)
 	composer.history = nil
+	composer.historyBytes = 0
 	composer.closeHistory()
 }
 

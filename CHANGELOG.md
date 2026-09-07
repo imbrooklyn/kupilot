@@ -17,7 +17,7 @@ This file records notable user-visible changes to Kupilot.
   approval/reviewer state, narrow Session rules, and one-attempt action
   supervision.
 - Added strict version 2 configuration, forward-only SQLite migrations through
-  migration 14, split least-privilege RBAC fixtures, and opt-in tagged model,
+  migration 16, split least-privilege RBAC fixtures, and opt-in tagged model,
   Reviewer, Session, and disposable-cluster integration harnesses.
 - Added active-run `Enter` steering at the next model boundary, a bounded
   process-local FIFO follow-up queue on active-run `Tab`, and empty-composer
@@ -31,6 +31,19 @@ This file records notable user-visible changes to Kupilot.
 - Added strict typed claim/Evidence coverage and deterministic synthetic
   quality metrics. These are structural validator tests, not live model
   quality evidence.
+- Added authoritative Last active, bounded `/sessions` and CLI Session listing,
+  `/delete`, exact historical deletion, and digest-bound transactional inactive-
+  Session batch deletion with conservative active/unknown protection.
+- Added typed run terminal reasons and next actions, bidirectional claim/Evidence
+  navigation and provenance, content-free model-egress preflight and detailed
+  budget state, fixed Slash availability, a run-local terminal capability
+  profile, submitted-input reverse search, semantic scrollback navigation,
+  bounded composer undo/redo, redacted `/doctor`/`kupilot doctor`, reduced
+  motion, and textual non-color accessibility.
+- Added strict answer-or-clarification response schema 2, completeness/source-
+  coverage manifests, Evidence freshness/conflict/supersession, narrow same-run
+  safe-read reuse, deterministic endpoint conformance and prompt-injection
+  fixtures, and a unified zero-auto-retry recovery matrix.
 
 ### Changed
 
@@ -52,9 +65,10 @@ This file records notable user-visible changes to Kupilot.
   citations. The pinned Chat Completions stack has no provable same-response
   continuation, so disconnects retain unknown/recovered handling and receive
   no automatic retry.
-- Advanced new redacted Session exports to `kupilot.export-summary.v3` so the
+- Advanced new redacted Session exports to `kupilot.export-summary.v4` so the
   bounded structural claim/Evidence coverage manifest accompanies the
-  validated answer without adding raw Evidence or authority.
+  validated answer or typed clarification without adding raw Evidence or
+  authority.
 - Give each new Session the configured default Context/Namespace candidate and
   verify it through normal scope activation. Resume reuses an exact independently
   verified current scope, while unavailable or conflicting historic candidates
@@ -69,6 +83,12 @@ This file records notable user-visible changes to Kupilot.
 - Completed the low-chrome conversational TUI permission picker, approval
   surface, Reviewer states, input-routing precedence, Markdown/table and
   no-color behavior, explicit resume history, and terminal restoration flow.
+- Replaced the generic question-start transfer failure with Application-owned
+  typed reasons and safe recovery actions. Ordinary submit now binds the exact
+  Session, both process-local authority generations, and selected-resource
+  state; denied input is restored once and is never automatically sent,
+  retargeted, queued, or retried. Compatible restart and migration preserve
+  eligible history without restoring historic authority.
 
 ### Security
 

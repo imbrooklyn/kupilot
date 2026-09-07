@@ -159,6 +159,14 @@ readable. The columns contain no Evidence payload, model response object,
 queue state, executable input, ActionEnvelope, approval, or resumable plan
 authority.
 
+Migration 15 adds the required `sessions.last_activity_at_ms` column and
+descending activity/ID index. Existing rows initialize conservatively from
+their previous `updated_at_ms`; production creates and admitted lifecycle
+writes supply or monotonically advance the dedicated value. Migration 16 adds
+bounded `answer_manifest_json` and `clarification_json` Diagnosis columns.
+Both accept only the strict project-owned schemas; they add no raw response,
+Evidence payload, prompt, generic object, or resumable authority.
+
 The initial schema contains `sessions`, `messages`, `agent_runs`,
 `model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
 `approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
@@ -204,11 +212,14 @@ sqlx handles, transactions, row mappings, `db` tags, nullable driver values, and
 JSON encoding stay inside the adapter.
 
 The Session repository supports create, exact-ID read, optimistic title rename,
-and complete deletion. Rename changes only a standard-persistence Session,
-requires the expected version, rejects a regressing update time, and advances
-the version. Session deletion issues one parent delete in a short transaction;
-foreign-key cascades remove the complete Session-owned graph or the transaction
-rolls back.
+bounded Last-active metadata pages, exact inactive-selection snapshots, storage
+health, and complete deletion. Rename changes only a standard-persistence
+Session, requires the expected version, rejects a regressing update time, and
+advances the version and Last active. Read-only list, resume, status, doctor,
+export, retention, preview, and failed deletion never touch activity. Session
+deletion issues parent deletes in one short transaction; foreign-key cascades
+remove every selected complete Session-owned graph or the transaction rolls
+back.
 
 The Message repository stores only bounded content that the caller has already
 made eligible and safe: user and system-notice content is at most 64 KiB, while
@@ -244,7 +255,7 @@ bounded the source data:
 | Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
 | ToolInvocation | One of the 14 admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
 | Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-, observability-, or remote-diagnostics-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. Raw remote output and remote-output excerpts are never stored; those facts contain only safe target metadata, counts, and a fingerprint. |
-| Diagnosis | Validated free-form Markdown, typed claim/Evidence coverage, an optional inert bounded plan, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete validated Domain record is at most 128 KiB. Every retained current observation and confirmed fact cites same-run Evidence when written. |
+| Diagnosis | Validated free-form Markdown or typed clarification, answer-completeness and claim/Evidence coverage, an optional inert bounded plan, typed not-executed proposed actions, validation warnings, compatibility metadata, and an exact historic Evidence window. The complete validated Domain record is at most 128 KiB. Every retained current observation and confirmed fact cites same-run Evidence when written. |
 | AuditEvent | A fixed event type, actor, outcome, optional scope and subject, and a typed scalar detail object. Detail and subject projections are each at most 4 KiB, and a correlation identifier is at most 128 bytes. Minimal persistence admits only fixed lifecycle, consent, policy, degraded-storage, approval, and write-safety event types. |
 | Setting | `retention.operational_detail_days` is a schema-version-1 integer from 0 through 3,650. `scope.last_context` is a schema-version-1 strict JSON object containing one Context display name. Both use injected UTC update time. Unknown and credential-shaped keys are rejected before SQL; the schema repeats the 64-byte key, 4 KiB JSON, and sensitive-key constraints. |
 
@@ -303,6 +314,12 @@ graph, including model metadata, ToolInvocations, Evidence, Diagnoses, terminal
 approval rows, and Session- or AgentRun-linked AuditEvents, through foreign-key
 cascade in one short transaction. Global typed settings are not Session-owned.
 
+Inactive batch selection is strict before a frozen cutoff, oldest first, and
+excludes current, active-run, active/consuming/attempted-authority, corrupt,
+future, and unknown rows. A confirmed transaction reselects the exact digest-
+bound IDs, Last-active times, Session versions, count, order, cutoff, and schema
+revision. It never creates tombstones or runs `VACUUM`.
+
 Physical-file conformance tests place distinct synthetic prohibited-content
 canaries outside eligible DTOs, persist safe derivatives, and scan both the
 database and WAL. Static guards keep sqlx imports inside the SQLite adapter and
@@ -319,7 +336,7 @@ separately documented kubeconfig exec-credential boundary.
 Resume eligibility is derived rather than stored. A candidate must be active,
 use standard persistence, and retain at least one committed safe Message.
 Picker pages are global and use the exclusive descending keyset
-`updated_at_ms, id`, with a maximum of 50 rows. `--last` is the first row under
+`last_activity_at_ms, id`, with a maximum of 50 rows. `--last` is the first row under
 the same ordering. There is no directory, repository, Context, Namespace, or
 environment filter.
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -25,6 +26,29 @@ const tightenOperationalDetailRetentionSQL = `
 		updated_at_ms = excluded.updated_at_ms
 	WHERE settings.value_json = ?
 `
+
+// AdvanceLastActivity persists one Application-accepted content-free
+// lifecycle instant. It is used when minimal mode intentionally retains no
+// Tool, Evidence, or audit detail.
+func (repository *SessionRepository) AdvanceLastActivity(ctx context.Context, id domain.SessionID, activityAt time.Time) error {
+	if err := repositoryContext(ctx, repository.db, "advance_session_last_activity"); err != nil {
+		return err
+	}
+	if !id.Valid() || activityAt.IsZero() || activityAt.Location() != time.UTC ||
+		activityAt.UnixMilli() < 0 || activityAt.Nanosecond()%int(time.Millisecond) != 0 {
+		return sessioncontract.ErrInvalidRepositoryRequest
+	}
+	err := withTx(ctx, repository.db.handle, func(tx *sqlx.Tx) error {
+		return touchSession(ctx, tx, id, activityAt)
+	})
+	if isSessionContractError(err) {
+		return err
+	}
+	if err != nil {
+		return repositoryFailure(repository.db, "session_activity_failed", "advance_session_last_activity", "Kupilot could not store Session activity.", err)
+	}
+	return nil
+}
 
 // CreateWithAudit atomically inserts one Session and its creation audit.
 func (repository *SessionRepository) CreateWithAudit(
@@ -56,6 +80,7 @@ func (repository *SessionRepository) CreateWithAudit(
 			nullableString(optionalString(session.Summary)),
 			session.Version,
 			session.CreatedAt.UTC().UnixMilli(),
+			session.LastActivityAt.UTC().UnixMilli(),
 			session.UpdatedAt.UTC().UnixMilli(),
 		)
 		if err != nil {
@@ -202,11 +227,6 @@ func (repository *SessionRepository) TightenOperationalDetailRetention(
 	return nil
 }
 
-// DeleteSessionGraph commits the existing fixed Session cascade transaction.
-func (repository *SessionRepository) DeleteSessionGraph(ctx context.Context, id domain.SessionID) error {
-	return repository.Delete(ctx, id)
-}
-
 // ClearHistory removes every Session graph and every remaining unlinked audit
 // in one transaction while preserving settings, consent, and schema metadata.
 func (repository *SessionRepository) ClearHistory(ctx context.Context) error {
@@ -234,8 +254,9 @@ func (repository *SessionRepository) ClearHistory(ctx context.Context) error {
 	return nil
 }
 
-// BeginWithAudit atomically inserts one running AgentRun, activity time, and
-// required start audit. Only standard mode retains the safe request Message.
+// BeginWithAudit atomically inserts one running AgentRun, records the committed
+// initial input as Session activity, and stores the required start audit. Only
+// standard mode retains the safe request Message.
 func (repository *AgentRunRepository) BeginWithAudit(
 	ctx context.Context,
 	message domain.Message,
@@ -269,7 +290,7 @@ func (repository *AgentRunRepository) BeginWithAudit(
 		if err := insertAgentRun(ctx, tx, run, retainMessage); err != nil {
 			return err
 		}
-		if err := touchSession(ctx, tx, run.SessionID, laterTime(message.CreatedAt, *run.StartedAt)); err != nil {
+		if err := touchSession(ctx, tx, run.SessionID, message.CreatedAt); err != nil {
 			return err
 		}
 		return insertAuditEvent(ctx, tx, audit)
@@ -459,7 +480,10 @@ func (repository *ToolInvocationRepository) SaveWithAudit(
 				return err
 			}
 		}
-		return insertAuditEvent(ctx, tx, audit)
+		if err := insertAuditEvent(ctx, tx, audit); err != nil {
+			return err
+		}
+		return touchSession(ctx, tx, run.SessionID, *invocation.FinishedAt)
 	})
 	if errors.Is(err, domain.ErrInvalidToolInvocation) || errors.Is(err, domain.ErrInvalidEvidence) ||
 		isSessionContractError(err) || isAuditContractError(err) {
@@ -485,13 +509,15 @@ type coordinatedDiagnosisJSON struct {
 	warnings   string
 	coverage   string
 	plan       string
+	manifest   string
+	clarify    string
 }
 
 func encodeCoordinatedDiagnosis(diagnosis domain.Diagnosis) (coordinatedDiagnosisJSON, error) {
-	confirmed, hypotheses, missing, actions, warnings, coverage, plan, err := encodeDiagnosis(diagnosis)
+	confirmed, hypotheses, missing, actions, warnings, coverage, plan, manifest, clarify, err := encodeDiagnosis(diagnosis)
 	return coordinatedDiagnosisJSON{
 		confirmed: confirmed, hypotheses: hypotheses, missing: missing, actions: actions, warnings: warnings,
-		coverage: coverage, plan: plan,
+		coverage: coverage, plan: plan, manifest: manifest, clarify: clarify,
 	}, err
 }
 
@@ -524,6 +550,8 @@ func insertCoordinatedDiagnosis(
 		nullableString(encoded.warnings),
 		nullableString(encoded.coverage),
 		nullableString(encoded.plan),
+		nullableString(encoded.manifest),
+		nullableString(encoded.clarify),
 		nullableTime(diagnosis.ObservedFrom),
 		nullableTime(diagnosis.ObservedTo),
 		diagnosis.CreatedAt.UTC().UnixMilli(),

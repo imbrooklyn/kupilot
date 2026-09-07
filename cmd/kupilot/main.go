@@ -7,11 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/term"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
@@ -28,6 +30,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/persistence/sqlite"
 	"github.com/imbrooklyn/kupilot/internal/platform/buildinfo"
 	platformlogging "github.com/imbrooklyn/kupilot/internal/platform/logging"
+	"github.com/imbrooklyn/kupilot/internal/platform/sessionlock"
 	"github.com/imbrooklyn/kupilot/internal/security"
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 	"github.com/imbrooklyn/kupilot/internal/tools"
@@ -62,6 +65,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		_, err := fmt.Fprintln(stdout, "Kupilot cache cleared.")
 		return err
 	}
+	if intent.Kind == cli.IntentSessionsList || intent.Kind == cli.IntentSessionsDelete || intent.Kind == cli.IntentDoctor {
+		return runLocalSessionCommand(ctx, intent, info, paths, sessionCommandIO{
+			input: os.Stdin, output: stdout, isTTY: sessionInputIsTerminal(os.Stdin), now: utcNow, getenv: os.Getenv,
+		})
+	}
 	loaded, err := config.Load(ctx, config.LoadOptions{
 		Paths: paths,
 		Overrides: config.Overrides{
@@ -90,6 +98,11 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			returnErr = closeErr
 		}
 	}()
+	processLock, err := sessionlock.Acquire(ctx, filepath.Join(loaded.Paths.StateDir, ".kupilot-process.lock"), sessionlock.Shared)
+	if err != nil {
+		return err
+	}
+	composition.processLock = processLock
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if loaded.Logging.Enabled {
@@ -440,6 +453,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		}
 	}()
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
+		ApplicationVersion: applicationVersion, ConfigurationSchema: fmt.Sprintf("v%d", config.CurrentVersion),
 		Sessions: sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		ModelContext: messageRepository,
@@ -450,7 +464,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Privacy: privacyManager, RunResourcePolicies: resourceAuthority, UIEvents: uiEventSink, Observer: slogRunObserver{logger: logger},
 		Now: now, BudgetLimits: budgetLimits,
 		UI: &application.CoordinatorUIConfig{
-			Sessions: sessionApplication, Search: sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
+			Sessions: sessionApplication, SessionManagement: sessionRepository,
+			SessionIsolation: &processDeletionIsolation{lock: processLock},
+			Search:           sessionRepository, Titles: sessionApplication, Startup: sessionApplication, Scopes: scopeManager,
 			ScopePreferences: scopePreferenceRepository,
 			Approvals:        approvalCoordinator, RestartProposals: restarter,
 			RemediationProposals: remediator, LocalProposals: localPreparer,
@@ -488,11 +504,14 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		initialScope.Namespace = startResult.ScopeCandidate.Namespace
 		initialScope.Generation = startResult.ScopeGeneration
 	}
-	terminalTitles := loaded.TerminalStatusTitles && terminalStatusTitlesSupported(stdout, os.Getenv)
+	terminalCapabilities := projectTerminalCapabilities(stdout, os.Getenv, loaded.NoColor, loaded.TerminalStatusTitles, loaded.ReducedMotion)
+	terminalTitles := terminalCapabilities.Title == tui.TerminalCapabilityAvailable
 	model := tui.NewModel(tui.Config{
 		NoColor:                 loaded.NoColor,
+		ReducedMotion:           loaded.ReducedMotion,
 		TerminalStatusTitles:    terminalTitles,
-		TerminalClipboard:       terminalClipboardSupported(stdout, os.Getenv),
+		TerminalClipboard:       terminalCapabilities.NativeClipboard == tui.TerminalCapabilityAvailable || terminalCapabilities.OSC52 == tui.TerminalCapabilityAvailable,
+		TerminalCapabilities:    &terminalCapabilities,
 		StartIntent:             startIntent,
 		Scope:                   initialScope,
 		ModelEndpoint:           loaded.Models.Agent.Endpoint,
@@ -583,15 +602,16 @@ func beginTerminalStatusTitlesOnWriter(output io.Writer, active bool) (func() er
 
 func terminalWriter(output io.Writer) bool {
 	file, ok := output.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 func terminalClipboardSupported(output io.Writer, getenv func(string) string) bool {
-	if !terminalWriter(output) || getenv == nil || getenv("TMUX") != "" || getenv("STY") != "" {
+	return terminalWriter(output) && terminalClipboardEnvironmentSupported(getenv)
+}
+
+func terminalClipboardEnvironmentSupported(getenv func(string) string) bool {
+	if getenv == nil || getenv("TMUX") != "" || getenv("STY") != "" ||
+		getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("SSH_CLIENT") != "" {
 		return false
 	}
 	switch strings.ToLower(getenv("TERM_PROGRAM")) {
@@ -616,6 +636,60 @@ func terminalStatusTitleEnvironmentSupported(getenv func(string) string) bool {
 	}
 	term := strings.ToLower(getenv("TERM"))
 	return strings.Contains(term, "xterm") || strings.Contains(term, "kitty") || strings.Contains(term, "wezterm")
+}
+
+func projectTerminalCapabilities(output io.Writer, getenv func(string) string, noColor, titleEnabled, reducedMotion bool) tui.TerminalCapabilityProfile {
+	return projectTerminalCapabilitiesForState(terminalWriter(output), getenv, noColor, titleEnabled, reducedMotion)
+}
+
+func projectTerminalCapabilitiesForState(terminal bool, getenv func(string) string, noColor, titleEnabled, reducedMotion bool) tui.TerminalCapabilityProfile {
+	profile := tui.TerminalCapabilityProfile{
+		NativeClipboard: tui.TerminalCapabilityUnsupported,
+		OSC52:           tui.TerminalCapabilityUnsupported,
+		Multiplexer:     tui.TerminalCapabilityAvailable,
+		RemoteSession:   tui.TerminalCapabilityAvailable,
+		Title:           tui.TerminalCapabilityUnsupported,
+		Notification:    tui.TerminalCapabilityDisabled,
+		Color:           tui.TerminalColorANSI,
+		AlternateScreen: tui.TerminalCapabilityDisabled,
+		ReducedMotion:   reducedMotion,
+		Scrollback:      tui.TerminalScrollbackRestoredCommitted,
+	}
+	if noColor {
+		profile.Color = tui.TerminalColorNone
+	}
+	if getenv == nil || !terminal {
+		if !titleEnabled {
+			profile.Title = tui.TerminalCapabilityDisabled
+		}
+		return profile
+	}
+	multiplexer := getenv("TMUX") != "" || getenv("STY") != ""
+	remote := getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("SSH_CLIENT") != ""
+	if multiplexer {
+		profile.Multiplexer = tui.TerminalCapabilityRestricted
+	}
+	if remote {
+		profile.RemoteSession = tui.TerminalCapabilityRestricted
+	}
+	if multiplexer || remote {
+		profile.OSC52 = tui.TerminalCapabilityRestricted
+		if titleEnabled {
+			profile.Title = tui.TerminalCapabilityRestricted
+		} else {
+			profile.Title = tui.TerminalCapabilityDisabled
+		}
+		return profile
+	}
+	if terminalClipboardEnvironmentSupported(getenv) {
+		profile.OSC52 = tui.TerminalCapabilityAvailable
+	}
+	if !titleEnabled {
+		profile.Title = tui.TerminalCapabilityDisabled
+	} else if terminalStatusTitleEnvironmentSupported(getenv) {
+		profile.Title = tui.TerminalCapabilityAvailable
+	}
+	return profile
 }
 
 func restoreTerminalAfterRuntime(output io.Writer, finalState tea.Model, runErr error) error {
@@ -706,7 +780,7 @@ func (adapter *applicationSessionAdapter) ListResumable(
 	result := make([]application.ResumeSessionRecord, len(page.Sessions))
 	for index, candidate := range page.Sessions {
 		result[index] = application.ResumeSessionRecord{
-			ID: candidate.ID, Title: candidate.Title, UpdatedAt: candidate.UpdatedAt,
+			ID: candidate.ID, Title: candidate.Title, LastActivityAt: candidate.LastActivityAt,
 			PrivacyMode: candidate.PrivacyMode, LastScope: cloneScope(candidate.LastScope),
 		}
 	}
@@ -738,6 +812,17 @@ func (adapter *applicationSessionAdapter) Rename(ctx context.Context, record app
 	return adapter.service.Rename(ctx, sessioncontract.RenameSession{
 		ID: record.SessionID, Title: record.Title, ExpectedVersion: record.ExpectedVersion, UpdatedAt: record.UpdatedAt,
 	})
+}
+
+func (adapter *applicationSessionAdapter) ReadTitleState(
+	ctx context.Context,
+	id domain.SessionID,
+) (application.SessionTitleState, error) {
+	session, err := adapter.service.GetByID(ctx, id)
+	if err != nil {
+		return application.SessionTitleState{}, err
+	}
+	return application.SessionTitleState{SessionID: session.ID, Version: session.Version}, nil
 }
 
 func (adapter *applicationSessionAdapter) RecoverInterrupted(ctx context.Context, recoveredAt time.Time) error {
@@ -871,8 +956,13 @@ func rejectedApplicationRequest(message tea.Msg) tea.Msg {
 		result.Evidence = request.Query.Reference
 	case tui.ApplicationCommandMsg:
 		result.RequestID = request.Command.RequestID
+		result.SessionID = request.Command.SessionID
 		result.ScopeGeneration = request.Command.ExpectedScopeGeneration
+		result.PolicyGeneration = request.Command.ExpectedPolicyGeneration
 		result.RunID = request.Command.RunID
+		result.ApprovalID = request.Command.ApprovalID
+		result.ApprovalDigest = request.Command.ApprovalDigest
+		result.ApprovalSequence = request.Command.ApprovalSequence
 		result.Command = request.Command.Kind
 	case tui.ApplicationModelSetupMsg:
 		destroyApplicationRequest(request)
@@ -1186,6 +1276,7 @@ type runtimeComposition struct {
 	scope             scopeLifecycle
 	database          io.Closer
 	logSink           io.Closer
+	processLock       io.Closer
 	profileCredential *config.SecretValue
 	sourceCredentials []*config.SecretValue
 	prometheus        *observability.PrometheusClient
@@ -1226,6 +1317,9 @@ func (composition *runtimeComposition) Close(ctx context.Context) error {
 	}
 	if composition.logSink != nil {
 		closeErrors = append(closeErrors, composition.logSink.Close())
+	}
+	if composition.processLock != nil {
+		closeErrors = append(closeErrors, composition.processLock.Close())
 	}
 	if composition.profileCredential != nil {
 		composition.profileCredential.Destroy()

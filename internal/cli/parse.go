@@ -17,6 +17,9 @@ const (
 	IntentResumeID
 	IntentResumeLast
 	IntentCacheClear
+	IntentSessionsList
+	IntentSessionsDelete
+	IntentDoctor
 	IntentVersion
 	IntentHelp
 )
@@ -28,16 +31,42 @@ const (
 	HelpRoot HelpTopic = iota
 	HelpResume
 	HelpCache
+	HelpSessions
+	HelpDoctor
 	HelpVersion
 	HelpHelp
 )
 
 // StartIntent is the complete typed result of command-line parsing.
 type StartIntent struct {
-	Kind      IntentKind
+	Kind          IntentKind
+	SessionID     string
+	HelpTopic     HelpTopic
+	Options       StartOptions
+	SessionList   *SessionListOptions
+	SessionDelete *SessionDeleteOptions
+	Doctor        *DoctorOptions
+}
+
+// SessionListOptions is the fixed bounded Session metadata CLI query.
+type SessionListOptions struct {
+	Limit  int
+	Cursor string
+	JSON   bool
+}
+
+// SessionDeleteOptions is one exact or cutoff-bound destructive CLI intent.
+type SessionDeleteOptions struct {
 	SessionID string
-	HelpTopic HelpTopic
-	Options   StartOptions
+	Before    string
+	Limit     int
+	DryRun    bool
+	Confirm   string
+}
+
+// DoctorOptions controls only the versioned output encoding.
+type DoctorOptions struct {
+	JSON bool
 }
 
 // StartOptions contains only admitted non-sensitive startup overrides.
@@ -131,6 +160,9 @@ func helpTopicBeforeOption(args []string) (HelpTopic, error) {
 	if len(args) == 2 && args[0] == "cache" && args[1] == "clear" {
 		return HelpCache, nil
 	}
+	if len(args) >= 1 && len(args) <= 2 && args[0] == "sessions" {
+		return HelpSessions, nil
+	}
 	topic := HelpRoot
 	commandSeen := false
 	for index := 0; index < len(args); index++ {
@@ -198,11 +230,147 @@ func newRootCommand(intent *StartIntent) *cobra.Command {
 		helpCommand,
 		newResumeCommand(intent, startup),
 		newCacheCommand(intent, startup),
+		newSessionsCommand(intent, startup),
+		newDoctorCommand(intent, startup),
 		newVersionCommand(intent),
 	)
 	root.SetHelpCommand(helpCommand)
 
 	return root
+}
+
+func newSessionsCommand(intent *StartIntent, startup *startupFlags) *cobra.Command {
+	sessions := &cobra.Command{
+		Use: "sessions", Short: "List or delete local Sessions",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return &parseFailure{message: "unknown sessions command"}
+			}
+			return nil
+		},
+		RunE: func(*cobra.Command, []string) error {
+			return &parseFailure{message: "sessions requires list or delete"}
+		},
+	}
+	sessions.SetFlagErrorFunc(func(*cobra.Command, error) error {
+		return &parseFailure{message: "unknown sessions option"}
+	})
+
+	var listLimit int
+	var listCursor string
+	var listJSON bool
+	list := &cobra.Command{
+		Use: "list", Short: "List bounded safe Session metadata",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return &parseFailure{message: "sessions list does not accept arguments"}
+			}
+			return nil
+		},
+		RunE: func(command *cobra.Command, _ []string) error {
+			if startup.changed(command) || listLimit < 1 || listLimit > 100 || len(listCursor) > 256 {
+				return &parseFailure{message: "sessions list options are invalid"}
+			}
+			*intent = StartIntent{Kind: IntentSessionsList, SessionList: &SessionListOptions{Limit: listLimit, Cursor: listCursor, JSON: listJSON}}
+			return nil
+		},
+	}
+	list.Flags().IntVar(&listLimit, "limit", 20, "Return at most 1-100 Sessions")
+	list.Flags().StringVar(&listCursor, "cursor", "", "Continue from one bounded opaque cursor")
+	list.Flags().BoolVar(&listJSON, "json", false, "Emit the versioned JSON schema")
+	list.SetFlagErrorFunc(func(*cobra.Command, error) error { return &parseFailure{message: "unknown sessions list option"} })
+
+	var before string
+	var deleteLimit int
+	var dryRun bool
+	var confirm string
+	deleteCommand := &cobra.Command{
+		Use: "delete [SESSION_ID]", Short: "Preview and delete an exact Session or inactive batch",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return &parseFailure{message: "sessions delete accepts one Session ID or --before"}
+			}
+			if len(args) == 1 {
+				canonical, ok := canonicalSessionID(args[0])
+				if !ok || canonical != args[0] {
+					return &parseFailure{message: "session ID must be an exact canonical UUIDv7"}
+				}
+				if before != "" || deleteLimit != 50 {
+					return &parseFailure{message: "exact Session deletion does not accept batch options"}
+				}
+				if confirm != "" && !validDeletionDigest(confirm) {
+					return &parseFailure{message: "sessions delete options are invalid"}
+				}
+				if dryRun && confirm != "" {
+					return &parseFailure{message: "--dry-run and --confirm are mutually exclusive"}
+				}
+				return nil
+			}
+			if before == "" {
+				return &parseFailure{message: "sessions delete requires one Session ID or --before"}
+			}
+			if deleteLimit < 1 || deleteLimit > 100 || len(before) > 64 || len(confirm) > 64 || confirm != "" && !validDeletionDigest(confirm) {
+				return &parseFailure{message: "sessions delete options are invalid"}
+			}
+			if dryRun && confirm != "" {
+				return &parseFailure{message: "--dry-run and --confirm are mutually exclusive"}
+			}
+			return nil
+		},
+		RunE: func(command *cobra.Command, args []string) error {
+			if startup.changed(command) {
+				return &parseFailure{message: "sessions delete does not accept startup options"}
+			}
+			options := &SessionDeleteOptions{Before: before, Limit: deleteLimit, DryRun: dryRun, Confirm: confirm}
+			if len(args) == 1 {
+				options.SessionID = args[0]
+			}
+			*intent = StartIntent{Kind: IntentSessionsDelete, SessionDelete: options}
+			return nil
+		},
+	}
+	deleteCommand.Flags().StringVar(&before, "before", "", "Select Sessions with Last active strictly before a duration or RFC3339 cutoff")
+	deleteCommand.Flags().IntVar(&deleteLimit, "limit", 50, "Bound a batch to 1-100 Sessions")
+	deleteCommand.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the exact snapshot without deleting")
+	deleteCommand.Flags().StringVar(&confirm, "confirm", "", "Commit one exact dry-run digest with an absolute cutoff")
+	deleteCommand.SetFlagErrorFunc(func(*cobra.Command, error) error { return &parseFailure{message: "unknown sessions delete option"} })
+	sessions.AddCommand(list, deleteCommand)
+	return sessions
+}
+
+func validDeletionDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, current := range value {
+		if current < '0' || current > '9' && (current < 'a' || current > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func newDoctorCommand(intent *StartIntent, startup *startupFlags) *cobra.Command {
+	var jsonOutput bool
+	command := &cobra.Command{
+		Use: "doctor", Short: "Show local redacted diagnostics",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return &parseFailure{message: "doctor does not accept arguments"}
+			}
+			return nil
+		},
+		RunE: func(command *cobra.Command, _ []string) error {
+			if startup.changed(command) {
+				return &parseFailure{message: "doctor does not accept startup options"}
+			}
+			*intent = StartIntent{Kind: IntentDoctor, Doctor: &DoctorOptions{JSON: jsonOutput}}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "Emit the versioned JSON schema")
+	command.SetFlagErrorFunc(func(*cobra.Command, error) error { return &parseFailure{message: "unknown doctor option"} })
+	return command
 }
 
 func (flags *startupFlags) changed(command *cobra.Command) bool {
@@ -411,6 +579,10 @@ func helpTopicByName(name string) (HelpTopic, bool) {
 		return HelpResume, true
 	case "cache":
 		return HelpCache, true
+	case "sessions":
+		return HelpSessions, true
+	case "doctor":
+		return HelpDoctor, true
 	case "version":
 		return HelpVersion, true
 	case "help":

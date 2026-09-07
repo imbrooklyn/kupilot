@@ -153,6 +153,74 @@ func TestComposerClearHistoryRemovesPriorSessionInputs(t *testing.T) {
 	}
 }
 
+func TestComposerUndoRedoPreservesUnicodePasteAndMultilineAsWholeEdits(t *testing.T) {
+	t.Parallel()
+
+	composer := NewComposer(ComposerStyles{}, 4096)
+	first := "first " + string([]rune{0x1f469, 0x200d, 0x1f4bb})
+	updated, _, err := composer.Update(tea.PasteMsg{Content: first})
+	if err != nil {
+		t.Fatalf("first paste error = %v", err)
+	}
+	composer = updated
+	updated, _, err = composer.Update(tea.PasteMsg{Content: "\nsecond line"})
+	if err != nil {
+		t.Fatalf("multiline paste error = %v", err)
+	}
+	composer = updated
+	if composer.Value() != first+"\nsecond line" || !composer.Undo() || composer.Value() != first ||
+		!composer.Undo() || composer.Value() != "" {
+		t.Fatalf("undo sequence produced %q", composer.Value())
+	}
+	if !composer.Redo() || composer.Value() != first || !composer.Redo() || composer.Value() != first+"\nsecond line" {
+		t.Fatalf("redo sequence produced %q", composer.Value())
+	}
+	if composer.Redo() {
+		t.Fatal("redo passed the newest snapshot")
+	}
+}
+
+func TestComposerUndoIsBoundedClearsRedoAndNeverRecordsSecretInput(t *testing.T) {
+	t.Parallel()
+
+	composer := NewComposer(ComposerStyles{}, 4096)
+	for index := 0; index < MaxComposerUndoOps+25; index++ {
+		updated, _, err := composer.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+		if err != nil {
+			t.Fatalf("edit %d error = %v", index, err)
+		}
+		composer = updated
+	}
+	if len(composer.undo)+len(composer.redo) != MaxComposerUndoOps ||
+		composer.undoBytes+composer.redoBytes > MaxComposerUndoBytes {
+		t.Fatalf("edit bounds = %d operations/%d bytes", len(composer.undo)+len(composer.redo), composer.undoBytes+composer.redoBytes)
+	}
+	if !composer.Undo() {
+		t.Fatal("bounded stack could not undo")
+	}
+	if len(composer.undo)+len(composer.redo) > MaxComposerUndoOps ||
+		composer.undoBytes+composer.redoBytes > MaxComposerUndoBytes || composer.undoBytes < 0 || composer.redoBytes < 0 {
+		t.Fatalf("undo transfer exceeded shared bounds = %d operations/%d bytes", len(composer.undo)+len(composer.redo), composer.undoBytes+composer.redoBytes)
+	}
+	updated, _, err := composer.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if err != nil {
+		t.Fatalf("replacement edit error = %v", err)
+	}
+	composer = updated
+	if composer.Redo() {
+		t.Fatal("new edit did not clear redo")
+	}
+	composer.SetSecretMode(true)
+	updated, _, err = composer.Update(tea.KeyPressMsg{Code: 's', Text: "secret"})
+	if err != nil {
+		t.Fatalf("secret edit error = %v", err)
+	}
+	composer = updated
+	if composer.Undo() || len(composer.undo) != 0 || len(composer.redo) != 0 {
+		t.Fatal("secret input entered the undo/redo stacks")
+	}
+}
+
 func visualTextColumn(line, value string) int {
 	index := strings.Index(line, value)
 	if index < 0 {

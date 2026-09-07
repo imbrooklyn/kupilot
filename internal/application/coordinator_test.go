@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,6 +103,73 @@ func TestCoordinatorDurableBeginFailurePerformsZeroAgentCalls(t *testing.T) {
 	})
 	if !errors.Is(err, ErrPersistenceUnavailable) || persistence.beginCalls() != 1 || runnerCalls.Load() != 0 {
 		t.Fatalf("degraded retry error/calls = %v/%d/%d", err, persistence.beginCalls(), runnerCalls.Load())
+	}
+}
+
+func TestCoordinatorRunPreflightRejectsUnboundInputAndBudgetBeforeModelCall(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*agent.ModelCallPreflight)
+	}{
+		{name: "input digest mismatch", mutate: func(preflight *agent.ModelCallPreflight) {
+			preflight.CurrentInputDigest = domain.SHA256Hex("foreign-input-manifest")
+		}},
+		{name: "input count mismatch", mutate: func(preflight *agent.ModelCallPreflight) {
+			preflight.CurrentInputCount++
+		}},
+		{name: "reservation exceeds frozen budget", mutate: func(preflight *agent.ModelCallPreflight) {
+			preflight.ReservedCostUnits = 100
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := newCoordinatorClock()
+			var modelCalls atomic.Int64
+			runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+				publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+				if err != nil {
+					t.Fatalf("NewEventPublisher() error = %v", err)
+				}
+				if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil || result != agent.EventSinkAccepted {
+					t.Fatalf("Publish(started) = %q, %v", result, err)
+				}
+				requestID := domain.ModelRequestID(coordinatorUUID(950))
+				preflight := testModelCallPreflightForInput(input, agent.ModelCallAgent)
+				test.mutate(preflight)
+				result, err := publisher.Publish(ctx, agent.RunEvent{
+					Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID, ModelPreflight: preflight,
+				})
+				if err != nil || result != agent.EventSinkRejected {
+					t.Fatalf("Publish(preflight) = %q, %v", result, err)
+				}
+				if result == agent.EventSinkAccepted {
+					modelCalls.Add(1)
+				}
+				class := domain.SafeErrorClassPersistenceUnavailable
+				if result, err := publisher.Publish(ctx, agent.RunEvent{
+					Kind:    agent.RunEventRunFailed,
+					Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The model invocation was rejected before transport."},
+				}); err != nil || result == agent.EventSinkRejected {
+					t.Fatalf("Publish(failed) = %q, %v", result, err)
+				}
+				return agent.RunOutcome{
+					Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+					SafeMessage: "The model invocation was rejected before transport.",
+				}
+			})
+			coordinator, _, _, _ := newCoordinatorHarness(t, clock, runner)
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
+				SessionID: session.ID, Question: "Inspect the selected Pod.",
+			})
+			if err != nil {
+				t.Fatalf("StartRun() error = %v", err)
+			}
+			result, err := coordinator.WaitRun(context.Background(), runID)
+			if err != nil || result.Status != domain.AgentRunStatusFailed || modelCalls.Load() != 0 {
+				t.Fatalf("preflight result/model calls = %#v/%d, %v", result, modelCalls.Load(), err)
+			}
+		})
 	}
 }
 
@@ -346,6 +414,92 @@ func TestCoordinatorRejectsDiagnosisWithUnacceptedEvidenceBeforePersistence(t *t
 	}
 }
 
+func TestCoordinatorRejectsClarificationAfterToolLifecycle(t *testing.T) {
+	clock := newCoordinatorClock()
+	rejected := make(chan agent.EventSinkResult, 1)
+	runner := runnerFunc(func(ctx context.Context, input agent.RunInput, sink agent.EventSink) agent.RunOutcome {
+		publisher, err := agent.NewEventPublisher(input.RunID(), input.Scope().Generation, clock.Now, sink)
+		if err != nil {
+			t.Fatalf("NewEventPublisher() error = %v", err)
+		}
+		if result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventRunStarted}); err != nil || result != agent.EventSinkAccepted {
+			t.Fatalf("Publish(started) = %q, %v", result, err)
+		}
+		purpose := "Inspect one bounded projection."
+		arguments := `{"kind":"Pod","name":"sample-pod"}`
+		startedAt := clock.Now()
+		invocation := domain.ToolInvocation{
+			ID: domain.ToolInvocationID(coordinatorUUID(960)), RunID: input.RunID(), Sequence: 1,
+			Name: domain.ToolNameGetResource, Version: "tool-v1", Purpose: &purpose,
+			Scope: input.Scope().Snapshot(), ArgumentsJSON: arguments, ArgumentsDigest: domain.SHA256Hex(arguments),
+			Status: domain.ToolInvocationStatusRequested, StartedAt: &startedAt,
+		}
+		if result, err := publisher.Publish(ctx, agent.RunEvent{
+			Kind: agent.RunEventToolCallRequested, ExternalCallCost: 1, ToolInvocation: &invocation,
+		}); err != nil || result != agent.EventSinkAccepted {
+			t.Fatalf("Publish(requested) = %q, %v", result, err)
+		}
+		finishedAt := clock.Now()
+		summary := "The bounded read completed without accepted Evidence."
+		invocation.Status = domain.ToolInvocationStatusSucceeded
+		invocation.ResultSummary = &summary
+		invocation.FinishedAt = &finishedAt
+		if result, err := publisher.Publish(ctx, agent.RunEvent{
+			Kind: agent.RunEventToolCallCompleted, ToolInvocation: &invocation,
+		}); err != nil || result != agent.EventSinkAccepted {
+			t.Fatalf("Publish(completed) = %q, %v", result, err)
+		}
+		clarification := domain.ClarificationRequest{
+			SchemaVersion: domain.AnswerCompletenessSchemaVersion,
+			Questions: []domain.ClarificationQuestion{{
+				Sequence: 1, Kind: domain.ClarificationFreeForm, Prompt: "Which exact workload should be inspected?",
+			}},
+		}
+		answer, err := agent.RenderClarificationMarkdown(clarification)
+		if err != nil {
+			t.Fatalf("RenderClarificationMarkdown() error = %v", err)
+		}
+		diagnosis := domain.Diagnosis{
+			ID: domain.DiagnosisID(coordinatorUUID(961)), RunID: input.RunID(), Scope: input.Scope().Snapshot(),
+			AnswerMarkdown: answer, CreatedAt: clock.Now(), Clarification: &clarification,
+			Completeness: domain.AnswerCompletenessManifest{
+				SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 2,
+				StopReason: domain.RunTerminalNeedsUserInput, StopReasonBasis: domain.RunTerminalReasonFromClarification,
+			},
+		}
+		if diagnosis.Validate() != nil {
+			t.Fatal("clarification fixture is not Domain-valid")
+		}
+		result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventDiagnosisReady, Diagnosis: &diagnosis})
+		if err != nil {
+			t.Fatalf("Publish(clarification) error = %v", err)
+		}
+		rejected <- result
+		class := domain.SafeErrorClassInvalidExternalResponse
+		_, _ = publisher.Publish(ctx, agent.RunEvent{
+			Kind:    agent.RunEventRunFailed,
+			Failure: &agent.RunEventFailure{Class: class, SafeMessage: "Clarification was rejected after Tool activity."},
+		})
+		return agent.RunOutcome{
+			Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+			SafeMessage: "Clarification was rejected after Tool activity.",
+		}
+	})
+	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	session := createCoordinatorSession(t, coordinator)
+	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{
+		SessionID: session.ID, Question: "Inspect the selected Pod.",
+	})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	result, err := coordinator.WaitRun(context.Background(), runID)
+	if err != nil || result.Status != domain.AgentRunStatusFailed || <-rejected != agent.EventSinkRejected ||
+		len(persistence.diagnoses) != 0 || persistence.toolCalls() != 1 {
+		t.Fatalf("clarification-after-Tool result = %#v, %v; diagnoses=%d tools=%d", result, err, len(persistence.diagnoses), persistence.toolCalls())
+	}
+}
+
 func TestCoordinatorRejectsCancelledAndStaleStartsBeforePersistence(t *testing.T) {
 	t.Parallel()
 	t.Run("cancelled Context", func(t *testing.T) {
@@ -552,7 +706,7 @@ func TestCoordinatorSurfacesLaterAuditDegradationAndFinishesInMemory(t *testing.
 			t.Fatalf("Publish(started) error = %v", err)
 		}
 		requestID := domain.ModelRequestID(coordinatorUUID(900))
-		result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID})
+		result, err := publisher.Publish(ctx, agent.RunEvent{Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID, ModelPreflight: testModelCallPreflightForInput(input, agent.ModelCallAgent)})
 		if err != nil || result != agent.EventSinkDegraded {
 			t.Fatalf("Publish(model) = %q/%v", result, err)
 		}
@@ -821,6 +975,7 @@ type memoryCoordinatorPersistence struct {
 	contextReadFailure   bool
 	contextWriteFailure  bool
 	contextSummaryWrites int
+	activityWrites       []time.Time
 }
 
 func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
@@ -841,6 +996,23 @@ func (persistence *memoryCoordinatorPersistence) CreateWithAudit(
 	}
 	persistence.sessions[session.ID] = session
 	persistence.audits = append(persistence.audits, audit)
+	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) AdvanceLastActivity(_ context.Context, id domain.SessionID, activityAt time.Time) error {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	session, found := persistence.sessions[id]
+	if !found || activityAt.IsZero() || activityAt.Location() != time.UTC || activityAt.Before(session.CreatedAt) {
+		return errors.New("invalid Session activity")
+	}
+	if activityAt.After(session.LastActivityAt) {
+		session.LastActivityAt = activityAt
+		session.UpdatedAt = activityAt
+	}
+	session.Version++
+	persistence.sessions[id] = session
+	persistence.activityWrites = append(persistence.activityWrites, activityAt)
 	return nil
 }
 
@@ -902,6 +1074,97 @@ func (persistence *memoryCoordinatorPersistence) DeleteSessionGraph(_ context.Co
 		}
 	}
 	return nil
+}
+
+func (persistence *memoryCoordinatorPersistence) ListSessionMetadata(_ context.Context, request SessionListStoreRequest) (SessionListStorePage, error) {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	rows := make([]SessionMetadataRecord, 0, len(persistence.sessions))
+	for _, session := range persistence.sessions {
+		rows = append(rows, memorySessionMetadata(session))
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].LastActiveUnixMillis > rows[j].LastActiveUnixMillis ||
+			rows[i].LastActiveUnixMillis == rows[j].LastActiveUnixMillis && rows[i].ID > rows[j].ID
+	})
+	if request.BeforeLastActiveMillis != nil {
+		filtered := rows[:0]
+		for _, row := range rows {
+			if row.LastActiveUnixMillis < *request.BeforeLastActiveMillis || row.LastActiveUnixMillis == *request.BeforeLastActiveMillis && row.ID < request.BeforeID {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	if len(rows) > request.Limit {
+		rows = rows[:request.Limit]
+	}
+	return SessionListStorePage{Sessions: rows}, nil
+}
+
+func (persistence *memoryCoordinatorPersistence) PreviewSessionDeletion(_ context.Context, request SessionDeletionSelectionRequest) (SessionDeletionSnapshot, error) {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	snapshot := SessionDeletionSnapshot{Request: request, SchemaRevision: 15, Remaining: len(persistence.sessions)}
+	for _, session := range persistence.sessions {
+		row := memorySessionMetadata(session)
+		matched := request.Kind == SessionDeletionExact && session.ID == request.SessionID ||
+			request.Kind == SessionDeletionBefore && session.LastActivityAt.Before(request.Cutoff)
+		if !matched {
+			continue
+		}
+		snapshot.Matched++
+		if session.LastActivityAt.After(request.FrozenNow) || request.Kind == SessionDeletionBefore && session.ID == request.CurrentSessionID {
+			snapshot.Protected++
+			continue
+		}
+		snapshot.Eligible++
+		snapshot.Selected = append(snapshot.Selected, row)
+	}
+	sort.Slice(snapshot.Selected, func(i, j int) bool {
+		return snapshot.Selected[i].LastActiveUnixMillis < snapshot.Selected[j].LastActiveUnixMillis ||
+			snapshot.Selected[i].LastActiveUnixMillis == snapshot.Selected[j].LastActiveUnixMillis && snapshot.Selected[i].ID < snapshot.Selected[j].ID
+	})
+	snapshot.OverLimit = snapshot.Eligible > request.Limit
+	if len(snapshot.Selected) > request.Limit {
+		snapshot.Selected = snapshot.Selected[:request.Limit]
+	}
+	if !snapshot.OverLimit {
+		snapshot.Remaining -= len(snapshot.Selected)
+	}
+	return snapshot, nil
+}
+
+func (persistence *memoryCoordinatorPersistence) CommitSessionDeletion(ctx context.Context, expected SessionDeletionSnapshot) (int, error) {
+	for _, row := range expected.Selected {
+		if err := persistence.DeleteSessionGraph(ctx, row.ID); err != nil {
+			return 0, err
+		}
+	}
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	return len(persistence.sessions), nil
+}
+
+func (persistence *memoryCoordinatorPersistence) SessionStorageHealth(_ context.Context, now time.Time) (SessionStorageHealth, error) {
+	persistence.mu.Lock()
+	defer persistence.mu.Unlock()
+	health := SessionStorageHealth{SchemaRevision: 15, SessionCount: len(persistence.sessions)}
+	for _, session := range persistence.sessions {
+		if session.LastActivityAt.After(now) {
+			health.ProtectedActivity++
+			health.FutureActivity++
+		}
+	}
+	return health, nil
+}
+
+func memorySessionMetadata(session domain.Session) SessionMetadataRecord {
+	return SessionMetadataRecord{
+		ID: session.ID, Title: session.Title, Status: session.Status, PrivacyMode: session.PrivacyMode,
+		Version: session.Version, CreatedAtUnixMillis: session.CreatedAt.UnixMilli(),
+		LastActiveUnixMillis: session.LastActivityAt.UnixMilli(), UpdatedAtUnixMillis: session.UpdatedAt.UnixMilli(),
+	}
 }
 
 func (persistence *memoryCoordinatorPersistence) ClearHistory(_ context.Context) error {
@@ -1366,6 +1629,10 @@ func newCoordinatorHarness(
 	coordinator, err := NewCoordinator(config)
 	if err != nil {
 		t.Fatalf("NewCoordinator() error = %v", err)
+	}
+	coordinator.sessionManager, err = NewSessionManager(persistence, clock.Now)
+	if err != nil {
+		t.Fatalf("NewSessionManager() error = %v", err)
 	}
 	return coordinator, persistence, scope, ui
 }

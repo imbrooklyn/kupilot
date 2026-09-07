@@ -624,6 +624,9 @@ func TestCoordinatorTerminalEventCancelsUnexecutedApproval(t *testing.T) {
 	outer.approvals = fixture.coordinator
 	fixture.scope.scope = scope.scope
 	session := createCoordinatorSession(t, outer)
+	outer.runResourcePolicies = coordinatorResourcePoliciesAt{
+		generation: fixture.coordinator.UIPermissionSnapshot().PolicyGeneration,
+	}
 	runID, err := outer.StartRun(context.Background(), StartRunCommand{
 		SessionID: session.ID, Question: "Inspect the selected Deployment.",
 	})
@@ -639,6 +642,18 @@ func TestCoordinatorTerminalEventCancelsUnexecutedApproval(t *testing.T) {
 		fixture.executor.calls != 0 {
 		t.Fatalf("terminal close expected/request/executor = %s/%#v/%d", fixture.persistence.lastCloseExpected, fixture.persistence.lastClosed, fixture.executor.calls)
 	}
+}
+
+type coordinatorResourcePoliciesAt struct {
+	generation domain.PolicyGeneration
+}
+
+func (source coordinatorResourcePoliciesAt) ResourcePolicySnapshot(ctx context.Context) (domain.ResourcePolicyCatalog, domain.PolicyGeneration, bool) {
+	return domain.DefaultResourcePolicyCatalog(), source.generation, ctx != nil && ctx.Err() == nil && source.generation.Valid()
+}
+
+func (source coordinatorResourcePoliciesAt) CurrentPolicyGeneration(ctx context.Context, generation domain.PolicyGeneration) bool {
+	return ctx != nil && ctx.Err() == nil && generation == source.generation
 }
 
 func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *testing.T) {

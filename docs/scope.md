@@ -1,7 +1,7 @@
 # Kupilot Scope
 
 - Status: Accepted `v0.5` target
-- Date: 2026-09-06
+- Date: 2026-09-07
 
 The current code includes the named-model and safe Session-context runtime,
 broad read/observability, remote-diagnostic adapters, deterministic permission
@@ -46,6 +46,18 @@ capability may be inferred from it.
 - Informed model-transfer consent, safe local SQLite persistence, retention,
   deletion, redacted export, durable action audit, and local `/status` and
   `/permissions` views.
+- Bounded `/sessions` discovery, authoritative Last active, exact current or
+  historical deletion, and digest-bound inactive-Session batch deletion through
+  the fixed TUI and pre-TUI CLI entry points.
+- Content-free model-egress preflight, typed terminal reasons and safe next
+  actions, provenance and bidirectional claim/Evidence navigation, fixed Slash
+  availability, conservative terminal capabilities, committed-input reverse
+  search, semantic scrollback jumps, bounded undo/redo, local redacted doctor,
+  reduced motion, and non-color accessibility.
+- Strict answer/clarification outcomes, declared source coverage, exact
+  freshness/conflict/supersession state, narrow same-run safe-read reuse,
+  category-level budget explanation, and a unified no-blind-retry recovery
+  matrix.
 - macOS and Linux support on `amd64` and `arm64`; Windows remains experimental.
 
 ## Capability contract
@@ -101,6 +113,16 @@ Pending steer and queued follow-up input is likewise bound to the exact scope,
 policy generation, model role and origin, consent, and budget state. A change
 invalidates it before cancellation; it is recovered for explicit editing and
 is never automatically retargeted.
+
+Both generations are process-local verified-authority versions. They are not
+binary, schema, migration, database, or Session versions, and a persisted value
+is historic provenance rather than resumable authority. A TUI question binds
+the exact current Session, both expected generations, and selected-resource
+state. A mismatch returns a typed safe reason and current-state projection with
+zero model calls; it never automatically retargets, queues, retries, or sends
+the question. A newer independently verified current scope may be shown for an
+explicit resubmit. An unverified scope or stale selected ResourceRef uses the
+existing bounded picker.
 
 ## Permission and risk scope
 
@@ -197,6 +219,13 @@ inside the sole adapter. The stable implementation path is the existing safe
 SQLite messages through a thin ordered bridge until a stable Eino runner-
 managed Session passes ADR-0047's adoption gate.
 
+A compatible restart or forward migration preserves eligible Session listing
+and explicit resume. Historic Context and Namespace remain candidates only. An
+exact match with a scope independently verified in the current process reuses
+that current authority; unavailable or conflicting candidates enter the scope
+picker. Resume itself remains zero model and operational I/O, and only the next
+explicit question can transfer eligible history.
+
 The process-local input queue is not Session memory or resumable authority.
 Only a committed steer enters the existing Message history. One completed run
 may therefore contain one initial user Message, zero or more ordered committed
@@ -263,6 +292,12 @@ Agent quality and Reviewer decisions, escalation, cost, and latency. Neither
 live integration nor evaluation replaces deterministic CI or generalizes to an
 untested endpoint or version.
 
+Session metadata listing and `/doctor` are local read-only use cases. Exact
+deletion is transactional; inactive batch automation requires a frozen absolute
+cutoff and matching schema-1 selection digest. Search state, undo snapshots,
+terminal capability state, deletion plans, preflight events, and safe-read
+reuse are not new durable stores or resumable authority.
+
 ## References
 
 - [Product Contract](product.md)
@@ -275,3 +310,6 @@ untested endpoint or version.
 - [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

@@ -339,6 +339,21 @@ func (manager *PrivacyManager) Snapshot() PrivacyBindingSnapshot {
 	}
 }
 
+// EligibleModelCategories returns the fixed ordered category IDs covered by
+// the current configuration. It performs no I/O and carries no content.
+func (manager *PrivacyManager) EligibleModelCategories() []ModelDataCategory {
+	if manager == nil {
+		return nil
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return enabledPrivacyCategories(
+		manager.logsEnabled,
+		manager.prometheusOriginHash != "",
+		manager.lokiOriginHash != "",
+	)
+}
+
 // AuthorizeContainerOutput fails closed before any admitted container output,
 // including logs, Pod Exec, file content, or diagnostic-Pod output, can cross
 // the model boundary.

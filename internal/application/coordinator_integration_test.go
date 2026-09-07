@@ -16,7 +16,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
@@ -586,10 +585,14 @@ func assertHistoricalResponseProtocol(t *testing.T, request integrationModelRequ
 	for _, message := range request.Messages {
 		if message.Role == "assistant" && message.Content != "" {
 			assistantCount++
-			draft, err := agent.DecodeDiagnosticResponse(message.Content)
-			if err != nil || draft.AnswerMarkdown == "" || len(draft.ConfirmedFacts) != 0 ||
-				len(draft.RecommendedActions) != 0 {
-				t.Fatalf("historic assistant response = %#v, error = %v", draft, err)
+			var retained struct {
+				AnswerMarkdown    string            `json:"answer_markdown"`
+				EvidenceCitations []json.RawMessage `json:"evidence_citations"`
+				ProposedActions   []json.RawMessage `json:"proposed_actions"`
+			}
+			if err := json.Unmarshal([]byte(message.Content), &retained); err != nil || retained.AnswerMarkdown == "" ||
+				len(retained.EvidenceCitations) != 0 || len(retained.ProposedActions) != 0 {
+				t.Fatalf("historic assistant response = %#v, error = %v", retained, err)
 			}
 		}
 		if message.Role == "user" && message.Content == currentQuestion {
@@ -866,7 +869,7 @@ func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) 
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	const claim = "The Pod is not Ready."
 	return fmt.Sprintf(
-		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[]}`,
+		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
 		claim, domain.SHA256Hex(claim), evidenceID,
 	)
 }
@@ -874,14 +877,14 @@ func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
 	claim := "The projected condition includes token=" + canary
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[]}`,
+		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
 		claim, claim, domain.SHA256Hex(claim), evidenceID,
 	)
 }
 
 func integrationUnreferencedDiagnosisJSON(canary string) string {
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[]}`,
+		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
 		"Review the observation without claiming it; marker="+canary,
 	)
 }

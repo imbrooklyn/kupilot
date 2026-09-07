@@ -2,6 +2,7 @@ package einoadapter
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,12 +47,13 @@ func TestToolBudgetProcessesBatchInOrderAndStopsBeforeSecondHandler(t *testing.T
 	assertTerminalSequence(t, recorder.Events())
 }
 
-func TestRepeatedToolCallStopsWithoutSecondHandlerOrThirdModelCall(t *testing.T) {
+func TestEquivalentSafeReadReusesAcceptedResultWithoutSecondHandlerCall(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	model := &recordingModel{scripts: []modelScript{
 		scriptedChunks(toolCallChunks(resourceCall("call-1", "sample-pod"))...),
 		scriptedChunks(toolCallChunks(resourceCall("call-2", "sample-pod"))...),
+		scriptedChunks(diagnosisChunks(readFixture(t, "agent-runtime-valid-diagnosis.json"))...),
 	}}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		return successfulToolResult(t, call, testEvidenceID, clock.Now(), `{"ready":false}`)
@@ -63,10 +65,88 @@ func TestRepeatedToolCallStopsWithoutSecondHandlerOrThirdModelCall(t *testing.T)
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
 		t.Fatalf("outcome = %#v", outcome)
 	}
-	if len(model.Requests()) != 2 || len(tool.Calls()) != 1 {
+	if len(model.Requests()) != 3 || len(tool.Calls()) != 1 {
 		t.Fatalf("calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
 	}
+	reused := 0
+	for _, event := range recorder.Events() {
+		if event.ToolReuse != nil {
+			reused++
+			if event.ExternalCallCost != 0 || event.ToolReuse.SourceInvocationID == event.ToolInvocation.ID ||
+				event.ToolReuse.ObservedAt != clock.Now() {
+				t.Fatalf("reuse event = %#v", event)
+			}
+		}
+	}
+	if reused != 2 {
+		t.Fatalf("reuse event count = %d, want requested and completed", reused)
+	}
+	lastRequest := model.Requests()[2]
+	foundMetadata := false
+	for _, message := range lastRequest.Messages {
+		foundMetadata = foundMetadata || message != nil && strings.Contains(message.Content, `"data_class":"local_runtime_reuse"`)
+		if message != nil && strings.Contains(message.Content, `"data":{"ready":false}`) && strings.Contains(message.Content, `"current_invocation_id"`) {
+			t.Fatal("reuse metadata copied the original Tool payload")
+		}
+	}
+	if !foundMetadata {
+		t.Fatal("third model request omitted bounded reuse metadata")
+	}
 	assertTerminalSequence(t, recorder.Events())
+}
+
+func TestSafeReadReuseExpiresRejectsPartialAndInvalidatesExactConflict(t *testing.T) {
+	clock := newTestClock()
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	firstCall, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000008101", resourceCall("call-1", "sample-pod"))
+	if err != nil {
+		t.Fatalf("BindToolCall(first) error = %v", err)
+	}
+	state := &runState{
+		safeReadReuse:    make(map[agent.ToolCallIdentity]safeReadCacheEntry),
+		safeReadSubjects: make(map[string]string), conflictSubjects: make(map[string]struct{}),
+	}
+	first := successfulToolResult(t, firstCall, testEvidenceID, clock.Now(), `{"ready":false}`)
+	state.retainReusableSafeRead(firstCall, first, `{"data":{"ready":false}}`)
+	if _, ok := state.reusableSafeRead(firstCall, clock.Now().Add(agent.SafeReadReuseWindow-time.Millisecond)); !ok {
+		t.Fatal("exact complete safe read was not reusable inside its fixed window")
+	}
+	if _, ok := state.reusableSafeRead(firstCall, clock.Now().Add(agent.SafeReadReuseWindow)); ok {
+		t.Fatal("safe read was reusable at the exact expiry boundary")
+	}
+
+	partialCall, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000008102", resourceCall("call-2", "partial-pod"))
+	if err != nil {
+		t.Fatalf("BindToolCall(partial) error = %v", err)
+	}
+	partial := successfulToolResult(t, partialCall, secondEvidenceID, clock.Now(), `{"ready":false}`)
+	partial.Status = domain.ToolResultStatusPartial
+	partial.Evidence[0].Partial = true
+	state.retainReusableSafeRead(partialCall, partial, `{"data":{"ready":false}}`)
+	if _, ok := state.reusableSafeRead(partialCall, clock.Now()); ok {
+		t.Fatal("partial result entered the reuse cache")
+	}
+
+	conflictCall, err := agent.BindToolCall(input, "00000000-0000-7000-8000-000000008103", resourceCall("call-3", "alias-pod"))
+	if err != nil {
+		t.Fatalf("BindToolCall(conflict) error = %v", err)
+	}
+	conflict := successfulToolResult(t, conflictCall, "00000000-0000-7000-8000-000000008104", clock.Now(), `{"ready":true}`)
+	conflict.Evidence[0].Fingerprint = domain.SHA256Hex("different-safe-observation")
+	state.retainReusableSafeRead(conflictCall, conflict, `{"data":{"ready":true}}`)
+	if _, ok := state.reusableSafeRead(firstCall, clock.Now()); ok || len(state.conflictSubjects) != 1 {
+		t.Fatalf("intervening exact subject conflict did not invalidate reuse: conflicts=%d", len(state.conflictSubjects))
+	}
+}
+
+func TestSafeReadReuseCatalogNeverAdmitsSensitiveOrMutatingOperations(t *testing.T) {
+	for _, name := range []domain.ToolName{
+		domain.ToolNameReadContainerFile, domain.ToolNamePodExec, domain.ToolNameRunDiagnosticPod,
+	} {
+		if safeReadReusable(name) {
+			t.Fatalf("sensitive or mutating Tool %q admitted to safe-read reuse", name)
+		}
+	}
 }
 
 func TestNoProgressStopsBeforeThirdNeutralModelCall(t *testing.T) {
@@ -91,12 +171,13 @@ func TestNoProgressStopsBeforeThirdNeutralModelCall(t *testing.T) {
 	if len(model.Requests()) != 2 || len(tool.Calls()) != 2 {
 		t.Fatalf("calls: Model = %d, Tool = %d", len(model.Requests()), len(tool.Calls()))
 	}
-	foundNoEvidenceGap := false
-	for _, missing := range outcome.Diagnosis.MissingInformation {
-		foundNoEvidenceGap = foundNoEvidenceGap || missing.Kind == domain.MissingInformationAbsent
+	checkedAbsent := false
+	for _, source := range outcome.Diagnosis.Completeness.Sources {
+		checkedAbsent = checkedAbsent || source.State == domain.SourceCheckedAbsent
 	}
-	if !foundNoEvidenceGap {
-		t.Fatalf("missing information = %#v", outcome.Diagnosis.MissingInformation)
+	if !checkedAbsent || outcome.Diagnosis.Completeness.StopReason != domain.RunTerminalBudgetExhausted ||
+		outcome.Diagnosis.Completeness.StopReasonBasis != domain.RunTerminalReasonFromRuntimeBudget {
+		t.Fatalf("negative source coverage = %#v", outcome.Diagnosis.Completeness)
 	}
 	assertTerminalSequence(t, recorder.Events())
 }

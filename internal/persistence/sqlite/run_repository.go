@@ -115,9 +115,10 @@ func NewAgentRunRepository(db *DB) *AgentRunRepository {
 	return &AgentRunRepository{db: db}
 }
 
-// Begin atomically inserts one running AgentRun and activity time. Standard
-// mode also retains the request Message; minimal mode retains only its opaque
-// identity in the run lifecycle record.
+// Begin atomically inserts one running AgentRun and records the committed
+// initial input as Session activity. Standard mode also retains the request
+// Message; minimal mode retains only its opaque identity in the run lifecycle
+// record.
 func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.Message, run domain.AgentRun) error {
 	if err := repositoryContext(ctx, repository.db, "begin_agent_run"); err != nil {
 		return err
@@ -146,7 +147,7 @@ func (repository *AgentRunRepository) Begin(ctx context.Context, message domain.
 		if err := insertAgentRun(ctx, tx, run, retainMessage); err != nil {
 			return err
 		}
-		return touchSession(ctx, tx, run.SessionID, laterTime(message.CreatedAt, *run.StartedAt))
+		return touchSession(ctx, tx, run.SessionID, message.CreatedAt)
 	})
 	if isSessionContractError(err) {
 		return err

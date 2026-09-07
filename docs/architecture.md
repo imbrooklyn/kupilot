@@ -5,7 +5,8 @@ Status: Accepted architecture target for Kupilot `v0.5`.
 The checked-in implementation now includes the named-model, stable Eino ADK,
 role-scoped consent, safe Session-memory/summarization, deterministic
 permission routing, Application-owned run steering and queued follow-up,
-common ActionEnvelope/approval lifecycle, and related
+authoritative Session activity/deletion, invocation preflight, typed final
+outcomes, common ActionEnvelope/approval lifecycle, and related
 budget and status foundations. The broad read/observability catalog, existing
 typed Deployment restart, and default-off Pod Exec, container-file, and
 diagnostic-Pod handlers are composed. The shared Application dispatcher also
@@ -73,6 +74,9 @@ define the admitted behavior.
     supplies the next-model-boundary state rewrite and model wrapper, but Eino
     `TurnLoop`, another conversation loop, and another durable input store are
     prohibited.
+18. Delivery owns only run-local terminal capabilities and interaction state.
+    Application owns Last active, deletion plans, preflight, terminal reasons,
+    coverage, recovery decisions, and all mutation or execution authority.
 
 ## 2. System context
 
@@ -200,7 +204,7 @@ Kubernetes, Tool, persistence, approval-service, or executor implementations.
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | Domain | Values, enums, validation, transitions, stable safe classes | I/O, frameworks, clients, SQL, UI state |
-| Application | Session/run/scope use cases, policy generation, permission routing, consent, event ordering, `/status`, persistence intent, approval coordination | SDK calls, SQL, terminal rendering, Kubernetes projection |
+| Application | Session/run/scope use cases, Last active, deletion plans, policy generation, permission routing, preflight, terminal reasons, coverage/recovery, consent, event ordering, `/status`, persistence intent, approval coordination | SDK calls, SQL, terminal rendering, Kubernetes projection |
 | Agent | Immutable run policy, model-role and capability contracts, Evidence-reference validation | A parallel ReAct loop, live scope mutation, client-go, SQLite, TUI state, executor calls |
 | Tools | Strict schemas, canonical arguments, projected results, Evidence construction | Generic Kubernetes access, repositories, TUI, approval authority |
 | Infrastructure | Kubeconfig and client lifecycle, typed Kubernetes calls, model/data-source/process transport, storage mappings | End-to-end product decisions or policy widening |
@@ -223,7 +227,8 @@ sequenceDiagram
     participant Kube as Kubernetes adapter
 
     User->>TUI: Submit natural-language question
-    TUI->>App: StartRun(expected generation)
+    TUI->>App: StartRun(Session, both expected generations, selected resource)
+    App->>App: Compare exact delivery projection with current authority
     App->>App: Freeze scope, policy generations, permission, consent, catalog, budgets
     App->>Store: Durably begin run
     Store-->>App: committed
@@ -283,6 +288,17 @@ remain zero. A later read-side persistence failure may let the in-memory answer
 finish with visible degraded state; it is not claimed resumable. A pre-write
 storage or audit failure always produces zero executor calls.
 
+A question that cannot cross the durable-start barrier returns a bounded typed
+reason and safe current-state projection instead of a generic transport error.
+Application distinguishes unavailable Session, unverified or stale scope,
+stale ResourceRef, stale or invalid policy, active/starting run, another bounded
+operation, degraded or failed precommit persistence, missing model, missing
+consent, local input rejection, and an unknown fail-closed condition. Delivery
+restores the draft once and commits no transcript/history row. A returned active
+run repairs stale delivery state; a returned verified scope may update the
+delivery projection for a later explicit submit. The result itself performs no
+send, steer, queue, retarget, or retry.
+
 ## 5. Scope and namespace-access isolation
 
 `ClusterScope` contains:
@@ -294,6 +310,12 @@ storage or audit failure always produces zero executor calls.
 | Namespace access | Frozen `current` or `all` policy |
 | Generation | Process-local monotonic stale-work epoch |
 | Activated at | UTC activation time |
+
+The generation is an ephemeral authority epoch, not a Session, executable,
+database, schema, or migration version. Persisted generations are provenance
+only. After restart, an eligible historic scope is a candidate; equality with
+an independently verified current Context and Namespace permits reuse of the
+current epoch, never restoration of the historic one.
 
 The Context and working Namespace remain immutable for a run. `all` does not
 replace ClusterScope with a global mutable scope; it authorizes an explicit
@@ -457,8 +479,10 @@ Reviewer, attempt, ambiguity, and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
-The final protocol envelope contains bounded `answer_markdown`,
-`evidence_citations`, and `proposed_actions`.
+The strict response schema 2 envelope contains bounded
+`response_schema_version`, `outcome`, `answer_markdown`,
+`evidence_citations`, `proposed_actions`, `stop_reason`, `limitations`, and
+`questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
 
 - Markdown is the visible answer and receives no mandatory local headings.
 - An Evidence citation binds a bounded claim to one or more accepted current-run
@@ -466,7 +490,10 @@ The final protocol envelope contains bounded `answer_markdown`,
 - A proposed action contains only a code-defined operation name and its strict
   safe proposal fields. It has no approval or executor authority.
 
-Runtime removes invalid and duplicate citations and records warnings. It does
+For new strict responses, runtime rejects missing, unknown, duplicate,
+cross-run, cross-generation, stale, out-of-order, hash-mismatched, or
+unauthorized claim/Evidence coverage before successful commit. Retained legacy
+records may still carry their bounded validation warnings. This validation does
 not claim semantic proof of arbitrary prose. The Evidence registry remains the
 source of accepted observations and observation time windows.
 
@@ -481,8 +508,9 @@ terminal answer.
 
 `Diagnosis` remains the durable name for the validated terminal result to avoid
 an unnecessary migration of every storage concept. Its current semantic core is
-the answer Markdown, Evidence citations, proposed actions, validation warnings,
-scope, time window, and creation time. Legacy four-collection rows may be read
+the answer or typed clarification, completeness and source-coverage manifest,
+Evidence citations, proposed actions, stop reason, limitations, scope,
+observation window, and creation time. Legacy four-collection rows may be read
 for compatibility but are not required or rendered for new answers.
 
 ## 9. Permission, ActionEnvelope, and execution boundary
@@ -551,7 +579,7 @@ and its own durable outcome, and any retry requires a fresh envelope.
 
 | Value | Essential safe data | Authority rule |
 | --- | --- | --- |
-| Session | ID, title, privacy mode, timestamps, optional saved scope/resource candidates | History only; resume restores no live authority |
+| Session | ID, title, privacy mode, created/updated metadata, authoritative Last active, optional saved scope/resource candidates | History only; resume restores no live authority |
 | ClusterScope | Context, working Namespace, access policy, generation, activation time | Application-owned immutable run authority |
 | ResourceRef | API version, Kind, actual Namespace when namespaced, name, optional UID/version | Identity only, never an object body |
 | AgentRun | IDs, frozen scope/policy/profile, counters, status, times, safe reason | One Application-owned terminal transition |
@@ -561,7 +589,7 @@ and its own durable outcome, and any retry requires a fresh envelope.
 | ToolInvocation | versioned name, canonical safe arguments, injected scope, status, summary, limits | Model syntax alone is not authorization |
 | ToolResult | ephemeral typed data, Evidence, warnings, truncation, safe error | Never persisted as a generic result body |
 | Evidence | IDs, run/invocation, exact ResourceRef, run scope, fact, source, time, safety metadata | Created only by deterministic local handling |
-| Diagnosis | Markdown, citations, proposed actions, warnings, observed window | Model draft becomes valid only after local checks |
+| Diagnosis | Markdown or clarification, citations, completeness manifest, stop reason and code-owned basis, source coverage, proposed actions, warnings, observed window | Model draft becomes valid only after local checks |
 | PermissionPolicy | Profile, risk routing, policy generation, current-process Session rules | Deterministic Application authority; Reviewer cannot widen it |
 | ActionEnvelope | Versioned operation, exact scope/target/parameters/effects/limits/verification and digest | Immutable review and execution identity; no generic payload |
 | Approval | envelope digest, actor, state, expiry, nonce hash | Local single-use authority; model, Reviewer, and TUI cannot mint it |
@@ -594,6 +622,12 @@ ApprovalCoordinator.Decide(ctx, typed decision)
 
 PermissionQuery.CurrentPolicy()
     -> bounded in-memory permission state
+
+SessionManager.List/PreviewDeletion/CommitDeletion(ctx, concrete request)
+    -> bounded metadata, frozen digest plan, or committed counts
+
+RunPreflight.Check(ctx, exact invocation facts)
+    -> content-free projection or zero-call denial
 ```
 
 No contract returns `any`, `map[string]any`, client-go objects, Eino values,
@@ -676,6 +710,13 @@ already independently verified in the current process, Application may use
 that current authority; unavailable or conflicting candidates enter the
 picker without silent fallback.
 
+Migration 15 adds `last_activity_at_ms`, initialized conservatively from the
+prior metadata time. Every admitted lifecycle write advances it monotonically;
+list, view, resume, status, doctor, export, maintenance, preview, and failed
+deletion do not. Migration 16 adds bounded strict completeness-manifest and
+clarification JSON columns to Diagnosis. Existing released migrations remain
+unchanged, and legacy rows remain readable without acquiring authority.
+
 ## 13. Security and conformance requirements
 
 Required deterministic checks include:
@@ -701,7 +742,6 @@ Required deterministic checks include:
    correlated Working-frame rejection, primary-screen history insertion and
    live-frame cleanup, disabled mouse reporting, one-editor, and local
    `/status` zero-I/O checks;
-   and
 10. temporary-file SQLite migration, summary coverage, explicit resume,
     retention, deletion, export, and degraded-storage tests;
 11. atomic queue cancel/clear races, committed-only copy/search, content-free
@@ -709,9 +749,14 @@ Required deterministic checks include:
 12. same-Agent plan-only restrictions, manual use of the existing Eino
     summarizer, strict claim/Evidence coverage, deterministic offline quality
     scoring, and proof that unsupported stream continuation adds no retry or
-    checkpoint path.
+    checkpoint path;
+13. authoritative Last active and exact/digest-bound deletion ordering,
+    protection, stale snapshot, rollback, cascade, and zero-call cases; and
+14. terminal reason/preflight/budget projections, clarification, source
+    coverage/freshness/conflict, safe-read reuse, endpoint/injection fixtures,
+    accessibility, doctor, and unified recovery behavior.
 
-## 14. Bounded planning and local observability
+## 14. Bounded planning, Session control, and local observability
 
 Application owns the one-shot plan arm, queue revision mutations, manual
 compaction intent, and pressure projection. Delivery owns only the single-
@@ -725,6 +770,30 @@ scope snapshot, and policy generation. SQLite retains it with a completed
 Diagnosis in standard mode; historic replay strips Evidence authority. No
 queue, search, clipboard, notification, compaction, plan-arm, or response-
 handle state is durable.
+
+The same Application boundary owns bounded Session metadata queries and exact
+deletion plans. SQLite orders discovery by
+`last_activity_at_ms DESC, session_id DESC`; inactive selection uses strict
+`< cutoff` and oldest-first order. Current, active, consuming, future, corrupt,
+or otherwise unproved Sessions are protected. A content-free schema-1 digest
+binds cutoff, ordered IDs and activities, count, Session versions, and database
+schema revision; the adapter reselects the snapshot in the deletion transaction.
+
+Before each actual endpoint entry, a run-local bridge verifies the exact
+Session/Run, initial input and steer sequence, generations, profile/origin,
+consent, context coverage, Tool catalog, storage health, budget, sink, run mode,
+and recovery state. Its content-free event precedes model I/O. Strict response
+schema 2 then produces either a bounded answer manifest or typed clarification.
+Application derives the terminal reason and safe next actions from accepted
+lifecycle state, so model prose cannot promote denied, partial, conflicting,
+unknown, or degraded work to completed.
+
+Delivery keeps terminal capability detection, search queries and matches,
+semantic selection, undo/redo, notification dedupe, and doctor rendering
+run-local. It never queries the clipboard or terminal, launches a helper
+process, or persists those states. Claims and Evidence navigate through exact
+accepted IDs; provenance reports only counts, times, generations, coverage,
+freshness/conflict, and checked/not-checked source state.
 
 ## 15. Decision references
 
@@ -746,3 +815,6 @@ handle state is durable.
 - [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
 - [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
+- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
+- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
+- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)

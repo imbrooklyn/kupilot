@@ -119,6 +119,7 @@ type ModelSetupCancelRejectedMsg struct {
 type ApplicationFailureMsg struct {
 	Message          string
 	RequestID        uint64
+	SessionID        domain.SessionID
 	ScopeGeneration  int64
 	PolicyGeneration domain.PolicyGeneration
 	RunID            domain.AgentRunID

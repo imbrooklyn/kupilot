@@ -57,7 +57,7 @@ func DecodePlanResponse(content string) (DiagnosisDraft, error) {
 		return DiagnosisDraft{}, err
 	}
 	return DiagnosisDraft{
-		AnswerMarkdown: answer, ConfirmedFacts: confirmed, ClaimCoverage: coverage, Plan: &plan,
+		AnswerMarkdown: answer, ResponseSchemaVersion: 1, ConfirmedFacts: confirmed, ClaimCoverage: coverage, Plan: &plan,
 	}, nil
 }
 

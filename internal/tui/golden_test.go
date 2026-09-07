@@ -189,15 +189,14 @@ func goldenModel(t *testing.T, mode ThemeMode) Model {
 		},
 	})
 	now = now.Add(20 * time.Second)
-	model.acceptApplicationEvent(application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 4, Text: "The Deployment has no available replicas.",
-		EvidenceReferences: []application.UIEvidenceReference{{
+	model.acceptApplicationEvent(runTerminalEvent(
+		application.UIEventRunCompleted, 4, "The Deployment has no available replicas.",
+		application.UIEvidenceReference{
 			EvidenceID: testEvidenceID, RunID: testRunID,
 			Scope:    domain.ScopeSnapshot{Context: "development", Namespace: "payments", Generation: 7},
 			Sequence: 4, State: application.UIEvidenceDetailAvailable,
-		}},
-	})
+		},
+	))
 	model.composer.SetValue("/resource pay")
 	model.openCompletion(application.UICompletionResource, "pay", resumeOriginNone)
 	query := model.pendingCompletion

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +40,24 @@ func TestConfiguredBudgetLimitsSelectsProfileAndHonorsTighterModelTimeout(t *tes
 	value.Runtime.BudgetProfile = "unlimited"
 	if _, err := configuredBudgetLimits(value); !errors.Is(err, agent.ErrInvalidRunBudget) {
 		t.Fatalf("configuredBudgetLimits(unknown) error = %v", err)
+	}
+}
+
+func TestRejectedQuestionRequestPreservesExactSafeCorrelation(t *testing.T) {
+	command := application.UICommand{
+		Kind: application.UICommandSubmitQuestion, RequestID: 91,
+		SessionID: "00000000-0000-7000-8000-000000009991", Text: "Synthetic question.",
+		ExpectedScopeGeneration: 7, ExpectedPolicyGeneration: 9,
+	}
+	if err := command.Validate(); err != nil {
+		t.Fatalf("command validation error = %v", err)
+	}
+	message := rejectedApplicationRequest(tui.ApplicationCommandMsg{Command: command})
+	failure, ok := message.(tui.ApplicationFailureMsg)
+	if !ok || failure.Command != command.Kind || failure.RequestID != command.RequestID ||
+		failure.SessionID != command.SessionID || failure.ScopeGeneration != command.ExpectedScopeGeneration ||
+		failure.PolicyGeneration != command.ExpectedPolicyGeneration {
+		t.Fatalf("rejected question correlation = %#v", message)
 	}
 }
 
@@ -153,9 +173,16 @@ func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 		Kind: application.UIEventRunStarted, RunID: runID, ScopeGeneration: 1, PolicyGeneration: 1, Sequence: 1,
 		Text: "How many Nodes are Ready?",
 	}})
+	outcome, err := application.ProjectTerminalOutcome(domain.RunTerminalCompleted)
+	if err != nil {
+		t.Fatalf("ProjectTerminalOutcome() error = %v", err)
+	}
 	model = updateTUIModel(t, model, tui.ApplicationEventMsg{Event: application.UIEvent{
 		Kind: application.UIEventRunCompleted, RunID: runID, ScopeGeneration: 1, PolicyGeneration: 1, Sequence: 2,
-		Text: "Three Nodes are Ready.",
+		Text: "Three Nodes are Ready.", TerminalOutcome: &outcome,
+		AnswerProvenance: &application.UIAnswerProvenance{
+			ScopeGeneration: 1, PolicyGeneration: 1, CoverageState: application.UIAnswerCoverageUnavailable,
+		},
 	}})
 
 	var output bytes.Buffer
@@ -250,6 +277,69 @@ func TestTerminalStatusTitleEnvironmentSupportIsConservative(t *testing.T) {
 	}
 }
 
+func TestTerminalCapabilityProjectionIsConservativeAndContentFree(t *testing.T) {
+	lookup := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	tests := []struct {
+		name          string
+		terminal      bool
+		values        map[string]string
+		noColor       bool
+		titleEnabled  bool
+		reducedMotion bool
+		wantOSC52     tui.TerminalCapabilityState
+		wantMux       tui.TerminalCapabilityState
+		wantRemote    tui.TerminalCapabilityState
+		wantTitle     tui.TerminalCapabilityState
+		wantColor     tui.TerminalColorProfile
+	}{
+		{
+			name: "verified direct terminal", terminal: true, values: map[string]string{"TERM_PROGRAM": "WezTerm"},
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityAvailable, wantMux: tui.TerminalCapabilityAvailable,
+			wantRemote: tui.TerminalCapabilityAvailable, wantTitle: tui.TerminalCapabilityAvailable, wantColor: tui.TerminalColorANSI,
+		},
+		{
+			name: "multiplexer is restricted", terminal: true, values: map[string]string{"TERM": "xterm-256color", "TMUX": "present"},
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityRestricted, wantMux: tui.TerminalCapabilityRestricted,
+			wantRemote: tui.TerminalCapabilityAvailable, wantTitle: tui.TerminalCapabilityRestricted, wantColor: tui.TerminalColorANSI,
+		},
+		{
+			name: "remote terminal is restricted", terminal: true, values: map[string]string{"TERM_PROGRAM": "iTerm.app", "SSH_TTY": "present"},
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityRestricted, wantMux: tui.TerminalCapabilityAvailable,
+			wantRemote: tui.TerminalCapabilityRestricted, wantTitle: tui.TerminalCapabilityRestricted, wantColor: tui.TerminalColorANSI,
+		},
+		{
+			name: "non terminal no color and titles disabled", values: map[string]string{"TERM_PROGRAM": "WezTerm"},
+			noColor: true, reducedMotion: true, wantOSC52: tui.TerminalCapabilityUnsupported,
+			wantMux: tui.TerminalCapabilityAvailable, wantRemote: tui.TerminalCapabilityAvailable,
+			wantTitle: tui.TerminalCapabilityDisabled, wantColor: tui.TerminalColorNone,
+		},
+		{
+			name: "unknown direct terminal", terminal: true, values: map[string]string{"TERM": "vt100"},
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityUnsupported, wantMux: tui.TerminalCapabilityAvailable,
+			wantRemote: tui.TerminalCapabilityAvailable, wantTitle: tui.TerminalCapabilityUnsupported, wantColor: tui.TerminalColorANSI,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := projectTerminalCapabilitiesForState(test.terminal, lookup(test.values), test.noColor, test.titleEnabled, test.reducedMotion)
+			if profile.OSC52 != test.wantOSC52 || profile.Multiplexer != test.wantMux || profile.RemoteSession != test.wantRemote ||
+				profile.Title != test.wantTitle || profile.Color != test.wantColor || profile.ReducedMotion != test.reducedMotion ||
+				profile.Notification != tui.TerminalCapabilityDisabled || profile.NativeClipboard != tui.TerminalCapabilityUnsupported ||
+				profile.AlternateScreen != tui.TerminalCapabilityDisabled || profile.Scrollback != tui.TerminalScrollbackRestoredCommitted {
+				t.Fatalf("terminal capability projection = %#v", profile)
+			}
+		})
+	}
+	for _, canary := range []string{"Session title", "resource name", "Evidence payload", "credential", "error detail"} {
+		profile := fmt.Sprintf("%#v", projectTerminalCapabilitiesForState(true, lookup(map[string]string{"TERM_PROGRAM": "WezTerm"}), false, true, false))
+		if strings.Contains(profile, canary) {
+			t.Fatalf("terminal capability projection contains dynamic canary %q", canary)
+		}
+	}
+}
+
 func updateTUIModel(t *testing.T, model tui.Model, message tea.Msg) tui.Model {
 	t.Helper()
 	next, _ := model.Update(message)
@@ -279,13 +369,13 @@ func TestApplicationRequestFilterRoutesEvidenceDetailAndRejectsOverflowSafely(t 
 	if result := filter(nil, request); result != nil {
 		t.Fatalf("routed Evidence detail result = %#v", result)
 	}
-	if routed := (<-requests).(tui.ApplicationEvidenceDetailMsg); routed.Query != request.Query {
+	if routed := (<-requests).(tui.ApplicationEvidenceDetailMsg); !reflect.DeepEqual(routed.Query, request.Query) {
 		t.Fatalf("routed Evidence detail request = %#v", routed)
 	}
 
 	requests <- tui.ApplicationQueryMsg{}
 	failure, ok := filter(nil, request).(tui.ApplicationFailureMsg)
-	if !ok || failure.RequestID != request.Query.RequestID || failure.Evidence != reference ||
+	if !ok || failure.RequestID != request.Query.RequestID || !reflect.DeepEqual(failure.Evidence, reference) ||
 		failure.RunID != reference.RunID || failure.ScopeGeneration != reference.Scope.Generation {
 		t.Fatalf("overflow Evidence failure identity = %#v", failure)
 	}

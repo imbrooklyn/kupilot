@@ -75,10 +75,9 @@ func TestConversationCommitEntersTranscriptExactlyOnceAndPreservesAgent(t *testi
 		Kind: application.UIEventTextDelta, RunID: testRunID,
 		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 2, Text: "Final stream.",
 	}})
-	model, _ = updateModel(t, model, ApplicationEventMsg{Event: application.UIEvent{
-		Kind: application.UIEventRunCompleted, RunID: testRunID,
-		ScopeGeneration: 7, PolicyGeneration: 1, Sequence: 3, Text: "Final answer.",
-	}})
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runTerminalEvent(
+		application.UIEventRunCompleted, 3, "Final answer.",
+	)})
 	entries := model.transcript.Entries()
 	if len(entries) != 3 || entries[0].Kind != components.EntryUser || entries[0].Text != "Initial question." ||
 		entries[1].Kind != components.EntryUser || entries[1].Text != "Committed steer." ||

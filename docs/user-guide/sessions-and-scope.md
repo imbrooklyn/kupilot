@@ -64,28 +64,57 @@ Session. Minimal-persistence content and model memory are process-only. Picker
 and `--last` exclude minimal Sessions, and exact resume returns
 `session_not_resumable`.
 
-## Delete a Session
+## Discover and delete Sessions
 
-The current Session can be selected for deletion with `D` in `/privacy`. A
-historical standard Session can be selected with `D` in the existing resume
-picker. There is no separate Session-management page or second input field.
-Both paths show the exact target and require `Y`; `Esc` or `Enter` cancels with
-no deletion command.
+`/sessions` opens the bounded Session picker inside the existing single screen.
+Rows contain only sanitized title, Session ID, relative and exact local Last
+active, persistence mode, and textual current/resumable/protected/deletion
+state. Selected detail includes exact UTC. `Enter` resumes an eligible
+historical Session, `D` previews the selected Session, `B` uses the sole
+composer for an inactive cutoff, and `Esc` closes. The `/resume` picker uses
+the same Last-active projection and `D` path.
 
-Deleting the current Session first cancels and waits for any starting, active,
-or terminal-but-not-yet-quiesced AgentRun and invalidates pending Session
-rules, Reviewer decisions, ActionEnvelopes, and approved-but-not-executed
-authority. A consuming action denies deletion. After the Session graph commits
-as one SQLite transaction, the current Session or picker row is cleared. On
-database failure, the graph remains and the UI reports that it was not deleted.
-A restart never restores an AgentRun or approval authority; startup recovery
-makes persisted pending or approved-but-not-executed approvals terminal before
-lifecycle actions continue.
+`/delete` accepts no argument and previews the current Session. `D` in
+`/privacy` is explicitly the same operation. A preview displays sanitized
+title, exact ID, Last active, queue item/byte counts, complete graph scope, and
+the external surfaces it cannot delete; it never displays queue, pending,
+recovered, or composer text. `Y` confirms. `Esc`, `Enter`, or `Ctrl+C` cancels.
+
+Deletion is unavailable while a starting/active AgentRun, commit barrier,
+Reviewer, approval, action, execution, or verification is active. It never
+cancels that work. The current queue, composer, context, and UI state clear only
+after the whole SQLite graph transaction commits. Failure leaves them intact.
+A committed historical deletion removes only the matching picker row.
+
+The pre-TUI CLI offers the same bounded Application projection:
+
+```text
+kupilot sessions list [--limit N] [--cursor CURSOR] [--json]
+kupilot sessions delete SESSION_ID
+kupilot sessions delete --before 1d [--limit N] [--dry-run]
+kupilot sessions delete --before 2026-09-01T00:00:00Z --confirm DIGEST
+```
+
+Exact deletion accepts only canonical UUIDv7, never a title, `--force`, or
+`--yes`. TTY deletion previews and confirms interactively. Non-TTY automation
+first uses `--dry-run`, then supplies the returned exact absolute cutoff and
+digest. `d` means 24 hours and `w` means seven such days; absolute values must
+be timezone-bearing RFC3339. Eligibility is strictly Last active before the
+frozen cutoff, so equality remains. Batches choose oldest first, exclude the
+current Session and every active, attempted, corrupt, future, or unproved row,
+and abort if the bounded limit or process-isolation proof fails.
+
+Authoritative Last active advances only for committed initial input or steer,
+final run result, accepted Tool/Evidence/Diagnosis, approval/action/
+verification transitions, and explicit rename. Listing, filtering, resume or
+view, `/status`, `/doctor`, export, retention, startup maintenance, preview, and
+failed deletion do not change it.
 
 Deletion removes the Session-owned conversation, safe summary and coverage,
 run, Tool, Evidence, Diagnosis, ActionEnvelope, approval, decision, execution,
-and linked audit rows. It is logical deletion, not forensic
-erasure of SQLite free pages, WAL, backups, snapshots, swap, or storage media.
+and linked audit rows. It does not remove exports, terminal scrollback, logs,
+backups, configuration, credentials, cache, or SQLite free pages and never runs
+automatic `VACUUM`. It is logical deletion, not forensic erasure.
 
 ## Export a Session summary
 
@@ -113,6 +142,12 @@ before acceptance. Choosing it is a separate explicit scope activation that
 must complete first. Resume acceptance itself keeps the currently verified
 scope and clears the selected ResourceRef; it does not install or revalidate a
 historic resource candidate.
+
+`scope_generation` and `policy_generation` are current-process safety epochs.
+They are not Kupilot versions, database versions, migration versions, or
+Session versions. Restarting or upgrading Kupilot does not by itself make
+compatible history ineligible. The historic numbers remain display provenance
+and never become current authority.
 
 Resume does not restore or replay:
 
@@ -152,6 +187,22 @@ another scope choice or Kubernetes request. Otherwise an unavailable or
 conflicting candidate opens the ordinary Context or Namespace picker. There is
 no historic-authority shortcut and no keep-current confirmation that could
 silently ignore the conflict.
+
+If a question reaches Application with a stale delivery projection, Kupilot
+does not silently change its target or send it. The draft is retained and the
+safe notice always says that the question was not sent. A currently verified
+scope is shown for review and can be used only by submitting again. An
+unverified scope opens the Context/Namespace picker; a stale selected resource
+opens the ordinary resource-selection recovery. If another run is already
+active, the TUI resynchronizes to it and keeps the draft so `Enter` can steer or
+`Tab` can queue only after another explicit key press.
+
+Question-start notices distinguish Session unavailable, scope verification or
+generation changes, stale selected resource, policy change or invalid policy,
+active/starting run, another bounded operation, storage degradation or failed
+precommit, missing model, consent review, local input rejection, and an unknown
+safe failure. They never include the question, resource content, credential,
+raw storage error, or path.
 
 No scope action occurs until the user chooses a picker item. `Esc` cancels the
 resume. A selection resolves its Context from local kubeconfig, creates a fresh

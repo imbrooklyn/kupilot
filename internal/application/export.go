@@ -16,7 +16,7 @@ import (
 
 const (
 	// ExportSummarySchemaVersion identifies the only admitted local export projection.
-	ExportSummarySchemaVersion = "kupilot.export-summary.v3"
+	ExportSummarySchemaVersion = "kupilot.export-summary.v4"
 	// MaxExportSummaryBytes is the complete post-redaction Markdown ceiling.
 	MaxExportSummaryBytes = 2 * 1024 * 1024
 	// MaxExportMessages bounds committed conversation records in one export.
@@ -118,12 +118,13 @@ type ExportFileWriter interface {
 
 // ExportSessionRecord is the complete Session metadata allowlist read from SQLite.
 type ExportSessionRecord struct {
-	ID          domain.SessionID
-	Title       string
-	PrivacyMode domain.PrivacyMode
-	LastScope   *domain.ScopeCandidate
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             domain.SessionID
+	Title          string
+	PrivacyMode    domain.PrivacyMode
+	LastScope      *domain.ScopeCandidate
+	CreatedAt      time.Time
+	LastActivityAt time.Time
+	UpdatedAt      time.Time
 }
 
 // ExportMessageRecord is one committed user or final assistant source record.
@@ -142,6 +143,8 @@ type ExportDiagnosisRecord struct {
 	MissingInformation []domain.MissingInformation
 	RecommendedActions []domain.RecommendedAction
 	ClaimCoverage      []domain.ClaimEvidenceCoverage
+	Completeness       domain.AnswerCompletenessManifest
+	Clarification      *domain.ClarificationRequest
 	CreatedAt          time.Time
 }
 
@@ -190,13 +193,13 @@ type ExportSummary struct {
 
 // ExportSummarySession contains only safe display metadata.
 type ExportSummarySession struct {
-	ID          domain.SessionID
-	Title       string
-	PrivacyMode domain.PrivacyMode
-	Context     string
-	Namespace   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             domain.SessionID
+	Title          string
+	PrivacyMode    domain.PrivacyMode
+	Context        string
+	Namespace      string
+	CreatedAt      time.Time
+	LastActivityAt time.Time
 }
 
 // ExportSummaryMessage is one redacted committed conversation item.
@@ -234,6 +237,8 @@ type ExportSummaryDiagnosis struct {
 	MissingInformation []domain.MissingInformation
 	RecommendedActions []domain.RecommendedAction
 	ClaimCoverage      []domain.ClaimEvidenceCoverage
+	Completeness       domain.AnswerCompletenessManifest
+	Clarification      *domain.ClarificationRequest
 	CreatedAt          time.Time
 }
 
@@ -278,8 +283,8 @@ func ProjectExportSummary(
 		Truncated:     snapshot.Truncated || title.Truncated,
 		Session: ExportSummarySession{
 			ID: snapshot.Session.ID, Title: title.Value, PrivacyMode: snapshot.Session.PrivacyMode,
-			CreatedAt: snapshot.Session.CreatedAt.UTC().Truncate(time.Millisecond),
-			UpdatedAt: snapshot.Session.UpdatedAt.UTC().Truncate(time.Millisecond),
+			CreatedAt:      snapshot.Session.CreatedAt.UTC().Truncate(time.Millisecond),
+			LastActivityAt: snapshot.Session.LastActivityAt.UTC().Truncate(time.Millisecond),
 		},
 	}
 	if snapshot.Session.LastScope != nil {
@@ -414,7 +419,7 @@ func ProjectExportSummary(
 // RenderExportSummary emits deterministic Markdown and applies the complete-output guard.
 func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) ([]byte, error) {
 	if processor == nil || summary.SchemaVersion != ExportSummarySchemaVersion || !validCoordinatorTime(summary.ExportedAt) ||
-		!summary.Session.ID.Valid() || summary.Session.PrivacyMode != domain.PrivacyModeStandard ||
+		!validExportSummarySession(summary.Session) ||
 		!validExportContextSummary(summary.ContextSummary, summary.Session.ID) || len(summary.Messages) > MaxExportMessages ||
 		len(summary.Diagnoses) > MaxExportDiagnoses || len(summary.Evidence) > MaxExportEvidence {
 		return nil, ErrInvalidExportSummary
@@ -435,7 +440,7 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 	fmt.Fprintf(&builder, "- Title: %s\n", escapeExportMarkdown(summary.Session.Title))
 	fmt.Fprintf(&builder, "- Persistence mode: `%s`\n", summary.Session.PrivacyMode)
 	fmt.Fprintf(&builder, "- Created at: `%s`\n", exportTimestamp(summary.Session.CreatedAt))
-	fmt.Fprintf(&builder, "- Updated at: `%s`\n", exportTimestamp(summary.Session.UpdatedAt))
+	fmt.Fprintf(&builder, "- Last active: `%s`\n", exportTimestamp(summary.Session.LastActivityAt))
 	if summary.Session.Context != "" && summary.Session.Namespace != "" {
 		fmt.Fprintf(&builder, "- Historic Context: %s\n", escapeExportMarkdown(summary.Session.Context))
 		fmt.Fprintf(&builder, "- Historic Namespace: %s\n", escapeExportMarkdown(summary.Session.Namespace))
@@ -488,6 +493,8 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 		writeMissingInformation(&builder, diagnosis.MissingInformation)
 		writeRecommendedActions(&builder, diagnosis.RecommendedActions)
 		writeClaimCoverage(&builder, diagnosis.ClaimCoverage)
+		writeAnswerCompleteness(&builder, diagnosis.Completeness)
+		writeClarification(&builder, diagnosis.Clarification)
 	}
 
 	builder.WriteString("\n## Evidence references\n")
@@ -533,9 +540,22 @@ func RenderExportSummary(summary ExportSummary, processor ExportTextProcessor) (
 
 func validExportSession(record ExportSessionRecord) bool {
 	return record.ID.Valid() && record.PrivacyMode == domain.PrivacyModeStandard &&
-		validCoordinatorTime(record.CreatedAt) && validCoordinatorTime(record.UpdatedAt) &&
-		!record.UpdatedAt.Before(record.CreatedAt) && utf8.ValidString(record.Title) && len(record.Title) <= 512 &&
+		validCoordinatorTime(record.CreatedAt) && validCoordinatorTime(record.LastActivityAt) && validCoordinatorTime(record.UpdatedAt) &&
+		!record.LastActivityAt.Before(record.CreatedAt) && !record.UpdatedAt.Before(record.LastActivityAt) &&
+		utf8.ValidString(record.Title) && len(record.Title) <= 512 &&
 		(record.LastScope == nil || record.LastScope.Validate() == nil)
+}
+
+func validExportSummarySession(session ExportSummarySession) bool {
+	return session.ID.Valid() && session.PrivacyMode == domain.PrivacyModeStandard &&
+		validCoordinatorTime(session.CreatedAt) && validCoordinatorTime(session.LastActivityAt) &&
+		!session.LastActivityAt.Before(session.CreatedAt) && utf8.ValidString(session.Title) && len(session.Title) <= 512 &&
+		((session.Context == "" && session.Namespace == "") ||
+			(validExportSingleLine(session.Context, 253) && validExportSingleLine(session.Namespace, 63)))
+}
+
+func validExportSingleLine(value string, limit int) bool {
+	return value != "" && len(value) <= limit && utf8.ValidString(value) && !strings.ContainsAny(value, "\r\n")
 }
 
 func projectExportContextSummary(
@@ -803,7 +823,115 @@ func projectExportDiagnosis(record ExportDiagnosisRecord, processor ExportTextPr
 			return ExportSummaryDiagnosis{}, false, ErrInvalidExportSummary
 		}
 	}
+	if !record.Completeness.Empty() {
+		manifest, manifestErr := projectExportCompleteness(record.Completeness, result.ClaimCoverage, result.MissingInformation, truncated)
+		if manifestErr != nil {
+			return ExportSummaryDiagnosis{}, false, manifestErr
+		}
+		result.Completeness = manifest
+	}
+	if record.Clarification != nil {
+		clarification, clarificationChanged, clarificationErr := projectExportClarification(*record.Clarification, processor)
+		if clarificationErr != nil {
+			return ExportSummaryDiagnosis{}, false, clarificationErr
+		}
+		result.Clarification = &clarification
+		truncated = truncated || clarificationChanged
+	}
 	return result, truncated, nil
+}
+
+func projectExportCompleteness(
+	manifest domain.AnswerCompletenessManifest,
+	claims []domain.ClaimEvidenceCoverage,
+	limitations []domain.MissingInformation,
+	truncated bool,
+) (domain.AnswerCompletenessManifest, error) {
+	if manifest.Validate() != nil || len(manifest.Claims) < len(claims) || len(manifest.Limitations) < len(limitations) {
+		return domain.AnswerCompletenessManifest{}, ErrInvalidExportSummary
+	}
+	result := domain.AnswerCompletenessManifest{
+		SchemaVersion: manifest.SchemaVersion, ResponseSchemaVersion: manifest.ResponseSchemaVersion,
+		Claims:          append([]domain.ClaimEvidenceCoverage(nil), claims...),
+		Limitations:     append([]domain.MissingInformation(nil), limitations...),
+		Sources:         make([]domain.AnswerSourceCoverage, len(manifest.Sources)),
+		StopReason:      manifest.StopReason,
+		StopReasonBasis: manifest.StopReasonBasis,
+	}
+	for index, source := range manifest.Sources {
+		result.Sources[index] = source
+		result.Sources[index].EvidenceIDs = append([]domain.EvidenceID(nil), source.EvidenceIDs...)
+		if source.ObservedFrom != nil {
+			value := *source.ObservedFrom
+			result.Sources[index].ObservedFrom = &value
+		}
+		if source.ObservedThrough != nil {
+			value := *source.ObservedThrough
+			result.Sources[index].ObservedThrough = &value
+		}
+	}
+	if truncated {
+		if !hasExportMissingInformation(result.Limitations, domain.MissingInformationTruncated) {
+			if len(result.Limitations) >= domain.MaxAnswerManifestItems {
+				return domain.AnswerCompletenessManifest{}, ErrInvalidExportSummary
+			}
+			result.Limitations = append(result.Limitations, domain.MissingInformation{
+				Kind:   domain.MissingInformationTruncated,
+				Detail: "The exported answer projection reached a fixed output limit.",
+				Impact: "The export does not contain every byte of the committed answer projection.",
+			})
+		}
+		if result.StopReasonBasis == domain.RunTerminalReasonFromCoverage {
+			result.StopReason, _ = domain.DeriveAnswerTerminalReason(result.Claims, result.Limitations, result.Sources, false)
+		}
+	}
+	if result.Validate() != nil {
+		return domain.AnswerCompletenessManifest{}, ErrInvalidExportSummary
+	}
+	return result, nil
+}
+
+func hasExportMissingInformation(items []domain.MissingInformation, kind domain.MissingInformationKind) bool {
+	for _, item := range items {
+		if item.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func projectExportClarification(
+	request domain.ClarificationRequest,
+	processor ExportTextProcessor,
+) (domain.ClarificationRequest, bool, error) {
+	if request.Validate() != nil {
+		return domain.ClarificationRequest{}, false, ErrInvalidExportSummary
+	}
+	result := domain.ClarificationRequest{SchemaVersion: request.SchemaVersion, Questions: make([]domain.ClarificationQuestion, len(request.Questions))}
+	changed := false
+	for index, question := range request.Questions {
+		prompt, err := processExportSingleLine(processor, question.Prompt, maxExportDiagnosisTextBytes)
+		if err != nil || prompt.Value == "" {
+			return domain.ClarificationRequest{}, false, ErrInvalidExportSummary
+		}
+		result.Questions[index] = domain.ClarificationQuestion{
+			Sequence: question.Sequence, Kind: question.Kind, Prompt: prompt.Value,
+			Choices: make([]domain.ClarificationChoiceValue, len(question.Choices)),
+		}
+		changed = changed || prompt.Truncated
+		for choiceIndex, choice := range question.Choices {
+			label, labelErr := processExportSingleLine(processor, choice.Label, maxExportDiagnosisTextBytes)
+			if labelErr != nil || label.Value == "" {
+				return domain.ClarificationRequest{}, false, ErrInvalidExportSummary
+			}
+			result.Questions[index].Choices[choiceIndex] = domain.ClarificationChoiceValue{ID: choice.ID, Label: label.Value}
+			changed = changed || label.Truncated
+		}
+	}
+	if result.Validate() != nil {
+		return domain.ClarificationRequest{}, false, ErrInvalidExportSummary
+	}
+	return result, changed, nil
 }
 
 func boundedEvidenceIDs(ids []domain.EvidenceID, required bool) ([]domain.EvidenceID, bool, error) {
@@ -1011,6 +1139,36 @@ func writeClaimCoverage(builder *strings.Builder, values []domain.ClaimEvidenceC
 		fmt.Fprintf(builder, "   - Policy generation: `%d`\n", coverage.PolicyGeneration)
 		writeEvidenceIDs(builder, "Evidence", coverage.EvidenceIDs)
 		writeExportQuote(builder, coverage.Text)
+	}
+}
+
+func writeAnswerCompleteness(builder *strings.Builder, manifest domain.AnswerCompletenessManifest) {
+	if manifest.Empty() {
+		return
+	}
+	builder.WriteString("\n#### Answer completeness\n\n")
+	fmt.Fprintf(builder, "- Schema: `%s`\n", manifest.SchemaVersion)
+	fmt.Fprintf(builder, "- Stop reason: `%s`\n", manifest.StopReason)
+	fmt.Fprintf(builder, "- Declared sources: `%d`\n", len(manifest.Sources))
+	for _, source := range manifest.Sources {
+		fmt.Fprintf(builder, "- Source %d: `%s` · `%s` · `%s`\n", source.Sequence, source.State, source.Freshness, source.Conflict)
+		fmt.Fprintf(builder, "  - Source hash: `%s`\n", source.SourceHash)
+		fmt.Fprintf(builder, "  - Subject hash: `%s`\n", source.SubjectHash)
+		writeEvidenceIDs(builder, "Evidence", source.EvidenceIDs)
+	}
+	builder.WriteString("\nThis manifest proves structural ownership and declared coverage only; it does not prove semantic correctness or exhaustive facts.\n")
+}
+
+func writeClarification(builder *strings.Builder, request *domain.ClarificationRequest) {
+	if request == nil {
+		return
+	}
+	builder.WriteString("\n#### Structured clarification\n")
+	for _, question := range request.Questions {
+		fmt.Fprintf(builder, "\n%d. %s\n", question.Sequence, escapeExportMarkdown(question.Prompt))
+		for _, choice := range question.Choices {
+			fmt.Fprintf(builder, "   - `%s`: %s\n", choice.ID, escapeExportMarkdown(choice.Label))
+		}
 	}
 }
 

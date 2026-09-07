@@ -16,7 +16,7 @@ const (
 	getExportSessionSQL = `
 		SELECT
 			id, title, status, privacy_mode, last_context, last_namespace,
-			created_at_ms, updated_at_ms
+			created_at_ms, last_activity_at_ms, updated_at_ms
 		FROM sessions
 		WHERE id = ?
 	`
@@ -39,6 +39,8 @@ const (
 			d.answer_markdown AS answer_markdown,
 			d.claim_coverage_json AS claim_coverage_json,
 			d.plan_json AS plan_json,
+			d.answer_manifest_json AS answer_manifest_json,
+			d.clarification_json AS clarification_json,
 			d.created_at_ms AS created_at_ms,
 			r.scope_context AS scope_context,
 			r.scope_namespace AS scope_namespace,
@@ -76,14 +78,15 @@ const (
 var _ application.SessionExportReader = (*SessionRepository)(nil)
 
 type exportSessionRow struct {
-	ID            string         `db:"id"`
-	Title         string         `db:"title"`
-	Status        string         `db:"status"`
-	PrivacyMode   string         `db:"privacy_mode"`
-	LastContext   sql.NullString `db:"last_context"`
-	LastNamespace sql.NullString `db:"last_namespace"`
-	CreatedAtMS   int64          `db:"created_at_ms"`
-	UpdatedAtMS   int64          `db:"updated_at_ms"`
+	ID               string         `db:"id"`
+	Title            string         `db:"title"`
+	Status           string         `db:"status"`
+	PrivacyMode      string         `db:"privacy_mode"`
+	LastContext      sql.NullString `db:"last_context"`
+	LastNamespace    sql.NullString `db:"last_namespace"`
+	CreatedAtMS      int64          `db:"created_at_ms"`
+	LastActivityAtMS int64          `db:"last_activity_at_ms"`
+	UpdatedAtMS      int64          `db:"updated_at_ms"`
 }
 
 type exportMessageRow struct {
@@ -93,19 +96,21 @@ type exportMessageRow struct {
 }
 
 type exportDiagnosisRow struct {
-	ID                string         `db:"id"`
-	RunID             string         `db:"run_id"`
-	ConfirmedJSON     string         `db:"confirmed_json"`
-	HypothesesJSON    string         `db:"hypotheses_json"`
-	MissingJSON       string         `db:"missing_json"`
-	ActionsJSON       string         `db:"actions_json"`
-	AnswerMarkdown    string         `db:"answer_markdown"`
-	ClaimCoverageJSON sql.NullString `db:"claim_coverage_json"`
-	PlanJSON          sql.NullString `db:"plan_json"`
-	CreatedAtMS       int64          `db:"created_at_ms"`
-	ScopeContext      string         `db:"scope_context"`
-	ScopeNamespace    string         `db:"scope_namespace"`
-	ScopeGeneration   int64          `db:"scope_generation"`
+	ID                 string         `db:"id"`
+	RunID              string         `db:"run_id"`
+	ConfirmedJSON      string         `db:"confirmed_json"`
+	HypothesesJSON     string         `db:"hypotheses_json"`
+	MissingJSON        string         `db:"missing_json"`
+	ActionsJSON        string         `db:"actions_json"`
+	AnswerMarkdown     string         `db:"answer_markdown"`
+	ClaimCoverageJSON  sql.NullString `db:"claim_coverage_json"`
+	PlanJSON           sql.NullString `db:"plan_json"`
+	AnswerManifestJSON sql.NullString `db:"answer_manifest_json"`
+	ClarificationJSON  sql.NullString `db:"clarification_json"`
+	CreatedAtMS        int64          `db:"created_at_ms"`
+	ScopeContext       string         `db:"scope_context"`
+	ScopeNamespace     string         `db:"scope_namespace"`
+	ScopeGeneration    int64          `db:"scope_generation"`
 }
 
 // ReadExportSnapshot loads one consistent, bounded, explicit export projection.
@@ -161,10 +166,12 @@ func readSessionExportSnapshot(
 	}
 	snapshot := application.SessionExportSnapshot{Session: application.ExportSessionRecord{
 		ID: domain.SessionID(row.ID), Title: row.Title, PrivacyMode: domain.PrivacyMode(row.PrivacyMode),
-		LastScope: lastScope, CreatedAt: time.UnixMilli(row.CreatedAtMS).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAtMS).UTC(),
+		LastScope: lastScope, CreatedAt: time.UnixMilli(row.CreatedAtMS).UTC(),
+		LastActivityAt: time.UnixMilli(row.LastActivityAtMS).UTC(), UpdatedAt: time.UnixMilli(row.UpdatedAtMS).UTC(),
 	}}
 	if !snapshot.Session.ID.Valid() || snapshot.Session.CreatedAt.UnixMilli() < 0 ||
-		snapshot.Session.UpdatedAt.Before(snapshot.Session.CreatedAt) {
+		snapshot.Session.LastActivityAt.Before(snapshot.Session.CreatedAt) ||
+		snapshot.Session.UpdatedAt.Before(snapshot.Session.LastActivityAt) {
 		return application.SessionExportSnapshot{}, domain.ErrInvalidSession
 	}
 
@@ -309,12 +316,27 @@ func (row exportDiagnosisRow) exportRecord() (application.ExportDiagnosisRecord,
 		}
 		plan = &value
 	}
+	var manifest domain.AnswerCompletenessManifest
+	if row.AnswerManifestJSON.Valid {
+		if err := decodeStrictJSON(row.AnswerManifestJSON.String, &manifest); err != nil {
+			return application.ExportDiagnosisRecord{}, err
+		}
+	}
+	var clarification *domain.ClarificationRequest
+	if row.ClarificationJSON.Valid {
+		var value domain.ClarificationRequest
+		if err := decodeStrictJSON(row.ClarificationJSON.String, &value); err != nil {
+			return application.ExportDiagnosisRecord{}, err
+		}
+		clarification = &value
+	}
 	createdAt := time.UnixMilli(row.CreatedAtMS).UTC()
 	validation := domain.Diagnosis{
 		ID: domain.DiagnosisID(row.ID), RunID: domain.AgentRunID(row.RunID),
 		Scope:          domain.ScopeSnapshot{Context: row.ScopeContext, Namespace: row.ScopeNamespace, Generation: row.ScopeGeneration},
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing, RecommendedActions: actions,
-		AnswerMarkdown: row.AnswerMarkdown, ClaimCoverage: coverage, Plan: plan, CreatedAt: createdAt,
+		AnswerMarkdown: row.AnswerMarkdown, ClaimCoverage: coverage, Completeness: manifest,
+		Clarification: clarification, Plan: plan, CreatedAt: createdAt,
 	}
 	if validation.Validate() != nil {
 		return application.ExportDiagnosisRecord{}, domain.ErrInvalidDiagnosis
@@ -322,7 +344,8 @@ func (row exportDiagnosisRow) exportRecord() (application.ExportDiagnosisRecord,
 	return application.ExportDiagnosisRecord{
 		AnswerMarkdown: row.AnswerMarkdown,
 		ConfirmedFacts: confirmed, Hypotheses: hypotheses, MissingInformation: missing,
-		RecommendedActions: actions, ClaimCoverage: coverage, CreatedAt: createdAt,
+		RecommendedActions: actions, ClaimCoverage: coverage, Completeness: manifest,
+		Clarification: clarification, CreatedAt: createdAt,
 	}, nil
 }
 

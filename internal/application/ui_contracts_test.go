@@ -126,7 +126,7 @@ func TestUIResumeAndSelectionResultsValidateExclusiveSafeShapes(t *testing.T) {
 	result := UIResumeResult{
 		RequestID: 1, Mode: UIResumeExact,
 		Session: &UIResumedSession{ResumeRequestID: 1, Session: UISessionCandidate{
-			ID: sessionID, UpdatedAtUnixMillis: 1, PrivacyMode: domain.PrivacyModeStandard,
+			ID: sessionID, LastActivityAtUnixMillis: 1, PrivacyMode: domain.PrivacyModeStandard,
 		}},
 	}
 	if err := result.Validate(); err != nil {

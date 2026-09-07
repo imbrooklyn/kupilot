@@ -28,9 +28,14 @@ var (
 )
 
 type diagnosticResponseWire struct {
-	AnswerMarkdown    *string                 `json:"answer_markdown"`
-	EvidenceCitations *[]evidenceCitationWire `json:"evidence_citations"`
-	ProposedActions   *[]proposedActionWire   `json:"proposed_actions"`
+	AnswerMarkdown        *string                         `json:"answer_markdown"`
+	EvidenceCitations     *[]evidenceCitationWire         `json:"evidence_citations"`
+	ProposedActions       *[]proposedActionWire           `json:"proposed_actions"`
+	ResponseSchemaVersion *int                            `json:"response_schema_version,omitempty"`
+	Outcome               *string                         `json:"outcome,omitempty"`
+	StopReason            *domain.RunTerminalReason       `json:"stop_reason,omitempty"`
+	Limitations           *[]domain.MissingInformation    `json:"limitations,omitempty"`
+	Questions             *[]domain.ClarificationQuestion `json:"questions,omitempty"`
 }
 
 type evidenceCitationWire struct {
@@ -104,6 +109,10 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 	if wire.AnswerMarkdown == nil || wire.EvidenceCitations == nil || wire.ProposedActions == nil {
 		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
 	}
+	if wire.ResponseSchemaVersion == nil || *wire.ResponseSchemaVersion != 2 || wire.Outcome == nil ||
+		wire.StopReason == nil || !validModelSuggestedStopReason(*wire.StopReason) || wire.Limitations == nil || wire.Questions == nil {
+		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+	}
 	citations, coverage, err := decodeClaimCoverage(*wire.EvidenceCitations)
 	if err != nil {
 		return DiagnosisDraft{}, err
@@ -129,12 +138,52 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 			Prerequisites: append([]string(nil), action.Prerequisites...),
 		}
 	}
-	return DiagnosisDraft{
-		AnswerMarkdown:     *wire.AnswerMarkdown,
-		ConfirmedFacts:     citations,
-		RecommendedActions: actions,
-		ClaimCoverage:      coverage,
-	}, nil
+	draft := DiagnosisDraft{
+		AnswerMarkdown:        *wire.AnswerMarkdown,
+		ResponseSchemaVersion: *wire.ResponseSchemaVersion,
+		ConfirmedFacts:        citations,
+		RecommendedActions:    actions,
+		ClaimCoverage:         coverage,
+	}
+	draft.SuggestedStopReason = *wire.StopReason
+	draft.MissingInformation = append([]domain.MissingInformation(nil), (*wire.Limitations)...)
+	switch *wire.Outcome {
+	case "answer":
+		if len(*wire.Questions) != 0 || *wire.StopReason == domain.RunTerminalNeedsUserInput {
+			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		}
+	case "needs_user_input":
+		if *wire.StopReason != domain.RunTerminalNeedsUserInput || len(citations) != 0 || len(actions) != 0 || len(coverage) != 0 ||
+			len(*wire.Limitations) != 0 {
+			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		}
+		request := domain.ClarificationRequest{
+			SchemaVersion: domain.AnswerCompletenessSchemaVersion,
+			Questions:     append([]domain.ClarificationQuestion(nil), (*wire.Questions)...),
+		}
+		if request.Validate() != nil {
+			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		}
+		rendered, err := RenderClarificationMarkdown(request)
+		if err != nil || rendered != draft.AnswerMarkdown {
+			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		}
+		draft.Clarification = &request
+	default:
+		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+	}
+	return draft, nil
+}
+
+func validModelSuggestedStopReason(reason domain.RunTerminalReason) bool {
+	switch reason {
+	case domain.RunTerminalCompleted, domain.RunTerminalPartialResult, domain.RunTerminalInsufficientEvidence,
+		domain.RunTerminalSourceUnavailable, domain.RunTerminalPolicyDenied, domain.RunTerminalConflictingEvidence,
+		domain.RunTerminalNeedsUserInput:
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeClaimCoverage(wire []evidenceCitationWire) ([]domain.ConfirmedFact, []ClaimCoverageDraft, error) {

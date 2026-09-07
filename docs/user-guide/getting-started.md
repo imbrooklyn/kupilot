@@ -217,7 +217,15 @@ The compile-time command registry is fixed:
 | `/new` | Create a new Session without querying history. |
 | `/resume [filter]` | Open eligible local Session selection inside the TUI. |
 | `/rename [title]` | Rename the current standard-persistence Session. |
+| `/sessions` | Open bounded local Session discovery, resume, exact delete, or inactive-batch preview. |
+| `/delete` | Preview deletion of the idle current Session; this is the `/privacy` `D` operation. |
 | `/privacy` | Review model data sharing, persistence, retention, deletion, and export controls. |
+| `/queue cancel ITEM_ID`, `/queue clear` | Remove exact editable follow-up state, with confirmation for clear. |
+| `/copy` | Send the latest committed assistant final to a verified terminal-native clipboard sink. |
+| `/find [query]` | Search only committed visible Session transcript content locally. |
+| `/compact` | Request one explicit idle safe-context compaction. |
+| `/plan`, `/plan off` | Arm or cancel the next one-shot bounded plan-only run. |
+| `/doctor` | Show versioned redacted local configuration, storage, feature, and terminal health. |
 | `/cancel` | Cancel the active diagnostic run. |
 | `/quit`, `/exit` | Exit Kupilot. |
 
@@ -228,7 +236,10 @@ Key bindings include `Enter` to submit, `Shift+Enter` or `Alt+Enter` for a
 newline, `Ctrl+J` for a newline when the terminal can distinguish it, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for bounded choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
-`Ctrl+E` to inspect observation details, `Ctrl+X` to cancel a run, and `Ctrl+C`
+`Ctrl+E` to inspect observation details, `Ctrl+R` for committed-input reverse
+search, `Ctrl+F` for committed-transcript search, `Alt+Z`/`Alt+Y` for bounded
+undo/redo, semantic `Alt+U`/`Alt+A`/`Alt+F`/`Alt+P` landmark pairs,
+`Ctrl+X` to cancel a run, and `Ctrl+C`
 to cancel the active local interaction first. Model setup, Pickers, observation
 detail, privacy, export, deletion, resume-scope, and approval interactions own
 that first `Ctrl+C`. With no child interaction, `Ctrl+C` clears a non-empty

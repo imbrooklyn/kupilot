@@ -134,7 +134,7 @@ func (repository *ToolInvocationRepository) Save(ctx context.Context, invocation
 				return err
 			}
 		}
-		return nil
+		return touchSession(ctx, tx, run.SessionID, *invocation.FinishedAt)
 	})
 	if errors.Is(err, domain.ErrInvalidToolInvocation) || errors.Is(err, domain.ErrInvalidEvidence) || isSessionContractError(err) {
 		return err

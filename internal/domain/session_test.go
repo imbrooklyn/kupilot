@@ -21,10 +21,11 @@ func TestSessionValidationAndMinimalPersistenceBoundary(t *testing.T) {
 			Namespace:  "test-namespace",
 			Name:       "sample-pod",
 		},
-		Summary:   &summary,
-		Version:   1,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Summary:        &summary,
+		Version:        1,
+		CreatedAt:      now,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	if err := standard.Validate(); err != nil {
 		t.Fatalf("standard Validate() error = %v", err)
@@ -34,12 +35,13 @@ func TestSessionValidationAndMinimalPersistenceBoundary(t *testing.T) {
 	}
 
 	minimal := Session{
-		ID:          "00000000-0000-7000-8000-000000000002",
-		Status:      SessionStatusActive,
-		PrivacyMode: PrivacyModeMinimal,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "00000000-0000-7000-8000-000000000002",
+		Status:         SessionStatusActive,
+		PrivacyMode:    PrivacyModeMinimal,
+		Version:        1,
+		CreatedAt:      now,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	if err := minimal.Validate(); err != nil {
 		t.Fatalf("minimal Validate() error = %v", err)
@@ -56,13 +58,14 @@ func TestSessionValidationAndMinimalPersistenceBoundary(t *testing.T) {
 func TestSessionValidationRejectsIdentifierTextAndSizeViolations(t *testing.T) {
 	now := time.UnixMilli(1).UTC()
 	valid := Session{
-		ID:          "00000000-0000-7000-8000-000000000011",
-		Title:       strings.Repeat("a", maxSessionTitleBytes),
-		Status:      SessionStatusActive,
-		PrivacyMode: PrivacyModeStandard,
-		Version:     1,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "00000000-0000-7000-8000-000000000011",
+		Title:          strings.Repeat("a", maxSessionTitleBytes),
+		Status:         SessionStatusActive,
+		PrivacyMode:    PrivacyModeStandard,
+		Version:        1,
+		CreatedAt:      now,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("boundary Validate() error = %v", err)
@@ -77,6 +80,8 @@ func TestSessionValidationRejectsIdentifierTextAndSizeViolations(t *testing.T) {
 		{name: "oversized title", mutate: func(value *Session) { value.Title += "a" }},
 		{name: "invalid UTF-8 title", mutate: func(value *Session) { value.Title = string([]byte{0xff}) }},
 		{name: "time regression", mutate: func(value *Session) { value.UpdatedAt = time.UnixMilli(0).UTC() }},
+		{name: "activity before creation", mutate: func(value *Session) { value.LastActivityAt = time.UnixMilli(0).UTC() }},
+		{name: "activity after update", mutate: func(value *Session) { value.LastActivityAt = value.UpdatedAt.Add(time.Millisecond) }},
 		{name: "partial scope", mutate: func(value *Session) { value.LastScope = &ScopeCandidate{Context: "test-context"} }},
 		{name: "resource without scope", mutate: func(value *Session) {
 			value.SelectedResource = &ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "test-namespace", Name: "sample-pod"}

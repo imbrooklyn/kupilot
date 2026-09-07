@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0049 and the canonical docs. It is unreleased. Passing
+> by ADR-0044 through ADR-0052 and the canonical docs. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 
@@ -144,6 +144,23 @@ kupilot resume SESSION_ID
 kupilot resume --last
 ```
 
+Bounded local Session management and redacted diagnostics short-circuit before
+new-Session, TUI, model, Kubernetes, Tool, Reviewer, process, or executor setup:
+
+```text
+kupilot sessions list [--limit N] [--cursor CURSOR] [--json]
+kupilot sessions delete SESSION_ID
+kupilot sessions delete --before 1d --dry-run
+kupilot sessions delete --before 2026-09-01T00:00:00Z --confirm DIGEST
+kupilot doctor [--json]
+```
+
+Session listing is ordered by authoritative Last active. Exact and batch
+deletion use a bounded Application preview and complete SQLite graph cascade;
+batch automation binds the frozen cutoff and exact selection to a digest.
+Active, current, corrupt, future, or otherwise unproved Sessions are protected,
+and deletion never cancels work or claims forensic erasure.
+
 Automatically managed files stay below
 `${KUPILOT_HOME:-$HOME/.kupilot}`. If current model configuration is incomplete,
 the TUI requests one endpoint, model, and masked key and discloses plaintext
@@ -191,6 +208,15 @@ automatically. Final claim/Evidence manifests are checked for same-run
 provenance, but that structural check is not proof that model reasoning is
 correct. The pinned streaming protocol has no safe same-response continuation;
 disconnects are never retried automatically.
+
+Typed terminal reasons and next actions, bidirectional claim/Evidence
+navigation, provenance, content-free egress preflight and budget state, fixed
+Slash availability, a conservative terminal profile, `Ctrl+R` committed-input
+search, semantic transcript jumps, bounded `Alt+Z`/`Alt+Y` undo/redo, and local
+`/doctor` remain inside the same low-chrome screen. Strict response schema 2
+also admits one to three typed clarification questions. `NO_COLOR`, ANSI-16,
+reduced-motion, narrow-resize, IME/Unicode, and restored-scrollback behavior
+retain textual safety meaning.
 
 ## Documentation
 

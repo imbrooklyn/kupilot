@@ -9,6 +9,27 @@ import (
 
 const MaxSlashCandidates = 8
 
+// SlashAvailabilityState is one fixed, content-free delivery status. It does
+// not register commands or grant Application authority.
+type SlashAvailabilityState string
+
+const (
+	SlashAvailable           SlashAvailabilityState = "available"
+	SlashBusy                SlashAvailabilityState = "busy"
+	SlashNotApplicable       SlashAvailabilityState = "not applicable"
+	SlashDisabled            SlashAvailabilityState = "disabled"
+	SlashUnsupportedTerminal SlashAvailabilityState = "unsupported terminal"
+)
+
+type slashAvailabilityProjection struct {
+	State  SlashAvailabilityState
+	Reason string
+}
+
+func (availability slashAvailabilityProjection) available() bool {
+	return availability.State == SlashAvailable
+}
+
 type slashAction uint8
 
 const (
@@ -22,6 +43,9 @@ const (
 	slashQueue
 	slashCompact
 	slashPlan
+	slashDelete
+	slashSessions
+	slashDoctor
 	slashQuit
 )
 
@@ -49,6 +73,9 @@ var fixedSlashCommands = [...]SlashCommand{
 	{Name: "find", Usage: "[query]", Summary: "Find committed transcript text locally", AcceptsArgument: true, action: slashFind},
 	{Name: "compact", Summary: "Compact eligible safe Session context", action: slashCompact},
 	{Name: "plan", Usage: "[off]", Summary: "Arm or cancel one-shot plan-only mode", AcceptsArgument: true, action: slashPlan},
+	{Name: "delete", Summary: "Preview deletion of the current Session", action: slashDelete},
+	{Name: "sessions", Summary: "List and manage bounded local Sessions", action: slashSessions},
+	{Name: "doctor", Summary: "Show local redacted diagnostics", action: slashDoctor},
 	{Name: "new", Summary: "Start a new Session", action: slashApplication, commandKind: application.UICommandNewSession},
 	{Name: "resume", Usage: "[filter]", Summary: "Resume a local Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandResumeSession},
 	{Name: "rename", Usage: "[title]", Summary: "Rename the current Session", AcceptsArgument: true, action: slashApplication, commandKind: application.UICommandRenameSession},

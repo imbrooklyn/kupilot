@@ -13,7 +13,7 @@ const searchResumableSessionsSQL = `
 		VALUES (lower(?))
 	), ranked AS (
 		SELECT
-			s.id, s.title, s.updated_at_ms, s.privacy_mode,
+			s.id, s.title, s.last_activity_at_ms, s.privacy_mode,
 			s.last_context, s.last_namespace,
 			CASE
 				WHEN search.filter_value = '' THEN 0
@@ -22,7 +22,7 @@ const searchResumableSessionsSQL = `
 				WHEN instr(lower(s.title), search.filter_value) > 0 THEN 2
 				WHEN instr(lower('ctx/' || coalesce(s.last_context, '')), search.filter_value) > 0
 					OR instr(lower('ns/' || coalesce(s.last_namespace, '')), search.filter_value) > 0 THEN 3
-				WHEN instr(lower(strftime('%Y-%m-%d %H:%MZ', s.updated_at_ms / 1000.0, 'unixepoch')), search.filter_value) > 0 THEN 4
+				WHEN instr(lower(strftime('%Y-%m-%d %H:%MZ', s.last_activity_at_ms / 1000.0, 'unixepoch')), search.filter_value) > 0 THEN 4
 				ELSE 5
 			END AS match_rank
 		FROM sessions AS s
@@ -36,11 +36,11 @@ const searchResumableSessionsSQL = `
 			)
 	)
 	SELECT
-		id, title, updated_at_ms, privacy_mode,
+		id, title, last_activity_at_ms, privacy_mode,
 		last_context, last_namespace, match_rank
 	FROM ranked
 	WHERE match_rank < 5
-	ORDER BY match_rank ASC, updated_at_ms DESC, id DESC
+	ORDER BY match_rank ASC, last_activity_at_ms DESC, id DESC
 	LIMIT ?
 `
 
@@ -82,7 +82,7 @@ func (repository *SessionRepository) SearchResumable(
 			return nil, repositoryFailure(repository.db, "session_row_invalid", "search_resumable_sessions", "Kupilot could not read resumable Session metadata safely.", err)
 		}
 		result = append(result, application.ResumeSessionRecord{
-			ID: candidate.ID, Title: candidate.Title, UpdatedAt: candidate.UpdatedAt.UTC().Truncate(time.Millisecond),
+			ID: candidate.ID, Title: candidate.Title, LastActivityAt: candidate.LastActivityAt.UTC().Truncate(time.Millisecond),
 			PrivacyMode: candidate.PrivacyMode, LastScope: cloneSearchScope(candidate.LastScope),
 		})
 	}
