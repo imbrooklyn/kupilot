@@ -91,6 +91,9 @@ const (
 	// ModelAPIKeySourceRuntime means the opaque value has already been selected
 	// from the admitted file, environment, or interactive source.
 	ModelAPIKeySourceRuntime ModelAPIKeySource = "runtime"
+	// ModelAPIKeySourceNone means the selected native provider accepts no
+	// transport credential.
+	ModelAPIKeySourceNone ModelAPIKeySource = "none"
 )
 
 // ModelTransportPolicy names the fixed endpoint and redirect behavior.
@@ -101,6 +104,9 @@ const (
 	// verification, permits HTTP only on explicit loopback, and binds redirects
 	// and Authorization to the configured canonical origin.
 	ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP ModelTransportPolicy = "verified_https_or_loopback_http_same_origin"
+	// ModelTransportPolicyLoopbackHTTPNoRedirect admits only the explicit
+	// credential-free native Ollama loopback route.
+	ModelTransportPolicyLoopbackHTTPNoRedirect ModelTransportPolicy = "loopback_http_no_redirect"
 )
 
 // ModelReasoningEffort is the optional fixed Chat Completions reasoning mode.
@@ -112,6 +118,19 @@ const (
 	ModelReasoningEffortNone    ModelReasoningEffort = "none"
 )
 
+// ModelResponseFormat is one explicit structured-output request contract.
+type ModelResponseFormat string
+
+const (
+	ModelResponseFormatPrompt     ModelResponseFormat = "prompt"
+	ModelResponseFormatJSONObject ModelResponseFormat = "json_object"
+)
+
+// Valid reports whether the format is one admitted fixed profile value.
+func (format ModelResponseFormat) Valid() bool {
+	return format == ModelResponseFormatPrompt || format == ModelResponseFormatJSONObject
+}
+
 // ModelConfiguration contains only validated, serializable, non-sensitive
 // settings. It contains no credential, header, client, callback, or SDK value.
 type ModelConfiguration struct {
@@ -122,6 +141,7 @@ type ModelConfiguration struct {
 	Origin              string
 	Model               string
 	ReasoningEffort     ModelReasoningEffort
+	ResponseFormat      ModelResponseFormat
 	APIKeySource        ModelAPIKeySource
 	Temperature         float64
 	MaxOutputTokens     int
@@ -134,12 +154,11 @@ type ModelConfiguration struct {
 // Validate checks the fixed model profile without accepting a credential.
 func (configuration ModelConfiguration) Validate() error {
 	if !ValidModelToken(configuration.ProfileName, 128) || !configuration.Role.Valid() ||
-		configuration.ProviderKind != ModelProviderOpenAICompatible ||
-		configuration.APIKeySource != ModelAPIKeySourceRuntime ||
-		configuration.TransportPolicy != ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP ||
+		!configuration.ProviderKind.Valid() || !configuration.validProviderPolicy() ||
 		!validModelEndpoint(configuration.Endpoint, configuration.Origin) ||
 		!validModelIdentifier(configuration.Model) ||
 		configuration.ReasoningEffort != ModelReasoningEffortOmitted && configuration.ReasoningEffort != ModelReasoningEffortNone ||
+		!configuration.ResponseFormat.Valid() ||
 		math.IsNaN(configuration.Temperature) || math.IsInf(configuration.Temperature, 0) ||
 		configuration.Temperature < 0 || configuration.Temperature > 0.2 ||
 		configuration.MaxOutputTokens < 0 ||
@@ -149,6 +168,30 @@ func (configuration ModelConfiguration) Validate() error {
 		return ErrInvalidModelConfiguration
 	}
 	return nil
+}
+
+func (configuration ModelConfiguration) validProviderPolicy() bool {
+	switch configuration.ProviderKind {
+	case ModelProviderOpenAI:
+		return configuration.APIKeySource == ModelAPIKeySourceRuntime &&
+			configuration.TransportPolicy == ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP
+	case ModelProviderOllama:
+		return configuration.APIKeySource == ModelAPIKeySourceNone &&
+			configuration.TransportPolicy == ModelTransportPolicyLoopbackHTTPNoRedirect &&
+			validNativeOllamaEndpoint(configuration.Endpoint)
+	default:
+		return false
+	}
+}
+
+func validNativeOllamaEndpoint(endpoint string) bool {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "http" || parsed.Path != "" {
+		return false
+	}
+	hostname := parsed.Hostname()
+	ip := net.ParseIP(hostname)
+	return hostname == "localhost" || ip != nil && ip.IsLoopback()
 }
 
 // ModelOperation is a code-defined model boundary operation.

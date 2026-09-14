@@ -19,10 +19,13 @@ models:
     name: agent
     role: agent
     credential_ref: agent
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://model.example.invalid/v1
     model: diagnostic-model
     # reasoning_effort: none
+    # prompt keeps prompt-only JSON guidance. json_object may be selected only
+    # after the exact endpoint is known to support that Chat Completions field.
+    response_format: prompt
     temperature: 0.1
     # max_output_tokens is omitted until the selected endpoint has exact
     # evidence. Byte, call, time, stream, and cost-unit limits still apply.
@@ -39,6 +42,7 @@ models:
   #   inherit_agent: true
   #   credential_ref: agent
   #   model: reviewer-model
+  #   response_format: prompt
   #   temperature: 0
   #   # max_output_tokens: 512 # only with endpoint evidence
   #   request_timeout_seconds: 30

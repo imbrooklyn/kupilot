@@ -522,7 +522,7 @@ func TestRetentionRepositoryHonorsZeroAndLongerOperationalDetailPolicy(t *testin
 			id, run_id, sequence, provider_kind, model, status,
 			prompt_version, prompt_fingerprint, started_at_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "00000000-0000-7000-8000-000000006158", run.ID, 2, "openai_compatible", "test-model", "running", "prompt-v1", domain.SHA256Hex("incomplete-request"), observedAt.UnixMilli()); err != nil {
+	`, "00000000-0000-7000-8000-000000006158", run.ID, 2, "openai", "test-model", "running", "prompt-v1", domain.SHA256Hex("incomplete-request"), observedAt.UnixMilli()); err != nil {
 		t.Fatalf("insert incomplete ModelRequest error = %v", err)
 	}
 	repository := NewRetentionRepository(db)

@@ -162,16 +162,28 @@ func validateResourcePolicies(configured []KubernetesResourcePolicyConfig) error
 func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, allowUnconfigured bool) error {
 	if profile == nil || profile.Role != expectedRole || !profile.Role.valid() ||
 		!validModelProfileName(profile.Name) || !profile.CredentialReference.valid() ||
-		expectedRole == ModelRoleAgent && (profile.InheritAgent || profile.CredentialReference != ModelCredentialAgent) ||
-		expectedRole == ModelRoleApprovalReviewer && profile.CredentialReference != ModelCredentialAgent &&
-			profile.CredentialReference != ModelCredentialApprovalReviewer {
+		expectedRole == ModelRoleAgent && profile.InheritAgent {
 		return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "Each model profile must have one unique name, its fixed role, and an admitted role-bound credential reference.")
 	}
-	if profile.ProviderKind != ProviderOpenAICompatible {
-		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "Each models profile provider_kind must be openai_compatible.")
+	switch profile.ProviderKind {
+	case ProviderOpenAI:
+		if expectedRole == ModelRoleAgent && profile.CredentialReference != ModelCredentialAgent ||
+			expectedRole == ModelRoleApprovalReviewer && profile.CredentialReference != ModelCredentialAgent &&
+				profile.CredentialReference != ModelCredentialApprovalReviewer {
+			return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "An openai profile requires its admitted role-bound credential reference.")
+		}
+	case ProviderOllama:
+		if profile.CredentialReference != ModelCredentialNone {
+			return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "An ollama profile requires credential_ref none.")
+		}
+	default:
+		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "Each models profile provider_kind must be openai or ollama.")
 	}
 	if profile.ReasoningEffort != "" && profile.ReasoningEffort != ModelReasoningEffortNone {
 		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Model profile reasoning_effort must be omitted or set to none.")
+	}
+	if profile.ResponseFormat != ModelResponseFormatPrompt && profile.ResponseFormat != ModelResponseFormatJSONObject {
+		return newSafeError(ClassConfigurationInvalid, "config_response_format_invalid", "validate_configuration", "Model profile response_format must be prompt or json_object.")
 	}
 	if math.IsNaN(profile.Temperature) || math.IsInf(profile.Temperature, 0) || profile.Temperature < 0 || profile.Temperature > 0.2 {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "Model profile temperature must be between 0 and 0.2.")
@@ -191,6 +203,9 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 		if !ok {
 			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "Model endpoint must use HTTPS, or HTTP only with an explicit loopback host; user information, query, fragments, and ambiguous paths are not allowed.")
 		}
+		if profile.ProviderKind == ProviderOllama && (endpoint != origin || !strings.HasPrefix(origin, "http://") || !isExplicitLoopback(strings.ToLower(mustEndpointHostname(origin)))) {
+			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "An ollama endpoint must be one explicit loopback HTTP origin without a path.")
+		}
 		profile.Endpoint = endpoint
 		profile.Origin = origin
 	} else {
@@ -203,6 +218,14 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 		return modelProfileRequiredError(expectedRole)
 	}
 	return nil
+}
+
+func mustEndpointHostname(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 func validModelProfileName(value string) bool {

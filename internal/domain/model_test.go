@@ -3,7 +3,70 @@ package domain
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestModelConfigurationRequiresOneExplicitResponseFormat(t *testing.T) {
+	t.Parallel()
+
+	configuration := ModelConfiguration{
+		ProfileName: "agent", Role: ModelRoleAgent, ProviderKind: ModelProviderOpenAI,
+		Endpoint: "http://127.0.0.1:11434/v1", Origin: "http://127.0.0.1:11434", Model: "fixture-model",
+		ResponseFormat: ModelResponseFormatPrompt, APIKeySource: ModelAPIKeySourceRuntime,
+		Temperature: 0.1, RequestTimeout: time.Minute, StreamingRequired: true, ToolCallingRequired: true,
+		TransportPolicy: ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+	}
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate(prompt) error = %v", err)
+	}
+	configuration.ResponseFormat = ModelResponseFormatJSONObject
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate(json_object) error = %v", err)
+	}
+	configuration.ResponseFormat = "automatic"
+	if err := configuration.Validate(); err == nil {
+		t.Fatal("Validate(unknown response format) error = nil")
+	}
+}
+
+func TestModelConfigurationSeparatesOpenAIAndNativeOllamaAuthority(t *testing.T) {
+	t.Parallel()
+
+	native := ModelConfiguration{
+		ProfileName: "agent", Role: ModelRoleAgent, ProviderKind: ModelProviderOllama,
+		Endpoint: "http://127.0.0.1:11434", Origin: "http://127.0.0.1:11434", Model: "fixture-model",
+		ResponseFormat: ModelResponseFormatJSONObject, APIKeySource: ModelAPIKeySourceNone,
+		Temperature: 0.1, RequestTimeout: 10 * time.Minute, StreamingRequired: true, ToolCallingRequired: true,
+		TransportPolicy: ModelTransportPolicyLoopbackHTTPNoRedirect,
+	}
+	if err := native.Validate(); err != nil {
+		t.Fatalf("Validate(native Ollama) error = %v", err)
+	}
+	for _, mutate := range []func(*ModelConfiguration){
+		func(value *ModelConfiguration) {
+			value.Endpoint, value.Origin = "http://model.example.test:11434", "http://model.example.test:11434"
+		},
+		func(value *ModelConfiguration) {
+			value.Endpoint, value.Origin = "https://127.0.0.1:11434", "https://127.0.0.1:11434"
+		},
+		func(value *ModelConfiguration) { value.Endpoint = "http://127.0.0.1:11434/api" },
+		func(value *ModelConfiguration) { value.APIKeySource = ModelAPIKeySourceRuntime },
+		func(value *ModelConfiguration) {
+			value.TransportPolicy = ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP
+		},
+	} {
+		candidate := native
+		mutate(&candidate)
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("Validate(unsafe native Ollama) accepted %#v", candidate)
+		}
+	}
+	retired := native
+	retired.ProviderKind = "openai_compatible"
+	if err := retired.Validate(); err == nil {
+		t.Fatal("Validate() accepted the retired provider kind")
+	}
+}
 
 func TestValidModelTextEnforcesCallerSelectedBoundsAndTerminalSafety(t *testing.T) {
 	if !ValidModelText(strings.Repeat("a", MaxModelMessageBytes), MaxModelMessageBytes, false) {

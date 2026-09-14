@@ -49,9 +49,10 @@ Check all of the following:
   `models.agent` profile and no
   unknown, duplicate, null, alias, merge, or second-document content.
 - Values use the exact types and bounds in [Configuration](configuration.md).
-- Each supplied `models.<role>.endpoint` and `models.<role>.model` value is
-  valid. A missing Agent endpoint, model identifier, or API key starts the TUI
-  in model-setup mode.
+- Each supplied `models.<role>.provider_kind`, endpoint, model, and credential
+  policy is valid. A missing Agent endpoint, model identifier, or required
+  OpenAI API key starts the TUI in model-setup mode. Native Ollama requires
+  `credential_ref: none` and no API key.
 
 `config.example.yaml` deliberately contains no real credential. Copy it to the
 fixed Home configuration or select an absolute external file. Do not add a real
@@ -77,7 +78,7 @@ an Agent failure. `Protocol continuation unavailable` means a disconnected
 stream remains unknown/recovered and requires a new explicit input; it is not a
 request to retry automatically.
 
-## The model API key is missing or rejected
+## The OpenAI model API key is missing or rejected
 
 Use masked TUI setup, optional plaintext `models.agent.api_key`, or exactly one
 of `KUPILOT_AGENT_API_KEY` and the legacy `KUPILOT_MODEL_API_KEY` alias. A
@@ -98,7 +99,8 @@ for it again. `save` writes disclosed plaintext to
 
 ## The model endpoint is rejected or incompatible
 
-The configured endpoint is a base URL. Kupilot sends the model request to:
+For `provider_kind: openai`, the configured endpoint is a Chat Completions base
+URL. Kupilot sends the model request to:
 
 ```text
 {configured-endpoint}/chat/completions
@@ -121,10 +123,28 @@ For the official OpenAI API, a compatible configuration example is:
 ```yaml
 models:
   agent:
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4o-mini
 ```
+
+For native Ollama, use the loopback server base without `/v1` or `/api/chat`:
+
+```yaml
+runtime:
+  budget_profile: extended
+models:
+  agent:
+    credential_ref: none
+    provider_kind: ollama
+    endpoint: http://127.0.0.1:11434
+    model: gpt-oss:20b
+```
+
+Kupilot uses Eino's native Ollama component and sends `/api/chat` NDJSON with
+no Authorization header. It does not read `OLLAMA_HOST`, start Ollama, pull a
+model, fall back to `/v1`, or retry another protocol. The finite `extended`
+profile is recommended for slow local model loading and generation.
 
 OpenAI documents `gpt-4o-mini` and later models as supporting Structured
 Outputs. A third-party relay must preserve the same streaming function-call and

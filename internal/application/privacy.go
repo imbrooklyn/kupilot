@@ -17,7 +17,7 @@ import (
 
 const (
 	// PrivacyPolicyVersion changes whenever an eligible category or its meaning changes.
-	PrivacyPolicyVersion       = "2026-09-05.v4"
+	PrivacyPolicyVersion       = "2026-09-15.v5"
 	PrivacyRecordSchemaVersion = 3
 	maxPrivacyPolicyBytes      = 64
 )
@@ -293,6 +293,21 @@ func (manager *PrivacyManager) ReconfigureOrigin(origin string) error {
 	manager.record = nil
 	manager.advanceRevisionLocked()
 	return nil
+}
+
+// InvalidateConsent durably revokes the current exact transfer tuple before a
+// provider-kind change. It prevents a same-origin protocol switch from
+// inheriting authority either in this process or after restart.
+func (manager *PrivacyManager) InvalidateConsent(ctx context.Context) error {
+	if manager == nil {
+		return ErrPrivacyConfiguration
+	}
+	review, err := manager.Review(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = manager.Decide(ctx, PrivacyActionRevoke, review.Revision, nil)
+	return err
 }
 
 // Review returns the exact current display contract after loading persisted state.

@@ -3,7 +3,6 @@
 package einoadapter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,21 +19,21 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
+	projectagent "github.com/imbrooklyn/kupilot/internal/agent"
 	projectconfig "github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const (
-	liveModelCallCeiling         = 3
-	liveModelOutputTokenCeiling  = 256
-	liveModelRequestByteCeiling  = 1024 * 1024
-	liveModelSuiteTimeout        = 3 * time.Minute
-	livePreferredCostUSDCeiling  = 3.0
-	liveModelAuthorizationValue  = "authorized"
-	liveModelTargetPreferred     = "preferred"
-	liveModelTargetOllama        = "ollama"
-	liveModelCredentialSource    = "file"
-	liveOllamaCredentialSentinel = "ollama-local-test-credential"
+	liveModelCallCeiling        = 4
+	liveModelOutputTokenCeiling = 2048
+	liveModelRequestByteCeiling = 1024 * 1024
+	liveModelSuiteTimeout       = 15 * time.Minute
+	livePreferredCostUSDCeiling = 3.0
+	liveModelAuthorizationValue = "authorized"
+	liveModelTargetPreferred    = "preferred"
+	liveModelTargetOllama       = "ollama"
+	liveModelCredentialSource   = "file"
 )
 
 // TestModelAPIIntegrationDeterministicContract is the network-independent
@@ -66,7 +65,7 @@ func TestModelAPIIntegrationDeterministicContract(t *testing.T) {
 	}
 }
 
-// TestModelAPIIntegrationLive performs three bounded protocol calls against
+// TestModelAPIIntegrationLive performs four bounded protocol calls against
 // exactly one explicitly selected profile. It asserts capabilities rather
 // than answer quality and never discovers an endpoint or falls back.
 func TestModelAPIIntegrationLive(t *testing.T) {
@@ -83,10 +82,12 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	}
 
 	configuration, credential, source := loadLiveModelProfile(t, target)
-	transport := newLiveBudgetTransport(liveModelCallCeiling, liveModelRequestByteCeiling)
+	transport := newLiveBudgetTransport(configuration.ProviderKind, liveModelCallCeiling, liveModelRequestByteCeiling)
 	client, modelError := newModelClientForTest(configuration, credential, nil, transport)
 	if modelError != nil {
-		credential.Destroy()
+		if credential != nil {
+			credential.Destroy()
+		}
 		t.Fatalf("FAIL model API preflight: profile configuration was rejected safely: %v", modelError)
 	}
 	t.Cleanup(client.close)
@@ -113,7 +114,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	textMessage, failure := client.stream(
 		ctx,
 		"00000000-0000-7000-8000-000000009601",
-		bound,
+		client.model,
 		[]*schema.Message{
 			schema.SystemMessage("This is a bounded protocol test. Do not call a Tool for this request."),
 			schema.UserMessage("Return one short plain-text sentence confirming that streaming text is available."),
@@ -131,7 +132,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	usage.observe(textMessage)
 
 	toolMessages := []*schema.Message{
-		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields: answer_markdown as a non-empty string, evidence_citations as an empty array, and proposed_actions as an empty array."),
+		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 2, outcome as answer, stop_reason as completed, limitations as an empty array, and questions as an empty array."),
 		schema.UserMessage(`Call get_resource with {"detail":"summary","name":"synthetic-pod","namespace":null,"purpose":"Validate the protocol fixture.","resource_type":"pods"}. Do not answer in prose before the Tool call.`),
 	}
 	toolMessage, failure := client.stream(
@@ -170,6 +171,34 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	}
 	usage.observe(finalMessage)
 
+	historical, historicalErr := projectagent.EncodeHistoricalAssistantResponse("Earlier visible answer.")
+	if historicalErr != nil {
+		t.Fatalf("FAIL model API historical response preflight: %v", historicalErr)
+	}
+	fullPrompt, promptErr := projectagent.BuildSystemPrompt(testInput(t, newTestClock(), projectagent.DefaultRunBudgetLimits()))
+	if promptErr != nil {
+		t.Fatalf("FAIL model API system prompt preflight: %v", promptErr)
+	}
+	followupMessage, failure := client.stream(
+		ctx,
+		"00000000-0000-7000-8000-000000009604",
+		bound,
+		[]*schema.Message{
+			schema.SystemMessage(fullPrompt),
+			schema.UserMessage("Hello."),
+			schema.AssistantMessage(historical, nil),
+			schema.UserMessage("Who are you?"),
+		},
+		nil,
+	)
+	if failure != nil {
+		t.Fatalf("FAIL model API later-turn structured stream: %v", failure)
+	}
+	if capabilityErr := validateLiveStructuredFinal(followupMessage); capabilityErr != nil {
+		t.Fatalf("MODEL_CAPABILITY_FAIL later-turn structured response: %v", capabilityErr)
+	}
+	usage.observe(followupMessage)
+
 	if calls := transport.calls.Load(); calls != liveModelCallCeiling {
 		t.Fatalf("FAIL model API request count = %d, want %d", calls, liveModelCallCeiling)
 	}
@@ -206,15 +235,16 @@ func (usage *liveUsageObservation) observe(message *schema.Message) {
 
 type liveBudgetTransport struct {
 	base         *http.Transport
+	provider     domain.ModelProviderKind
 	callCeiling  int64
 	byteCeiling  int64
 	calls        atomic.Int64
 	requestBytes atomic.Int64
 }
 
-func newLiveBudgetTransport(callCeiling int, byteCeiling int) *liveBudgetTransport {
+func newLiveBudgetTransport(provider domain.ModelProviderKind, callCeiling int, byteCeiling int) *liveBudgetTransport {
 	base := http.DefaultTransport.(*http.Transport).Clone()
-	return &liveBudgetTransport{base: base, callCeiling: int64(callCeiling), byteCeiling: int64(byteCeiling)}
+	return &liveBudgetTransport{base: base, provider: provider, callCeiling: int64(callCeiling), byteCeiling: int64(byteCeiling)}
 }
 
 func (transport *liveBudgetTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -227,8 +257,11 @@ func (transport *liveBudgetTransport) RoundTrip(request *http.Request) (*http.Re
 	if transport.requestBytes.Add(request.ContentLength) > transport.byteCeiling {
 		return nil, errors.New("live integration request byte ceiling reached")
 	}
-	if request.Header.Get("Authorization") == "" {
-		return nil, errors.New("live integration request has no transport credential")
+	if transport.provider == domain.ModelProviderOpenAI && request.Header.Get("Authorization") == "" {
+		return nil, errors.New("live OpenAI integration request has no transport credential")
+	}
+	if transport.provider == domain.ModelProviderOllama && (request.Header.Get("Authorization") != "" || request.URL.Path != "/api/chat") {
+		return nil, errors.New("live native Ollama integration request violated the credential-free route")
 	}
 	return transport.base.RoundTrip(request)
 }
@@ -245,32 +278,30 @@ func loadLiveModelProfile(t *testing.T, target string) (domain.ModelConfiguratio
 		endpoint := os.Getenv("KUPILOT_INTEGRATION_OLLAMA_ENDPOINT")
 		model := os.Getenv("KUPILOT_INTEGRATION_OLLAMA_MODEL")
 		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1" || model == "" {
+		if err != nil || parsed.Scheme != "http" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+			parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1" || model == "" {
 			t.Skip("BLOCKED Ollama integration: provide an explicit loopback KUPILOT_INTEGRATION_OLLAMA_ENDPOINT and KUPILOT_INTEGRATION_OLLAMA_MODEL")
-		}
-		credential, credentialErr := projectconfig.NewSecretValue(liveOllamaCredentialSentinel)
-		if credentialErr != nil {
-			t.Fatalf("create Ollama test credential wrapper: %v", credentialErr)
 		}
 		configuration := domain.ModelConfiguration{
 			ProfileName: "ollama-integration", Role: domain.ModelRoleAgent,
-			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			ProviderKind:        domain.ModelProviderOllama,
 			Endpoint:            strings.TrimRight(endpoint, "/"),
 			Origin:              parsed.Scheme + "://" + parsed.Host,
 			Model:               model,
-			APIKeySource:        domain.ModelAPIKeySourceRuntime,
+			ReasoningEffort:     domain.ModelReasoningEffortOmitted,
+			ResponseFormat:      domain.ModelResponseFormatJSONObject,
+			APIKeySource:        domain.ModelAPIKeySourceNone,
 			Temperature:         0,
 			MaxOutputTokens:     liveModelOutputTokenCeiling,
-			RequestTimeout:      time.Minute,
+			RequestTimeout:      10 * time.Minute,
 			StreamingRequired:   true,
 			ToolCallingRequired: true,
-			TransportPolicy:     domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+			TransportPolicy:     domain.ModelTransportPolicyLoopbackHTTPNoRedirect,
 		}
 		if configuration.Validate() != nil {
-			credential.Destroy()
-			t.Skip("BLOCKED Ollama integration: the explicit profile is not an admitted OpenAI-compatible loopback configuration")
+			t.Skip("BLOCKED Ollama integration: the explicit profile is not an admitted native loopback configuration")
 		}
-		return configuration, &credential, "test-config"
+		return configuration, nil, "none"
 	}
 
 	paths, err := projectconfig.SystemPaths()
@@ -301,11 +332,12 @@ func loadLiveModelProfile(t *testing.T, target string) (domain.ModelConfiguratio
 	}
 	configuration := domain.ModelConfiguration{
 		ProfileName: profile.Name, Role: domain.ModelRoleAgent,
-		ProviderKind:        domain.ModelProviderOpenAICompatible,
+		ProviderKind:        domain.ModelProviderOpenAI,
 		Endpoint:            profile.Endpoint,
 		Origin:              profile.Origin,
 		Model:               profile.Model,
 		ReasoningEffort:     domain.ModelReasoningEffort(profile.ReasoningEffort),
+		ResponseFormat:      domain.ModelResponseFormat(profile.ResponseFormat),
 		APIKeySource:        domain.ModelAPIKeySourceRuntime,
 		Temperature:         profile.Temperature,
 		MaxOutputTokens:     liveModelOutputTokenCeiling,
@@ -363,22 +395,19 @@ func validateLiveStructuredFinal(message *schema.Message) error {
 	if message == nil || message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "stop" || len(message.ToolCalls) != 0 {
 		return fmt.Errorf("expected Tool-free finish_reason=stop; tools=%d finish=%q", toolCallCount(message), finishReason(message))
 	}
-	decoder := json.NewDecoder(bytes.NewBufferString(message.Content))
-	decoder.DisallowUnknownFields()
-	var document struct {
-		AnswerMarkdown    string            `json:"answer_markdown"`
-		EvidenceCitations []json.RawMessage `json:"evidence_citations"`
-		ProposedActions   []json.RawMessage `json:"proposed_actions"`
+	draft, err := projectagent.DecodeDiagnosticResponse(message.Content)
+	if err != nil {
+		return fmt.Errorf("final response did not satisfy the current strict contract: %w", err)
 	}
-	if err := decoder.Decode(&document); err != nil {
-		return fmt.Errorf("final response was not strict JSON: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("final response contained trailing data")
-	}
-	if strings.TrimSpace(document.AnswerMarkdown) == "" || len(document.EvidenceCitations) != 0 || len(document.ProposedActions) != 0 {
-		return errors.New("final response changed the content-free protocol fixture")
+	if strings.TrimSpace(draft.AnswerMarkdown) == "" || draft.ResponseSchemaVersion != 2 ||
+		len(draft.ConfirmedFacts) != 0 || len(draft.ClaimCoverage) != 0 || len(draft.RecommendedActions) != 0 ||
+		len(draft.MissingInformation) != 0 || draft.Clarification != nil {
+		return fmt.Errorf(
+			"final response changed the content-free protocol fixture: answer=%t schema=%d facts=%d claims=%d actions=%d limitations=%d clarification=%t stop=%s",
+			strings.TrimSpace(draft.AnswerMarkdown) != "", draft.ResponseSchemaVersion,
+			len(draft.ConfirmedFacts), len(draft.ClaimCoverage), len(draft.RecommendedActions),
+			len(draft.MissingInformation), draft.Clarification != nil, draft.SuggestedStopReason,
+		)
 	}
 	return nil
 }

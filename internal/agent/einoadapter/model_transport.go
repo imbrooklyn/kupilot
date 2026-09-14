@@ -118,6 +118,7 @@ type guardedRoundTripper struct {
 	base       http.RoundTripper
 	origin     *url.URL
 	credential *config.SecretValue
+	provider   domain.ModelProviderKind
 }
 
 func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -136,13 +137,20 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	if !transport.validRequest(request, state.requestLimit) {
 		return nil, errTransportRequestInvalid
 	}
-	if useError := transport.credential.Use(func(value string) {
-		request.Header.Set("Authorization", "Bearer "+value)
-	}); useError != nil {
-		return nil, errTransportRequestInvalid
+	if transport.provider == domain.ModelProviderOpenAI {
+		if transport.credential == nil {
+			return nil, errTransportRequestInvalid
+		}
+		if useError := transport.credential.Use(func(value string) {
+			request.Header.Set("Authorization", "Bearer "+value)
+		}); useError != nil {
+			return nil, errTransportRequestInvalid
+		}
 	}
 	response, err := transport.base.RoundTrip(request)
-	request.Header.Set("Authorization", "Bearer "+einoCredentialPlaceholder)
+	if transport.provider == domain.ModelProviderOpenAI {
+		request.Header.Set("Authorization", "Bearer "+einoCredentialPlaceholder)
+	}
 	if response != nil {
 		state.setHTTPStatus(response.StatusCode)
 	}
@@ -156,13 +164,15 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return nil, errTransportRequestInvalid
 	}
 	if response.StatusCode != http.StatusOK {
-		sanitizeProviderErrorResponse(response, state)
+		sanitizeProviderErrorResponse(response, state, transport.provider)
 		return response, nil
 	}
 	mediaType, _, mediaError := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	wantMedia := "text/event-stream"
 	if state.responseMode == transportResponseJSON {
 		wantMedia = "application/json"
+	} else if transport.provider == domain.ModelProviderOllama {
+		wantMedia = "application/x-ndjson"
 	}
 	if mediaError != nil || !strings.EqualFold(mediaType, wantMedia) {
 		_ = response.Body.Close()
@@ -179,8 +189,10 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 		return nil, errModelResponseLimitReached
 	}
 	var boundedBody boundedResponseBody
-	if state.responseMode == transportResponseStream {
+	if state.responseMode == transportResponseStream && transport.provider == domain.ModelProviderOpenAI {
 		boundedBody = &boundedSSEBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
+	} else if state.responseMode == transportResponseStream {
+		boundedBody = &boundedNDJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
 	} else {
 		boundedBody = &boundedJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
 	}
@@ -195,14 +207,30 @@ func (transport *guardedRoundTripper) validRequest(request *http.Request, maximu
 		maximum < 1 || maximum > domain.MaxModelRequestBytes || request.ContentLength > int64(maximum) ||
 		request.URL.Scheme != transport.origin.Scheme || request.URL.Host != transport.origin.Host ||
 		request.URL.User != nil || request.URL.RawQuery != "" || request.URL.ForceQuery || request.URL.Fragment != "" ||
-		request.Header.Get("Authorization") != "Bearer "+einoCredentialPlaceholder {
+		!transport.validProviderRequest(request) {
 		return false
 	}
 	contentType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	return err == nil && contentType == "application/json"
 }
 
-func sanitizeProviderErrorResponse(response *http.Response, state *transportRequestState) {
+func (transport *guardedRoundTripper) validProviderRequest(request *http.Request) bool {
+	if transport == nil || request == nil || request.URL == nil {
+		return false
+	}
+	switch transport.provider {
+	case domain.ModelProviderOpenAI:
+		return transport.credential != nil && transport.credential.IsSet() &&
+			request.Header.Get("Authorization") == "Bearer "+einoCredentialPlaceholder
+	case domain.ModelProviderOllama:
+		return transport.credential == nil && request.Header.Get("Authorization") == "" &&
+			request.URL.Path == "/api/chat" && request.Header.Get("Accept") == "application/x-ndjson"
+	default:
+		return false
+	}
+}
+
+func sanitizeProviderErrorResponse(response *http.Response, state *transportRequestState, provider domain.ModelProviderKind) {
 	if state != nil && state.sensitiveDiagnostics {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, int64(domain.MaxModelErrorBodyBytes+1)))
 		truncated := len(body) > domain.MaxModelErrorBodyBytes
@@ -218,6 +246,9 @@ func sanitizeProviderErrorResponse(response *http.Response, state *transportRequ
 	}
 	_ = response.Body.Close()
 	body := []byte(safeProviderErrorBody)
+	if provider == domain.ModelProviderOllama {
+		body = []byte(`{"error":"The model endpoint rejected the request."}`)
+	}
 	response.Body = io.NopCloser(bytes.NewReader(body))
 	response.ContentLength = int64(len(body))
 	response.Header.Set("Content-Type", "application/json")
@@ -316,6 +347,65 @@ func (body *boundedSSEBody) resetLine() {
 	body.linePrefixBytes = 0
 	body.dataLine = false
 	body.dataLeadingSpace = false
+}
+
+type boundedNDJSONBody struct {
+	io.ReadCloser
+	closeOnce    sync.Once
+	closeError   error
+	totalBytes   int
+	recordBytes  int
+	records      int
+	maximumBytes int
+	failure      error
+}
+
+func (body *boundedNDJSONBody) Close() error {
+	body.closeOnce.Do(func() { body.closeError = body.ReadCloser.Close() })
+	return body.closeError
+}
+
+func (body *boundedNDJSONBody) Read(target []byte) (int, error) {
+	if body.failure != nil {
+		return 0, body.failure
+	}
+	maximum := body.maximumBytes
+	if maximum < 1 || maximum > domain.MaxModelStreamBytes {
+		maximum = domain.MaxModelStreamBytes
+	}
+	remaining := maximum - body.totalBytes + 1
+	if remaining < len(target) {
+		target = target[:remaining]
+	}
+	count, readError := body.ReadCloser.Read(target)
+	for index := 0; index < count; index++ {
+		if !body.accept(target[index], maximum) {
+			body.failure = errModelResponseLimitReached
+			return index, body.failure
+		}
+	}
+	return count, readError
+}
+
+func (body *boundedNDJSONBody) accept(current byte, maximum int) bool {
+	body.totalBytes++
+	if body.totalBytes > maximum {
+		return false
+	}
+	if current == '\n' {
+		if body.recordBytes == 0 {
+			return false
+		}
+		body.records++
+		body.recordBytes = 0
+		return body.records <= domain.MaxModelStreamChunks
+	}
+	body.recordBytes++
+	return body.recordBytes <= domain.MaxModelStreamChunkBytes
+}
+
+func (body *boundedNDJSONBody) limitReached() bool {
+	return body != nil && errors.Is(body.failure, errModelResponseLimitReached)
 }
 
 type boundedJSONBody struct {

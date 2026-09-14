@@ -53,9 +53,11 @@ Loki results, and remote diagnostic output use separate categories as
 applicable and remain disabled until their exact capability and policy enable
 them. The three current remote diagnostics share the existing
 `redacted_container_output` transfer category while their ActionEnvelopes keep
-container and file data effects distinct. This expanded meaning advances the
-privacy policy to `2026-09-05.v4`, so a consent created under the preceding
-meaning cannot authorize any transfer. Local process output has no model-
+container and file data effects distinct. This expanded meaning and the newly
+distinct provider protocol advance the privacy policy to `2026-09-15.v5`, so a
+consent created under the preceding meaning cannot authorize any transfer. A
+same-origin provider switch durably revokes the old Agent consent before
+runtime replacement. Local process output has no model-
 transfer category in the current implementation: even bounded sanitized output
 is terminal-only and cannot become model content or Evidence. Changing a
 category returns the affected consent to pending and cancels old work before
@@ -113,7 +115,7 @@ Kupilot never includes:
 
 - raw kubeconfig or Kubernetes credentials, certificates, keys, bearer tokens,
   ServiceAccount tokens, or exec credential output;
-- the model API key or Authorization header as content;
+- an OpenAI model API key or Authorization header as content;
 - Kubernetes Secret values or an unprojected Secret object;
 - credential-bearing ConfigMap or environment values, ServiceAccount material,
   or another referenced credential value;
@@ -197,10 +199,12 @@ or action authority.
 Final-answer content may be shown provisionally after Eino decodes and validates
 each content chunk. Only the first top-level `answer_markdown` string is
 eligible. Before a fragment reaches Application or the TUI, Kupilot checks the
-exact model credential across chunk boundaries, normalizes split terminal
+exact model credential across chunk boundaries when one exists, normalizes split terminal
 controls, applies the fixed sensitive-value policy, enforces byte and event
 ceilings, and verifies current scope. Raw SSE, envelope syntax, Evidence
 citations, proposed actions, reasoning and provider metadata remain excluded.
+Native Ollama uses the same content checks but is restricted to explicit
+loopback HTTP and has no credential or Authorization header.
 The complete decoded Diagnosis is checked again and only its final validated
 answer may be persisted or committed to terminal scrollback.
 
@@ -320,6 +324,13 @@ and no current-question-only fallback. Historic scope, Evidence, permission
 rules, reviews, ActionEnvelopes, approvals, and execution state are never
 restored as authority.
 
+Before transfer, each historic assistant answer is rebuilt as the complete
+current response-schema object containing only its already admitted visible
+answer and empty historic authority arrays. This request-only representation is
+not stored as raw model traffic and does not restore Evidence, action, or stop
+authority. An explicit JSON-object response constraint changes only syntax at
+the same consented role and origin; it adds no content category or retry.
+
 Scope and policy generations are current-process authority versions rather than
 Session, binary, schema, or database versions. Compatible upgrades and forward
 migrations keep eligible history available, but historic generations never
@@ -431,3 +442,5 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

@@ -332,7 +332,7 @@ func runCLIDoctor(ctx context.Context, manager *application.SessionManager, opti
 		version = "dev"
 	}
 	digest := sha256.Sum256([]byte(loaded.Models.Agent.Origin))
-	doctor, err := application.NewDoctorResult(version, fmt.Sprintf("v%d", config.CurrentVersion), hex.EncodeToString(digest[:]),
+	doctor, err := application.NewDoctorResult(version, fmt.Sprintf("v%d", config.CurrentVersion), domain.ModelProviderKind(loaded.Models.Agent.ProviderKind), hex.EncodeToString(digest[:]),
 		loaded.Models.Agent.Model != "", false, health)
 	if err != nil {
 		return err

@@ -177,10 +177,11 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 	adapter, modelErr := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: domain.ModelConfiguration{
 			ProfileName: "agent", Role: domain.ModelRoleAgent,
-			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			ProviderKind:        domain.ModelProviderOpenAI,
 			Endpoint:            server.URL + "/v1",
 			Origin:              server.URL,
 			Model:               "assurance-model",
+			ResponseFormat:      domain.ModelResponseFormatPrompt,
 			APIKeySource:        domain.ModelAPIKeySourceRuntime,
 			Temperature:         0.1,
 			MaxOutputTokens:     256,

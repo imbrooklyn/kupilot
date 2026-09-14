@@ -9,8 +9,11 @@ import (
 
 const (
 	CurrentVersion                    = 1
-	ProviderOpenAICompatible          = "openai_compatible"
+	ProviderOpenAI                    = "openai"
+	ProviderOllama                    = "ollama"
 	ModelReasoningEffortNone          = "none"
+	ModelResponseFormatPrompt         = "prompt"
+	ModelResponseFormatJSONObject     = "json_object"
 	BudgetProfileCompact              = "compact"
 	BudgetProfileBalanced             = "balanced"
 	BudgetProfileExtended             = "extended"
@@ -52,12 +55,13 @@ func (role ModelRole) valid() bool {
 type ModelCredentialReference string
 
 const (
+	ModelCredentialNone             ModelCredentialReference = "none"
 	ModelCredentialAgent            ModelCredentialReference = "agent"
 	ModelCredentialApprovalReviewer ModelCredentialReference = "approval_reviewer"
 )
 
 func (reference ModelCredentialReference) valid() bool {
-	return reference == ModelCredentialAgent || reference == ModelCredentialApprovalReviewer
+	return reference == ModelCredentialNone || reference == ModelCredentialAgent || reference == ModelCredentialApprovalReviewer
 }
 
 // Config is the complete serializable, non-sensitive startup configuration.
@@ -165,6 +169,7 @@ type ModelProfileConfig struct {
 	Origin                string                   `yaml:"-" json:"origin,omitempty"`
 	Model                 string                   `yaml:"model,omitempty" json:"model,omitempty"`
 	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	ResponseFormat        string                   `yaml:"response_format" json:"response_format"`
 	Temperature           float64                  `yaml:"temperature" json:"temperature"`
 	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
@@ -580,7 +585,8 @@ type Overrides struct {
 func defaultAgentProfile() ModelProfileConfig {
 	return ModelProfileConfig{
 		Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
-		ProviderKind: ProviderOpenAICompatible, Temperature: DefaultModelTemperature,
+		ProviderKind: ProviderOpenAI, Temperature: DefaultModelTemperature,
+		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultModelRequestTimeoutSeconds,
 		Streaming:             true, ToolCallingRequired: true,
 	}
@@ -590,7 +596,8 @@ func defaultReviewerProfile() ModelProfileConfig {
 	return ModelProfileConfig{
 		Name: "approval-reviewer", Role: ModelRoleApprovalReviewer,
 		CredentialReference: ModelCredentialApprovalReviewer,
-		ProviderKind:        ProviderOpenAICompatible, Temperature: 0,
+		ProviderKind:        ProviderOpenAI, Temperature: 0,
+		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultReviewerTimeoutSeconds,
 		Streaming:             false, ToolCallingRequired: false,
 	}
@@ -645,6 +652,6 @@ func modelProfileRequiredError(role ModelRole) error {
 		ClassConfigurationInvalid,
 		"config_model_profile_required",
 		"validate_model_configuration",
-		"The "+name+" model profile requires an endpoint, model identifier, and role-bound credential.",
+		"The "+name+" model profile requires a provider, endpoint, model identifier, and its fixed credential policy.",
 	)
 }

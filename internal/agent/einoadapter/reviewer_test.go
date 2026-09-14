@@ -23,7 +23,7 @@ func TestReviewerUsesOneStrictNonStreamingToolFreeRequest(t *testing.T) {
 	credentialCanary := strings.Repeat("r", 43) + "-reviewer"
 	var captured []byte
 	var calls atomic.Int64
-	reviewer := newReviewerForTest(t, credentialCanary, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	reviewer := newReviewerForTestWithResponseFormat(t, credentialCanary, domain.ModelResponseFormatJSONObject, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
@@ -48,13 +48,48 @@ func TestReviewerUsesOneStrictNonStreamingToolFreeRequest(t *testing.T) {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"messages"`
+		ResponseFormat *struct {
+			Type string `json:"type"`
+		} `json:"response_format"`
 	}
 	if json.Unmarshal(captured, &payload) != nil || len(payload.Tools) != 0 ||
 		payload.Stream != nil && *payload.Stream || len(payload.Messages) != 2 ||
+		payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" ||
 		payload.Messages[0].Role != "system" || payload.Messages[1].Role != "user" ||
 		!strings.Contains(payload.Messages[1].Content, request.NormalizedAction) ||
 		bytes.Contains(captured, []byte(credentialCanary)) {
 		t.Fatalf("reviewer request body violated the fixed projection: %s", captured)
+	}
+}
+
+func TestNativeOllamaReviewerUsesOneCredentialFreeStructuredRequest(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	configuration := fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second)
+	configuration.ProfileName = "approval-reviewer"
+	configuration.Role = domain.ModelRoleApprovalReviewer
+	configuration.Temperature = 0
+	configuration.MaxOutputTokens = 0
+	configuration.StreamingRequired = false
+	configuration.ToolCallingRequired = false
+	client, modelErr := newModelClientForTest(configuration, nil, nil, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if request.URL.Path != "/api/chat" || request.Header.Get("Authorization") != "" {
+			return nil, errors.New("native reviewer violated the fixed route")
+		}
+		body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"{\"decision\":\"approve\",\"risk\":\"review\",\"rationale\":\"The bounded policy facts support review.\"}"},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if modelErr != nil {
+		t.Fatalf("newModelClientForTest(native reviewer) error = %v", modelErr)
+	}
+	reviewer := &Reviewer{client: client}
+	t.Cleanup(reviewer.Close)
+	result, err := reviewer.Review(context.Background(), validReviewerRequest(), reviewerReservation(time.Second))
+	if err != nil || calls.Load() != 1 || result.Decision != agent.ReviewerDecisionApprove ||
+		result.Risk != domain.RiskReview {
+		t.Fatalf("native Review() = %#v/%v, calls %d", result, err, calls.Load())
 	}
 }
 
@@ -170,12 +205,22 @@ func TestReviewerInvalidOrSensitiveInputMakesZeroRequests(t *testing.T) {
 }
 
 func newReviewerForTest(t *testing.T, credentialText string, transport http.RoundTripper) *Reviewer {
+	return newReviewerForTestWithResponseFormat(t, credentialText, domain.ModelResponseFormatPrompt, transport)
+}
+
+func newReviewerForTestWithResponseFormat(
+	t *testing.T,
+	credentialText string,
+	responseFormat domain.ModelResponseFormat,
+	transport http.RoundTripper,
+) *Reviewer {
 	t.Helper()
 	credential, err := config.NewSecretValue(credentialText)
 	if err != nil {
 		t.Fatalf("NewSecretValue() error = %v", err)
 	}
 	configuration := fixtureConfiguration("https://model.example.test/v1", time.Second)
+	configuration.ResponseFormat = responseFormat
 	configuration.ProfileName = "approval-reviewer"
 	configuration.Role = domain.ModelRoleApprovalReviewer
 	configuration.Temperature = 0

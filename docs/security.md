@@ -77,9 +77,15 @@ or protection from a fully compromised local account.
 - kubeconfig file contents, inline certificates and keys, bearer tokens, and
   client-go `rest.Config` values;
 - output from kubeconfig exec credential programs;
-- the configured model API key and Authorization header; and
+- any configured OpenAI model API key and Authorization header; and
 - any credential-shaped value found in an otherwise eligible Event, log, field,
   or provider error.
+
+Native Ollama is a credential-free explicit loopback transport. Its profile
+must use `credential_ref: none`; file or environment model keys conflict with
+that profile. The guarded transport rejects Authorization, query-bearing
+ambient authentication, non-loopback targets, redirects, and any path other
+than `/api/chat` before network I/O.
 
 ### Operationally sensitive data
 
@@ -206,6 +212,13 @@ bounded inside the Eino boundary and discarded after the assembled response
 proves `tool_calls`; it cannot become visible text, Tool authority, Evidence, or
 action state. Eino's indexed argument assembly and every project-owned runtime
 authorization check remain mandatory.
+
+Retained assistant messages use the complete current response grammar with
+empty historic Evidence and action arrays rather than teaching a later model a
+retired schema. An explicitly configured JSON-object response constraint only
+narrows endpoint syntax. Strict local decoding, Evidence checks, and action
+binding remain mandatory, and an unsupported constraint cannot trigger a
+probe, downgrade, resend, or retry.
 
 ### T05: Model transfer without valid consent
 
@@ -641,3 +654,5 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

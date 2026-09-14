@@ -214,6 +214,75 @@ func TestLoadAcceptsZeroModelTemperature(t *testing.T) {
 	}
 }
 
+func TestLoadNativeOllamaRequiresNoCredentialAndRejectsCredentialSources(t *testing.T) {
+	t.Parallel()
+
+	nativeDocument := strings.NewReplacer(
+		"credential_ref: agent", "credential_ref: none",
+		"provider_kind: openai", "provider_kind: ollama",
+		"endpoint: https://agent.example.test/v1", "endpoint: http://127.0.0.1:11434",
+	).Replace(version1Config("", ""))
+	t.Run("credential free", func(t *testing.T) {
+		paths := testPaths(t.TempDir())
+		writePrivateFile(t, paths.ConfigFile, []byte(nativeDocument))
+		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+		if err != nil {
+			t.Fatalf("Load(native Ollama) error = %v", err)
+		}
+		defer loaded.Credentials.Destroy()
+		if loaded.Models.Agent.ProviderKind != ProviderOllama || loaded.Models.Agent.Origin != "http://127.0.0.1:11434" ||
+			loaded.Credentials.Agent.Reference != ModelCredentialNone || loaded.Credentials.Agent.Source != CredentialSourceNone ||
+			loaded.Credentials.Agent.Value.IsSet() {
+			t.Fatalf("native Ollama load = profile %#v credential %#v", loaded.Models.Agent, loaded.Credentials.Agent)
+		}
+	})
+	for _, test := range []struct {
+		name        string
+		document    string
+		environment map[string]string
+	}{
+		{name: "file", document: strings.Replace(nativeDocument, "    temperature: 0.1", "    api_key: generated-native-key\n    temperature: 0.1", 1)},
+		{name: "environment", document: nativeDocument, environment: map[string]string{ModelAPIKeyEnvironmentVariable: "generated-native-key"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testPaths(t.TempDir())
+			writePrivateFile(t, paths.ConfigFile, []byte(test.document))
+			_, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(test.environment)})
+			assertSafeError(t, err, ClassConfigurationInvalid, "config_model_credential_conflict")
+			if strings.Contains(err.Error(), "generated-native-key") {
+				t.Fatal("credential entered native Ollama load error")
+			}
+		})
+	}
+}
+
+func TestLoadDefaultsAndParsesExplicitModelResponseFormat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := testPaths(root)
+	writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", "")))
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load(default response format) error = %v", err)
+	}
+	if loaded.Models.Agent.ResponseFormat != ModelResponseFormatPrompt {
+		t.Fatalf("default response format = %q", loaded.Models.Agent.ResponseFormat)
+	}
+	loaded.Credentials.Destroy()
+
+	document := strings.Replace(version1Config("", ""), "    model: agent-model", "    model: agent-model\n    response_format: json_object", 1)
+	writePrivateFile(t, paths.ConfigFile, []byte(document))
+	loaded, err = Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load(explicit response format) error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.Models.Agent.ResponseFormat != ModelResponseFormatJSONObject {
+		t.Fatalf("explicit response format = %q", loaded.Models.Agent.ResponseFormat)
+	}
+}
+
 func TestLoadSensitiveDiagnosticsIsExplicitAndWarned(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +327,7 @@ func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 		{name: "wrong root type", content: "version: \"1\"\n"},
 		{name: "wrong nested type", content: "version: 1\nlogging:\n  enabled: \"true\"\n"},
 		{name: "wrong reasoning effort type", content: "version: 1\nmodel:\n  reasoning_effort: true\n"},
+		{name: "wrong response format type", content: "version: 1\nmodel:\n  response_format: true\n"},
 		{name: "wrong sensitive diagnostics type", content: "version: 1\nlogging:\n  sensitive_diagnostics: \"true\"\n"},
 		{name: "wrong integer type", content: "version: 1\nmodel:\n  max_output_tokens: 2048.0\n"},
 		{name: "null value", content: "version: 1\ncontext: null\n"},
@@ -429,6 +499,7 @@ func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
 		paths := testPaths(root)
 		canary := "agent-inherited-key-generated"
 		writePrivateFile(t, paths.ConfigFile, []byte(version1Config(`
+    response_format: json_object
     api_key: `+canary, `
   approval_reviewer:
     name: reviewer
@@ -446,6 +517,7 @@ func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
 		}
 		reviewer := loaded.Models.ApprovalReviewer
 		if reviewer.Origin != loaded.Models.Agent.Origin || reviewer.Model != "reviewer-model" ||
+			reviewer.ResponseFormat != ModelResponseFormatJSONObject ||
 			reviewer.Streaming || reviewer.ToolCallingRequired || reviewer.Role != ModelRoleApprovalReviewer {
 			t.Fatalf("resolved reviewer profile = %#v", reviewer)
 		}
@@ -470,7 +542,7 @@ func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
     role: approval_reviewer
     inherit_agent: false
     credential_ref: approval_reviewer
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://reviewer.example.test/v1
     model: reviewer-model
     temperature: 0
@@ -504,7 +576,7 @@ func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
     role: approval_reviewer
     inherit_agent: false
     credential_ref: approval_reviewer
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://reviewer.example.test/v1
     model: reviewer-model
     temperature: 0
@@ -696,7 +768,7 @@ models:
     name: agent
     role: agent
     credential_ref: agent
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://agent.example.test/v1
     model: agent-model
     temperature: 0.1

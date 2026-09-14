@@ -16,12 +16,18 @@ func TestHistoricalAssistantResponseUsesDiagnosticProtocolWithoutAuthority(t *te
 	if err != nil {
 		t.Fatalf("EncodeHistoricalAssistantResponse() error = %v", err)
 	}
-	const want = `{"answer_markdown":"Earlier visible answer.","evidence_citations":[],"proposed_actions":[]}`
+	const want = `{"answer_markdown":"Earlier visible answer.","evidence_citations":[],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
 	if content != want {
 		t.Fatalf("encoded history = %q, want %q", content, want)
 	}
-	if _, err := DecodeDiagnosticResponse(content); !errors.Is(err, ErrInvalidDiagnosticResponse) {
-		t.Fatalf("retained schema 1 was accepted as new model output: %v", err)
+	draft, err := DecodeDiagnosticResponse(content)
+	if err != nil {
+		t.Fatalf("current retained response was rejected: %v", err)
+	}
+	if draft.AnswerMarkdown != "Earlier visible answer." || draft.ResponseSchemaVersion != diagnosticResponseSchemaVersion ||
+		len(draft.ConfirmedFacts) != 0 || len(draft.RecommendedActions) != 0 || len(draft.ClaimCoverage) != 0 ||
+		len(draft.MissingInformation) != 0 || draft.Clarification != nil {
+		t.Fatalf("retained response restored authority: %#v", draft)
 	}
 }
 

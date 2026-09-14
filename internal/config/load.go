@@ -149,16 +149,26 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 
 	agentCredential := fileCredentials.agent
 	agentSource := CredentialSourceNone
-	if fileCredentials.agentFound {
-		agentSource = CredentialSourceFile
-	}
-	if agentEnvironmentFound {
+	if config.Models.Agent.ProviderKind == ProviderOllama {
 		fileCredentials.agent.Destroy()
-		agentCredential = agentEnvironmentCredential
-		agentSource = CredentialSourceEnvironment
+		agentEnvironmentCredential.Destroy()
+		if fileCredentials.agentFound || agentEnvironmentFound {
+			fileCredentials.reviewer.Destroy()
+			reviewerEnvironmentCredential.Destroy()
+			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_credential_conflict", "load_configuration", "An ollama model profile must not define an API key.")
+		}
+	} else {
+		if fileCredentials.agentFound {
+			agentSource = CredentialSourceFile
+		}
+		if agentEnvironmentFound {
+			fileCredentials.agent.Destroy()
+			agentCredential = agentEnvironmentCredential
+			agentSource = CredentialSourceEnvironment
+		}
 	}
 	credentials := ModelCredentials{Agent: ProfileCredential{
-		Role: ModelRoleAgent, Reference: ModelCredentialAgent, Source: agentSource, Value: agentCredential,
+		Role: ModelRoleAgent, Reference: config.Models.Agent.CredentialReference, Source: agentSource, Value: agentCredential,
 	}}
 
 	if config.Models.ApprovalReviewer == nil {
@@ -199,6 +209,13 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 				fileCredentials.reviewer.Destroy()
 				reviewerCredential.Value = reviewerEnvironmentCredential
 				reviewerCredential.Source = CredentialSourceEnvironment
+			}
+		case ModelCredentialNone:
+			fileCredentials.reviewer.Destroy()
+			reviewerEnvironmentCredential.Destroy()
+			if fileCredentials.reviewerFound || reviewerEnvironmentFound {
+				credentials.Destroy()
+				return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_credential_conflict", "load_configuration", "An ollama reviewer profile must not define an API key.")
 			}
 		default:
 			credentials.Destroy()
@@ -340,6 +357,7 @@ type modelProfileDocument struct {
 	Endpoint              *string                   `yaml:"endpoint,omitempty"`
 	Model                 *string                   `yaml:"model,omitempty"`
 	ReasoningEffort       *string                   `yaml:"reasoning_effort,omitempty"`
+	ResponseFormat        *string                   `yaml:"response_format,omitempty"`
 	Temperature           *float64                  `yaml:"temperature,omitempty"`
 	MaxOutputTokens       *int                      `yaml:"max_output_tokens,omitempty"`
 	RequestTimeoutSeconds *int                      `yaml:"request_timeout_seconds,omitempty"`
@@ -507,6 +525,9 @@ func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocu
 	}
 	if document.ReasoningEffort != nil {
 		profile.ReasoningEffort = *document.ReasoningEffort
+	}
+	if document.ResponseFormat != nil {
+		profile.ResponseFormat = *document.ResponseFormat
 	}
 	if document.Temperature != nil {
 		profile.Temperature = *document.Temperature
@@ -778,7 +799,7 @@ func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 			return yamlString(value)
 		case "inherit_agent":
 			return yamlScalar(value, "!!bool")
-		case "provider_kind", "endpoint", "model", "reasoning_effort":
+		case "provider_kind", "endpoint", "model", "reasoning_effort", "response_format":
 			return yamlString(value)
 		case "api_key":
 			return allowCredential && yamlString(value)

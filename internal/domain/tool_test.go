@@ -172,7 +172,7 @@ func TestModelRequestMetadataValidationExcludesBodiesAndBoundsFields(t *testing.
 		ModelRole:           ModelRoleAgent,
 		Invocation:          ModelInvocationAgent,
 		ReservedCostUnits:   1,
-		ProviderKind:        ModelProviderOpenAICompatible,
+		ProviderKind:        ModelProviderOpenAI,
 		EndpointOriginHash:  &endpointHash,
 		Model:               "test-model",
 		Status:              ModelRequestStatusSucceeded,

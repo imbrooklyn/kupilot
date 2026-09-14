@@ -273,6 +273,13 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 			historic.AnswerMarkdown != turns[1].Content || len(historic.EvidenceCitations) != 0 || len(historic.ProposedActions) != 0 {
 			t.Fatalf("historic final answer = %#v, error = %v", historic, historyErr)
 		}
+		historicalDraft, historyErr := agent.DecodeDiagnosticResponse(request.Messages[2].Content)
+		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 2 ||
+			len(historicalDraft.ConfirmedFacts) != 0 || len(historicalDraft.RecommendedActions) != 0 ||
+			len(historicalDraft.ClaimCoverage) != 0 || len(historicalDraft.MissingInformation) != 0 ||
+			historicalDraft.Clarification != nil {
+			t.Fatalf("historic answer did not use the complete authority-free current schema: %#v, error = %v", historicalDraft, historyErr)
+		}
 		return scriptedChunks(diagnosisChunks(`{"answer_markdown":"The ordered Session context was supplied once.","evidence_citations":[],"proposed_actions":[]}`)...)(ctx, request)
 	}}}
 	outcome := testAdapter(t, clock, model, tool, newTestScopeGuard()).Run(context.Background(), input, newEventRecorder())

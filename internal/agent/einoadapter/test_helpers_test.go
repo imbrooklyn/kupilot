@@ -309,9 +309,10 @@ func testAdapter(t *testing.T, clock *testClock, model einomodel.ToolCallingChat
 		t.Fatalf("NewSecretValue() error = %v", err)
 	}
 	client := &modelClient{
-		credential: &credential,
-		model:      model,
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		configuration: domain.ModelConfiguration{ProviderKind: domain.ModelProviderOpenAI},
+		credential:    &credential,
+		model:         model,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	adapter, err := newAdapter(runtimeConfig{
 		tools:       fixedHandlers(tool),

@@ -459,7 +459,8 @@ immutable Tool request, log, result, aggregate, call, and run deadlines.
 
 All budgets remain finite. Exact context windows, input/output tokens, request
 and stream limits, summary thresholds, latency, concurrency, and cost ceilings
-require evidence for the exact pinned Eino/OpenAI component and selected
+require evidence for the exact pinned Eino core, selected OpenAI or native
+Ollama component, and selected
 endpoint. The earlier `v0.4` global limits are not universal `v0.5` values.
 Absent exact token evidence, conservative byte, call, time, and cost ceilings
 still fail closed.
@@ -483,6 +484,24 @@ The strict response schema 2 envelope contains bounded
 `response_schema_version`, `outcome`, `answer_markdown`,
 `evidence_citations`, `proposed_actions`, `stop_reason`, `limitations`, and
 `questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
+
+Eligible historic assistant answers are translated into this complete current
+envelope before Eino receives them. Historic citations and actions are empty
+and the prompt marks the representation as context-only, so grammar continuity
+does not restore authority. A profile may explicitly select the standard
+provider JSON-object response constraint. The selected pinned Eino component
+serializes that setting for structured Agent or Reviewer output; Agent summaries
+remain plain text. Prompt-only mode remains available, and neither mode permits
+capability probing, fallback, or a second request.
+
+The model boundary contains two concrete fixed component constructions, not a
+provider router: `openai` uses Eino OpenAI Chat Completions and `ollama` uses
+Eino native Ollama `/api/chat` at an explicit loopback origin. Application
+freezes one selected kind per role. The guarded transport enforces the selected
+path, media type, credential policy, body limits, and redirect policy before
+network I/O. Native Tool calls receive only a request-bound deterministic ID
+and ordinal inside the adapter because the Ollama protocol carries neither;
+this restores local Eino pairing syntax without creating authority.
 
 - Markdown is the visible answer and receives no mandatory local headings.
 - An Evidence citation binds a bounded claim to one or more accepted current-run
@@ -819,3 +838,5 @@ freshness/conflict, and checked/not-checked source state.
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

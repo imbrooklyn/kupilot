@@ -77,7 +77,7 @@ The model-content contract excludes:
   keys, ServiceAccount token material, and exec credential output.
 - Kubernetes Secret values, ServiceAccount tokens, credential-bearing
   ConfigMap or environment values, and referenced credential values.
-- The model API key as content. It is used only as an authentication header for
+- An OpenAI model API key as content. It is used only as an authentication header for
   the validated configured origin.
 - Raw Kubernetes objects, full YAML, managed fields, unrestricted annotations,
   EndpointSlice addresses, and arbitrary API types.
@@ -234,7 +234,7 @@ configuration file, but it does not chmod or chown it. Managed targets must
 still have the expected file type and must not use a symbolic link below the
 canonical Home.
 
-Interactive model setup may save a model API key as disclosed plaintext in
+Interactive OpenAI model setup may save a model API key as disclosed plaintext in
 `config.yaml`. That file is not an encrypted credential store and can be
 exposed by its permissions, another same-user process, backups, or snapshots.
 The extractor keeps the value out of ordinary typed configuration, TUI history,

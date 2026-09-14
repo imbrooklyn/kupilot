@@ -45,13 +45,17 @@ func TestReviewerLiveEvaluation(t *testing.T) {
 	configuration.StreamingRequired = false
 	configuration.ToolCallingRequired = false
 	if configuration.Validate() != nil {
-		credential.Destroy()
+		if credential != nil {
+			credential.Destroy()
+		}
 		t.Fatalf("FAIL Reviewer eval preflight: the explicit Reviewer role is invalid")
 	}
-	transport := newLiveBudgetTransport(liveReviewerCallCeiling, liveReviewerRequestByteCeiling)
+	transport := newLiveBudgetTransport(configuration.ProviderKind, liveReviewerCallCeiling, liveReviewerRequestByteCeiling)
 	client, modelError := newModelClientForTest(configuration, credential, nil, transport)
 	if modelError != nil {
-		credential.Destroy()
+		if credential != nil {
+			credential.Destroy()
+		}
 		t.Fatalf("FAIL Reviewer eval preflight: %v", modelError)
 	}
 	reviewer := &Reviewer{client: client}

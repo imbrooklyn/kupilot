@@ -6,12 +6,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 type modelSetupStage uint8
 
 const (
-	modelSetupEndpoint modelSetupStage = iota + 1
+	modelSetupProvider modelSetupStage = iota + 1
+	modelSetupEndpoint
 	modelSetupName
 	modelSetupStorage
 	modelSetupCredential
@@ -21,30 +23,32 @@ const (
 const modelSetupStorageDisclosure = "Choosing save writes models.agent.api_key and any existing file-sourced models.approval_reviewer.api_key, observability.prometheus.api_key, and observability.loki.api_key as plaintext (not encrypted) in KUPILOT_HOME/config.yaml. Choosing session keeps the new Agent key only in this process."
 
 type modelSetupState struct {
-	Stage      modelSetupStage
-	Endpoint   string
-	Model      string
-	Persist    bool
-	Cancelling bool
+	Stage        modelSetupStage
+	ProviderKind domain.ModelProviderKind
+	Endpoint     string
+	Model        string
+	Persist      bool
+	Cancelling   bool
 }
 
 func (model *Model) beginModelSetup() {
 	model.closePickers()
 	model.slashMenu.Close()
-	model.modelSetup = &modelSetupState{Stage: modelSetupEndpoint, Endpoint: model.modelEndpoint, Model: model.modelName}
+	model.modelSetup = &modelSetupState{
+		Stage: modelSetupProvider, ProviderKind: model.modelProvider,
+		Endpoint: model.modelEndpoint, Model: model.modelName,
+	}
 	model.pendingModelSetupID = 0
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
-	model.composer.SetMaxBytes(application.MaxModelSetupEndpointBytes)
-	model.composer.SetPlaceholder("Enter an OpenAI-compatible endpoint")
-	if model.modelEndpoint != "" {
-		model.composer.SetValue(model.modelEndpoint)
-	}
+	model.composer.SetMaxBytes(16)
+	model.composer.SetPlaceholder("openai or ollama")
+	model.composer.SetValue(string(model.modelProvider))
 }
 
 func (model *Model) beginMissingModelSetup() {
 	model.beginModelSetup()
-	if model.modelEndpoint != "" && model.modelName != "" {
+	if model.modelProvider.Valid() && model.modelEndpoint != "" && model.modelName != "" {
 		model.enterModelSetupStorage()
 	}
 }
@@ -53,6 +57,11 @@ func (model *Model) enterModelSetupStorage() {
 	model.modelSetup.Stage = modelSetupStorage
 	model.composer.Reset()
 	model.composer.SetMaxBytes(16)
+	if model.modelSetup.ProviderKind == domain.ModelProviderOllama {
+		model.composer.SetPlaceholder("save or session")
+		model.closeDialog()
+		return
+	}
 	model.composer.SetPlaceholder("save (plaintext) or session")
 	model.showDialog("Plaintext credential storage", modelSetupStorageDisclosure)
 }
@@ -94,6 +103,24 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 	}
 	draft := strings.TrimSpace(model.composer.Value())
 	switch model.modelSetup.Stage {
+	case modelSetupProvider:
+		provider := domain.ModelProviderKind(strings.ToLower(draft))
+		if !provider.Valid() {
+			model.showDialog("Provider required", "Type openai or ollama.")
+			return model, nil
+		}
+		model.modelSetup.ProviderKind = provider
+		model.modelSetup.Stage = modelSetupEndpoint
+		model.composer.Reset()
+		model.composer.SetMaxBytes(application.MaxModelSetupEndpointBytes)
+		if provider == domain.ModelProviderOllama {
+			model.composer.SetPlaceholder("Enter the loopback Ollama server base")
+		} else {
+			model.composer.SetPlaceholder("Enter the OpenAI Chat Completions base")
+		}
+		if provider == model.modelProvider && model.modelEndpoint != "" {
+			model.composer.SetValue(model.modelEndpoint)
+		}
 	case modelSetupEndpoint:
 		if draft == "" || len(draft) > application.MaxModelSetupEndpointBytes || strings.ContainsRune(draft, '\n') {
 			model.showDialog("Endpoint required", "Enter one HTTPS endpoint, or explicit loopback HTTP endpoint.")
@@ -121,13 +148,20 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 		case "session":
 			model.modelSetup.Persist = false
 		default:
-			model.showDialog("Choose storage", "Type save or session.\n\n"+modelSetupStorageDisclosure)
+			detail := "Type save or session."
+			if model.modelSetup.ProviderKind == domain.ModelProviderOpenAI {
+				detail += "\n\n" + modelSetupStorageDisclosure
+			}
+			model.showDialog("Choose storage", detail)
 			return model, nil
+		}
+		if model.modelSetup.ProviderKind == domain.ModelProviderOllama {
+			return model.submitModelSetupRequest(nil)
 		}
 		model.modelSetup.Stage = modelSetupCredential
 		model.composer.Reset()
 		model.composer.SetMaxBytes(application.MaxModelSetupSecretBytes)
-		model.composer.SetPlaceholder("Enter the model API key")
+		model.composer.SetPlaceholder("Enter the OpenAI API key")
 		model.composer.SetSecretMode(true)
 	case modelSetupCredential:
 		secret, err := application.NewModelSetupSecret(model.composer.Value())
@@ -138,21 +172,7 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 			model.showDialog("API key required", "Enter one non-empty API key without spaces or control characters.")
 			return model, nil
 		}
-		request := application.ModelSetupRequest{
-			RequestID: model.nextUIRequestID(), Endpoint: model.modelSetup.Endpoint,
-			Model: model.modelSetup.Model, Persist: model.modelSetup.Persist, Secret: secret,
-		}
-		if request.Validate() != nil {
-			secret.Destroy()
-			model.composer.SetSecretMode(true)
-			model.showDialog("Model setup unavailable", "The model settings could not be submitted safely.")
-			return model, nil
-		}
-		model.pendingModelSetupID = request.RequestID
-		model.modelSetup.Stage = modelSetupApplying
-		model.composer.SetMaxBytes(application.MaxQuestionBytes)
-		model.composer.SetPlaceholder("Configuring model…")
-		return model, applicationModelSetup(request)
+		return model.submitModelSetupRequest(secret)
 	case modelSetupApplying:
 		return model, nil
 	}
@@ -160,11 +180,35 @@ func (model Model) submitModelSetupDraft() (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
+func (model Model) submitModelSetupRequest(secret *application.ModelSetupSecret) (tea.Model, tea.Cmd) {
+	request := application.ModelSetupRequest{
+		RequestID: model.nextUIRequestID(), ProviderKind: model.modelSetup.ProviderKind,
+		Endpoint: model.modelSetup.Endpoint, Model: model.modelSetup.Model,
+		Persist: model.modelSetup.Persist, Secret: secret,
+	}
+	if request.Validate() != nil {
+		if secret != nil {
+			secret.Destroy()
+		}
+		model.composer.SetSecretMode(model.modelSetup.ProviderKind == domain.ModelProviderOpenAI)
+		model.showDialog("Model setup unavailable", "The model settings could not be submitted safely.")
+		return model, nil
+	}
+	model.pendingModelSetupID = request.RequestID
+	model.modelSetup.Stage = modelSetupApplying
+	model.composer.Reset()
+	model.composer.SetSecretMode(false)
+	model.composer.SetMaxBytes(application.MaxQuestionBytes)
+	model.composer.SetPlaceholder("Configuring model…")
+	return model, applicationModelSetup(request)
+}
+
 func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) tea.Cmd {
 	if model.modelSetup == nil || model.pendingModelSetupID == 0 || result.RequestID != model.pendingModelSetupID || result.Validate() != nil {
 		return nil
 	}
 	model.modelEndpoint = model.modelSetup.Endpoint
+	model.modelProvider = result.ProviderKind
 	model.modelName = sanitizeExternalText(result.Model, application.MaxModelSetupNameBytes)
 	model.modelConfigured = true
 	model.pendingModelSetupID = 0
@@ -175,7 +219,11 @@ func (model *Model) acceptModelSetupResult(result application.ModelSetupResult) 
 	model.composer.SetMaxBytes(application.MaxQuestionBytes)
 	model.composer.ResetPlaceholder()
 	if result.Persisted {
-		model.transcript.AppendNotice("Agent model configured. The agent API key, plus any existing file-sourced approval_reviewer, Prometheus, and Loki keys, was saved as plaintext in KUPILOT_HOME/config.yaml.")
+		if result.ProviderKind == domain.ModelProviderOpenAI {
+			model.transcript.AppendNotice("Agent model configured. The agent API key, plus any existing file-sourced approval_reviewer, Prometheus, and Loki keys, was saved as plaintext in KUPILOT_HOME/config.yaml.")
+		} else {
+			model.transcript.AppendNotice("Native Ollama model configured without a credential in KUPILOT_HOME/config.yaml.")
+		}
 	} else {
 		model.transcript.AppendNotice("Model configured for this Kupilot process only.")
 	}
@@ -209,12 +257,12 @@ func (model *Model) acceptModelSetupFailure(message ApplicationFailureMsg) bool 
 		return false
 	}
 	model.pendingModelSetupID = 0
-	model.modelSetup.Stage = modelSetupEndpoint
+	model.modelSetup.Stage = modelSetupProvider
 	model.composer.Reset()
 	model.composer.SetSecretMode(false)
-	model.composer.SetMaxBytes(application.MaxModelSetupEndpointBytes)
-	model.composer.SetPlaceholder("Enter an OpenAI-compatible endpoint")
-	model.composer.SetValue(model.modelSetup.Endpoint)
+	model.composer.SetMaxBytes(16)
+	model.composer.SetPlaceholder("openai or ollama")
+	model.composer.SetValue(string(model.modelSetup.ProviderKind))
 	return true
 }
 
@@ -223,14 +271,25 @@ func (model Model) modelSetupView() string {
 		return ""
 	}
 	switch model.modelSetup.Stage {
+	case modelSetupProvider:
+		return "Provider · model setup 1/5"
 	case modelSetupEndpoint:
-		return "Endpoint · model setup 1/4"
+		if model.modelSetup.ProviderKind == domain.ModelProviderOllama {
+			return "Endpoint · model setup 2/4"
+		}
+		return "Endpoint · model setup 2/5"
 	case modelSetupName:
-		return "Model · model setup 2/4"
+		if model.modelSetup.ProviderKind == domain.ModelProviderOllama {
+			return "Model · model setup 3/4"
+		}
+		return "Model · model setup 3/5"
 	case modelSetupStorage:
-		return "Storage · model setup 3/4"
+		if model.modelSetup.ProviderKind == domain.ModelProviderOllama {
+			return "Storage · model setup 4/4"
+		}
+		return "Storage · model setup 4/5"
 	case modelSetupCredential:
-		return "API key · model setup 4/4 · masked"
+		return "API key · model setup 5/5 · masked"
 	case modelSetupApplying:
 		if model.modelSetup.Cancelling {
 			return "Model setup · cancelling…"

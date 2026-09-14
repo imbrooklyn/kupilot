@@ -104,21 +104,22 @@ override on the configured preferred endpoint. It performs no discovery or
 fallback; an unsupported model fails that exact run.
 
 The Ollama target performs no discovery, installation, server start, or model
-download. Supply its exact loopback endpoint and already-available model. The
-test uses a non-secret, test-owned opaque bearer value because the local
-OpenAI-compatible route still exercises the same transport contract.
+download. Supply its exact loopback server base and already-available model.
+It exercises Eino's native Ollama `/api/chat` component and asserts that no
+bearer credential is sent.
 
 ```sh
 KUPILOT_INTEGRATION_LIVE=authorized \
 KUPILOT_INTEGRATION_MAX_COST_USD=0 \
-KUPILOT_INTEGRATION_OLLAMA_ENDPOINT=http://127.0.0.1:11434/v1 \
+KUPILOT_INTEGRATION_OLLAMA_ENDPOINT=http://127.0.0.1:11434 \
 KUPILOT_INTEGRATION_OLLAMA_MODEL=gpt-oss:20b \
 GOTOOLCHAIN=go1.25.13 \
 make test-integration-model-ollama
 ```
 
-The model API harness permits at most three calls, 768 requested output tokens,
-1 MiB of aggregate request payload, and three minutes. It distinguishes a
+The model API harness permits at most four calls, 8,192 requested output tokens,
+1 MiB of aggregate request payload, and fifteen minutes for the local Ollama
+target. It distinguishes a
 transport/protocol failure from a `MODEL_CAPABILITY_FAIL`; it never relaxes the
 fragmented-Tool, finish-reason, optional-usage, cancellation, timeout,
 authentication, safe-error, or body-close contract based on model quality.
@@ -335,3 +336,5 @@ quality evidence.
 - [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

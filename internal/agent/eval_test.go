@@ -581,10 +581,11 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	adapter, err := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: domain.ModelConfiguration{
 			ProfileName: "agent", Role: domain.ModelRoleAgent,
-			ProviderKind:        domain.ModelProviderOpenAICompatible,
+			ProviderKind:        domain.ModelProviderOpenAI,
 			Endpoint:            modelServer.URL + "/v1",
 			Origin:              modelServer.URL,
 			Model:               "eval-model",
+			ResponseFormat:      domain.ModelResponseFormatPrompt,
 			APIKeySource:        domain.ModelAPIKeySourceRuntime,
 			Temperature:         0.1,
 			MaxOutputTokens:     2048,

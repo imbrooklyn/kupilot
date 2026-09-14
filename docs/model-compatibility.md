@@ -1,7 +1,7 @@
 # Model Compatibility Contract
 
-This document defines the one model protocol kind and explicit named-profile
-contract accepted for Kupilot `v0.5`. The checked-in runtime implements the
+This document defines the two fixed model provider kinds and explicit named-
+profile contract accepted for Kupilot `v0.5`. The checked-in runtime implements the
 required `agent` profile, optional `approval_reviewer` transport seam, Eino ADK
 composition, safe Session context, Agent-profile summarization, and the strict
 Reviewer transport consumed by deterministic permission routing. Reviewer
@@ -14,23 +14,31 @@ ActionEnvelope authority. Review-class Pod logs and optional Prometheus/Loki
 reads use that supervision too; model output cannot bypass their privacy,
 catalog, permission, target, generation, or audit checks.
 
-The protocol is intentionally narrower than the broad and inconsistent use of
-the term "OpenAI-compatible." Compatibility means passing this contract for
-one exact role, model, origin, dependency tag, and configuration; it does not
-follow from a product label or provider claim.
+Each protocol is intentionally narrower than a broad compatibility label.
+Compatibility means passing this contract for one exact provider kind, role,
+model, origin, dependency tag, and configuration; it does not follow from a
+product label or provider claim.
 
 ## Named profiles and evidence boundary
 
-Kupilot retains exactly one provider kind, `openai_compatible`, while allowing
-the two fixed explicitly configured profiles and canonical origins. The fixed
-consumer roles are required `agent` and optional `approval_reviewer`.
+Kupilot admits exactly two provider kinds, `openai` and `ollama`, while allowing
+the two fixed explicitly configured profiles and canonical origins. `openai`
+uses Eino's OpenAI Chat Completions component. `ollama` uses Eino's native
+Ollama component at an explicit loopback origin. The fixed consumer roles are
+required `agent` and optional `approval_reviewer`.
 Summarization reuses `agent` with an independent reserved budget; there is no
 predeclared `context_compactor` role.
 
 Each call is bound to the one profile selected by its code-owned consumer role.
-There is no provider auto-detection, fallback, router, load balancing, cross-
-origin retry, or model-selected endpoint. Ollama is an integration target for
-this protocol, not a second provider kind.
+There is no provider auto-detection, protocol translation, fallback, router,
+load balancing, cross-origin retry, or model-selected endpoint. Provider kind
+is explicit, validated configuration and is frozen with each role binding.
+
+Each profile explicitly selects `response_format: prompt` or
+`response_format: json_object`. `prompt` is the compatibility default.
+`json_object` is selected only with exact endpoint evidence and asks the
+selected Eino component for its JSON-object mode. It is not inferred from the
+origin or model name and never triggers a probe, downgrade, fallback, or retry.
 
 Agent requests remain streamed Chat Completions with structured Tool calls.
 Reviewer requests are separate strict non-streaming, no-Tool requests that may
@@ -66,14 +74,15 @@ falling back to a current-question-only call fails closed before model I/O.
 Stable ADK `ChatModelAgent` and `Runner` own the in-run message state,
 Tool-message pairing, ReAct iteration, and events. Before each bounded model
 call, project policy validates the Eino-owned conversation in place and invokes
-the concrete Eino OpenAI ChatModel.
+the one concrete Eino ChatModel selected by the frozen provider kind.
 Eino v0.9.19 runs the summarization handler first and then the run-local steer
 handler's `BeforeModelRewriteState`; the returned Messages are persisted before
 the same handler's `WrapModel` executes the Application commit barrier around
 real model I/O. A failed barrier does not delegate to the model.
 There is no parallel neutral request/message protocol or custom conversation
-loop. Eino serializes the request, decodes the SSE response, and assembles its
-message stream. The adapter then validates and locally canonicalizes the one
+loop. Eino serializes the request, decodes the selected protocol's SSE or
+NDJSON response, and assembles its message stream. The adapter then validates
+and locally canonicalizes the one
 assembled assistant message before any Tool reservation, Tool dispatch,
 durable assistant Message, Evidence reference, or Diagnosis can result.
 
@@ -93,7 +102,10 @@ source of final text and structured actions.
 
 Provider fragments never authorize a Tool. A complete Tool call must have a
 contiguous bounded index, fixed name, bounded identifier, valid JSON argument
-object, and the `tool_calls` finish reason. The project-owned strict binder then
+object, and an admitted Tool terminal state. OpenAI supplies its wire ID and
+delta index. Native Ollama supplies neither, so the adapter assigns one
+request-bound deterministic identifier and ordinal to each complete decoded
+call before the same project validation. The project-owned strict binder then
 rejects duplicate, unknown, wrong-type, overlong, sensitive, scope-bearing, and
 runtime-authority fields, injects immutable scope and ceilings, and produces
 canonical arguments before budget reservation or dispatch. Non-canonical JSON
@@ -115,9 +127,10 @@ objects, injected authority fields, and sensitive model text remain terminal.
 ## Transport implementation and lifecycle
 
 The production model transport uses
-`github.com/cloudwego/eino-ext/components/model/openai` v0.1.13 with
-`github.com/cloudwego/eino` v0.9.19. The component, ReAct runtime, and hardened
-`net/http` wrapper are all contained in `internal/agent/einoadapter`.
+`github.com/cloudwego/eino-ext/components/model/openai` v0.1.13 and
+`github.com/cloudwego/eino-ext/components/model/ollama` v0.1.9 with
+`github.com/cloudwego/eino` v0.9.19. Both components, the ReAct runtime, and the
+hardened `net/http` wrapper are contained in `internal/agent/einoadapter`.
 
 Those pins are the implemented runtime and the exact tagged source reviewed for
 this slice. Eino v0.9.19 is the exact stable target at commit
@@ -133,24 +146,36 @@ Session API, or a second runtime.
 
 The reviewed OpenAI extension v0.1.13 source revision is
 `0ebab92e14f26088411dbc440a1ebdc904ccd8a1`; the pinned ACL is v0.1.17 and
-`go-openai` is v0.1.2. These are compatibility identities, not evidence for a
-particular live endpoint. No dependency was upgraded for these changes.
+`go-openai` is v0.1.2. The reviewed stable native Ollama extension v0.1.9
+source revision is `9b7587b89863115eb89f172858fdd3b4de30c3e7`; it uses
+`github.com/eino-contrib/ollama` v0.1.0 at revision
+`d83ec400201e36f50556dfbec25cf2bbadd0b4c9`. These are compatibility identities,
+not evidence for a particular live endpoint. Eino core and the OpenAI
+extension were not upgraded to admit Ollama.
 
-The Eino component is the only Chat Completions serializer and stream decoder.
-Kupilot does not replace or reconstruct its JSON request. A payload observer
+The selected Eino component is the only request serializer and stream decoder.
+Kupilot does not replace or reconstruct its JSON request. When a profile
+selects `json_object`, a response-constrained Eino model value sharing the same
+role, origin, credential policy, and guarded HTTP client serializes the
+provider's fixed JSON mode for Agent streaming or Reviewer generation.
+Agent-summary generation
+uses the unconstrained value because its result is bounded plain text. This is
+still one model boundary and one Agent/Runner/ReAct loop. A payload observer
 rejects an oversized request or exact credential reflection and otherwise
 returns the Eino-generated bytes unchanged. The guarded transport wraps the
 response body before Eino reads it to enforce raw wire-byte, data-record, and
 record-size limits. A response-chunk observer rejects ambiguous choice
 envelopes without decoding a second provider protocol. Before assembly,
 Kupilot accepts only Eino's paired request-ID and reasoning metadata, bounds
-and credential-checks those values, and discards them. After Eino assembles the
-stream, Kupilot validates the message shape and finish reason and applies
+and credential-checks those values, and discards them. Native Ollama's exact
+zero-valued intermediate usage containers are removed before this common
+validation; terminal measured usage remains. After Eino assembles the stream,
+Kupilot validates the message shape and finish reason and applies
 project policy. During that same read-once drain, the passive answer projector
 may receive validated `Content` strings. It exposes neither raw provider chunks
 nor Eino values outside the adapter.
 
-Construction validates the effective profile and credential locally, clones an
+Construction validates the effective profile and provider credential policy locally, clones an
 independent HTTP transport, and performs no network request. A successfully
 constructed adapter owns the opaque credential. Application owns interactive
 replacement: it cancels and joins an active run, builds one replacement before
@@ -169,23 +194,26 @@ terminal paths.
 The current ordinary typed `ModelConfiguration` contains only validated,
 non-sensitive values:
 
-- The fixed provider kind `openai_compatible`.
+- The fixed selected provider kind `openai` or `ollama`.
 - One explicit profile name and fixed consumer role: required `agent` or
   optional `approval_reviewer`.
 - One canonical endpoint base URL and its exact canonical origin.
 - A user-configured model identifier.
-- The fixed `runtime` credential-source marker, never the selected source or
-  key value.
+- The fixed `runtime` credential-source marker for `openai`, or `none` for
+  native `ollama`; never the selected source or key value.
 - Temperature from 0 through 0.2, an optional positive endpoint-evidenced
-  output-token limit, and a configured request timeout no greater than 300
+  output-token limit, and a configured request timeout no greater than 900
   seconds. Without endpoint evidence, Kupilot omits the token parameter and
   relies on independent output-byte, stream, call, time, and cost-unit safety
   limits. The immutable run profile and remaining run time may impose a shorter
   deadline.
+- A fixed response format of `prompt` or explicitly endpoint-proved
+  `json_object`. The latter constrains structured Agent or Reviewer output but
+  never Agent-summary prose.
 - Required streaming and structured Tool-calling flags for `agent`; fixed
   non-streaming and Tool-free flags for `approval_reviewer`.
-- The fixed transport policy: normally verified HTTPS, HTTP only on an explicit
-  loopback host, and same-origin redirects only.
+- The fixed transport policy: verified HTTPS or explicit loopback HTTP for
+  `openai`; explicit loopback HTTP and no redirect for `ollama`.
 
 The model request contains no endpoint, origin, credential, Context, Namespace,
 deadline, redirect setting, arbitrary Tool, or hard-limit override. Every model
@@ -196,9 +224,10 @@ code-owned catalog remain unavailable until their exact schema, policy, wiring,
 and tests are implemented. "Strict" describes Kupilot's closed JSON Schemas and
 local binder; it does not require a provider-specific strict-output flag.
 
-## Implemented Agent Chat Completions wire profile
+## Implemented OpenAI Chat Completions wire profile
 
-The configured endpoint is a base URL. The accepted request target is:
+For `provider_kind: openai`, the configured endpoint is a base URL. The
+accepted request target is:
 
 ```text
 POST {configured-endpoint}/chat/completions
@@ -208,6 +237,9 @@ The request uses the fields emitted by the pinned Eino ChatModel and asks for
 one streamed choice. The required effective values are the configured `model`,
 bounded conversation `messages`, fourteen function `tools`, `stream: true`,
 `stream_options.include_usage: true`, and the bounded `temperature`.
+When the exact profile selects `json_object`, the request also contains
+`response_format: {"type":"json_object"}`. Prompt-only profiles omit that
+field. The selection is frozen configuration rather than endpoint inference.
 `max_tokens` is present only when typed configuration explicitly sets
 `models.agent.max_output_tokens` from endpoint evidence. When configuration sets
 `models.agent.reasoning_effort: none`, Eino also emits
@@ -282,6 +314,61 @@ objects never become Application or Domain metadata. Only the project-owned
 safe provisional text event may cross into Application, and it is never Domain
 state, a successful result, or durable content.
 
+## Implemented native Ollama wire profile
+
+For `provider_kind: ollama`, the configured endpoint is the explicit loopback
+server base. It contains no `/v1` compatibility suffix and the accepted request
+target is exactly:
+
+```text
+POST {configured-endpoint}/api/chat
+```
+
+Eino's native Ollama component owns serialization and decoding. The request
+contains the configured model, bounded messages, fixed Tool schemas, native
+`stream`, native `format`, and bounded `options`. Kupilot maps the configured
+temperature and an explicitly endpoint-evidenced positive output limit to the
+native options. `json_object` selects Ollama's fixed JSON format; `prompt`
+omits it. Unsupported model or format behavior fails the single request.
+An omitted `reasoning_effort` also omits native `think`; explicit `none` sends
+`think: false`. Interactive switching to Ollama chooses the omitted form rather
+than carrying an OpenAI-specific explicit disable value into the new provider.
+The adapter does not select a value from the model name or retry a response
+whose Tool behavior is incompatible with the explicit setting.
+
+Streaming requires `application/x-ndjson` with one bounded JSON record per
+line. Non-streaming summary or Reviewer generation requires
+`application/json`. Each native response must decode to an assistant message;
+intermediate records may contain content, reasoning, or complete Tool calls,
+and the terminal record must carry an admitted done reason. The native
+component exposes usage containers on every record. Kupilot removes only an
+exact all-zero container before terminal state and accepts measured usage only
+at terminal state.
+
+Ollama Tool calls carry a function name and complete JSON argument object but
+no OpenAI ID or delta index. Within the current model request, Kupilot assigns
+each decoded call its contiguous arrival ordinal and a deterministic bounded
+identifier derived from the request ID and ordinal. Duplicate ordinals,
+malformed arguments, partial calls, over-limit calls, a Tool after terminal
+state, and mismatched finish state remain invalid. The synthetic identifier is
+used only for the existing Eino/project Tool-result pairing; it creates no
+Evidence, permission, execution, replay, or continuation authority.
+
+Native Ollama is restricted to explicit loopback HTTP and
+`credential_ref: none`. The transport rejects Authorization, URL query,
+userinfo, fragment, redirect, an endpoint-selected through `OLLAMA_HOST`, or
+an authentication query introduced through ambient Ollama settings before
+network I/O. Kupilot performs no model discovery, server start, model pull,
+protocol fallback, or automatic resend.
+
+The initial production-call-graph scan found GO-2026-5018 reachable through
+the native client's imported SSH helper at `golang.org/x/crypto` v0.44.0.
+Kupilot therefore pins fixed v0.52.0 plus its minimum compatible `x/net`
+v0.54.0, `x/term` v0.43.0, and `x/text` v0.37.0 requirements. All retain the
+repository's Go 1.25 minimum. The project vulnerability gate must remain
+clean; the fact that Kupilot does not configure an SSH transport is not used to
+waive a reachable dependency finding.
+
 ## Implemented Agent capability validation strategy
 
 Adapter construction is deliberately network-free and does not send a
@@ -299,12 +386,15 @@ successful result.
 
 | Behavior | Requirement |
 | --- | --- |
-| Chat Completions JSON request | Required |
-| SSE streaming | Required |
+| OpenAI Chat Completions JSON request | Required for `openai` |
+| Native Ollama `/api/chat` request | Required for `ollama` |
+| SSE streaming | Required for `openai` |
+| NDJSON streaming | Required for `ollama` |
 | Structured function Tool calls | Required |
 | Strict JSON object Tool schemas | Required |
-| Indexed, fragmented Tool arguments | Required; distinct indexes may interleave |
-| Atomic Tool-call identifier, type, and name | Required for each index |
+| Indexed, fragmented Tool arguments | Required from `openai`; distinct indexes may interleave |
+| Complete native Tool argument object | Required from `ollama` |
+| Tool-call identifier and index | Provider-supplied for `openai`; deterministic request-bound adapter values for `ollama` |
 | Provider-specific `strict` Tool flag | Not required and not used as an authority boundary |
 | Tool-argument whitespace and key order | Valid bounded JSON object accepted; canonicalized after strict binding |
 | Commentary accompanying a Tool selection | Accepted only with `tool_calls`; bounded and discarded |
@@ -342,7 +432,7 @@ or summarization call.
 | Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
 | Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
 | Eligible durable recent tail after summarization | At least 16 user/assistant Messages and at most 25 so the cut remains on a complete-run boundary; current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
-| Retained final assistant answer representation | Current strict final-response JSON envelope containing the validated Markdown answer and empty Evidence/action arrays; raw model traffic is never replayed |
+| Retained final assistant answer representation | Complete current strict response schema 2 envelope containing the validated Markdown answer, empty Evidence/action/limitation/question arrays, and the current outcome members; raw model traffic is never replayed |
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |
@@ -351,15 +441,16 @@ or summarization call.
 | One assembled Tool argument object | 8 KiB |
 | One Tool-call identifier | 256 bytes |
 | Total response-stream wire bytes | 8 MiB |
-| One SSE data record or decoded Eino chunk | 64 KiB |
-| SSE data records or decoded Eino chunks | 32,768, whichever is reached first |
+| One SSE data record, NDJSON record, or decoded Eino chunk | 64 KiB |
+| SSE or NDJSON records or decoded Eino chunks | 32,768, whichever is reached first |
 | Discarded HTTP error-body read | 4 KiB |
 | Configured output tokens | No universal default; the request field is omitted unless the selected endpoint has exact evidence |
 | One model request | At most 900 seconds, further capped by the selected profile and owning AgentRun deadline |
 
 <!-- markdownlint-enable MD013 -->
 
-The request byte limit is checked on Eino's serialized JSON before HTTP I/O.
+The request byte limit is checked on Eino's serialized JSON before HTTP I/O;
+OpenAI also uses its Eino request modifier for an earlier identical check.
 Stream byte, record, chunk, and Tool-argument limits include
 partial, malformed, error, and terminal paths. Reaching a fixed byte or event
 limit returns `budget_exhausted`; discarded bytes are never included in an
@@ -416,12 +507,14 @@ arguments, messages, resumed history, and Kubernetes content cannot change it.
 HTTPS uses normal certificate and hostname verification. Plain HTTP is accepted
 only for an explicit loopback endpoint. User information, query parameters,
 fragments, insecure TLS overrides, and cross-origin redirects are rejected.
-Private HTTPS endpoints are supported only when their certificate chain and
-hostname validate against the process trust store. At most three same-origin
-redirects are followed, and only when the redirect preserves the authenticated
-POST and body; method-changing or otherwise ambiguous redirects are rejected.
+Private HTTPS endpoints are supported only for `openai` and only when their
+certificate chain and hostname validate against the process trust store. At
+most three same-origin OpenAI redirects are followed, and only when the
+redirect preserves the authenticated POST and body; method-changing or
+otherwise ambiguous redirects are rejected. Native Ollama is loopback HTTP
+only and rejects every redirect.
 
-Each model API key is a role-owned transport-only credential extracted from
+Each OpenAI model API key is a role-owned transport-only credential extracted from
 masked Agent setup, an optional named-profile plaintext file field, or the
 role's one-shot environment source. It is never an ordinary typed configuration
 field. The Eino component
@@ -442,6 +535,12 @@ Tool-call data. Endpoint error bodies are read only to the fixed limit and are
 never decoded into a safe error or metadata value. Default logs discard them.
 Explicit sensitive diagnostics may retain only the credential-redacted prefix
 documented by ADR-0036.
+
+Native Ollama requires `credential_ref: none`. Any file or environment API key
+conflicts with that profile, and the transport rejects Authorization before
+network I/O. The guarded boundary still applies the same bounded sensitive-
+value processing to native content and safe diagnostics without inventing a
+credential.
 
 By default, the fixed local `model_request` log event records only the local
 request ID, operation, phase, outcome, stable class and code, retryability,
@@ -474,6 +573,7 @@ synthetic English content and loopback `httptest` servers.
 | `reasoning-content.sse` | Bounded Eino reasoning metadata checked and discarded before final text assembly |
 | `no-usage-eof.sse` | Optional usage and terminal EOF after finish reason |
 | `reasoning-none` route | Explicit `reasoning_effort: "none"` admission before a valid stream |
+| Response-format request recorder | Explicit `json_object` serialization for structured output, omission for `prompt` and Agent-summary requests, and one request with no fallback |
 | `error-400.json` | Unsupported compatibility classification and generic-SDK status fallback |
 | `error-401.json` | Authentication classification and error-body confinement |
 | `error-429.json` | Rate-limit classification and bounded retry metadata |
@@ -487,6 +587,8 @@ synthetic English content and loopback `httptest` servers.
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 | Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
 | Scripted steer boundary routes | Summary-before-steer order, durable commit before model I/O, exact-once active input, intact Tool pairs, and zero model calls after a failed barrier |
+| Current-schema history routes | Complete schema 2 retained assistant representation and a later strict final without retired three-member imitation |
+| Native Ollama request recorder | Exact `/api/chat`, no Authorization, NDJSON/JSON media, bounded native format/options, deterministic Tool-call pairing, usage normalization, and no redirect or fallback |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -542,13 +644,39 @@ the `go-openai` `v0.1.2` SSE reader consumes `data:` records and `[DONE]` but
 has no replay event ID, sequence/offset, `Last-Event-ID`, or same-response
 reattach operation. Chunk response IDs and `X-Request-ID` do not establish
 replay order. Kupilot therefore retains unknown/recovered handling and adds no
-continuation, retry, polling, checkpoint, or dependency change.
+continuation, retry, polling, or checkpoint. The native Ollama component
+v0.1.9 likewise issues one complete `/api/chat` request and exposes no stable
+same-response replay identity or reattach offset.
 
 The deterministic loopback conformance suite covers structured finals, Tool
 call identities, event order, usage, cancellation, timeout, malformed,
 duplicate and out-of-order stream data, unknown outcome, and no cross-origin
-retry. It runs only under tests. Live endpoint conformance and model-quality
-evaluation were not run for this implementation evidence.
+retry. It runs only under tests.
+
+On 2026-09-15, the explicitly authorized compatibility-route suite passed
+against Ollama `0.34.0`, `gpt-oss:20b`, and
+`http://127.0.0.1:11434/v1` with
+`response_format: json_object`. Four bounded calls covered streaming, one fixed
+Tool call, a complete schema 2 final, and a later complete schema 2 final after
+the current retained-assistant envelope under the full production policy
+prompt. The run sent 94,363 request bytes and reported 13,944 input, 506 output,
+and 14,450 total tokens. This proves only that exact local protocol observation;
+live model-quality evaluation and live cluster integration were not run. This
+historical result does not establish the newly admitted native `/api/chat`
+path.
+
+On the same date, the separately authorized native suite passed against
+Ollama `0.34.0`, `gpt-oss:20b`, and `http://127.0.0.1:11434/api/chat` with
+`response_format: json_object` and native `think` omitted. Four bounded calls
+covered an unconstrained streaming text response, one native Tool call with a
+request-bound local ID, the matching Tool-result turn and complete schema 2
+final, and a later complete schema 2 final after the current retained-assistant
+envelope under the full production policy prompt. The run sent 74,178 request
+bytes and reported 12,714 input, 499 output, and 13,213 total tokens. A separate
+single-request observation with explicit `think: false` ended with empty
+content and no Tool call; it was not retried and is not counted as a pass. This
+evidence is exact-version compatibility only. Live Reviewer evaluation and
+live cluster integration were not run.
 
 ## References
 
@@ -561,4 +689,6 @@ evaluation were not run for this implementation evidence.
 - [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)

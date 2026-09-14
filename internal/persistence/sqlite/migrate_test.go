@@ -62,7 +62,7 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 		}
 	}()
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	releasedChecksums := []string{
@@ -313,6 +313,26 @@ func TestReleasedMigrationMatrixPreservesV01V02V03Data(t *testing.T) {
 	if err := reopened.handle.GetContext(context.Background(), &reopenedRows, `SELECT count(id) FROM legacy_restart_approvals WHERE id = ?`, approvalID); err != nil || reopenedRows != 1 {
 		t.Fatalf("reopened approval rows = %d/%v", reopenedRows, err)
 	}
+	var migratedProvider string
+	if err := reopened.handle.GetContext(context.Background(), &migratedProvider, `SELECT provider_kind FROM model_requests WHERE id = ?`, modelRequestID); err != nil || migratedProvider != "openai" {
+		t.Fatalf("migrated provider kind = %q/%v", migratedProvider, err)
+	}
+	if _, err := reopened.handle.ExecContext(context.Background(), `
+		INSERT INTO model_requests (
+			id, run_id, sequence, provider_kind, model, status,
+			prompt_version, prompt_fingerprint, started_at_ms, finished_at_ms
+		) VALUES (?, ?, 2, 'ollama', 'native-model', 'succeeded', 'prompt-v1', ?, 1011, 1012)
+	`, "00000000-0000-7000-8000-000000009919", runID, strings.Repeat("c", 64)); err != nil {
+		t.Fatalf("insert native Ollama request after migration: %v", err)
+	}
+	if _, err := reopened.handle.ExecContext(context.Background(), `
+		INSERT INTO model_requests (
+			id, run_id, sequence, provider_kind, model, status,
+			prompt_version, prompt_fingerprint, started_at_ms, finished_at_ms
+		) VALUES (?, ?, 3, 'openai_compatible', 'retired-model', 'succeeded', 'prompt-v1', ?, 1012, 1013)
+	`, "00000000-0000-7000-8000-000000009920", runID, strings.Repeat("c", 64)); err == nil {
+		t.Fatal("retired provider kind remained writable after migration")
+	}
 }
 
 func assertMigrationApplicationVersions(t *testing.T, db *sqlx.DB, wantVersions []string) {
@@ -366,7 +386,7 @@ func TestApprovalRuntimeMigrationRejectsUnexpectedReleasedRowsWithoutDataLoss(t 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 2; index++ {
@@ -421,7 +441,7 @@ func TestMinimalRunIdentityMigrationPreservesReleasedSessionGraph(t *testing.T) 
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -507,7 +527,7 @@ func TestMinimalRunIdentityMigrationRollsBackForeignKeyFailure(t *testing.T) {
 	raw.SetMaxOpenConns(1)
 	db := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 3; index++ {
@@ -572,7 +592,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 16 {
+		if err != nil || len(migrations) != 17 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -653,7 +673,7 @@ func TestMigrateV04RuntimeLimitsPreservesGraphAndRollsBackFailure(t *testing.T) 
 		db := sqlx.NewDb(raw, driverName)
 		t.Cleanup(func() { _ = db.Close() })
 		migrations, err := loadMigrations()
-		if err != nil || len(migrations) != 16 {
+		if err != nil || len(migrations) != 17 {
 			t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 		}
 		for index := 0; index < 4; index++ {
@@ -871,7 +891,7 @@ func openMigrationV12Fixture(t *testing.T, name string) (*sqlx.DB, []migration) 
 	db := sqlx.NewDb(raw, driverName)
 	t.Cleanup(func() { _ = db.Close() })
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 12; index++ {
@@ -913,7 +933,7 @@ func TestCompatibleBinaryUpgradePreservesSessionListingAndResumableHistory(t *te
 	raw := openRawDatabase(t, filepath.Join(stateDir, databaseFilename))
 	legacy := sqlx.NewDb(raw, driverName)
 	migrations, err := loadMigrations()
-	if err != nil || len(migrations) != 16 {
+	if err != nil || len(migrations) != 17 {
 		t.Fatalf("loadMigrations() = %d/%v", len(migrations), err)
 	}
 	for index := 0; index < 14; index++ {
@@ -1032,7 +1052,7 @@ func TestMigrateRejectsSchemaTooNew(t *testing.T) {
 		INSERT INTO schema_migrations (
 			version, name, checksum, applied_at_ms, app_version
 		) VALUES (?, ?, ?, ?, ?)
-	`, 17, "000017_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
+	`, 18, "000018_future.sql", strings.Repeat("1", 64), 1, "future-version"); err != nil {
 		_ = raw.Close()
 		t.Fatalf("future migration insert error = %v", err)
 	}
@@ -1290,6 +1310,7 @@ func assertMigrationRecord(t *testing.T, db *sql.DB, wantApplicationVersion stri
 		"000014_claim_coverage_and_plan.sql",
 		"000015_session_last_activity.sql",
 		"000016_answer_completeness.sql",
+		"000017_model_provider_kinds.sql",
 	}
 	count := 0
 	for rows.Next() {

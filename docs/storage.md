@@ -189,7 +189,8 @@ text identities and UTC Unix-millisecond timestamps. SQL uses fixed statements,
 explicit columns, Context-aware calls, and bound values. sqlx handles, rows,
 transactions, tags, and driver values stay inside `internal/persistence/sqlite`.
 
-The schema has no field for model API keys, kubeconfig content, authentication
+The schema records only the bounded `openai` or `ollama` provider identity for
+model requests. It has no field for OpenAI model API keys, kubeconfig content, authentication
 tokens, certificates, private keys, raw container logs, assembled prompts, raw
 model traffic, raw Tool results, arbitrary patches, or framework objects.
 Token-count metadata is numeric usage information and never authentication

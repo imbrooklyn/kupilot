@@ -400,10 +400,18 @@ func (id ModelRequestID) Valid() bool {
 	return validUUIDv7(string(id))
 }
 
-// ModelProviderKind is the fixed model-provider contract.
+// ModelProviderKind is one fixed model-provider contract.
 type ModelProviderKind string
 
-const ModelProviderOpenAICompatible ModelProviderKind = "openai_compatible"
+const (
+	ModelProviderOpenAI ModelProviderKind = "openai"
+	ModelProviderOllama ModelProviderKind = "ollama"
+)
+
+// Valid reports whether the kind is one explicitly admitted provider.
+func (kind ModelProviderKind) Valid() bool {
+	return kind == ModelProviderOpenAI || kind == ModelProviderOllama
+}
 
 // ModelRequestStatus is one safe request lifecycle state.
 type ModelRequestStatus string
@@ -458,7 +466,7 @@ func (request ModelRequestMetadata) Validate() error {
 		!request.Invocation.Valid() || request.ReservedCostUnits < 1 || request.ReservedCostUnits > maxModelRequests ||
 		request.ModelRole == ModelRoleAgent && request.Invocation == ModelInvocationReview ||
 		request.ModelRole == ModelRoleApprovalReviewer && request.Invocation != ModelInvocationReview ||
-		request.ProviderKind != ModelProviderOpenAICompatible ||
+		!request.ProviderKind.Valid() ||
 		!validBoundedText(request.Model, 1, maxModelIdentifierBytes) ||
 		!validBoundedText(request.PromptVersion, 1, maxPromptVersionBytes) ||
 		!validSHA256Hex(request.PromptFingerprint) ||

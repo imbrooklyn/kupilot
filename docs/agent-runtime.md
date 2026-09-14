@@ -27,7 +27,7 @@ decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v15`
+- System prompt: `kupilot-agent-policy-v16`
 - Capability catalog: `kupilot-operational-tools-v5`
 
 ## Frozen run input
@@ -92,7 +92,8 @@ never reactivated after restart.
    content-free preflight event before endpoint entry. A failed barrier or
    preflight delegates no call.
 5. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
-   iteration. The Eino boundary drains one bounded model stream and asks Eino
+   iteration. The Eino boundary drains one bounded OpenAI SSE or native Ollama
+   NDJSON model stream and asks Eino
    to assemble exactly one assistant message. After each Eino-decoded content
    chunk passes
    stream validation, a passive projector may decode the first top-level
@@ -259,7 +260,7 @@ claim/Evidence reference rejects a new final result before successful commit.
 Retained legacy records may still expose their bounded validation warnings.
 
 Provisional text is delivery-only. It is independently bounded, checked for
-the exact model credential and sensitive patterns across chunk boundaries,
+the exact model credential when one exists and for sensitive patterns across chunk boundaries,
 normalized across split terminal controls, and rechecked against the immutable
 scope before each event. Application emits an immediate first safe fragment and
 then uses bounded byte- and time-based coalescing. A Tool request
@@ -423,12 +424,20 @@ resumable authority. An unknown item has a committed Message, but its incomplete
 or failed run group is also ineligible for replay.
 
 At the Eino boundary, each retained final assistant answer is reconstructed in
-the current strict final-response JSON envelope. Only its locally validated
-visible Markdown is placed in `answer_markdown`; `evidence_citations` and
-`proposed_actions` are empty. The durable Message remains the safe Markdown
-answer, not raw model traffic. This role-preserving representation prevents a
-prior visible answer from becoming a plain-text response-format example and
-cannot restore historic Evidence or action authority.
+the complete current strict final-response JSON envelope. Only its locally
+validated visible Markdown is placed in `answer_markdown`;
+`evidence_citations`, `proposed_actions`, `limitations`, and `questions` are
+empty, while the remaining schema 2 outcome members retain the current grammar.
+The durable Message remains the safe Markdown answer, not raw model traffic.
+This role-preserving representation prevents a prior visible answer from
+becoming a plain-text or retired-schema response example and cannot restore
+historic Evidence or action authority.
+
+The fixed profile response format is `prompt` or `json_object`. The latter is
+used only when explicitly configured from exact endpoint evidence and constrains
+structured Agent/plan or Reviewer output through the pinned Eino serializer.
+Agent-summary requests stay plain text. An unsupported constraint fails its one
+request; it never causes detection traffic, downgrade, fallback, or retry.
 
 Eino summarization middleware produces a bounded safe summary plus a complete
 eligible recent tail. Project-owned coverage records the first/last covered
@@ -555,10 +564,11 @@ input disposition, queue-drain denial, next action, and zero automatic model,
 Tool, or action retries. Optional delivery failure never changes an Agent
 result; unknown authority or side effects never become success.
 
-**Protocol continuation unavailable.** The pinned Chat Completions adapter has
-no stable replay identity/offset or same-response reattach operation. A stream
-disconnect remains unknown/recovered; Kupilot adds no retry, polling,
-checkpoint, persisted event, or second request.
+**Protocol continuation unavailable.** Neither the pinned Chat Completions
+adapter nor the native Ollama `/api/chat` adapter has a stable replay identity,
+offset, or same-response reattach operation. A stream disconnect remains
+unknown/recovered; Kupilot adds no retry, polling, checkpoint, persisted event,
+or second request.
 
 ## References
 
@@ -579,3 +589,5 @@ checkpoint, persisted event, or second request.
 - [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

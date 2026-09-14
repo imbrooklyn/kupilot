@@ -202,10 +202,13 @@ separate bounded read phase and cannot rewrite the attempt outcome.
 
 ## Model and Session context contract
 
-Kupilot keeps one protocol kind, `openai_compatible`, while allowing several
-explicit named profiles and origins. The required `agent` and optional
-`approval_reviewer` roles select exactly one profile each. There is no provider
+Kupilot supports exactly two provider kinds: `openai` through Eino's OpenAI
+Chat Completions component and `ollama` through Eino's native loopback Ollama
+component. The required `agent` and optional `approval_reviewer` roles select
+exactly one profile, kind, and origin each. There is no provider
 auto-detection, router, fallback, load balancing, or cross-origin retry.
+OpenAI requires its fixed role credential; native Ollama requires
+`credential_ref: none` and sends no Authorization header.
 Summarization reuses `agent` with an independent reserved budget; there is no
 prebuilt `context_compactor` role.
 
@@ -222,6 +225,12 @@ never restores current scope, ResourceRef, Evidence, Tool state, permission
 rule, Reviewer decision, approval, ActionEnvelope, execution, or generation.
 Summary or compaction failure cannot cause an oversized or silently truncated
 model request.
+
+Retained assistant answers use the complete current response schema with empty
+historic Evidence/action arrays so later turns never receive a retired response
+grammar. A profile may explicitly request the endpoint-proved Chat Completions
+JSON-object constraint; Kupilot never probes, retries, or downgrades when that
+configured capability is unavailable.
 
 One completed run may contain one initial committed user Message, zero or more
 committed steer user Messages, and one final assistant Message. Pending,
@@ -333,3 +342,5 @@ needed for daily operations.
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

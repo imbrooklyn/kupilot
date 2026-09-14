@@ -38,6 +38,7 @@ var (
 type CoordinatorConfig struct {
 	ApplicationVersion  string
 	ConfigurationSchema string
+	ModelProvider       domain.ModelProviderKind
 	Sessions            SessionPersistence
 	Runs                RunPersistence
 	RunInputs           RunInputPersistence
@@ -103,6 +104,7 @@ type Coordinator struct {
 	startupMu           sync.Mutex
 	applicationVersion  string
 	configurationSchema string
+	modelProvider       domain.ModelProviderKind
 
 	sessions             SessionPersistence
 	runs                 RunPersistence
@@ -290,7 +292,13 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.ConfigurationSchema == "" {
 		config.ConfigurationSchema = "current"
 	}
+	if config.ModelProvider == "" {
+		config.ModelProvider = domain.ModelProviderOpenAI
+	}
 	if !validDoctorToken(config.ApplicationVersion, 128) || !validDoctorToken(config.ConfigurationSchema, 64) {
+		return nil, ErrCoordinatorDependency
+	}
+	if !config.ModelProvider.Valid() {
 		return nil, ErrCoordinatorDependency
 	}
 	if config.Sessions == nil || config.Runs == nil || config.Tools == nil ||
@@ -380,7 +388,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	}
 	coordinator := &Coordinator{
 		applicationVersion: config.ApplicationVersion, configurationSchema: config.ConfigurationSchema,
-		sessions: config.Sessions, runs: config.Runs, runInputs: runInputs, tools: config.Tools,
+		modelProvider: config.ModelProvider,
+		sessions:      config.Sessions, runs: config.Runs, runInputs: runInputs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
 		runner: runner, modelRuntime: config.ModelRuntime,
 		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles, reviewerModel: config.ReviewerModel,
@@ -538,10 +547,12 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 	}
 	coordinator.mu.Lock()
 	currentRuntime := coordinator.modelRuntime
+	currentProvider := coordinator.modelProvider
 	approvals := coordinator.approvals
 	coordinator.mu.Unlock()
 	originChanged := currentRuntime == nil || currentRuntime.Origin() != replacement.Origin()
-	if originChanged && approvals != nil {
+	providerChanged := currentProvider != request.ProviderKind
+	if (originChanged || providerChanged) && approvals != nil {
 		if err := approvals.InvalidateModelOrigin(ctx); err != nil {
 			replacement.Close()
 			return ModelSetupResult{}, ErrModelSetupFailed
@@ -555,6 +566,12 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 	if err := ctx.Err(); err != nil {
 		replacement.Close()
 		return ModelSetupResult{}, err
+	}
+	if providerChanged {
+		if err := coordinator.privacy.InvalidateConsent(ctx); err != nil {
+			replacement.Close()
+			return ModelSetupResult{}, ErrModelSetupFailed
+		}
 	}
 	if request.Persist {
 		if err := profiles.SaveModelProfile(ctx, request); err != nil {
@@ -589,6 +606,7 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 		}
 	}
 	coordinator.modelRuntime = replacement
+	coordinator.modelProvider = request.ProviderKind
 	coordinator.runner = replacement
 	coordinator.compactor = replacement
 	coordinator.privacyChallenge = nil
@@ -606,7 +624,7 @@ func (coordinator *Coordinator) ConfigureModel(ctx context.Context, request Mode
 		previous.Close()
 	}
 	result := ModelSetupResult{
-		RequestID: request.RequestID, Model: replacement.ModelName(),
+		RequestID: request.RequestID, ProviderKind: request.ProviderKind, Model: replacement.ModelName(),
 		Origin: replacement.Origin(), Persisted: request.Persist,
 	}
 	if result.Validate() != nil {

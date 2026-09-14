@@ -37,9 +37,9 @@ capability may be inferred from it.
   default-off shell risk class.
 - Permission profiles `read-only`, `ask`, `auto-review`, `full-access`, and
   `custom`; `ask` is the default.
-- A required `agent` model role, an optional `approval_reviewer` role, several
-  explicit named OpenAI-compatible profiles and origins, and no fallback or
-  routing.
+- A required `agent` model role, an optional `approval_reviewer` role, and
+  explicit named `openai` Chat Completions or native loopback `ollama`
+  profiles, with no detection, fallback, or routing.
 - Standard and minimal Session model-memory modes, explicit resume, direct Eino
   ADK message-state and summarization reuse, bounded safe summary coverage and
   recent tail, and capability-aware finite budgets.
@@ -58,6 +58,9 @@ capability may be inferred from it.
   freshness/conflict/supersession state, narrow same-run safe-read reuse,
   category-level budget explanation, and a unified no-blind-retry recovery
   matrix.
+- Current-schema retained assistant envelopes and an explicit per-profile
+  `prompt` or endpoint-proved `json_object` response constraint, with no
+  capability probe, downgrade, fallback, or resend.
 - macOS and Linux support on `amd64` and `arm64`; Windows remains experimental.
 
 ## Capability contract
@@ -199,10 +202,12 @@ plan. Generic patch/apply/edit/delete/YAML and command fallback remain denied.
 
 ## Model and Session scope
 
-All profiles use the one `openai_compatible` protocol kind. Each role binds one
-explicit profile and origin. There is no automatic discovery, fallback, router,
-load balancing, cross-origin retry, or model-selected endpoint. Credentials are
-opaque and consent is role-, origin-, policy-, and category-bound.
+Each profile selects exactly one fixed provider kind: `openai` Chat Completions
+or native loopback `ollama`. Each role binds one explicit profile and origin.
+There is no automatic discovery, protocol translation, fallback, router, load
+balancing, cross-origin retry, or model-selected endpoint. OpenAI credentials
+are opaque; Ollama accepts none. Consent remains role-, origin-, policy-, and
+category-bound.
 
 Every AgentRun after the first question in a Session must receive one ordered,
 bounded representation of all retained eligible prior user and final assistant
@@ -314,3 +319,5 @@ reuse are not new durable stores or resumable authority.
 - [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

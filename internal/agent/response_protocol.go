@@ -14,8 +14,9 @@ import (
 const (
 	// DiagnosticResponseAnswerField is the first top-level field projected for
 	// provisional display before the complete response is validated.
-	DiagnosticResponseAnswerField  = "answer_markdown"
-	maxDiagnosticResponseJSONDepth = 8
+	DiagnosticResponseAnswerField   = "answer_markdown"
+	diagnosticResponseSchemaVersion = 2
+	maxDiagnosticResponseJSONDepth  = 8
 )
 
 var (
@@ -69,10 +70,20 @@ type proposedActionWire struct {
 func EncodeHistoricalAssistantResponse(answer string) (string, error) {
 	citations := make([]evidenceCitationWire, 0)
 	actions := make([]proposedActionWire, 0)
+	limitations := make([]domain.MissingInformation, 0)
+	questions := make([]domain.ClarificationQuestion, 0)
+	version := diagnosticResponseSchemaVersion
+	outcome := "answer"
+	stopReason := domain.RunTerminalCompleted
 	wire := diagnosticResponseWire{
-		AnswerMarkdown:    &answer,
-		EvidenceCitations: &citations,
-		ProposedActions:   &actions,
+		AnswerMarkdown:        &answer,
+		EvidenceCitations:     &citations,
+		ProposedActions:       &actions,
+		ResponseSchemaVersion: &version,
+		Outcome:               &outcome,
+		StopReason:            &stopReason,
+		Limitations:           &limitations,
+		Questions:             &questions,
 	}
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -109,7 +120,7 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 	if wire.AnswerMarkdown == nil || wire.EvidenceCitations == nil || wire.ProposedActions == nil {
 		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
 	}
-	if wire.ResponseSchemaVersion == nil || *wire.ResponseSchemaVersion != 2 || wire.Outcome == nil ||
+	if wire.ResponseSchemaVersion == nil || *wire.ResponseSchemaVersion != diagnosticResponseSchemaVersion || wire.Outcome == nil ||
 		wire.StopReason == nil || !validModelSuggestedStopReason(*wire.StopReason) || wire.Limitations == nil || wire.Questions == nil {
 		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
 	}

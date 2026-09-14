@@ -36,13 +36,21 @@ outside Home.
 ## Current first start and interactive model setup
 
 A bare `kupilot` starts the TUI without requiring a configuration file, model
-endpoint, model identifier, or API key. When any model requirement is missing,
-the sole composer opens a fixed setup flow:
+endpoint, model identifier, or OpenAI API key. When any selected-provider
+requirement is missing, the sole composer opens a fixed setup flow:
 
-1. Enter the OpenAI-compatible endpoint.
-2. Enter the model identifier.
-3. Choose `save` or `session`. Empty input selects `save`.
-4. Enter the API key in masked mode.
+1. Select the fixed `openai` or `ollama` provider kind.
+2. Enter its endpoint.
+3. Enter the model identifier.
+4. Choose `save` or `session`. Empty input selects `save`.
+5. For `openai` only, enter the API key in masked mode. Ollama configuration
+   carries no credential.
+
+Switching interactively to Ollama leaves native `think` omitted so the exact
+model keeps its own default. A manually authored `reasoning_effort: none`
+remains an explicit request for native `think: false`; Kupilot never changes
+that authored value or retries when the selected model rejects or mishandles
+it.
 
 Each step keeps a field label directly above the composer after typing replaces
 the placeholder. `Ctrl+C` or `Esc` cancels an editable step. During in-flight
@@ -57,7 +65,9 @@ optional-source key implicitly. `session` keeps the new Agent key only in the
 current Kupilot process. `/model` repeats Agent setup.
 Reconfiguration cancels and joins an active AgentRun, constructs one
 replacement runtime, invalidates Agent consent if the canonical model origin
-changed, and closes the prior runtime after the swap.
+or provider kind changed, and closes the prior runtime after the swap. A
+provider-kind change durably revokes old same-origin consent so restart cannot
+restore it.
 
 Adapter construction is local and network-free. The endpoint's complete stream
 and structured Tool compatibility is checked by the first consented model
@@ -66,8 +76,9 @@ provider.
 
 The loaded configuration always contains one named `agent` profile and may
 contain one `approval_reviewer` profile. Each profile explicitly binds one
-`openai_compatible` model identifier, canonical origin, opaque credential
-reference, finite limits, and exactly one consumer role. A Reviewer may inherit
+`openai` Chat Completions or native loopback `ollama` model identifier,
+canonical origin, exact credential policy, finite limits, and exactly one
+consumer role. A Reviewer may inherit
 the Agent origin and selected settings, use the same origin with another model,
 or provide another explicit origin. It remains a distinct role and consent
 tuple in every case. Summarization reuses `agent` with a separate budget and
@@ -187,18 +198,19 @@ an actual key so it remains safe to copy and inspect.
 | `runtime.budget_profile` | `balanced`; accepted values are `compact`, `balanced`, and `extended`. The profile is frozen into each run and cannot be expanded by model output. |
 | `models.agent.name` | Required unique profile name; lowercase letters and digits with internal hyphens, at most 128 bytes. |
 | `models.agent.role` | Required fixed value `agent`. |
-| `models.agent.credential_ref` | Required fixed value `agent`. |
-| `models.agent.provider_kind` | Required fixed value `openai_compatible`. |
-| `models.agent.endpoint` | Required key and may be empty until interactive setup; HTTPS is required except for explicit loopback HTTP. |
+| `models.agent.credential_ref` | Required `agent` for `openai`; required `none` for `ollama`. |
+| `models.agent.provider_kind` | Required fixed value `openai` or `ollama`. The retired unreleased value `openai_compatible` is rejected. |
+| `models.agent.endpoint` | Required key and may be empty until interactive setup. `openai` requires HTTPS except for explicit loopback HTTP. Native `ollama` requires explicit loopback HTTP and uses the configured server base without `/v1` or `/api/chat`. |
 | `models.agent.model` | Required key and may be empty until interactive setup; non-empty values are 1–128 admitted ASCII bytes. Endpoint and model must be either both empty or both non-empty. |
-| `models.agent.api_key` | Optional plaintext credential extracted before ordinary typed configuration decode. |
-| `models.agent.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. |
+| `models.agent.api_key` | Optional plaintext OpenAI credential extracted before ordinary typed configuration decode. It is forbidden for `ollama`. |
+| `models.agent.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. For native Ollama, omission leaves `think` absent while `none` sends `think: false`. Interactive provider switching selects omission because it does not ask a separate reasoning question. |
+| `models.agent.response_format` | Effective fixed value `prompt` or `json_object`; omission resolves to `prompt`. `json_object` selects the provider's fixed JSON-object response constraint only when the exact endpoint has proved support. It never enables probing, fallback, or retry. |
 | `models.agent.temperature` | Required; accepted range `0` through `0.2`. |
 | `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
 | `models.agent.request_timeout_seconds` | Required; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
 | `models.agent.streaming` | Required fixed value `true`. |
 | `models.agent.tool_calling_required` | Required fixed value `true`. |
-| `models.approval_reviewer` | Optional typed profile. `name`, `role: approval_reviewer`, `inherit_agent`, and `credential_ref` are always explicit. A non-inheriting profile supplies every non-secret model field. The resolved Reviewer is fixed non-streaming and Tool-free. |
+| `models.approval_reviewer` | Optional typed profile. `name`, `role: approval_reviewer`, `inherit_agent`, and `credential_ref` are always explicit. A non-inheriting profile supplies every non-secret model field. The resolved Reviewer is fixed non-streaming and Tool-free. Its `response_format` has the same explicit `prompt` or `json_object` contract. |
 | `models.approval_reviewer.api_key` | Optional plaintext key only when `credential_ref: approval_reviewer`; it conflicts with `credential_ref: agent`. |
 | `kubernetes.exec_credentials` | `allow`; may be set to `deny`. It never selects or supplies a command. |
 | `kubernetes.namespace_access` | `all`; may be tightened to `current`. `all` permits explicit cross-Namespace and all-Namespace reads in the same Context only when RBAC also permits them. |
@@ -237,8 +249,9 @@ The exact profile time envelopes and their no-retry semantics are defined by
 [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md).
 
 Each supplied endpoint or model identifier is validated independently. If the
-effective endpoint, model identifier, or API key is absent, Kupilot opens the
-interactive model setup flow to complete the profile.
+effective endpoint, model identifier, or required OpenAI API key is absent,
+Kupilot opens the interactive model setup flow to complete the profile. An
+Ollama profile is configured without a credential.
 
 The admitted environment variables are:
 
@@ -312,10 +325,10 @@ pre-release configuration-schema migration.
 
 ## Credential boundary
 
-An Agent API key may come from masked TUI input,
+An OpenAI Agent API key may come from masked TUI input,
 `models.agent.api_key` in the selected file, or exactly one of
 `KUPILOT_AGENT_API_KEY` and its legacy `KUPILOT_MODEL_API_KEY` alias. An
-independent Reviewer key may come from
+independent OpenAI Reviewer key may come from
 `models.approval_reviewer.api_key` or
 `KUPILOT_APPROVAL_REVIEWER_API_KEY`. An enabled optional source with its fixed
 credential reference may use `observability.prometheus.api_key` or

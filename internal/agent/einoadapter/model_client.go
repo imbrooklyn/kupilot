@@ -3,6 +3,7 @@ package einoadapter
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 
+	einoollama "github.com/cloudwego/eino-ext/components/model/ollama"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -74,16 +76,18 @@ var (
 	errUnsupportedProviderChunk  = errors.New("model provider chunk unsupported")
 )
 
-// modelClient owns the one Eino OpenAI component and its guarded transport.
-// It is private to the sole Eino boundary and never becomes a second Agent
+// modelClient owns the selected Eino component views and their one guarded
+// transport. The structured view differs only by the frozen response format;
+// both stay private to the sole Eino boundary and never become another Agent
 // model port.
 type modelClient struct {
-	configuration domain.ModelConfiguration
-	credential    *config.SecretValue
-	model         einomodel.ToolCallingChatModel
-	client        *http.Client
-	logger        *slog.Logger
-	diagnostics   DiagnosticOptions
+	configuration   domain.ModelConfiguration
+	credential      *config.SecretValue
+	model           einomodel.ToolCallingChatModel
+	structuredModel einomodel.ToolCallingChatModel
+	client          *http.Client
+	logger          *slog.Logger
+	diagnostics     DiagnosticOptions
 }
 
 // newModelClient validates local configuration and constructs an isolated
@@ -116,7 +120,8 @@ func newModelClientWithTransport(
 	if configuration.Validate() != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInvalidRequest, "model-configuration")
 	}
-	if credential == nil || !credential.IsSet() {
+	if configuration.ProviderKind == domain.ModelProviderOpenAI && (credential == nil || !credential.IsSet()) ||
+		configuration.ProviderKind == domain.ModelProviderOllama && credential != nil && credential.IsSet() {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-credential")
 	}
 	if credentialAppearsInStrings(credential, configuration.Endpoint, configuration.Origin, configuration.Model) {
@@ -136,43 +141,88 @@ func newModelClientWithTransport(
 			base:       transport,
 			origin:     origin,
 			credential: credential,
+			provider:   configuration.ProviderKind,
 		},
-		CheckRedirect: redirectPolicy(origin),
+		CheckRedirect: redirectPolicy(origin, configuration.ProviderKind),
 	}
 	var maximum *int
 	if configuration.MaxOutputTokens > 0 {
 		configuredMaximum := configuration.MaxOutputTokens
 		maximum = &configuredMaximum
 	}
-	chatModel, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
-		APIKey:     einoCredentialPlaceholder,
-		HTTPClient: client,
-		BaseURL:    strings.TrimRight(configuration.Endpoint, "/"),
-		Model:      configuration.Model,
-		MaxTokens:  maximum,
-		// The pinned OpenAI client rejects temperature before transport for
-		// identifiers beginning with gpt-5, even for compatible endpoints that
-		// admit the configured field. Eino's fixed ExtraFields path keeps Eino
-		// as the serializer without allowing SDK model-name inference to change
-		// Kupilot's typed request contract.
-		ExtraFields: map[string]any{
-			"temperature": configuration.Temperature,
-		},
-		ReasoningEffort: einoopenai.ReasoningEffortLevel(configuration.ReasoningEffort),
-	})
-	if err != nil {
+	newOpenAIComponent := func(responseFormat *einoopenai.ChatCompletionResponseFormat) (einomodel.ToolCallingChatModel, error) {
+		return einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
+			APIKey:         einoCredentialPlaceholder,
+			HTTPClient:     client,
+			BaseURL:        strings.TrimRight(configuration.Endpoint, "/"),
+			Model:          configuration.Model,
+			MaxTokens:      maximum,
+			ResponseFormat: responseFormat,
+			// The pinned OpenAI client rejects temperature before transport for
+			// identifiers beginning with gpt-5, even for compatible endpoints that
+			// admit the configured field. Eino's fixed ExtraFields path keeps Eino
+			// as the serializer without allowing SDK model-name inference to change
+			// Kupilot's typed request contract.
+			ExtraFields: map[string]any{
+				"temperature": configuration.Temperature,
+			},
+			ReasoningEffort: einoopenai.ReasoningEffortLevel(configuration.ReasoningEffort),
+		})
+	}
+	newOllamaComponent := func(structured bool) (einomodel.ToolCallingChatModel, error) {
+		options := &einoollama.Options{Temperature: float32(configuration.Temperature)}
+		if configuration.MaxOutputTokens > 0 {
+			options.NumPredict = configuration.MaxOutputTokens
+		}
+		var format json.RawMessage
+		if structured {
+			format = json.RawMessage(`"json"`)
+		}
+		var thinking *einoollama.ThinkValue
+		if configuration.ReasoningEffort == domain.ModelReasoningEffortNone {
+			thinking = &einoollama.ThinkValue{Value: false}
+		}
+		return einoollama.NewChatModel(context.Background(), &einoollama.ChatModelConfig{
+			BaseURL: strings.TrimRight(configuration.Endpoint, "/"), HTTPClient: client,
+			Model: configuration.Model, Format: format, Options: options, Thinking: thinking,
+		})
+	}
+	var (
+		chatModel    einomodel.ToolCallingChatModel
+		componentErr error
+	)
+	if configuration.ProviderKind == domain.ModelProviderOllama {
+		chatModel, componentErr = newOllamaComponent(false)
+	} else {
+		chatModel, componentErr = newOpenAIComponent(nil)
+	}
+	if componentErr != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
+	}
+	structuredModel := chatModel
+	if configuration.ResponseFormat == domain.ModelResponseFormatJSONObject {
+		if configuration.ProviderKind == domain.ModelProviderOllama {
+			structuredModel, componentErr = newOllamaComponent(true)
+		} else {
+			structuredModel, componentErr = newOpenAIComponent(&einoopenai.ChatCompletionResponseFormat{
+				Type: einoopenai.ChatCompletionResponseFormatTypeJSONObject,
+			})
+		}
+		if componentErr != nil {
+			return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
+		}
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &modelClient{
-		configuration: configuration,
-		credential:    credential,
-		model:         chatModel,
-		client:        client,
-		logger:        logger,
-		diagnostics:   diagnostics,
+		configuration:   configuration,
+		credential:      credential,
+		model:           chatModel,
+		structuredModel: structuredModel,
+		client:          client,
+		logger:          logger,
+		diagnostics:     diagnostics,
 	}, nil
 }
 
@@ -204,8 +254,11 @@ func prepareTransport(base http.RoundTripper) (http.RoundTripper, bool) {
 	return clone, true
 }
 
-func redirectPolicy(origin *url.URL) func(*http.Request, []*http.Request) error {
+func redirectPolicy(origin *url.URL, provider domain.ModelProviderKind) func(*http.Request, []*http.Request) error {
 	return func(request *http.Request, via []*http.Request) error {
+		if provider == domain.ModelProviderOllama {
+			return errRedirectUnsupported
+		}
 		if request.URL.Scheme != origin.Scheme || request.URL.Host != origin.Host {
 			request.Header.Del("Authorization")
 			return errRedirectOriginDenied
@@ -239,14 +292,25 @@ func (client *modelClient) close() {
 }
 
 func (client *modelClient) withTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
-	if client == nil || client.model == nil || validateAnyBoundToolInfos(tools) != nil {
+	model := client.structuredOutputModel()
+	if model == nil || validateAnyBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	bound, err := client.model.WithTools(tools)
+	bound, err := model.WithTools(tools)
 	if err != nil {
 		return nil, failedRuntime(domain.SafeErrorClassUnsupported, "The configured model cannot accept the fixed Tool catalog.", err)
 	}
 	return bound, nil
+}
+
+func (client *modelClient) structuredOutputModel() einomodel.ToolCallingChatModel {
+	if client == nil {
+		return nil
+	}
+	if client.structuredModel != nil {
+		return client.structuredModel
+	}
+	return client.model
 }
 
 // stream sends one Eino-generated request and returns one assembled Eino
@@ -300,12 +364,14 @@ func (client *modelClient) streamBounded(
 		"phase", "started",
 		"request_id", string(requestID),
 	)
-	stream, err := model.Stream(
-		requestContext,
-		messages,
-		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
-		einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
-	)
+	options := make([]einomodel.Option, 0, 2)
+	if client.configuration.ProviderKind == domain.ModelProviderOpenAI {
+		options = append(options,
+			einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
+			einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
+		)
+	}
+	stream, err := model.Stream(requestContext, messages, options...)
 	if err != nil {
 		return nil, client.finishWithError(
 			requestID,
@@ -316,7 +382,7 @@ func (client *modelClient) streamBounded(
 		)
 	}
 	defer state.closeResponseBody()
-	message, err := collectModelMessage(requestContext, stream, client.credential, observeContent)
+	message, err := collectModelMessage(requestContext, requestID, client.configuration.ProviderKind, stream, client.credential, observeContent)
 	if err != nil {
 		return nil, client.finishWithError(
 			requestID,
@@ -373,17 +439,23 @@ func (client *modelClient) generateNonStreaming(
 		"component", "model", "operation", string(domain.ModelOperationRequest),
 		"phase", "started", "request_id", string(requestID), "invocation", string(invocation),
 	)
-	message, err := client.model.Generate(
-		requestContext,
-		messages,
-		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
-		einoopenai.WithResponseMessageModifier(validateResponseMessage),
-	)
+	model := client.model
+	if invocation == domain.ModelInvocationReview {
+		model = client.structuredOutputModel()
+	}
+	options := make([]einomodel.Option, 0, 2)
+	if client.configuration.ProviderKind == domain.ModelProviderOpenAI {
+		options = append(options,
+			einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
+			einoopenai.WithResponseMessageModifier(validateResponseMessage),
+		)
+	}
+	message, err := model.Generate(requestContext, messages, options...)
 	defer state.closeResponseBody()
 	if err != nil {
 		return nil, client.finishWithError(requestID, mapModelRequestError(requestContext, err, state), domain.ModelOperationRequest, err, state)
 	}
-	if err := admitAndClearNonStreamingMetadata(message, client.credential); err != nil {
+	if err := admitAndClearNonStreamingMetadata(message, client.credential, client.configuration.ProviderKind); err != nil {
 		return nil, client.finishWithError(
 			requestID,
 			mapModelRequestError(requestContext, err, state),
@@ -425,7 +497,7 @@ func einoMessagesContainCredential(credential *config.SecretValue, messages []*s
 func credentialAppearsInStrings(credential *config.SecretValue, values ...string) bool {
 	found := false
 	if credential == nil {
-		return true
+		return false
 	}
 	if err := credential.Use(func(secret string) {
 		for _, value := range values {
@@ -443,7 +515,7 @@ func credentialAppearsInStrings(credential *config.SecretValue, values ...string
 func credentialAppearsInBytes(credential *config.SecretValue, value []byte) bool {
 	found := false
 	if credential == nil {
-		return true
+		return false
 	}
 	if err := credential.Use(func(secret string) {
 		found = bytes.Contains(value, []byte(secret))
@@ -459,8 +531,11 @@ type credentialScanner struct {
 }
 
 func (scanner *credentialScanner) Contains(fragment string) bool {
-	if scanner == nil || scanner.credential == nil {
+	if scanner == nil {
 		return true
+	}
+	if scanner.credential == nil {
+		return false
 	}
 	found := false
 	if err := scanner.credential.Use(func(secret string) {
@@ -710,13 +785,15 @@ func (client *modelClient) sensitiveFailureAttributes(rawCause error, state *tra
 }
 
 func (client *modelClient) sensitiveDiagnosticText(value string, maximum int) (string, bool) {
-	if client == nil || !client.diagnostics.Sensitive || value == "" || maximum < 1 || client.credential == nil {
+	if client == nil || !client.diagnostics.Sensitive || value == "" || maximum < 1 {
 		return "", false
 	}
-	if err := client.credential.Use(func(secret string) {
-		value = strings.ReplaceAll(value, secret, sensitiveRedactionMarker)
-	}); err != nil {
-		return "", false
+	if client.credential != nil {
+		if err := client.credential.Use(func(secret string) {
+			value = strings.ReplaceAll(value, secret, sensitiveRedactionMarker)
+		}); err != nil {
+			return "", false
+		}
 	}
 	processed, err := security.NewRedactor().ProcessLines(value, maximum)
 	if err != nil {

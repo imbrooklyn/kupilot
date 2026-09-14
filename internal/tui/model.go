@@ -116,6 +116,7 @@ type Config struct {
 	Resource                ResourceView
 	ModelEndpoint           string
 	ModelName               string
+	ModelProvider           domain.ModelProviderKind
 	ModelConfigured         bool
 	ModelConfiguredSet      bool
 	ScopePreferenceDegraded bool
@@ -151,6 +152,7 @@ type Model struct {
 	reducedMotion   bool
 	modelName       string
 	modelEndpoint   string
+	modelProvider   domain.ModelProviderKind
 	modelConfigured bool
 	privacyMode     domain.PrivacyMode
 	now             func() time.Time
@@ -273,6 +275,10 @@ func NewModel(config Config) Model {
 	if config.ModelConfiguredSet {
 		modelConfigured = config.ModelConfigured
 	}
+	modelProvider := config.ModelProvider
+	if !modelProvider.Valid() {
+		modelProvider = domain.ModelProviderOpenAI
+	}
 	permission := config.Permission
 	if !permission.Configured || !permission.Profile.Valid() || !permission.PolicyGeneration.Valid() {
 		permission = application.UIPermissionStatus{
@@ -288,6 +294,7 @@ func NewModel(config Config) Model {
 		scope: sanitizedScope(config.Scope), resource: sanitizedResource(config.Resource),
 		modelName:       sanitizeExternalText(config.ModelName, 256),
 		modelEndpoint:   sanitizeExternalText(config.ModelEndpoint, application.MaxModelSetupEndpointBytes),
+		modelProvider:   modelProvider,
 		modelConfigured: modelConfigured,
 		privacyMode:     privacy, permission: permission, now: now,
 		reducedMotion:        config.ReducedMotion,

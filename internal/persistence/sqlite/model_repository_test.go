@@ -199,7 +199,7 @@ func testModelRequest(id domain.ModelRequestID, runID domain.AgentRunID, sequenc
 		ModelRole:           domain.ModelRoleAgent,
 		Invocation:          domain.ModelInvocationAgent,
 		ReservedCostUnits:   1,
-		ProviderKind:        domain.ModelProviderOpenAICompatible,
+		ProviderKind:        domain.ModelProviderOpenAI,
 		EndpointOriginHash:  &endpointHash,
 		Model:               "test-model",
 		Status:              domain.ModelRequestStatusSucceeded,

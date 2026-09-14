@@ -6,6 +6,10 @@ This file records notable user-visible changes to Kupilot.
 
 ### Added
 
+- Added explicit `openai` and native loopback `ollama` provider kinds. Ollama
+  uses Eino's stable native `/api/chat` component without a bearer credential;
+  provider selection remains fixed with no detection, routing, fallback, or
+  retry.
 - Added the fixed fourteen-Tool read, observability, and remote-diagnostic
   catalog; exact optional Prometheus and Loki sources; and typed restart,
   scale, rollback, owned-Pod delete, cordon, uncordon, and drain actions.
@@ -17,7 +21,7 @@ This file records notable user-visible changes to Kupilot.
   approval/reviewer state, narrow Session rules, and one-attempt action
   supervision.
 - Added strict version 1 named-profile configuration, forward-only SQLite
-  migrations through migration 16, split least-privilege RBAC fixtures, and
+  migrations through migration 17, split least-privilege RBAC fixtures, and
   opt-in tagged model, Reviewer, Session, and disposable-cluster integration
   harnesses.
 - Added active-run `Enter` steering at the next model boundary, a bounded
@@ -48,6 +52,15 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Renamed the unreleased `openai_compatible` configuration value to `openai`
+  and added a forward-only migration that translates historical model-request
+  metadata without restoring transport authority. Native Ollama examples and
+  live tests use the finite `extended` budget for slower local generation.
+- Keep the complete strict response schema consistent across retained
+  assistant history and later model turns. Profiles may explicitly request an
+  endpoint-proved JSON-object response constraint; Agent summaries remain plain
+  text, and unsupported endpoints receive no probe, downgrade, fallback, or
+  retry.
 - Fixed first startup and local Session diagnostics to prepare the private
   SQLite state directory before acquiring its process lock.
 - Scaled the immutable runtime time profiles for slower local models. The
@@ -99,6 +112,10 @@ This file records notable user-visible changes to Kupilot.
 
 ### Security
 
+- Updated the native Ollama dependency graph to the fixed `x/crypto` v0.52.0
+  line after the vulnerability gate found GO-2026-5018 reachable through an
+  imported client helper; the final production call graph has no known called
+  vulnerability.
 - Kept model and Reviewer text non-authoritative; hard denials, credentials,
   Secret values, raw objects, raw process output, generic writes, arbitrary
   commands, and cross-Context operations remain outside every permission

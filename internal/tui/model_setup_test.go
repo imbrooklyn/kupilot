@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imbrooklyn/kupilot/internal/application"
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing.T) {
@@ -14,15 +15,19 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 		Width: 80, Height: 24, Theme: ThemeNoColor,
 		ModelConfiguredSet: true, ModelConfigured: false,
 	})
-	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
-		!strings.Contains(model.modelSetupView(), "Endpoint · model setup 1/4") ||
+	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupProvider ||
+		!strings.Contains(model.modelSetupView(), "Provider · model setup 1/5") ||
 		strings.Contains(model.footerView(), "model") {
 		t.Fatalf("initial model setup state = %#v prompt=%q footer=%q", model.modelSetup, model.modelSetupView(), model.footerView())
+	}
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint {
+		t.Fatalf("default provider stage = %#v command=%v", model.modelSetup, cmd != nil)
 	}
 	model = pasteAndSubmitSetup(t, model, "https://model.example.test/v1", modelSetupName)
 	model = pasteAndSubmitSetup(t, model, "diagnostic-model", modelSetupStorage)
 	assertModelSetupStorageDisclosure(t, model)
-	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil || model.dialog.Open() || model.modelSetup.Stage != modelSetupStorage {
 		t.Fatalf("storage disclosure close = %#v command=%v dialog=%v", model.modelSetup, cmd != nil, model.dialog.Open())
 	}
@@ -56,7 +61,7 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 	}
 	message.Request.Secret.Destroy()
 	model, cmd = updateModel(t, model, ModelSetupResultMsg{Result: application.ModelSetupResult{
-		RequestID: message.Request.RequestID, Model: "diagnostic-model",
+		RequestID: message.Request.RequestID, ProviderKind: domain.ModelProviderOpenAI, Model: "diagnostic-model",
 		Origin: "https://model.example.test", Persisted: true,
 	}})
 	if !model.modelConfigured || model.modelSetup != nil || cmd == nil ||
@@ -74,6 +79,50 @@ func TestUnconfiguredModelSetupMasksCredentialAndEmitsOneTypedRequest(t *testing
 	}
 }
 
+func TestNativeOllamaSetupUsesNoCredentialOrStorageDisclosure(t *testing.T) {
+	model := NewModel(Config{
+		Width: 80, Height: 24, Theme: ThemeNoColor,
+		ModelConfiguredSet: true, ModelConfigured: false,
+	})
+	model.composer.SetValue("ollama")
+	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
+		!strings.Contains(model.modelSetupView(), "Endpoint · model setup 2/4") {
+		t.Fatalf("native provider stage = %#v command=%v", model.modelSetup, cmd != nil)
+	}
+	model = pasteAndSubmitSetup(t, model, "http://127.0.0.1:11434", modelSetupName)
+	model = pasteAndSubmitSetup(t, model, "fixture-model", modelSetupStorage)
+	if model.dialog.Open() || strings.Contains(model.render(), "api_key") ||
+		!strings.Contains(model.modelSetupView(), "Storage · model setup 4/4") {
+		t.Fatalf("native storage stage = %#v dialog=%v render=%q", model.modelSetup, model.dialog.Open(), model.render())
+	}
+	model.composer.SetValue("invalid")
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || !model.dialog.Open() || strings.Contains(model.render(), "api_key") ||
+		strings.Contains(model.render(), "plaintext") {
+		t.Fatalf("native invalid storage disclosed an unrelated credential contract: command=%v render=%q", cmd != nil, model.render())
+	}
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEsc})
+	model.composer.Reset()
+	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupApplying {
+		t.Fatalf("native apply state = %#v command=%v", model.modelSetup, cmd != nil)
+	}
+	message, ok := cmd().(ApplicationModelSetupMsg)
+	if !ok || message.Request.Validate() != nil || message.Request.ProviderKind != domain.ModelProviderOllama ||
+		message.Request.Secret != nil || !message.Request.Persist {
+		t.Fatalf("native setup request = %#v", message)
+	}
+	model, _ = updateModel(t, model, ModelSetupResultMsg{Result: application.ModelSetupResult{
+		RequestID: message.Request.RequestID, ProviderKind: domain.ModelProviderOllama,
+		Model: "fixture-model", Origin: "http://127.0.0.1:11434", Persisted: true,
+	}})
+	if !model.modelConfigured || model.modelProvider != domain.ModelProviderOllama ||
+		!transcriptContains(model, "Native Ollama model configured without a credential") {
+		t.Fatalf("native configured state = provider %q configured=%v", model.modelProvider, model.modelConfigured)
+	}
+}
+
 func TestModelSetupKeepsAFieldLabelVisibleAfterTypingAtEveryStep(t *testing.T) {
 	t.Parallel()
 
@@ -86,9 +135,10 @@ func TestModelSetupKeepsAFieldLabelVisibleAfterTypingAtEveryStep(t *testing.T) {
 		value string
 		want  modelSetupStage
 	}{
-		{label: "Endpoint · model setup 1/4", value: "https://model.example.test/v1", want: modelSetupName},
-		{label: "Model · model setup 2/4", value: "diagnostic-model", want: modelSetupStorage},
-		{label: "Storage · model setup 3/4", value: "session", want: modelSetupCredential},
+		{label: "Provider · model setup 1/5", value: "openai", want: modelSetupEndpoint},
+		{label: "Endpoint · model setup 2/5", value: "https://model.example.test/v1", want: modelSetupName},
+		{label: "Model · model setup 3/5", value: "diagnostic-model", want: modelSetupStorage},
+		{label: "Storage · model setup 4/5", value: "session", want: modelSetupCredential},
 	}
 	for _, step := range steps {
 		model.composer.SetValue(step.value)
@@ -110,8 +160,8 @@ func TestModelSetupKeepsAFieldLabelVisibleAfterTypingAtEveryStep(t *testing.T) {
 		}
 	}
 	model.composer.SetValue("generated-labelled-key")
-	if label := model.inputLabelView(); !strings.Contains(label, "API key · model setup 4/4 · masked") ||
-		!strings.Contains(model.render(), "API key · model setup 4/4 · masked") ||
+	if label := model.inputLabelView(); !strings.Contains(label, "API key · model setup 5/5 · masked") ||
+		!strings.Contains(model.render(), "API key · model setup 5/5 · masked") ||
 		strings.Contains(model.render(), "generated-labelled-key") {
 		t.Fatalf("credential label or masking = label %q render %q", label, model.render())
 	}
@@ -124,12 +174,12 @@ func TestModelSetupArrowKeysCannotRecallOrdinaryInputHistory(t *testing.T) {
 	model.composer.RecordSubmission("ordinary diagnostic question")
 	model.beginModelSetup()
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
-	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
-		model.composer.Value() != "" {
+	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupProvider ||
+		model.composer.Value() != "openai" {
 		t.Fatalf("model setup recalled ordinary history: setup=%#v draft=%q command=%v", model.modelSetup, model.composer.Value(), cmd != nil)
 	}
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if cmd != nil || model.composer.Value() != "" {
+	if cmd != nil || model.composer.Value() != "openai" {
 		t.Fatalf("explicit history shortcut reached model setup: draft=%q command=%v", model.composer.Value(), cmd != nil)
 	}
 }
@@ -137,7 +187,7 @@ func TestModelSetupArrowKeysCannotRecallOrdinaryInputHistory(t *testing.T) {
 func TestCtrlCCancelsModelSetupDraftAtEveryStepWithoutChangingRuntime(t *testing.T) {
 	t.Parallel()
 
-	for _, stage := range []modelSetupStage{modelSetupEndpoint, modelSetupName, modelSetupStorage, modelSetupCredential} {
+	for _, stage := range []modelSetupStage{modelSetupProvider, modelSetupEndpoint, modelSetupName, modelSetupStorage, modelSetupCredential} {
 		t.Run(modelSetupStageName(stage), func(t *testing.T) {
 			model := NewModel(Config{
 				Width: 80, Height: 24, Theme: ThemeNoColor,
@@ -232,6 +282,8 @@ func TestRejectedModelSetupCancellationRemainsRetryable(t *testing.T) {
 
 func modelSetupStageName(stage modelSetupStage) string {
 	switch stage {
+	case modelSetupProvider:
+		return "provider"
 	case modelSetupEndpoint:
 		return "endpoint"
 	case modelSetupName:
@@ -285,9 +337,11 @@ func TestModelSlashReconfiguresAndFailureRestartsEditableFlow(t *testing.T) {
 	})
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/model"})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint {
+	if cmd != nil || model.modelSetup == nil || model.modelSetup.Stage != modelSetupProvider {
 		t.Fatalf("/model state = %#v command=%v", model.modelSetup, cmd != nil)
 	}
+	model.composer.SetValue("openai")
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.composer.SetValue("https://new.example.test/v1")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model.composer.SetValue("new-model")
@@ -308,8 +362,8 @@ func TestModelSlashReconfiguresAndFailureRestartsEditableFlow(t *testing.T) {
 	model, _ = updateModel(t, model, ApplicationFailureMsg{
 		RequestID: message.Request.RequestID, ModelSetup: true,
 	})
-	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupEndpoint ||
-		model.composer.Value() != "https://new.example.test/v1" ||
+	if model.modelSetup == nil || model.modelSetup.Stage != modelSetupProvider ||
+		model.composer.Value() != "openai" ||
 		!model.dialog.Open() {
 		t.Fatalf("failed model setup state = %#v draft=%q dialog=%v", model.modelSetup, model.composer.Value(), model.dialog.Open())
 	}

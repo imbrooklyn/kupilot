@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0053 and the canonical docs. It is unreleased. Passing
+> by ADR-0044 through ADR-0055 and the canonical docs. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 
@@ -74,12 +74,12 @@ automatically.
 
 ## Models and Session context
 
-Kupilot retains one provider protocol kind, `openai_compatible`, with an
-explicit required `agent` profile and optional `approval_reviewer` profile.
-Profiles may use different explicit origins, credentials, consent tuples, and
-budgets. There is no provider auto-detection, router, fallback, load balancing,
-or cross-origin retry. Summarization reuses `agent`; no `context_compactor` role
-is prebuilt.
+Kupilot supports two fixed provider kinds: `openai` for Eino's OpenAI Chat
+Completions component and `ollama` for Eino's native loopback Ollama component.
+Each required `agent` or optional `approval_reviewer` profile selects exactly
+one kind, origin, credential policy, consent tuple, and finite budget. There is
+no provider auto-detection, router, fallback, load balancing, or cross-origin
+retry. Summarization reuses `agent`; no `context_compactor` role is prebuilt.
 
 The `v0.5` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware inside the one Eino adapter. Kupilot
@@ -87,6 +87,12 @@ does not build another conversation loop, memory manager, summary engine,
 checkpoint store, or framework facade. Until a stable Eino runner-managed
 Session passes the documented adoption gate, the existing safe SQLite Messages
 remain the durable source through a thin ordered bridge.
+
+Retained assistant answers are reconstructed with the complete current strict
+response grammar and empty historic authority arrays. Profiles default to
+prompt-only structured output and may explicitly select `json_object` only for
+an endpoint proved to support that Chat Completions constraint. Kupilot performs
+no capability probe, automatic downgrade, fallback, or retry.
 
 Every question after the first in a Session receives one ordered, bounded
 representation of all retained eligible prior turns. Standard mode supplies it

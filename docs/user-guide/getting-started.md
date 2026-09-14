@@ -41,7 +41,7 @@ package-manager installation is supported.
 
 No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
-the endpoint, model identifier, or API key is absent.
+the provider, endpoint, model identifier, or required OpenAI API key is absent.
 
 If you prefer a file, Kupilot reads and writes strict schema version 1. No
 released predecessor schema exists, so pre-release single-profile layouts and
@@ -61,11 +61,12 @@ models:
     name: agent
     role: agent
     credential_ref: agent
-    provider_kind: openai_compatible
+    provider_kind: openai
     endpoint: https://model.example.invalid/v1
     model: example-model
+    response_format: prompt
     temperature: 0.1
-    request_timeout_seconds: 300
+    request_timeout_seconds: 900
     streaming: true
     tool_calling_required: true
 
@@ -74,7 +75,10 @@ kubernetes:
 ```
 
 The endpoint and names are deliberately non-working placeholders. Replace them
-with approved values. `max_output_tokens` remains omitted until exact evidence
+with approved values. Keep `response_format: prompt` unless the exact endpoint
+has proved support for the standard Chat Completions `json_object` constraint;
+Kupilot never probes, downgrades, or retries this selection.
+`max_output_tokens` remains omitted until exact evidence
 for that selected endpoint supports a positive configured value; independent
 byte, call, time, stream, and cost-unit limits remain active. The default file
 is `KUPILOT_HOME/config.yaml`. An

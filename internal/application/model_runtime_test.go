@@ -22,7 +22,7 @@ func TestModelSetupSecretCannotBeFormattedOrSerialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := ModelSetupRequest{
-		RequestID: 81, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
+		RequestID: 81, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
 	}
 	formatted := fmt.Sprintf("%s %q %v %+v %#v request=%v request-go=%#v", secret, secret, secret, secret, secret, request, request)
 	if strings.Contains(formatted, canary) || !strings.Contains(formatted, redactedModelSecret) {
@@ -46,6 +46,34 @@ func TestModelSetupSecretRejectsInvalidValues(t *testing.T) {
 		if secret, err := NewModelSetupSecret(value); !errors.Is(err, ErrModelSetupInvalid) || secret != nil {
 			t.Fatalf("NewModelSetupSecret(%q) = %#v, %v", value, secret, err)
 		}
+	}
+}
+
+func TestModelSetupRequestSeparatesProviderCredentialContracts(t *testing.T) {
+	t.Parallel()
+
+	native := ModelSetupRequest{
+		RequestID: 82, ProviderKind: domain.ModelProviderOllama,
+		Endpoint: "http://127.0.0.1:11434", Model: "fixture-model", Persist: true,
+	}
+	if err := native.Validate(); err != nil {
+		t.Fatalf("Validate(native Ollama) error = %v", err)
+	}
+	secret, err := NewModelSetupSecret("generated-provider-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secret.Destroy()
+	native.Secret = secret
+	if !errors.Is(native.Validate(), ErrModelSetupInvalid) {
+		t.Fatal("native Ollama setup accepted a credential")
+	}
+	openAI := native
+	openAI.ProviderKind = domain.ModelProviderOpenAI
+	openAI.Endpoint = "https://model.example.test/v1"
+	openAI.Secret = nil
+	if !errors.Is(openAI.Validate(), ErrModelSetupInvalid) {
+		t.Fatal("OpenAI setup accepted a missing credential")
 	}
 }
 
@@ -116,7 +144,7 @@ func TestCoordinatorModelSetupConstructsReplacementBeforeCancellingAndAtomically
 	<-started
 	secret, _ := NewModelSetupSecret("generated-replacement-key")
 	result, err := coordinator.ConfigureModel(context.Background(), ModelSetupRequest{
-		RequestID: 91, Endpoint: "https://new-model.example/v1", Model: "new-model", Secret: secret,
+		RequestID: 91, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://new-model.example/v1", Model: "new-model", Secret: secret,
 	})
 	if err != nil || result.Validate() != nil || result.Persisted || factory.calls.Load() != 1 ||
 		profiles.calls.Load() != 0 || oldRuntime.closed.Load() != 1 || replacement.closed.Load() != 0 || secret.IsSet() {
@@ -142,11 +170,36 @@ func TestCoordinatorModelSetupPersistenceFailureKeepsOldRuntime(t *testing.T) {
 	coordinator.modelProfiles = &recordingModelProfiles{err: errors.New("generated persistence failure")}
 	secret, _ := NewModelSetupSecret("generated-persistence-key")
 	_, err := coordinator.ConfigureModel(context.Background(), ModelSetupRequest{
-		RequestID: 92, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
+		RequestID: 92, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
 	})
 	if !errors.Is(err, ErrModelSetupFailed) || coordinator.runner != oldRuntime || oldRuntime.closed.Load() != 0 ||
 		replacement.closed.Load() != 1 || secret.IsSet() {
 		t.Fatalf("failed replacement = %v runner=%T oldClose=%d newClose=%d secret=%v", err, coordinator.runner, oldRuntime.closed.Load(), replacement.closed.Load(), secret.IsSet())
+	}
+}
+
+func TestCoordinatorSameOriginProviderSwitchDurablyInvalidatesConsent(t *testing.T) {
+	t.Parallel()
+	oldRuntime := &recordingModelRuntime{name: "old-model", origin: "https://model.example"}
+	coordinator, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), oldRuntime)
+	coordinator.modelRuntime = oldRuntime
+	replacement := &recordingModelRuntime{name: "native-model", origin: "https://model.example"}
+	coordinator.modelFactory = &recordingModelFactory{build: func(ModelSetupRequest) (ModelRuntime, error) {
+		return replacement, nil
+	}}
+	coordinator.modelProfiles = new(recordingModelProfiles)
+
+	result, err := coordinator.ConfigureModel(context.Background(), ModelSetupRequest{
+		RequestID: 96, ProviderKind: domain.ModelProviderOllama,
+		Endpoint: "http://127.0.0.1:11434", Model: "native-model",
+	})
+	if err != nil || result.ProviderKind != domain.ModelProviderOllama || coordinator.runner != replacement ||
+		oldRuntime.closed.Load() != 1 || replacement.closed.Load() != 0 {
+		t.Fatalf("same-origin provider switch = %#v/%v runner=%T oldClose=%d newClose=%d",
+			result, err, coordinator.runner, oldRuntime.closed.Load(), replacement.closed.Load())
+	}
+	if allowed, err := coordinator.privacy.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("same-origin provider consent = %v/%v", allowed, err)
 	}
 }
 
@@ -163,7 +216,7 @@ func TestCoordinatorModelSetupConstructionFailureKeepsOldRuntime(t *testing.T) {
 	coordinator.modelProfiles = profiles
 	secret, _ := NewModelSetupSecret("generated-construction-key")
 	_, err := coordinator.ConfigureModel(context.Background(), ModelSetupRequest{
-		RequestID: 93, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
+		RequestID: 93, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
 	})
 	if !errors.Is(err, ErrModelSetupFailed) || coordinator.runner != oldRuntime || factory.calls.Load() != 1 ||
 		profiles.calls.Load() != 0 || oldRuntime.closed.Load() != 0 || secret.IsSet() {
@@ -186,7 +239,7 @@ func TestCoordinatorModelSetupCancellationDestroysCredentialWithoutDependencies(
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := coordinator.ConfigureModel(ctx, ModelSetupRequest{
-		RequestID: 94, Endpoint: "https://new-model.example/v1", Model: "new-model", Secret: secret,
+		RequestID: 94, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://new-model.example/v1", Model: "new-model", Secret: secret,
 	})
 	if !errors.Is(err, context.Canceled) || factory.calls.Load() != 0 || oldRuntime.closed.Load() != 0 || secret.IsSet() {
 		t.Fatalf("cancelled setup = %v factory=%d oldClose=%d secret=%v",
@@ -215,7 +268,7 @@ func TestCoordinatorModelSetupCancellationAfterConstructionKeepsOldRuntime(t *te
 	result := make(chan error, 1)
 	go func() {
 		_, err := coordinator.ConfigureModel(ctx, ModelSetupRequest{
-			RequestID: 95, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
+			RequestID: 95, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://new-model.example/v1", Model: "new-model", Persist: true, Secret: secret,
 		})
 		result <- err
 	}()

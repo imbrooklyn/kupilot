@@ -337,7 +337,7 @@ func TestCLIDoctorPreparesMissingStateDirectoryBeforeProcessLock(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode doctor JSON: %v", err)
 	}
-	if envelope.Doctor.ConfigurationSchema != "v1" || envelope.Doctor.Storage.SchemaRevision != 16 {
+	if envelope.Doctor.ConfigurationSchema != "v1" || envelope.Doctor.Storage.SchemaRevision != 17 {
 		t.Fatalf("doctor startup projection = %#v", envelope.Doctor)
 	}
 	if info, err := os.Lstat(paths.StateDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {

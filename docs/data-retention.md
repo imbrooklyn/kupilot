@@ -3,7 +3,7 @@
 - Status: Accepted target for `v0.5`
 - Date: 2026-09-07
 
-The checked-in SQLite schema is now at forward-only migration 16. It implements
+The checked-in SQLite schema is now at forward-only migration 17. It implements
 the safe Session-summary/coverage record, role-scoped consent, named
 model-request metadata, and minimal generalized ActionEnvelope, approval, and
 Reviewer-decision metadata described here. Migration 8 adds bounded exact API
@@ -32,8 +32,11 @@ response, or process output is eligible for SQLite, audit, logs, or export.
 Migration 13 records committed user-message sequence, migration 14 stores the
 bounded claim/plan projection, migration 15 adds authoritative Session Last
 active initialized conservatively from prior metadata time, and migration 16
-adds bounded answer-completeness and clarification projections. None creates a
-queue, search, terminal, retry, raw model-response, or second history store.
+adds bounded answer-completeness and clarification projections. Migration 17
+rebuilds only the model-request metadata constraint and translates the retired
+unreleased provider-kind name to `openai`; it adds no content column or
+resumable transport state. None creates a queue, search, terminal, retry, raw
+model-response, or second history store.
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -43,11 +46,12 @@ this contract excludes.
 
 Kupilot uses a local SQLite database. It does not claim that the database is
 encrypted, tamper-resistant, a credential store, or capable of forensic
-erasure. A separate fixed Home configuration may contain a model API key only
-after the user chooses disclosed plaintext storage; that exception never makes
-the key eligible for SQLite. Local controls are source exclusion, projection,
-create-only owner modes on supported platforms, bounded detail retention, user
-deletion, and visible failure. Existing user-managed modes, operating-system
+erasure. A separate fixed Home configuration may contain an OpenAI model API
+key only after the user chooses disclosed plaintext storage; that exception
+never makes the key eligible for SQLite. A native Ollama profile contains no
+model credential. Local controls are source exclusion, projection, create-only
+owner modes on supported platforms, bounded detail retention, user deletion,
+and visible failure. Existing user-managed modes, operating-system
 disk encryption, and backup lifecycle remain the user's controls.
 
 ## 1. Normative principles
@@ -198,7 +202,7 @@ Eligible run data is limited to:
   reason, timestamps, safe working-scope snapshot, optional ResourceRef,
   counters, truncation flags, prompt and capability-catalog versions, and
   `persistence_degraded` state.
-- Model-request identity, sequence, fixed provider kind, named profile and
+- Model-request identity, sequence, fixed `openai` or `ollama` provider kind, named profile and
   consumer role, model identifier, endpoint-origin hash, status, stable error
   class, bounded validated provider request identifier, prompt and response
   fingerprints, optional evidence-based token/cost counts, and timing metadata.
@@ -357,7 +361,7 @@ a crash bundle, or another Kupilot-created durable store:
 - Kubeconfig contents; bearer tokens; ServiceAccount token material; client
   certificates; private keys; exec credential output; cookies; and
   authentication headers.
-- Model API keys from every source outside the explicit Home configuration
+- OpenAI model API keys from every source outside the explicit Home configuration
   save. Even when locally saved, the key is never eligible for SQLite, Session
   content, audit, logs, exports, model content, or generic configuration values.
 - Kubernetes Secret values, ServiceAccount tokens, credential-bearing
@@ -709,3 +713,5 @@ before:
 - [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
+- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)

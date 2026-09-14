@@ -328,8 +328,9 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
 
 ## Models, credentials, consent, and Evidence
 
-- MUST support exactly one provider kind, `openai_compatible`, with a required
-  named `agent` profile and optional `approval_reviewer`. Profiles MAY bind
+- MUST support exactly two explicit provider kinds, `openai` and native
+  loopback-only `ollama`, with a required named `agent` profile and optional
+  `approval_reviewer`. Profiles MAY bind
   several explicit canonical origins. MUST NOT add auto-detection, fallback,
   provider routing, load balancing, cross-origin retry, or prompt-parsed Tools.
 - Each profile MUST explicitly bind consumer role, canonical origin, model,

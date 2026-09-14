@@ -397,7 +397,7 @@ func TestApplicationRequestFilterAndDrainDestroyRejectedModelSecrets(t *testing.
 	cancel()
 	requests := make(chan tea.Msg, 1)
 	message := tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
-		RequestID: 11, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
+		RequestID: 11, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
 	}}
 	failure, ok := applicationRequestFilter(ctx, requests)(nil, message).(tui.ApplicationFailureMsg)
 	if !ok || !failure.ModelSetup || failure.RequestID != 11 || secret.IsSet() {
@@ -409,7 +409,7 @@ func TestApplicationRequestFilterAndDrainDestroyRejectedModelSecrets(t *testing.
 		t.Fatal(err)
 	}
 	requests <- tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
-		RequestID: 12, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: queuedSecret,
+		RequestID: 12, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: queuedSecret,
 	}}
 	close(requests)
 	destroyPendingApplicationRequests(requests)
@@ -453,7 +453,7 @@ func TestApplicationRequestPumpCancelsInFlightModelSetupAndDestroysSecret(t *tes
 		t.Fatal(err)
 	}
 	requests <- tui.ApplicationModelSetupMsg{Request: application.ModelSetupRequest{
-		RequestID: 18, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
+		RequestID: 18, ProviderKind: domain.ModelProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model", Secret: secret,
 	}}
 	<-consumer.started
 	requests <- tui.ApplicationModelSetupCancelMsg{RequestID: 18}

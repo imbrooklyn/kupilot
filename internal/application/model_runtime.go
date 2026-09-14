@@ -117,17 +117,20 @@ func validModelSetupSecret(value string) bool {
 
 // ModelSetupRequest is the complete typed interactive configuration intent.
 type ModelSetupRequest struct {
-	RequestID uint64
-	Endpoint  string
-	Model     string
-	Persist   bool
-	Secret    *ModelSetupSecret
+	RequestID    uint64
+	ProviderKind domain.ModelProviderKind
+	Endpoint     string
+	Model        string
+	Persist      bool
+	Secret       *ModelSetupSecret
 }
 
 // Validate checks only transport-neutral shape and limits. The concrete model
 // adapter remains responsible for endpoint canonicalization and capabilities.
 func (request ModelSetupRequest) Validate() error {
-	if request.RequestID == 0 || request.Secret == nil || !request.Secret.IsSet() ||
+	if request.RequestID == 0 || !request.ProviderKind.Valid() ||
+		request.ProviderKind == domain.ModelProviderOpenAI && (request.Secret == nil || !request.Secret.IsSet()) ||
+		request.ProviderKind == domain.ModelProviderOllama && request.Secret != nil && request.Secret.IsSet() ||
 		!validModelSetupText(request.Endpoint, MaxModelSetupEndpointBytes) ||
 		!validModelSetupText(request.Model, MaxModelSetupNameBytes) {
 		return ErrModelSetupInvalid
@@ -149,14 +152,15 @@ func validModelSetupText(value string, limit int) bool {
 
 // ModelSetupResult is the bounded non-sensitive replacement projection.
 type ModelSetupResult struct {
-	RequestID uint64
-	Model     string
-	Origin    string
-	Persisted bool
+	RequestID    uint64
+	ProviderKind domain.ModelProviderKind
+	Model        string
+	Origin       string
+	Persisted    bool
 }
 
 func (result ModelSetupResult) Validate() error {
-	if result.RequestID == 0 || !validModelSetupText(result.Model, MaxModelSetupNameBytes) || !validPrivacyOrigin(result.Origin) {
+	if result.RequestID == 0 || !result.ProviderKind.Valid() || !validModelSetupText(result.Model, MaxModelSetupNameBytes) || !validPrivacyOrigin(result.Origin) {
 		return ErrModelSetupInvalid
 	}
 	return nil

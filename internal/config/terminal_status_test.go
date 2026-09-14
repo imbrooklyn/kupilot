@@ -48,7 +48,7 @@ func TestReducedMotionLoadsAndIsPreservedByProfileWrite(t *testing.T) {
 	}
 	defer secret.Destroy()
 	if err = SaveModelProfile(context.Background(), pathsForHome(root), loaded.Config, ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret); err != nil {
 		t.Fatalf("SaveModelProfile() error = %v", err)
 	}
@@ -72,7 +72,7 @@ func TestModelProfileWritePreservesTerminalStatusTitleDisable(t *testing.T) {
 	base := Defaults()
 	base.TerminalStatusTitles = false
 	if err = SaveModelProfile(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret); err != nil {
 		t.Fatalf("SaveModelProfile() error = %v", err)
 	}

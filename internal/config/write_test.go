@@ -23,9 +23,10 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	defer secret.Destroy()
 	base := Defaults()
 	base.Models.Agent.ReasoningEffort = ModelReasoningEffortNone
+	base.Models.Agent.ResponseFormat = ModelResponseFormatJSONObject
 	base.Logging.SensitiveDiagnostics = true
 	if err := SaveModelProfile(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret); err != nil {
 		t.Fatalf("SaveModelProfile() error = %v", err)
 	}
@@ -39,7 +40,8 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	}
 	defer loaded.Credentials.Destroy()
 	if loaded.Models.Agent.Endpoint != "https://model.example.test/v1" || loaded.Models.Agent.Model != "diagnostic-model" ||
-		loaded.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || loaded.Credentials.Agent.Source != CredentialSourceFile ||
+		loaded.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || loaded.Models.Agent.ResponseFormat != ModelResponseFormatJSONObject ||
+		loaded.Credentials.Agent.Source != CredentialSourceFile ||
 		!loaded.Credentials.Agent.Value.IsSet() || !loaded.Logging.SensitiveDiagnostics {
 		t.Fatalf("loaded model profile = %#v source=%q credential=%v", loaded.Models.Agent, loaded.Credentials.Agent.Source, loaded.Credentials.Agent.Value.IsSet())
 	}
@@ -82,6 +84,75 @@ func TestLoadEnvironmentCredentialOverridesFileAndIsUnsetOnce(t *testing.T) {
 	}
 }
 
+func TestSaveNativeOllamaProfileOmitsCredentialAndRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	paths := pathsForHome(filepath.Join(t.TempDir(), "native-home"))
+	base := Defaults()
+	base.Models.Agent.ReasoningEffort = ModelReasoningEffortNone
+	base.Models.Agent.ResponseFormat = ModelResponseFormatJSONObject
+	if err := SaveModelProfile(context.Background(), paths, base, ModelProfile{
+		ProviderKind: ProviderOllama, Endpoint: "http://127.0.0.1:11434", Model: "fixture-model",
+	}, nil); err != nil {
+		t.Fatalf("SaveModelProfile(native Ollama) error = %v", err)
+	}
+	content, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "api_key:") || !strings.Contains(string(content), "provider_kind: ollama") ||
+		!strings.Contains(string(content), "credential_ref: none") {
+		t.Fatalf("native Ollama config = %q", content)
+	}
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load(native Ollama) error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.Models.Agent.ProviderKind != ProviderOllama || loaded.Models.Agent.ReasoningEffort != "" || loaded.Credentials.Agent.Value.IsSet() {
+		t.Fatalf("native Ollama round trip = %#v / %#v", loaded.Models.Agent, loaded.Credentials.Agent)
+	}
+}
+
+func TestSaveNativeOllamaProfileDropsInheritedReviewerCredential(t *testing.T) {
+	t.Parallel()
+
+	paths := pathsForHome(filepath.Join(t.TempDir(), "native-inherited-home"))
+	base := Defaults()
+	base.Models.Agent.ReasoningEffort = ModelReasoningEffortNone
+	reviewer := defaultReviewerProfile()
+	reviewer.InheritAgent = true
+	reviewer.CredentialReference = ModelCredentialAgent
+	reviewer.Endpoint = "https://agent.example.test/v1"
+	reviewer.Model = "agent-model"
+	base.Models.ApprovalReviewer = &reviewer
+	reviewerKey, _ := NewSecretValue("retired-reviewer-key-generated")
+	defer reviewerKey.Destroy()
+
+	if err := SaveModelProfiles(context.Background(), paths, base, ModelProfile{
+		ProviderKind: ProviderOllama, Endpoint: "http://127.0.0.1:11434", Model: "fixture-model",
+	}, nil, &reviewerKey); err != nil {
+		t.Fatalf("SaveModelProfiles(native inherited reviewer) error = %v", err)
+	}
+	content, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "api_key:") || strings.Contains(string(content), "reasoning_effort:") {
+		t.Fatalf("native inherited config retained provider-specific secrets or reasoning: %q", content)
+	}
+	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+	if err != nil {
+		t.Fatalf("Load(native inherited reviewer) error = %v", err)
+	}
+	defer loaded.Credentials.Destroy()
+	if loaded.Models.ApprovalReviewer == nil || loaded.Models.ApprovalReviewer.ProviderKind != ProviderOllama ||
+		loaded.Models.ApprovalReviewer.CredentialReference != ModelCredentialNone ||
+		loaded.Models.ApprovalReviewer.ReasoningEffort != "" || loaded.Credentials.ApprovalReviewer.Value.IsSet() {
+		t.Fatalf("native inherited reviewer = %#v / %#v", loaded.Models.ApprovalReviewer, loaded.Credentials.ApprovalReviewer)
+	}
+}
+
 func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "home")
@@ -96,7 +167,7 @@ func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing
 	defer agentKey.Destroy()
 	defer reviewerKey.Destroy()
 	if err := SaveModelProfiles(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://agent.example.test/v1", Model: "agent-model",
 	}, &agentKey, &reviewerKey); err != nil {
 		t.Fatalf("SaveModelProfiles() error = %v", err)
 	}
@@ -141,7 +212,7 @@ func TestSaveModelProfilesPreservesOnlyExplicitFileDataSourceCredentials(t *test
 	defer prometheusKey.Destroy()
 	defer lokiKey.Destroy()
 	if err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://agent.example.test/v1", Model: "agent-model",
 	}, &agentKey, nil, &prometheusKey, &lokiKey); err != nil {
 		t.Fatalf("SaveModelProfilesWithDataSources() error = %v", err)
 	}
@@ -178,7 +249,7 @@ func TestSaveModelProfilesDoesNotCopyEnvironmentDataSourceCredentials(t *testing
 	agentKey, _ := NewSecretValue("saved-agent-key-generated")
 	defer agentKey.Destroy()
 	if err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://agent.example.test/v1", Model: "agent-model",
 	}, &agentKey, nil, nil, nil); err != nil {
 		t.Fatalf("SaveModelProfilesWithDataSources() error = %v", err)
 	}
@@ -218,7 +289,7 @@ func TestSaveModelProfilesRejectsMismatchedDataSourceCredentialBeforePublication
 	defer agentKey.Destroy()
 	defer prometheusKey.Destroy()
 	err := SaveModelProfilesWithDataSources(context.Background(), paths, base, ModelProfile{
-		Endpoint: "https://agent.example.test/v1", Model: "agent-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://agent.example.test/v1", Model: "agent-model",
 	}, &agentKey, nil, &prometheusKey, nil)
 	assertSafeError(t, err, ClassInternal, "config_write_invalid")
 	if _, statErr := os.Lstat(root); !errors.Is(statErr, os.ErrNotExist) {
@@ -245,7 +316,7 @@ func TestSaveModelProfileRespectsExistingWideHomeAndRejectsSymlinkTarget(t *test
 	secret, _ := NewSecretValue("generated-local-key")
 	defer secret.Destroy()
 	err := SaveModelProfile(context.Background(), paths, Defaults(), ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret)
 	assertSafeError(t, err, ClassConfigurationInvalid, "config_file_unsafe")
 	content, readErr := os.ReadFile(outside)
@@ -267,7 +338,7 @@ func TestSaveModelProfilePreservesExistingUserManagedConfigMode(t *testing.T) {
 	secret, _ := NewSecretValue("generated-local-key")
 	defer secret.Destroy()
 	if err := SaveModelProfile(context.Background(), paths, Defaults(), ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret); err != nil {
 		t.Fatalf("SaveModelProfile() error = %v", err)
 	}
@@ -304,7 +375,7 @@ func TestSaveModelProfileCancellationCreatesNothing(t *testing.T) {
 	secret, _ := NewSecretValue("generated-local-key")
 	defer secret.Destroy()
 	err := SaveModelProfile(ctx, pathsForHome(root), Defaults(), ModelProfile{
-		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
+		ProviderKind: ProviderOpenAI, Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
 	}, &secret)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SaveModelProfile() error = %v", err)

@@ -68,6 +68,32 @@ func TestPrivacyConsentLifecycleBindsOriginCategoriesAndPolicy(t *testing.T) {
 	}
 }
 
+func TestPrivacyConsentInvalidationIsDurableForSameOriginProviderChange(t *testing.T) {
+	store := new(privacyTestStore)
+	now := privacyTestClock()
+	manager := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, now)
+	review, err := manager.Review(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Decide(context.Background(), PrivacyActionAccept, review.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.InvalidateConsent(context.Background()); err != nil {
+		t.Fatalf("InvalidateConsent() error = %v", err)
+	}
+	if allowed, err := manager.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("invalidated AuthorizeModel() = %v, %v", allowed, err)
+	}
+	restarted := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, now)
+	if allowed, err := restarted.AuthorizeModel(context.Background()); err != nil || allowed {
+		t.Fatalf("restarted invalidated AuthorizeModel() = %v, %v", allowed, err)
+	}
+	if stored := store.snapshot(); stored.Decision != PrivacyDecisionRevoked {
+		t.Fatalf("stored invalidation = %#v", stored)
+	}
+}
+
 func TestPrivacyDecisionsRejectStaleCancelledAndFailedWrites(t *testing.T) {
 	store := new(privacyTestStore)
 	manager := newPrivacyTestManager(t, store, "https://model.example", PrivacyPolicyVersion, privacyTestClock())

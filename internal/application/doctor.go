@@ -4,15 +4,20 @@ import (
 	"context"
 	"errors"
 	"unicode/utf8"
+
+	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const (
 	DoctorSchemaVersion           = "kupilot.doctor/v1"
 	DoctorRuntimeName             = "eino_adk"
 	DoctorRuntimeVersion          = "v0.9.19"
-	DoctorModelAdapterName        = "eino_openai"
-	DoctorModelAdapterVersion     = "v0.1.13"
-	DoctorModelProtocol           = "openai_compatible_chat_completions"
+	DoctorOpenAIAdapterName       = "eino_openai"
+	DoctorOpenAIAdapterVersion    = "v0.1.13"
+	DoctorOpenAIProtocol          = "openai_chat_completions"
+	DoctorOllamaAdapterName       = "eino_ollama"
+	DoctorOllamaAdapterVersion    = "v0.1.9"
+	DoctorOllamaProtocol          = "ollama_native_chat"
 	DoctorLiveConformanceEvidence = "not_run"
 )
 
@@ -62,14 +67,18 @@ type UIDoctorResult struct {
 
 // NewDoctorResult constructs the same typed local projection for the CLI
 // short-circuit, which deliberately does not construct a Coordinator.
-func NewDoctorResult(version, configSchema, originHash string, configured, degraded bool, health SessionStorageHealth) (UIDoctorResult, error) {
+func NewDoctorResult(version, configSchema string, provider domain.ModelProviderKind, originHash string, configured, degraded bool, health SessionStorageHealth) (UIDoctorResult, error) {
+	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider)
+	if !ok {
+		return UIDoctorResult{}, ErrDoctorUnavailable
+	}
 	result := UIDoctorResult{
 		SchemaVersion: DoctorSchemaVersion, ApplicationVersion: version, ConfigurationSchema: configSchema,
-		ProviderKind: "openai_compatible", AgentOriginHash: originHash, ModelConfigured: configured,
+		ProviderKind: string(provider), AgentOriginHash: originHash, ModelConfigured: configured,
 		ModelCompatibility: DoctorModelCompatibility{
 			Runtime: DoctorRuntimeName, RuntimeVersion: DoctorRuntimeVersion,
-			Adapter: DoctorModelAdapterName, AdapterVersion: DoctorModelAdapterVersion,
-			Protocol: DoctorModelProtocol, LiveConformance: DoctorLiveConformanceEvidence,
+			Adapter: adapter, AdapterVersion: adapterVersion,
+			Protocol: protocol, LiveConformance: DoctorLiveConformanceEvidence,
 			StreamContinuation: "protocol_continuation_unavailable",
 		},
 		Storage: health, PersistenceDegraded: degraded,
@@ -88,12 +97,14 @@ func NewDoctorResult(version, configSchema, originHash string, configured, degra
 }
 
 func (result UIDoctorResult) Validate() error {
+	provider := domain.ModelProviderKind(result.ProviderKind)
+	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider)
 	if result.SchemaVersion != DoctorSchemaVersion || !validDoctorToken(result.ApplicationVersion, 128) ||
-		!validDoctorToken(result.ConfigurationSchema, 64) || result.ProviderKind != "openai_compatible" ||
+		!validDoctorToken(result.ConfigurationSchema, 64) || !ok ||
 		!validPrivacyDigest(result.AgentOriginHash) || !result.Storage.valid() ||
 		result.ModelCompatibility.Runtime != DoctorRuntimeName || result.ModelCompatibility.RuntimeVersion != DoctorRuntimeVersion ||
-		result.ModelCompatibility.Adapter != DoctorModelAdapterName || result.ModelCompatibility.AdapterVersion != DoctorModelAdapterVersion ||
-		result.ModelCompatibility.Protocol != DoctorModelProtocol ||
+		result.ModelCompatibility.Adapter != adapter || result.ModelCompatibility.AdapterVersion != adapterVersion ||
+		result.ModelCompatibility.Protocol != protocol ||
 		result.ModelCompatibility.LiveConformance != DoctorLiveConformanceEvidence ||
 		result.ModelCompatibility.StreamContinuation != "protocol_continuation_unavailable" || len(result.Features) != 5 {
 		return ErrInvalidUIEvent
@@ -105,6 +116,17 @@ func (result UIDoctorResult) Validate() error {
 		}
 	}
 	return nil
+}
+
+func doctorModelBoundary(provider domain.ModelProviderKind) (adapter, version, protocol string, ok bool) {
+	switch provider {
+	case domain.ModelProviderOpenAI:
+		return DoctorOpenAIAdapterName, DoctorOpenAIAdapterVersion, DoctorOpenAIProtocol, true
+	case domain.ModelProviderOllama:
+		return DoctorOllamaAdapterName, DoctorOllamaAdapterVersion, DoctorOllamaProtocol, true
+	default:
+		return "", "", "", false
+	}
 }
 
 func validDoctorToken(value string, limit int) bool {
@@ -126,6 +148,7 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	manager := coordinator.sessionManager
 	version := coordinator.applicationVersion
 	configSchema := coordinator.configurationSchema
+	provider := coordinator.modelProvider
 	configured := coordinator.modelRuntime != nil
 	degraded := coordinator.persistenceDegraded
 	coordinator.mu.Unlock()
@@ -136,5 +159,5 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	if err != nil {
 		return UIDoctorResult{}, ErrDoctorUnavailable
 	}
-	return NewDoctorResult(version, configSchema, coordinator.privacy.OriginHash(), configured, degraded, health)
+	return NewDoctorResult(version, configSchema, provider, coordinator.privacy.OriginHash(), configured, degraded, health)
 }

@@ -330,17 +330,23 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 			Profile: reviewerProfile.Name, Model: reviewerProfile.Model,
 			Privacy: reviewerPrivacy, Budget: reviewerBudget,
 		}
-		if loaded.Credentials.ApprovalReviewer != nil && loaded.Credentials.ApprovalReviewer.Value.IsSet() {
-			reviewerSecret, cloneErr := loaded.Credentials.ApprovalReviewer.Value.Clone()
-			if cloneErr != nil {
-				return cloneErr
+		if modelProfileReady(*reviewerProfile, loaded.Credentials.ApprovalReviewer) {
+			var reviewerSecret *config.SecretValue
+			if loaded.Credentials.ApprovalReviewer != nil && loaded.Credentials.ApprovalReviewer.Value.IsSet() {
+				clone, cloneErr := loaded.Credentials.ApprovalReviewer.Value.Clone()
+				if cloneErr != nil {
+					return cloneErr
+				}
+				reviewerSecret = &clone
 			}
 			reviewer, reviewerErr := einoadapter.NewReviewer(einoadapter.ReviewerConfig{
-				ModelConfiguration: modelConfiguration(*reviewerProfile), Credential: &reviewerSecret,
+				ModelConfiguration: modelConfiguration(*reviewerProfile), Credential: reviewerSecret,
 				Logger: logger, Diagnostics: einoadapter.DiagnosticOptions{Sensitive: loaded.Logging.SensitiveDiagnostics},
 			})
 			if reviewerErr != nil {
-				reviewerSecret.Destroy()
+				if reviewerSecret != nil {
+					reviewerSecret.Destroy()
+				}
 				_, _ = fmt.Fprintln(stderr, "Warning: the configured approval reviewer is unavailable; automated review remains disabled.")
 			} else {
 				composition.reviewer = reviewer
@@ -425,12 +431,17 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		identifiers: identifiers, now: now, logger: logger,
 	}
 	var initialRuntime application.ModelRuntime
-	if loaded.Models.Agent.Endpoint != "" && loaded.Models.Agent.Model != "" && loaded.Credentials.Agent.Value.IsSet() {
-		setupSecret, secretErr := applicationSecret(&loaded.Credentials.Agent.Value)
+	if modelProfileReady(loaded.Models.Agent, &loaded.Credentials.Agent) {
+		var setupSecret *application.ModelSetupSecret
+		var secretErr error
+		if loaded.Models.Agent.ProviderKind == config.ProviderOpenAI {
+			setupSecret, secretErr = applicationSecret(&loaded.Credentials.Agent.Value)
+		}
 		loaded.Credentials.Agent.Value.Destroy()
 		if secretErr == nil {
 			request := application.ModelSetupRequest{
-				RequestID: 1, Endpoint: loaded.Models.Agent.Endpoint, Model: loaded.Models.Agent.Model, Secret: setupSecret,
+				RequestID: 1, ProviderKind: domain.ModelProviderKind(loaded.Models.Agent.ProviderKind),
+				Endpoint: loaded.Models.Agent.Endpoint, Model: loaded.Models.Agent.Model, Secret: setupSecret,
 			}
 			initialRuntime, err = modelFactory.BuildModelRuntime(ctx, request)
 			setupSecret.Destroy()
@@ -450,7 +461,8 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}()
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		ApplicationVersion: applicationVersion, ConfigurationSchema: fmt.Sprintf("v%d", config.CurrentVersion),
-		Sessions: sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
+		ModelProvider: domain.ModelProviderKind(loaded.Models.Agent.ProviderKind),
+		Sessions:      sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		ModelContext: messageRepository,
 		ModelRuntime: initialRuntime, ModelFactory: modelFactory, ModelProfiles: profileWriter,
@@ -512,6 +524,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		Scope:                   initialScope,
 		ModelEndpoint:           loaded.Models.Agent.Endpoint,
 		ModelName:               loaded.Models.Agent.Model,
+		ModelProvider:           domain.ModelProviderKind(loaded.Models.Agent.ProviderKind),
 		ModelConfigured:         initialRuntime != nil,
 		ModelConfiguredSet:      true,
 		PrivacyMode:             domain.PrivacyModeStandard,
@@ -1117,19 +1130,29 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		return nil, application.ErrModelSetupInvalid
 	}
 	settings := factory.base
+	settings.Models.Agent.ProviderKind = string(request.ProviderKind)
+	settings.Models.Agent.CredentialReference = config.ModelCredentialAgent
+	if request.ProviderKind == domain.ModelProviderOllama {
+		settings.Models.Agent.CredentialReference = config.ModelCredentialNone
+		settings.Models.Agent.ReasoningEffort = ""
+	}
 	settings.Models.Agent.Endpoint = request.Endpoint
 	settings.Models.Agent.Origin = ""
 	settings.Models.Agent.Model = request.Model
 	if err := config.Validate(&settings); err != nil {
 		return nil, err
 	}
-	credential, err := configurationSecret(request.Secret)
-	if err != nil {
-		return nil, err
+	var credential *config.SecretValue
+	if request.ProviderKind == domain.ModelProviderOpenAI {
+		value, err := configurationSecret(request.Secret)
+		if err != nil {
+			return nil, err
+		}
+		credential = &value
 	}
 	agentAdapter, err := einoadapter.New(einoadapter.Config{
 		ModelConfiguration: modelConfiguration(settings.Models.Agent),
-		Credential:         &credential,
+		Credential:         credential,
 		Logger:             factory.logger,
 		Diagnostics:        einoadapter.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
 		Tools:              factory.tools,
@@ -1138,7 +1161,9 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		Now:                factory.now,
 	})
 	if err != nil {
-		credential.Destroy()
+		if credential != nil {
+			credential.Destroy()
+		}
 		return nil, err
 	}
 	return &compositionModelRuntime{
@@ -1163,14 +1188,20 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 	if writer == nil || request.Validate() != nil {
 		return application.ErrModelSetupInvalid
 	}
-	credential, err := configurationSecret(request.Secret)
-	if err != nil {
-		return err
+	var credential *config.SecretValue
+	if request.ProviderKind == domain.ModelProviderOpenAI {
+		value, err := configurationSecret(request.Secret)
+		if err != nil {
+			return err
+		}
+		credential = &value
 	}
-	defer credential.Destroy()
+	if credential != nil {
+		defer credential.Destroy()
+	}
 	return config.SaveModelProfilesWithDataSources(ctx, writer.paths, writer.base, config.ModelProfile{
-		Endpoint: request.Endpoint, Model: request.Model,
-	}, &credential, writer.reviewerFileCredential, writer.prometheusFileCredential, writer.lokiFileCredential)
+		ProviderKind: string(request.ProviderKind), Endpoint: request.Endpoint, Model: request.Model,
+	}, credential, writer.reviewerFileCredential, writer.prometheusFileCredential, writer.lokiFileCredential)
 }
 
 type compositionModelRuntime struct {
@@ -1404,17 +1435,34 @@ func (observer slogRunObserver) ObserveRun(ctx context.Context, observation appl
 }
 
 func modelConfiguration(value config.ModelProfileConfig) domain.ModelConfiguration {
+	apiKeySource := domain.ModelAPIKeySourceRuntime
+	transportPolicy := domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP
+	if value.ProviderKind == config.ProviderOllama {
+		apiKeySource = domain.ModelAPIKeySourceNone
+		transportPolicy = domain.ModelTransportPolicyLoopbackHTTPNoRedirect
+	}
 	return domain.ModelConfiguration{
 		ProfileName: value.Name, Role: domain.ModelRole(value.Role),
-		ProviderKind: domain.ModelProviderOpenAICompatible,
+		ProviderKind: domain.ModelProviderKind(value.ProviderKind),
 		Endpoint:     value.Endpoint, Origin: value.Origin, Model: value.Model,
-		APIKeySource:    domain.ModelAPIKeySourceRuntime,
+		APIKeySource:    apiKeySource,
 		ReasoningEffort: domain.ModelReasoningEffort(value.ReasoningEffort),
+		ResponseFormat:  domain.ModelResponseFormat(value.ResponseFormat),
 		Temperature:     value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
 		RequestTimeout:    time.Duration(value.RequestTimeoutSeconds) * time.Second,
 		StreamingRequired: value.Streaming, ToolCallingRequired: value.ToolCallingRequired,
-		TransportPolicy: domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
+		TransportPolicy: transportPolicy,
 	}
+}
+
+func modelProfileReady(profile config.ModelProfileConfig, credential *config.ProfileCredential) bool {
+	if profile.Endpoint == "" || profile.Model == "" {
+		return false
+	}
+	if profile.ProviderKind == config.ProviderOllama {
+		return profile.CredentialReference == config.ModelCredentialNone
+	}
+	return profile.ProviderKind == config.ProviderOpenAI && credential != nil && credential.Value.IsSet()
 }
 
 func configuredBudgetLimits(value config.Config) (agent.RunBudgetLimits, error) {
