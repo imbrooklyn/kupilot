@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	LegacyVersion                     = 1
-	CurrentVersion                    = 2
+	CurrentVersion                    = 1
 	ProviderOpenAICompatible          = "openai_compatible"
 	ModelReasoningEffortNone          = "none"
 	BudgetProfileCompact              = "compact"
@@ -22,7 +21,6 @@ const (
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
 	DefaultModelTemperature           = 0.1
-	LegacyDefaultMaxModelOutputTokens = 8192
 	DefaultModelRequestTimeoutSeconds = 900
 	DefaultReviewerTimeoutSeconds     = 30
 	MaxModelRequestTimeoutSeconds     = 900
@@ -155,7 +153,7 @@ type ModelProfilesConfig struct {
 }
 
 // ModelProfileConfig contains one resolved, explicitly named and role-bound
-// profile. InheritAgent records only the user's v2 shorthand; all runtime
+// profile. InheritAgent records only the user's schema shorthand; all runtime
 // settings below are complete after loading.
 type ModelProfileConfig struct {
 	Name                  string                   `yaml:"name" json:"name"`

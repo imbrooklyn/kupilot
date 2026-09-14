@@ -109,6 +109,9 @@ func runLocalSessionCommand(
 	if err := config.EnsureHome(ctx, paths); err != nil {
 		return err
 	}
+	if err := sqlite.EnsureStateDirectory(ctx, paths.StateDir, "session-management"); err != nil {
+		return err
+	}
 	lockMode := sessionlock.Shared
 	if intent.Kind == cli.IntentSessionsDelete && intent.SessionDelete != nil && intent.SessionDelete.Before != "" {
 		lockMode = sessionlock.Exclusive

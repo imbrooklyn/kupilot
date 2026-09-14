@@ -10,7 +10,7 @@ import (
 
 func TestLoadLocalExecutionBuildsExactDefaultOffCatalogs(t *testing.T) {
 	paths := testPaths(t.TempDir())
-	writePrivateFile(t, paths.ConfigFile, []byte(version2Config("", "")+validLocalExecutionYAMLFixture()))
+	writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", "")+validLocalExecutionYAMLFixture()))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -43,7 +43,7 @@ func TestLoadLocalExecutionBuildsExactDefaultOffCatalogs(t *testing.T) {
 }
 
 func TestLoadLocalExecutionRejectsSchemaAndPrivilegeEscalation(t *testing.T) {
-	valid := version2Config("", "") + validLocalExecutionYAMLFixture()
+	valid := version1Config("", "") + validLocalExecutionYAMLFixture()
 	tests := []struct {
 		name string
 		text string

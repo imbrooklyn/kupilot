@@ -12,7 +12,7 @@ import (
 func TestLoadRemoteDiagnosticsBuildsExactDefaultOffCatalog(t *testing.T) {
 	root := t.TempDir()
 	paths := testPaths(root)
-	writePrivateFile(t, paths.ConfigFile, []byte(version2Config("", "")+validRemoteDiagnosticsYAMLFixture()))
+	writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", "")+validRemoteDiagnosticsYAMLFixture()))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -41,7 +41,7 @@ func TestLoadRemoteDiagnosticsBuildsExactDefaultOffCatalog(t *testing.T) {
 
 	emptyRoot := t.TempDir()
 	emptyPaths := testPaths(emptyRoot)
-	writePrivateFile(t, emptyPaths.ConfigFile, []byte(version2Config("", "")))
+	writePrivateFile(t, emptyPaths.ConfigFile, []byte(version1Config("", "")))
 	empty, err := Load(context.Background(), LoadOptions{Paths: emptyPaths, LookupEnv: lookupMap(nil)})
 	if err != nil {
 		t.Fatalf("Load(default off) error = %v", err)
@@ -54,7 +54,7 @@ func TestLoadRemoteDiagnosticsBuildsExactDefaultOffCatalog(t *testing.T) {
 }
 
 func TestLoadRemoteDiagnosticsRejectsSchemaAndSemanticEscalation(t *testing.T) {
-	valid := version2Config("", "") + validRemoteDiagnosticsYAMLFixture()
+	valid := version1Config("", "") + validRemoteDiagnosticsYAMLFixture()
 	tests := []struct {
 		name string
 		text string

@@ -89,6 +89,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	if err := config.EnsureHome(ctx, loaded.Paths); err != nil {
 		return err
 	}
+	if err := sqlite.EnsureStateDirectory(ctx, loaded.Paths.StateDir, "composition"); err != nil {
+		return err
+	}
 
 	composition := &runtimeComposition{}
 	defer func() {
@@ -276,14 +279,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		return err
 	}
 	readPolicy := compositionObservationPolicy{privacy: privacyManager}
-	profileWriterBase := loaded.Config
-	if loaded.SourceVersion == config.LegacyVersion &&
-		profileWriterBase.Models.Agent.MaxOutputTokens == config.LegacyDefaultMaxModelOutputTokens {
-		// Preserve the v1 value only for the compatibility runtime. A deliberate
-		// v2 save must not republish that historical default as endpoint evidence.
-		profileWriterBase.Models.Agent.MaxOutputTokens = 0
-	}
-	profileWriter := &compositionModelProfileWriter{paths: loaded.Paths, base: profileWriterBase}
+	profileWriter := &compositionModelProfileWriter{paths: loaded.Paths, base: loaded.Config}
 	if reviewerCredential := loaded.Credentials.ApprovalReviewer; reviewerCredential != nil &&
 		reviewerCredential.Source == config.CredentialSourceFile {
 		clone, cloneErr := reviewerCredential.Value.Clone()

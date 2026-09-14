@@ -8,8 +8,9 @@
 ADR-0046 replaces the single active model-profile restriction with explicit
 named `agent` and optional `approval_reviewer` profiles, which may bind distinct
 canonical origins. Setup remains explicit and credential-safe, there is still
-no auto-detection, fallback, or router, and the exact `v0.5` schema and
-migration require implementation evidence before they become usable.
+no auto-detection, fallback, or router, and the expanded configuration remains
+the sole pre-release version 1 schema rather than creating a compatibility
+migration between unpublished layouts.
 
 ## Context
 
@@ -53,15 +54,16 @@ fail the affected component safely. An unavailable log sink is disabled
 visibly; an unavailable cache is bypassed; unavailable durable state still
 blocks operations whose contracts require it.
 
-The version 1 YAML schema has no `paths` object and no `model.api_key_source`.
-It permits an optional plaintext `model.api_key`. The environment precedence is
-`KUPILOT_MODEL_ENDPOINT`, `KUPILOT_MODEL`, and
-`KUPILOT_MODEL_API_KEY` over file values. The environment key is read once,
-copied into an opaque non-renderable wrapper, and removed from the process
-environment; it is never written back. A dedicated extraction boundary removes
-the file key before Viper sees configuration bytes. The key is not a normal
-Config, Domain, model-content, log, audit, error, SQLite, formatting, or generic
-serialization value.
+The version 1 YAML schema has no `paths` object or configurable credential
+source. It contains one required named `models.agent` profile and may contain
+one `models.approval_reviewer` profile. Each profile has a fixed
+`credential_ref` and may carry only its admitted optional plaintext `api_key`.
+Role-specific environment values take precedence over file values. An
+environment key is read once, copied into an opaque non-renderable wrapper, and
+removed from the process environment; it is never written back. A dedicated
+extraction boundary removes file keys before Viper sees configuration bytes.
+A key is not a normal Config, Domain, model-content, log, audit, error, SQLite,
+formatting, or generic serialization value.
 
 A bare `kupilot` starts the single-screen TUI even when endpoint, model, or key
 is absent. The UI reports `model not configured` and opens the fixed model-setup
@@ -134,9 +136,10 @@ Deterministic tests must cover:
 1. Default and overridden Home resolution, canonicalization, fixed descendants,
    invalid roots, missing creation, existing wider permissions, symlink denial
    below Home, and cancellation.
-2. Version 1 strict decoding, removal of retired fields, file and environment
-   precedence, one-shot unsetting, plaintext local extraction, serialization
-   denial, atomic write failure, and distinct sensitive canaries.
+2. Version 1 named-profile strict decoding, rejection of retired pre-release
+   layouts, file and environment precedence, one-shot unsetting, plaintext
+   local extraction, serialization denial, atomic write failure, and distinct
+   sensitive canaries.
 3. Bare unconfigured startup, masked setup input, both save choices, `/model`,
    persistent field labels, cancellation at every editable step, correlated
    in-flight cancellation and commit races, invalid settings, construction

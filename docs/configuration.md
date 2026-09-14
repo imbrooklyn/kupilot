@@ -4,11 +4,11 @@
   remote-diagnostic, and local-execution policy configuration implemented
 - Date: 2026-09-07
 
-The current parser writes strict schema version 2 and reads schema version 1
-through a deterministic in-memory compatibility migration. Loading never
-rewrites a user file; the next explicit interactive save writes version 2 and
-does not carry the historical v1 output-token default into the new schema.
-Version 2 implements typed `agent` and optional `approval_reviewer` profiles,
+The current parser reads and writes strict schema version 1. No public release
+established a predecessor configuration schema, so the retired pre-release
+single-profile layout and pre-release `version: 2` files are rejected rather
+than treated as compatibility inputs. Loading never rewrites a user file.
+Version 1 implements typed `agent` and optional `approval_reviewer` profiles,
 exact `kubernetes.resource_policies` entries for approved CRDs, and the two
 fixed optional `observability.prometheus` and `observability.loki` slots. It
 also implements the default-off exact `kubernetes.remote_diagnostics` policy
@@ -29,7 +29,7 @@ uses `$HOME/.kupilot`. The fixed layout is:
 | Bounded operational log | `logs/kupilot.log` plus rotations |
 
 There are no XDG, macOS Library, working-directory, or repository-relative
-storage locations. The version 2 schema has no configurable path fields. An
+storage locations. The version 1 schema has no configurable path fields. An
 explicit Session-summary export remains the only user-confirmed Kupilot write
 outside Home.
 
@@ -108,7 +108,7 @@ does not chmod or chown the file and warns that it may contain a plaintext key.
 
 ## Implemented and remaining `v0.5` configuration semantics
 
-Version 2 implements these project-owned concepts without generic maps or
+Version 1 implements these project-owned concepts without generic maps or
 extension payloads:
 
 - fixed typed `agent` and optional `approval_reviewer` role bindings;
@@ -169,7 +169,7 @@ notifications remain disabled; there is no notification command, external
 clipboard helper, deletion bypass, retry, continuation, cache TTL, dynamic
 command, or per-run budget selector.
 
-## Implemented version 2 fields
+## Implemented version 1 fields
 
 The complete YAML schema is shown in
 [the example configuration](../config.example.yaml). The tracked example omits
@@ -179,7 +179,7 @@ an actual key so it remains safe to copy and inspect.
 
 | Field | Default and validation |
 | --- | --- |
-| `version` | Required write schema version `2`; version `1` remains a read-only compatibility input and is migrated in memory without rewriting the file. |
+| `version` | Required schema version `1`. Retired pre-release single-profile layouts and pre-release `version: 2` files are rejected rather than migrated implicitly. |
 | `context` | Empty; when set, at most 253 UTF-8 bytes with no control or bidirectional-control characters. When empty, startup uses the last successfully verified local Context, then kubeconfig `current-context`. |
 | `namespace` | `default`; when set, one working-Namespace DNS label of at most 63 bytes. It is never an all-Namespace marker. |
 | `no_color` | `false`; `--no-color` overrides it, while the presence of `NO_COLOR` supplies `true` at environment priority. |
@@ -306,9 +306,9 @@ These modes do not provide encryption, protection from another process running
 as the same user, or forensic deletion. Windows remains experimental; Kupilot
 does not claim equivalent Unix mode enforcement there.
 
-Because no version has been released with the retired filesystem layout,
-Kupilot performs no legacy path discovery. This is separate from the supported
-schema version 1 to version 2 in-memory configuration migration.
+Because no version has been released with the retired filesystem or
+configuration layouts, Kupilot performs no legacy path discovery and no
+pre-release configuration-schema migration.
 
 ## Credential boundary
 

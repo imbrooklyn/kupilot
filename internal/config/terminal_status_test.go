@@ -16,7 +16,7 @@ func TestTerminalStatusTitlesDefaultAndExplicitDisable(t *testing.T) {
 	}
 	root := t.TempDir()
 	paths := testPaths(root)
-	document := strings.Replace(version2Config("", ""), "version: 2\n", "version: 2\nterminal_status_titles: false\n", 1)
+	document := strings.Replace(version1Config("", ""), "version: 1\n", "version: 1\nterminal_status_titles: false\n", 1)
 	writePrivateFile(t, paths.ConfigFile, []byte(document))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 	if err != nil {
@@ -31,7 +31,7 @@ func TestTerminalStatusTitlesDefaultAndExplicitDisable(t *testing.T) {
 func TestReducedMotionLoadsAndIsPreservedByProfileWrite(t *testing.T) {
 	root := t.TempDir()
 	paths := testPaths(root)
-	document := strings.Replace(version2Config("", ""), "version: 2\n", "version: 2\nreduced_motion: true\n", 1)
+	document := strings.Replace(version1Config("", ""), "version: 1\n", "version: 1\nreduced_motion: true\n", 1)
 	writePrivateFile(t, paths.ConfigFile, []byte(document))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 	if err != nil {

@@ -55,7 +55,9 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 func TestLoadEnvironmentCredentialOverridesFileAndIsUnsetOnce(t *testing.T) {
 	root := t.TempDir()
 	paths := pathsForHome(root)
-	writePrivateFile(t, paths.ConfigFile, []byte("version: 1\nmodel:\n  endpoint: https://file.example.test/v1\n  model: file-model\n  api_key: file-generated-key\n"))
+	document := strings.Replace(version1Config("\n    api_key: file-generated-key", ""), "https://agent.example.test/v1", "https://file.example.test/v1", 1)
+	document = strings.Replace(document, "model: agent-model", "model: file-model", 1)
+	writePrivateFile(t, paths.ConfigFile, []byte(document))
 	environment := map[string]string{
 		"KUPILOT_MODEL_ENDPOINT":       "https://environment.example.test/v1",
 		"KUPILOT_MODEL":                "environment-model",
@@ -112,9 +114,9 @@ func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "version: 2") || !strings.Contains(string(content), "approval_reviewer:") ||
+	if !strings.Contains(string(content), "version: 1") || !strings.Contains(string(content), "approval_reviewer:") ||
 		strings.Contains(string(content), "\nmodel:\n") {
-		t.Fatalf("saved schema is not version 2: %s", content)
+		t.Fatalf("saved schema is not version 1: %s", content)
 	}
 }
 

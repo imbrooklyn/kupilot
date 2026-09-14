@@ -66,13 +66,9 @@ func TestLoadPrecedence(t *testing.T) {
 
 			root := t.TempDir()
 			configFile := filepath.Join(root, "config.yaml")
-			writePrivateFile(t, configFile, []byte(`version: 1
-context: file-context
+			writePrivateFile(t, configFile, []byte(version1Config("", "")+`context: file-context
 namespace: file-namespace
 no_color: true
-model:
-  endpoint: https://model.example.test/v1
-  model: diagnostic-model
 `))
 
 			paths := testPaths(root)
@@ -103,7 +99,7 @@ func TestLoadUsesDefaultNamespaceWithoutSelectingContext(t *testing.T) {
 
 	root := t.TempDir()
 	configFile := filepath.Join(root, "config.yaml")
-	writePrivateFile(t, configFile, []byte("version: 1\n"))
+	writePrivateFile(t, configFile, []byte(version1Config("", "")))
 	paths := testPaths(root)
 	paths.ConfigFile = configFile
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
@@ -127,7 +123,7 @@ func TestLoadSelectsConfigurationFileByPrecedence(t *testing.T) {
 		environmentFile: "environment-file",
 		cliFile:         "cli-file",
 	} {
-		writePrivateFile(t, path, []byte(fmt.Sprintf("version: 1\ncontext: %s\n", contextName)))
+		writePrivateFile(t, path, []byte(version1Config("", "")+fmt.Sprintf("context: %s\n", contextName)))
 	}
 
 	tests := []struct {
@@ -205,7 +201,8 @@ func TestLoadAcceptsZeroModelTemperature(t *testing.T) {
 
 	root := t.TempDir()
 	path := filepath.Join(root, "config.yaml")
-	writePrivateFile(t, path, []byte("version: 1\nmodel:\n  endpoint: https://model.example.test/v1\n  model: diagnostic-model\n  temperature: 0\n"))
+	document := strings.Replace(version1Config("", ""), "    temperature: 0.1", "    temperature: 0", 1)
+	writePrivateFile(t, path, []byte(document))
 	paths := testPaths(root)
 	paths.ConfigFile = path
 	got, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
@@ -232,7 +229,7 @@ func TestLoadSensitiveDiagnosticsIsExplicitAndWarned(t *testing.T) {
 
 	root := t.TempDir()
 	path := filepath.Join(root, "config.yaml")
-	writePrivateFile(t, path, []byte("version: 1\nlogging:\n  sensitive_diagnostics: true\n"))
+	writePrivateFile(t, path, []byte(version1Config("", "")+"logging:\n  sensitive_diagnostics: true\n"))
 	paths := testPaths(root)
 	paths.ConfigFile = path
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
@@ -242,7 +239,7 @@ func TestLoadSensitiveDiagnosticsIsExplicitAndWarned(t *testing.T) {
 	if !loaded.Logging.SensitiveDiagnostics {
 		t.Fatal("sensitive diagnostics opt-in was not loaded")
 	}
-	if len(loaded.Warnings) != 2 || !strings.Contains(strings.Join(loaded.Warnings, "\n"), "Sensitive model diagnostics") {
+	if len(loaded.Warnings) != 1 || !strings.Contains(strings.Join(loaded.Warnings, "\n"), "Sensitive model diagnostics") {
 		t.Fatalf("sensitive diagnostics warnings = %q", loaded.Warnings)
 	}
 }
@@ -299,7 +296,7 @@ func TestLoadAcceptsUserManagedConfigurationPermissionsAndRejectsUnsafeFiles(t *
 	t.Run("non-owner permissions", func(t *testing.T) {
 		root := t.TempDir()
 		path := filepath.Join(root, "config.yaml")
-		if err := os.WriteFile(path, []byte("version: 1\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(version1Config("", "")), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -309,8 +306,8 @@ func TestLoadAcceptsUserManagedConfigurationPermissionsAndRejectsUnsafeFiles(t *
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
-		if len(loaded.Warnings) != 2 || !strings.Contains(strings.Join(loaded.Warnings, "\n"), "accessible beyond its owner") {
-			t.Fatalf("warnings = %#v, want migration and permissions warnings", loaded.Warnings)
+		if len(loaded.Warnings) != 1 || !strings.Contains(strings.Join(loaded.Warnings, "\n"), "accessible beyond its owner") {
+			t.Fatalf("warnings = %#v, want permissions warning", loaded.Warnings)
 		}
 	})
 
@@ -318,7 +315,7 @@ func TestLoadAcceptsUserManagedConfigurationPermissionsAndRejectsUnsafeFiles(t *
 		root := t.TempDir()
 		target := filepath.Join(root, "target.yaml")
 		link := filepath.Join(root, "config.yaml")
-		writePrivateFile(t, target, []byte("version: 1\n"))
+		writePrivateFile(t, target, []byte(version1Config("", "")))
 		if err := os.Symlink(target, link); err != nil {
 			t.Fatal(err)
 		}
@@ -424,14 +421,14 @@ func TestExampleConfigurationMatchesStrictSchema(t *testing.T) {
 	}
 }
 
-func TestLoadVersion2NamedProfilesAndIndependentCredentials(t *testing.T) {
+func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
 	t.Parallel()
 
 	t.Run("reviewer inherits agent origin model settings and credential buffer", func(t *testing.T) {
 		root := t.TempDir()
 		paths := testPaths(root)
 		canary := "agent-inherited-key-generated"
-		writePrivateFile(t, paths.ConfigFile, []byte(version2Config(`
+		writePrivateFile(t, paths.ConfigFile, []byte(version1Config(`
     api_key: `+canary, `
   approval_reviewer:
     name: reviewer
@@ -466,7 +463,7 @@ func TestLoadVersion2NamedProfilesAndIndependentCredentials(t *testing.T) {
 	t.Run("reviewer uses a distinct origin model and environment credential", func(t *testing.T) {
 		root := t.TempDir()
 		paths := testPaths(root)
-		writePrivateFile(t, paths.ConfigFile, []byte(version2Config(`
+		writePrivateFile(t, paths.ConfigFile, []byte(version1Config(`
     api_key: file-agent-key-generated`, `
   approval_reviewer:
     name: reviewer
@@ -501,7 +498,7 @@ func TestLoadVersion2NamedProfilesAndIndependentCredentials(t *testing.T) {
 	t.Run("missing optional reviewer credential remains visibly unavailable", func(t *testing.T) {
 		root := t.TempDir()
 		paths := testPaths(root)
-		writePrivateFile(t, paths.ConfigFile, []byte(version2Config("", `
+		writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", `
   approval_reviewer:
     name: reviewer
     role: approval_reviewer
@@ -527,13 +524,13 @@ func TestLoadVersion2NamedProfilesAndIndependentCredentials(t *testing.T) {
 	})
 }
 
-func TestLoadVersionMigrationAndVersion2StrictFailures(t *testing.T) {
+func TestLoadVersion1StrictSchemaAndRejectsPreReleaseLayouts(t *testing.T) {
 	t.Parallel()
 
-	t.Run("version 1 migrates in memory without rewriting", func(t *testing.T) {
+	t.Run("version 1 named profile loads without rewriting", func(t *testing.T) {
 		root := t.TempDir()
 		paths := testPaths(root)
-		original := []byte("version: 1\nmodel:\n  endpoint: https://legacy.example.test/v1\n  model: legacy-model\n")
+		original := []byte(version1Config("", ""))
 		writePrivateFile(t, paths.ConfigFile, original)
 		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 		if err != nil {
@@ -542,12 +539,12 @@ func TestLoadVersionMigrationAndVersion2StrictFailures(t *testing.T) {
 		defer loaded.Credentials.Destroy()
 		current, readErr := os.ReadFile(paths.ConfigFile)
 		if readErr != nil || !bytes.Equal(current, original) {
-			t.Fatalf("legacy file was rewritten: %q, %v", current, readErr)
+			t.Fatalf("configuration file was rewritten: %q, %v", current, readErr)
 		}
-		if loaded.SourceVersion != LegacyVersion || loaded.Version != CurrentVersion ||
+		if loaded.SourceVersion != CurrentVersion || loaded.Version != CurrentVersion ||
 			loaded.Models.Agent.Name != "agent" || loaded.Models.Agent.Role != ModelRoleAgent ||
-			loaded.Models.Agent.MaxOutputTokens != LegacyDefaultMaxModelOutputTokens || len(loaded.Warnings) == 0 {
-			t.Fatalf("legacy migration = version %d source %d profile %#v warnings=%q", loaded.Version, loaded.SourceVersion, loaded.Models.Agent, loaded.Warnings)
+			loaded.Models.Agent.MaxOutputTokens != 2048 || len(loaded.Warnings) != 0 {
+			t.Fatalf("schema load = version %d source %d profile %#v warnings=%q", loaded.Version, loaded.SourceVersion, loaded.Models.Agent, loaded.Warnings)
 		}
 	})
 
@@ -555,11 +552,13 @@ func TestLoadVersionMigrationAndVersion2StrictFailures(t *testing.T) {
 		name    string
 		content string
 	}{
-		{name: "missing agent profile", content: "version: 2\nmodels: {}\n"},
-		{name: "partial agent profile", content: "version: 2\nmodels:\n  agent:\n    name: agent\n    role: agent\n"},
-		{name: "wrong reviewer type", content: version2Config("", "\n  approval_reviewer: enabled")},
-		{name: "duplicate profile field", content: strings.Replace(version2Config("", ""), "    name: agent", "    name: agent\n    name: duplicate", 1)},
-		{name: "unknown profile field", content: strings.Replace(version2Config("", ""), "    role: agent", "    role: agent\n    route: fallback", 1)},
+		{name: "pre-release single model layout", content: "version: 1\nmodel:\n  endpoint: https://legacy.example.test/v1\n  model: legacy-model\n"},
+		{name: "pre-release version 2", content: strings.Replace(version1Config("", ""), "version: 1", "version: 2", 1)},
+		{name: "missing agent profile", content: "version: 1\nmodels: {}\n"},
+		{name: "partial agent profile", content: "version: 1\nmodels:\n  agent:\n    name: agent\n    role: agent\n"},
+		{name: "wrong reviewer type", content: version1Config("", "\n  approval_reviewer: enabled")},
+		{name: "duplicate profile field", content: strings.Replace(version1Config("", ""), "    name: agent", "    name: agent\n    name: duplicate", 1)},
+		{name: "unknown profile field", content: strings.Replace(version1Config("", ""), "    role: agent", "    role: agent\n    route: fallback", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -571,12 +570,12 @@ func TestLoadVersionMigrationAndVersion2StrictFailures(t *testing.T) {
 	}
 }
 
-func TestLoadVersion2ResourcePolicies(t *testing.T) {
+func TestLoadVersion1ResourcePolicies(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	paths := testPaths(root)
-	writePrivateFile(t, paths.ConfigFile, []byte(version2Config("", "")+validResourcePolicyYAMLFixture()))
+	writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", "")+validResourcePolicyYAMLFixture()))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -600,12 +599,12 @@ func TestLoadVersion2ResourcePolicies(t *testing.T) {
 func TestLoadRejectsMalformedResourcePolicyYAMLBeforeUse(t *testing.T) {
 	t.Parallel()
 
-	valid := version2Config("", "") + validResourcePolicyYAMLFixture()
+	valid := version1Config("", "") + validResourcePolicyYAMLFixture()
 	for _, test := range []struct {
 		name    string
 		content string
 	}{
-		{name: "version 1 policy", content: "version: 1\nkubernetes:\n  resource_policies: []\n"},
+		{name: "policy without required model profile", content: "version: 1\nkubernetes:\n  resource_policies: []\n"},
 		{name: "unknown policy field", content: strings.Replace(valid, "      group: example.test", "      group: example.test\n      endpoint: https://cluster.example.test", 1)},
 		{name: "duplicate field member", content: strings.Replace(valid, "          scalar: string", "          scalar: string\n          scalar: integer", 1)},
 		{name: "wrong verbs type", content: strings.Replace(valid, "      verbs: [get, list]", "      verbs: get", 1)},
@@ -663,7 +662,7 @@ func TestLoadUnsetsEveryRoleCredentialBeforeOtherConfigurationFailures(t *testin
 			name: "invalid configuration schema",
 			paths: func(t *testing.T) Paths {
 				paths := testPaths(t.TempDir())
-				writePrivateFile(t, paths.ConfigFile, []byte("version: 2\nmodels: {}\n"))
+				writePrivateFile(t, paths.ConfigFile, []byte("version: 1\nmodels: {}\n"))
 				return paths
 			},
 			code: "config_schema_invalid",
@@ -690,8 +689,8 @@ func TestLoadUnsetsEveryRoleCredentialBeforeOtherConfigurationFailures(t *testin
 	}
 }
 
-func version2Config(agentExtra, reviewer string) string {
-	return `version: 2
+func version1Config(agentExtra, reviewer string) string {
+	return `version: 1
 models:
   agent:
     name: agent

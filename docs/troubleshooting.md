@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The checked-in source now implements strict version 2 named model profiles,
+The checked-in source now implements strict version 1 named model profiles,
 safe Session context/summarization, the five permission profiles, optional
 data sources, default-off Pod Exec/diagnostic Pod/local argv/shell policies,
 and the typed remediation catalog. These capabilities remain bounded by their
@@ -45,8 +45,8 @@ Check all of the following:
   normalized path.
 - The file is regular, not a symlink, and no larger than 64 KiB. Wider existing
   permissions produce a warning rather than a rejection.
-- The document contains `version: 2` with a complete required
-  `models.agent` profile, or a supported legacy `version: 1` profile, and no
+- The document contains `version: 1` with a complete required
+  `models.agent` profile and no
   unknown, duplicate, null, alias, merge, or second-document content.
 - Values use the exact types and bounds in [Configuration](configuration.md).
 - Each supplied `models.<role>.endpoint` and `models.<role>.model` value is

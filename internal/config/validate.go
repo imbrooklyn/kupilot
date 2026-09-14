@@ -21,7 +21,7 @@ func Validate(config *Config) error {
 		return newSafeError(ClassInternal, "config_internal", "validate_configuration", "Kupilot could not validate its configuration.")
 	}
 	if config.Version != CurrentVersion {
-		return newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "validate_configuration", "Configuration version is unsupported; use version 2. Version 1 files are accepted only through the documented compatibility migration.")
+		return newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "validate_configuration", "Configuration version is unsupported; use version 1.")
 	}
 	if !validDisplayName(config.Context, MaxContextBytes) {
 		return newSafeError(ClassConfigurationInvalid, "config_context_invalid", "validate_configuration", "Kubernetes Context must be valid, bounded text without control characters.")

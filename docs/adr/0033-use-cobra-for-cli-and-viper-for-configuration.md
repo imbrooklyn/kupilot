@@ -38,8 +38,9 @@ project-owned schema before values cross a boundary.
 Viper use is limited to the accepted CLI, environment, file, and default
 precedence for non-sensitive configuration. Kupilot will not use remote
 configuration providers, live watch or hot reload, or a generic `map[string]any`
-configuration boundary. A dedicated loader extracts `model.api_key` before
-Viper receives sanitized key-free bytes. A dedicated atomic writer may update
+configuration boundary. A dedicated loader extracts only the fixed profile and
+optional-source `api_key` fields before Viper receives sanitized key-free
+bytes. A dedicated atomic writer may update
 the fixed Home configuration file from an Application-owned model-setup use
 case; Viper itself does not write configuration. Help, version, and `cache
 clear` must return before Viper or any business dependency is initialized.

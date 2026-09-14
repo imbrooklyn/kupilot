@@ -1,9 +1,9 @@
-# This is the implemented strict version 2 schema. Interactive Agent setup may
+# This is the implemented strict version 1 schema. Interactive Agent setup may
 # add a plaintext models.agent.api_key to KUPILOT_HOME/config.yaml. An existing
 # file-sourced approval_reviewer, Prometheus, and Loki keys are preserved only
 # when the setup disclosure names them. Environment-sourced keys are never
 # written implicitly.
-version: 2
+version: 1
 
 context: development
 namespace: default

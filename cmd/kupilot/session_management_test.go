@@ -312,6 +312,39 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 	}
 }
 
+func TestCLIDoctorPreparesMissingStateDirectoryBeforeProcessLock(t *testing.T) {
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := config.ResolvePaths(config.PathInput{KupilotHome: filepath.Join(root, "new-home")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(paths.StateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state directory unexpectedly exists before doctor: %v", err)
+	}
+
+	var output bytes.Buffer
+	intent := cli.StartIntent{Kind: cli.IntentDoctor, Doctor: &cli.DoctorOptions{JSON: true}}
+	if err := runLocalSessionCommand(ctx, intent, buildinfo.Info{Version: "v0.0.0-test"}, paths, sessionCommandIO{
+		output: &output, now: func() time.Time { return time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC) }, isTTY: false,
+	}); err != nil {
+		t.Fatalf("doctor with missing state directory error = %v", err)
+	}
+	var envelope cliDoctorEnvelope
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode doctor JSON: %v", err)
+	}
+	if envelope.Doctor.ConfigurationSchema != "v1" || envelope.Doctor.Storage.SchemaRevision != 16 {
+		t.Fatalf("doctor startup projection = %#v", envelope.Doctor)
+	}
+	if info, err := os.Lstat(paths.StateDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("doctor did not create a safe state directory: %#v/%v", info, err)
+	}
+}
+
 func deletionDigestFromOutput(t *testing.T, output string) string {
 	t.Helper()
 	const marker = "Selection digest: "

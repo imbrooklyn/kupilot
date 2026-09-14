@@ -73,6 +73,32 @@ func TestOpenCreatesPrivateStateAndDatabase(t *testing.T) {
 	assertMode(t, db.databasePath, 0o600)
 }
 
+func TestEnsureStateDirectoryCreatesOnlyPrivateParentAndHonorsCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix mode contract")
+	}
+	root := testRealTempDir(t)
+	stateDir := filepath.Join(root, "new-state-parent")
+	if err := EnsureStateDirectory(context.Background(), stateDir, "state-directory-test"); err != nil {
+		t.Fatalf("EnsureStateDirectory() error = %v", err)
+	}
+	assertMode(t, stateDir, 0o700)
+	if _, err := os.Lstat(filepath.Join(stateDir, databaseFilename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("EnsureStateDirectory() created a database: %v", err)
+	}
+
+	cancelledDir := filepath.Join(root, "cancelled-state-parent")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := EnsureStateDirectory(ctx, cancelledDir, "state-directory-cancelled")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled EnsureStateDirectory() error = %v", err)
+	}
+	if _, statErr := os.Lstat(cancelledDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("cancelled EnsureStateDirectory() changed storage: %v", statErr)
+	}
+}
+
 func TestDeleteAllLocalStateRemovesOnlyDatabaseFilesAndKeepsDirectory(t *testing.T) {
 	stateDir := filepath.Join(testRealTempDir(t), "delete-all-state")
 	database := openTestDB(t, context.Background(), stateDir, "delete-all")

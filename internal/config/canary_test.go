@@ -116,7 +116,7 @@ func TestFileModelAPIKeyCanaryIsExtractedFromOrdinaryConfiguration(t *testing.T)
 	canary := strings.Repeat("f", 47) + "-generated"
 	root := t.TempDir()
 	paths := pathsForHome(root)
-	writePrivateFile(t, paths.ConfigFile, []byte("version: 1\nmodel:\n  endpoint: https://model.example.test/v1\n  model: diagnostic-model\n  api_key: "+canary+"\n"))
+	writePrivateFile(t, paths.ConfigFile, []byte(version1Config("\n    api_key: "+canary, "")))
 	loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)

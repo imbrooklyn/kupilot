@@ -135,6 +135,26 @@ type DB struct {
 	closed        bool
 }
 
+// EnsureStateDirectory prepares the fixed SQLite parent before the composition
+// root acquires its process lock from that directory. It creates no database
+// and performs no migration.
+func EnsureStateDirectory(ctx context.Context, stateDir, correlationID string) error {
+	if err := contextFailure(ctx, "prepare_storage_path", correlationID); err != nil {
+		return err
+	}
+	if !validMetadata(correlationID, maxCorrelationBytes) || !validStateDirectory(stateDir) {
+		return newError(
+			ClassConfigurationInvalid,
+			"storage_path_invalid",
+			"validate_storage_path",
+			"The Kupilot state directory is invalid.",
+			correlationID,
+			nil,
+		)
+	}
+	return ensureStateDirectory(stateDir, correlationID)
+}
+
 // Open validates the fixed storage path, opens the selected SQLite driver,
 // applies connection policy, and migrates the schema.
 func Open(ctx context.Context, options OpenOptions) (_ *DB, returnErr error) {
@@ -440,28 +460,8 @@ func prepareStoragePath(ctx context.Context, stateDir, correlationID string) (st
 	if err := contextFailure(ctx, "prepare_storage_path", correlationID); err != nil {
 		return "", nil, err
 	}
-	if err := rejectSymlinkedPath(stateDir); err != nil {
-		return "", nil, pathError(correlationID, err)
-	}
-	_, beforeErr := os.Lstat(stateDir)
-	createdStateDir := errors.Is(beforeErr, os.ErrNotExist)
-	if beforeErr != nil && !createdStateDir {
-		return "", nil, pathError(correlationID, beforeErr)
-	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return "", nil, permissionError(correlationID, err)
-	}
-	if err := rejectSymlinkedPath(stateDir); err != nil {
-		return "", nil, pathError(correlationID, err)
-	}
-	info, err := os.Lstat(stateDir)
-	if err != nil || !info.IsDir() {
-		return "", nil, pathError(correlationID, err)
-	}
-	if createdStateDir {
-		if err := os.Chmod(stateDir, 0o700); err != nil {
-			return "", nil, permissionError(correlationID, err)
-		}
+	if err := ensureStateDirectory(stateDir, correlationID); err != nil {
+		return "", nil, err
 	}
 
 	databasePath := filepath.Join(stateDir, databaseFilename)
@@ -494,6 +494,33 @@ func prepareStoragePath(ctx context.Context, stateDir, correlationID string) (st
 		return "", nil, err
 	}
 	return databasePath, existingFiles, nil
+}
+
+func ensureStateDirectory(stateDir, correlationID string) error {
+	if err := rejectSymlinkedPath(stateDir); err != nil {
+		return pathError(correlationID, err)
+	}
+	_, beforeErr := os.Lstat(stateDir)
+	createdStateDir := errors.Is(beforeErr, os.ErrNotExist)
+	if beforeErr != nil && !createdStateDir {
+		return pathError(correlationID, beforeErr)
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return permissionError(correlationID, err)
+	}
+	if err := rejectSymlinkedPath(stateDir); err != nil {
+		return pathError(correlationID, err)
+	}
+	info, err := os.Lstat(stateDir)
+	if err != nil || !info.IsDir() {
+		return pathError(correlationID, err)
+	}
+	if createdStateDir {
+		if err := os.Chmod(stateDir, 0o700); err != nil {
+			return permissionError(correlationID, err)
+		}
+	}
+	return nil
 }
 
 func secureKnownStorageFiles(

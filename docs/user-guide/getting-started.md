@@ -43,12 +43,13 @@ No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
 the endpoint, model identifier, or API key is absent.
 
-If you prefer a file, Kupilot writes strict schema version 2. It also reads a
-legacy version 1 document through an in-memory migration without rewriting the
-file. A minimal explicit version 2 Agent profile looks like:
+If you prefer a file, Kupilot reads and writes strict schema version 1. No
+released predecessor schema exists, so pre-release single-profile layouts and
+pre-release `version: 2` files are rejected instead of migrated implicitly. A
+minimal explicit Agent profile looks like:
 
 ```yaml
-version: 2
+version: 1
 context: example-context
 namespace: example-namespace
 

@@ -47,8 +47,7 @@ func (credentials *extractedCredentials) destroy() {
 }
 
 // Load applies defaults, a strict versioned YAML file, admitted environment
-// variables, and typed CLI overrides in increasing precedence order. A v1
-// document is migrated in memory and is never rewritten by loading.
+// variables, and typed CLI overrides in increasing precedence order.
 func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
@@ -279,10 +278,7 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		credentials.Destroy()
 		return Loaded{}, newSafeError(ClassCancelled, "config_load_cancelled", "load_configuration", "Configuration loading was cancelled.")
 	}
-	warnings := make([]string, 0, 4)
-	if sourceVersion == LegacyVersion {
-		warnings = append(warnings, "Configuration schema version 1 was loaded in compatibility mode and was not rewritten; a future explicit save writes version 2.")
-	}
+	warnings := make([]string, 0, 3)
 	if options.Paths.HomePermissionsWider {
 		warnings = append(warnings, "KUPILOT_HOME is accessible beyond its owner; Kupilot will respect the existing user-managed permissions.")
 	}
@@ -299,30 +295,7 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	}, nil
 }
 
-type configV1Document struct {
-	Version    int               `yaml:"version"`
-	Context    string            `yaml:"context,omitempty"`
-	Namespace  string            `yaml:"namespace,omitempty"`
-	NoColor    bool              `yaml:"no_color"`
-	Runtime    RuntimeConfig     `yaml:"runtime"`
-	Model      legacyModelConfig `yaml:"model"`
-	Kubernetes KubernetesConfig  `yaml:"kubernetes"`
-	Logging    LoggingConfig     `yaml:"logging"`
-}
-
-type legacyModelConfig struct {
-	ProviderKind          string  `yaml:"provider_kind"`
-	Endpoint              string  `yaml:"endpoint,omitempty"`
-	Model                 string  `yaml:"model,omitempty"`
-	ReasoningEffort       string  `yaml:"reasoning_effort,omitempty"`
-	Temperature           float64 `yaml:"temperature"`
-	MaxOutputTokens       int     `yaml:"max_output_tokens"`
-	RequestTimeoutSeconds int     `yaml:"request_timeout_seconds"`
-	Streaming             bool    `yaml:"streaming"`
-	ToolCallingRequired   bool    `yaml:"tool_calling_required"`
-}
-
-type configV2Document struct {
+type configDocument struct {
 	Version              int                    `yaml:"version"`
 	Context              *string                `yaml:"context,omitempty"`
 	Namespace            *string                `yaml:"namespace,omitempty"`
@@ -388,70 +361,39 @@ type loggingDocument struct {
 }
 
 func decodeConfigDocument(content []byte, version int) (Config, error) {
-	switch version {
-	case LegacyVersion:
-		defaults := Defaults()
-		document := configV1Document{
-			Version: LegacyVersion, Namespace: defaults.Namespace, Runtime: defaults.Runtime,
-			Model: legacyModelConfig{
-				ProviderKind: defaults.Models.Agent.ProviderKind,
-				Temperature:  defaults.Models.Agent.Temperature, MaxOutputTokens: LegacyDefaultMaxModelOutputTokens,
-				RequestTimeoutSeconds: defaults.Models.Agent.RequestTimeoutSeconds,
-				Streaming:             defaults.Models.Agent.Streaming, ToolCallingRequired: defaults.Models.Agent.ToolCallingRequired,
-			},
-			Kubernetes: defaults.Kubernetes, Logging: defaults.Logging,
-		}
-		if err := decodeStrictDocument(content, &document); err != nil {
-			return Config{}, err
-		}
-		config := Config{
-			Version: CurrentVersion, Context: document.Context, Namespace: document.Namespace, NoColor: document.NoColor,
-			TerminalStatusTitles: defaults.TerminalStatusTitles,
-			Runtime:              document.Runtime,
-			Models: ModelProfilesConfig{Agent: ModelProfileConfig{
-				Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
-				ProviderKind: document.Model.ProviderKind, Endpoint: document.Model.Endpoint, Model: document.Model.Model,
-				ReasoningEffort: document.Model.ReasoningEffort, Temperature: document.Model.Temperature,
-				MaxOutputTokens: document.Model.MaxOutputTokens, RequestTimeoutSeconds: document.Model.RequestTimeoutSeconds,
-				Streaming: document.Model.Streaming, ToolCallingRequired: document.Model.ToolCallingRequired,
-			}},
-			Kubernetes: document.Kubernetes, Logging: document.Logging,
-		}
-		return config, nil
-	case CurrentVersion:
-		var document configV2Document
-		if err := decodeStrictDocument(content, &document); err != nil {
-			return Config{}, err
-		}
-		if document.Version != CurrentVersion || document.Models == nil || document.Models.Agent == nil ||
-			!document.Models.Agent.complete(false) ||
-			(*document.Models.Agent.Endpoint == "") != (*document.Models.Agent.Model == "") {
-			return Config{}, schemaError("Configuration version 2 requires one complete models.agent profile.")
-		}
-		config := Defaults()
-		applyRootDocument(&config, document)
-		config.Models.Agent = applyProfileDocument(defaultAgentProfile(), document.Models.Agent)
-		if reviewer := document.Models.ApprovalReviewer; reviewer != nil {
-			if reviewer.Name == nil || reviewer.Role == nil || reviewer.InheritAgent == nil || reviewer.CredentialReference == nil {
-				return Config{}, schemaError("The approval_reviewer profile must explicitly name its role, inheritance choice, and credential reference.")
-			}
-			if !*reviewer.InheritAgent && !reviewer.complete(true) {
-				return Config{}, schemaError("A non-inheriting approval_reviewer profile must provide every model setting.")
-			}
-			base := defaultReviewerProfile()
-			if *reviewer.InheritAgent {
-				base = config.Models.Agent
-				base.Role = ModelRoleApprovalReviewer
-				base.Streaming = false
-				base.ToolCallingRequired = false
-			}
-			resolved := applyProfileDocument(base, reviewer)
-			config.Models.ApprovalReviewer = &resolved
-		}
-		return config, nil
-	default:
-		return Config{}, newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "decode_configuration", "Configuration version is unsupported; use version 2 or migrate a version 1 file.")
+	if version != CurrentVersion {
+		return Config{}, newSafeError(ClassConfigurationInvalid, "config_version_unsupported", "decode_configuration", "Configuration version is unsupported; use version 1.")
 	}
+	var document configDocument
+	if err := decodeStrictDocument(content, &document); err != nil {
+		return Config{}, err
+	}
+	if document.Version != CurrentVersion || document.Models == nil || document.Models.Agent == nil ||
+		!document.Models.Agent.complete(false) ||
+		(*document.Models.Agent.Endpoint == "") != (*document.Models.Agent.Model == "") {
+		return Config{}, schemaError("Configuration version 1 requires one complete models.agent profile.")
+	}
+	config := Defaults()
+	applyRootDocument(&config, document)
+	config.Models.Agent = applyProfileDocument(defaultAgentProfile(), document.Models.Agent)
+	if reviewer := document.Models.ApprovalReviewer; reviewer != nil {
+		if reviewer.Name == nil || reviewer.Role == nil || reviewer.InheritAgent == nil || reviewer.CredentialReference == nil {
+			return Config{}, schemaError("The approval_reviewer profile must explicitly name its role, inheritance choice, and credential reference.")
+		}
+		if !*reviewer.InheritAgent && !reviewer.complete(true) {
+			return Config{}, schemaError("A non-inheriting approval_reviewer profile must provide every model setting.")
+		}
+		base := defaultReviewerProfile()
+		if *reviewer.InheritAgent {
+			base = config.Models.Agent
+			base.Role = ModelRoleApprovalReviewer
+			base.Streaming = false
+			base.ToolCallingRequired = false
+		}
+		resolved := applyProfileDocument(base, reviewer)
+		config.Models.ApprovalReviewer = &resolved
+	}
+	return config, nil
 }
 
 func (profile *modelProfileDocument) complete(requireInheritance bool) bool {
@@ -461,7 +403,7 @@ func (profile *modelProfileDocument) complete(requireInheritance bool) bool {
 		profile.RequestTimeoutSeconds != nil && profile.Streaming != nil && profile.ToolCallingRequired != nil
 }
 
-func applyRootDocument(config *Config, document configV2Document) {
+func applyRootDocument(config *Config, document configDocument) {
 	if document.Context != nil {
 		config.Context = *document.Context
 	}
@@ -611,59 +553,48 @@ func extractSensitiveConfig(content []byte) ([]byte, extractedCredentials, int, 
 	extraErr := decoder.Decode(&extra)
 	version, versionOK := configDocumentVersion(&document)
 	if decodeErr != nil || !errors.Is(extraErr, io.EOF) || containsProhibitedYAMLNode(&document) ||
-		!versionOK || (version != LegacyVersion && version != CurrentVersion) {
+		!versionOK || version != CurrentVersion {
 		return nil, extractedCredentials{}, version, schemaError("Configuration values must use a supported version and the documented YAML types without null, alias, or merge values.")
 	}
-	if !validConfigYAMLDocument(&document, true, version) {
+	if !validConfigYAMLDocument(&document, true) {
 		return nil, extractedCredentials{}, version, schemaError("Configuration values must use the documented YAML types and must not contain unknown or duplicate fields.")
 	}
 	root := document.Content[0]
 	var credentials extractedCredentials
-	if version == LegacyVersion {
-		model := mappingValue(root, "model")
-		if model != nil {
+	models := mappingValue(root, "models")
+	if models != nil {
+		if agent := mappingValue(models, "agent"); agent != nil {
 			var err error
-			credentials.agent, credentials.agentFound, err = extractProfileCredential(model)
+			credentials.agent, credentials.agentFound, err = extractProfileCredential(agent)
 			if err != nil {
 				return nil, extractedCredentials{}, version, err
 			}
 		}
-	} else {
-		models := mappingValue(root, "models")
-		if models != nil {
-			if agent := mappingValue(models, "agent"); agent != nil {
-				var err error
-				credentials.agent, credentials.agentFound, err = extractProfileCredential(agent)
-				if err != nil {
-					return nil, extractedCredentials{}, version, err
-				}
-			}
-			if reviewer := mappingValue(models, "approval_reviewer"); reviewer != nil {
-				var err error
-				credentials.reviewer, credentials.reviewerFound, err = extractProfileCredential(reviewer)
-				if err != nil {
-					credentials.destroy()
-					return nil, extractedCredentials{}, version, err
-				}
+		if reviewer := mappingValue(models, "approval_reviewer"); reviewer != nil {
+			var err error
+			credentials.reviewer, credentials.reviewerFound, err = extractProfileCredential(reviewer)
+			if err != nil {
+				credentials.destroy()
+				return nil, extractedCredentials{}, version, err
 			}
 		}
-		observability := mappingValue(root, "observability")
-		if observability != nil {
-			if prometheus := mappingValue(observability, "prometheus"); prometheus != nil {
-				var err error
-				credentials.prometheus, credentials.prometheusFound, err = extractProfileCredential(prometheus)
-				if err != nil {
-					credentials.destroy()
-					return nil, extractedCredentials{}, version, err
-				}
+	}
+	observability := mappingValue(root, "observability")
+	if observability != nil {
+		if prometheus := mappingValue(observability, "prometheus"); prometheus != nil {
+			var err error
+			credentials.prometheus, credentials.prometheusFound, err = extractProfileCredential(prometheus)
+			if err != nil {
+				credentials.destroy()
+				return nil, extractedCredentials{}, version, err
 			}
-			if loki := mappingValue(observability, "loki"); loki != nil {
-				var err error
-				credentials.loki, credentials.lokiFound, err = extractProfileCredential(loki)
-				if err != nil {
-					credentials.destroy()
-					return nil, extractedCredentials{}, version, err
-				}
+		}
+		if loki := mappingValue(observability, "loki"); loki != nil {
+			var err error
+			credentials.loki, credentials.lokiFound, err = extractProfileCredential(loki)
+			if err != nil {
+				credentials.destroy()
+				return nil, extractedCredentials{}, version, err
 			}
 		}
 	}
@@ -737,7 +668,7 @@ func configDocumentVersion(document *yaml.Node) (int, bool) {
 	return version, seen
 }
 
-func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version int) bool {
+func validConfigYAMLDocument(document *yaml.Node, allowCredential bool) bool {
 	if document == nil || document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
 		return false
 	}
@@ -771,31 +702,27 @@ func validConfigYAMLDocument(document *yaml.Node, allowCredential bool, version 
 				return false
 			}
 		case "terminal_status_titles":
-			if version != CurrentVersion || !yamlScalar(value, "!!bool") {
+			if !yamlScalar(value, "!!bool") {
 				return false
 			}
 		case "runtime":
 			if !validRuntimeYAML(value) {
 				return false
 			}
-		case "model":
-			if version != LegacyVersion || !validModelYAML(value, allowCredential, false) {
-				return false
-			}
 		case "models":
-			if version != CurrentVersion || !validModelsYAML(value, allowCredential) {
+			if !validModelsYAML(value, allowCredential) {
 				return false
 			}
 		case "kubernetes":
-			if !validKubernetesYAML(value, version == CurrentVersion) {
+			if !validKubernetesYAML(value, true) {
 				return false
 			}
 		case "local_execution":
-			if version != CurrentVersion || !validLocalExecutionYAML(value) {
+			if !validLocalExecutionYAML(value) {
 				return false
 			}
 		case "observability":
-			if version != CurrentVersion || !validObservabilityYAML(value, allowCredential) {
+			if !validObservabilityYAML(value, allowCredential) {
 				return false
 			}
 		case "logging":
@@ -840,17 +767,17 @@ func validRuntimeYAML(node *yaml.Node) bool {
 
 func validModelsYAML(node *yaml.Node, allowCredential bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
-		return (key == "agent" || key == "approval_reviewer") && validModelYAML(value, allowCredential, true)
+		return (key == "agent" || key == "approval_reviewer") && validModelYAML(value, allowCredential)
 	})
 }
 
-func validModelYAML(node *yaml.Node, allowCredential, named bool) bool {
+func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
 		case "name", "role", "credential_ref":
-			return named && yamlString(value)
+			return yamlString(value)
 		case "inherit_agent":
-			return named && yamlScalar(value, "!!bool")
+			return yamlScalar(value, "!!bool")
 		case "provider_kind", "endpoint", "model", "reasoning_effort":
 			return yamlString(value)
 		case "api_key":

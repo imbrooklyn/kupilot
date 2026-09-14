@@ -128,7 +128,7 @@ The current source implements the fixed fourteen-Tool operational catalog,
 named Agent and optional Reviewer profiles, Session context and summarization,
 permission supervision, remote diagnostics, local execution policy, and the
 typed remediation catalog. `config.example.yaml` uses the current strict
-version 2 schema and intentionally contains no credential.
+version 1 schema and intentionally contains no credential.
 
 Start a new Session with:
 

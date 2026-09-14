@@ -16,9 +16,10 @@ This file records notable user-visible changes to Kupilot.
   permission profiles, `/permissions`, detailed local `/status`, inline
   approval/reviewer state, narrow Session rules, and one-attempt action
   supervision.
-- Added strict version 2 configuration, forward-only SQLite migrations through
-  migration 16, split least-privilege RBAC fixtures, and opt-in tagged model,
-  Reviewer, Session, and disposable-cluster integration harnesses.
+- Added strict version 1 named-profile configuration, forward-only SQLite
+  migrations through migration 16, split least-privilege RBAC fixtures, and
+  opt-in tagged model, Reviewer, Session, and disposable-cluster integration
+  harnesses.
 - Added active-run `Enter` steering at the next model boundary, a bounded
   process-local FIFO follow-up queue on active-run `Tab`, and empty-composer
   `Alt+Up` edit-last for queued or recovered ordinary input.
@@ -47,6 +48,8 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Fixed first startup and local Session diagnostics to prepare the private
+  SQLite state directory before acquiring its process lock.
 - Scaled the immutable runtime time profiles for slower local models. The
   default `balanced` profile now permits a 30-minute AgentRun, a 600-second
   model request, and a 120-second Tool request; `compact` and `extended`
