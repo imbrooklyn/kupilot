@@ -45,13 +45,17 @@ This file records notable user-visible changes to Kupilot.
   profile, submitted-input reverse search, semantic scrollback navigation,
   bounded composer undo/redo, redacted `/doctor`/`kupilot doctor`, reduced
   motion, and textual non-color accessibility.
-- Added strict answer-or-clarification response schema 2, completeness/source-
+- Added strict answer-or-clarification response schema 3, completeness/source-
   coverage manifests, Evidence freshness/conflict/supersession, narrow same-run
   safe-read reuse, deterministic endpoint conformance and prompt-injection
   fixtures, and a unified zero-auto-retry recovery matrix.
 
 ### Changed
 
+- Derive claim SHA-256 metadata in deterministic runtime code after bounded
+  normalization instead of requiring the Agent model to calculate it. Strict
+  response schema 3 keeps all same-run/generation Evidence checks while
+  reducing false invalid-response failures after successful Tool calls.
 - Aligned model-egress preflight validation with the code-owned 900-second
   model-request ceiling so the `extended` budget profile reaches the configured
   provider instead of failing before transport.
@@ -88,11 +92,11 @@ This file records notable user-visible changes to Kupilot.
 - Reconstruct retained final assistant answers in the strict response envelope
   during Session replay so follow-up turns keep the structured protocol while
   historic Evidence and action proposals remain non-authoritative.
-- Invalid, stale, duplicate, cross-run, out-of-order, or hash-mismatched claim
-  coverage now fails the final response instead of silently deleting
-  citations. The pinned Chat Completions stack has no provable same-response
-  continuation, so disconnects retain unknown/recovered handling and receive
-  no automatic retry.
+- Invalid, stale, duplicate, cross-run, out-of-order, or internally
+  hash-inconsistent claim coverage now fails the final response instead of
+  silently deleting citations. The pinned Chat Completions stack has no
+  provable same-response continuation, so disconnects retain unknown/recovered
+  handling and receive no automatic retry.
 - Advanced new redacted Session exports to `kupilot.export-summary.v4` so the
   bounded structural claim/Evidence coverage manifest accompanies the
   validated answer or typed clarification without adding raw Evidence or

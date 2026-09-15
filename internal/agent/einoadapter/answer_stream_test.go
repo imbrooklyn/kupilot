@@ -126,13 +126,13 @@ func TestAdapterStreamsFragmentedAnswerWithoutEnvelopeMetadata(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	const answer = "Streaming answer arrives in several visible fragments."
-	const diagnosis = `{"answer_markdown":"` + answer + `","evidence_citations":[],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
+	const diagnosis = `{"answer_markdown":"` + answer + `","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
 	chunks := []*schema.Message{
 		{Role: schema.Assistant, Content: `{"answer_markdown":"Streaming `},
 		{Role: schema.Assistant, Content: "answer arrives "},
 		{Role: schema.Assistant, Content: "in several "},
 		{Role: schema.Assistant, Content: `visible fragments.","evidence_citations":[]`},
-		{Role: schema.Assistant, Content: `,"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`},
+		{Role: schema.Assistant, Content: `,"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`},
 		{Role: schema.Assistant, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"}},
 	}
 	model := &recordingModel{scripts: []modelScript{scriptedChunks(chunks...)}}
@@ -209,7 +209,7 @@ func TestAdapterBlocksJSONEscapedCredentialFromEveryDiagnosisSink(t *testing.T) 
 		{
 			name: "citation metadata",
 			diagnosis: `{"answer_markdown":"Safe provisional answer.","evidence_citations":[{"sequence":1,"claim":"` + escaped +
-				`","claim_type":"unsupported_observation","claim_hash":"661a251f9fde14b9e426d1bbb3d8cad0786d9a0129aa806810d0880df1de0426",` +
+				`","claim_type":"unsupported_observation",` +
 				`"evidence_ids":[],"coverage_state":"unsupported"}],"proposed_actions":[]}`,
 		},
 		{

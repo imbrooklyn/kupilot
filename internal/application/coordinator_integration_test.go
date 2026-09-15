@@ -870,22 +870,22 @@ func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) 
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	const claim = "The Pod is not Ready."
 	return fmt.Sprintf(
-		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
-		claim, domain.SHA256Hex(claim), evidenceID,
+		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		claim, evidenceID,
 	)
 }
 
 func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
 	claim := "The projected condition includes token=" + canary
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
-		claim, claim, domain.SHA256Hex(claim), evidenceID,
+		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		claim, claim, evidenceID,
 	)
 }
 
 func integrationUnreferencedDiagnosisJSON(canary string) string {
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[],"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
 		"Review the observation without claiming it; marker="+canary,
 	)
 }

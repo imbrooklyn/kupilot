@@ -148,9 +148,8 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 	}
 	type citation struct {
 		Sequence      int                       `json:"sequence"`
-		ClaimType     domain.ClaimKind          `json:"claim_type"`
 		Claim         string                    `json:"claim"`
-		ClaimHash     string                    `json:"claim_hash"`
+		ClaimType     domain.ClaimKind          `json:"claim_type"`
 		EvidenceIDs   []domain.EvidenceID       `json:"evidence_ids"`
 		CoverageState domain.ClaimCoverageState `json:"coverage_state"`
 	}
@@ -165,14 +164,14 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 		Questions             []domain.ClarificationQuestion `json:"questions"`
 	}{
 		AnswerMarkdown: source.AnswerMarkdown, ProposedActions: source.ProposedActions,
-		ResponseSchemaVersion: 2, Outcome: "answer", StopReason: domain.RunTerminalCompleted,
+		ResponseSchemaVersion: 3, Outcome: "answer", StopReason: domain.RunTerminalCompleted,
 		Limitations: []domain.MissingInformation{}, Questions: []domain.ClarificationQuestion{},
 	}
 	result.EvidenceCitations = make([]citation, len(source.EvidenceCitations))
 	for index, item := range source.EvidenceCitations {
 		result.EvidenceCitations[index] = citation{
 			Sequence: index + 1, ClaimType: domain.ClaimCurrentObservation,
-			Claim: item.Claim, ClaimHash: domain.SHA256Hex(item.Claim),
+			Claim:         item.Claim,
 			EvidenceIDs:   append([]domain.EvidenceID(nil), item.EvidenceIDs...),
 			CoverageState: domain.ClaimCoverageVerified,
 		}

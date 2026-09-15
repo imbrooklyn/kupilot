@@ -248,7 +248,6 @@ type ClaimCoverageDraft struct {
 	Sequence    int
 	Kind        domain.ClaimKind
 	Text        string
-	TextHash    string
 	EvidenceIDs []domain.EvidenceID
 	State       domain.ClaimCoverageState
 }
@@ -520,15 +519,12 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 		}
 	}
 	for index, coverage := range draft.ClaimCoverage {
-		if coverage.TextHash != domain.SHA256Hex(coverage.Text) {
-			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
-		}
 		text, err := sanitizeDiagnosisText(coverage.Text)
 		if err != nil {
 			return DiagnosisDraft{}, err
 		}
 		result.ClaimCoverage[index] = ClaimCoverageDraft{
-			Sequence: coverage.Sequence, Kind: coverage.Kind, Text: text, TextHash: domain.SHA256Hex(text),
+			Sequence: coverage.Sequence, Kind: coverage.Kind, Text: text,
 			EvidenceIDs: append([]domain.EvidenceID(nil), coverage.EvidenceIDs...), State: coverage.State,
 		}
 	}
@@ -551,13 +547,14 @@ func bindClaimCoverage(
 	seenClaims := make(map[string]struct{}, len(drafts))
 	result := make([]domain.ClaimEvidenceCoverage, len(drafts))
 	for index, draft := range drafts {
-		if draft.Sequence != index+1 || draft.TextHash != domain.SHA256Hex(draft.Text) {
+		if draft.Sequence != index+1 {
 			return nil, ErrInvalidDiagnosisDraft
 		}
-		if _, duplicate := seenClaims[draft.TextHash]; duplicate {
+		textHash := domain.SHA256Hex(draft.Text)
+		if _, duplicate := seenClaims[textHash]; duplicate {
 			return nil, ErrInvalidDiagnosisDraft
 		}
-		seenClaims[draft.TextHash] = struct{}{}
+		seenClaims[textHash] = struct{}{}
 		lastPosition := -1
 		for _, id := range draft.EvidenceIDs {
 			evidence, exists := snapshot.items[id]
@@ -569,7 +566,7 @@ func bindClaimCoverage(
 			lastPosition = position
 		}
 		result[index] = domain.ClaimEvidenceCoverage{
-			Sequence: draft.Sequence, Kind: draft.Kind, Text: draft.Text, TextHash: draft.TextHash,
+			Sequence: draft.Sequence, Kind: draft.Kind, Text: draft.Text, TextHash: textHash,
 			EvidenceIDs: append([]domain.EvidenceID(nil), draft.EvidenceIDs...), RunID: registry.runID,
 			Scope: registry.scope.Snapshot(), PolicyGeneration: policy, State: draft.State,
 		}

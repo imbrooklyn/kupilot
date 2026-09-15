@@ -300,13 +300,14 @@ composer undo/redo, and redacted local `/doctor`. Every safety state has text
 or a stable symbol in `NO_COLOR`, ANSI-16, reduced-motion, narrow, and restored-
 scrollback modes.
 
-Strict response schema 2 supports either an answer or one to three typed
+Strict response schema 3 supports either an answer or one to three typed
 clarification questions. It carries a bounded completeness manifest with
 authoritative stop reason, source coverage, freshness, exact typed conflict or
-supersession, limitations, and claim/Evidence provenance. Application may
-reuse only an exact complete same-run safe read within its code-owned freshness
-window. Clarification, plans, cached reads, and model stop suggestions create
-no action or approval authority.
+supersession, limitations, and claim/Evidence provenance. Claim hashes are
+derived locally after bounded normalization rather than supplied by the model.
+Application may reuse only an exact complete same-run safe read within its
+code-owned freshness window. Clarification, plans, cached reads, and model stop
+suggestions create no action or approval authority.
 
 ## Product identity and non-goals
 

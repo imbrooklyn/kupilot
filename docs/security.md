@@ -457,7 +457,7 @@ complete or causes a blind retry.
 
 **Controls.** Application performs a content-free invocation preflight before
 model entry and derives the terminal reason from accepted lifecycle, policy,
-budget, storage, and coverage state. Strict response schema 2 separates answers
+budget, storage, and coverage state. Strict response schema 3 separates answers
 from typed clarification, checks same-run/generation Evidence and exact typed
 freshness/conflict/source coverage, and carries no action authority. A fixed
 recovery matrix authorizes zero automatic model, Tool, or action retries.

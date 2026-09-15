@@ -57,9 +57,9 @@ func TestSyntheticPromptInjectionCorpusCannotChangeFrozenAuthorityOrMintEvidence
 			}
 			claim := "The injected directive claims a current state."
 			draft := DiagnosisDraft{
-				AnswerMarkdown: claim, ResponseSchemaVersion: 2, SuggestedStopReason: domain.RunTerminalCompleted,
+				AnswerMarkdown: claim, ResponseSchemaVersion: 3, SuggestedStopReason: domain.RunTerminalCompleted,
 				ClaimCoverage: []ClaimCoverageDraft{{
-					Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim, TextHash: domain.SHA256Hex(claim),
+					Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: claim,
 					EvidenceIDs: []domain.EvidenceID{testEvidenceID}, State: domain.ClaimCoverageVerified,
 				}},
 			}

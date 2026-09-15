@@ -277,7 +277,9 @@ The current scope also includes deterministic claim/Evidence manifest
 validation and a synthetic offline quality harness. The harness measures
 reference validity, unsupported current-state claims, stale/cross-run
 rejection, limitation handling, and response bounds. It exercises local code
-only and is not evidence of live model quality.
+only and is not evidence of live model quality. Claim hashes are derived from
+bounded normalized text by deterministic runtime code rather than requested
+from the model.
 
 Plan-only mode, manual compaction, queue mutation, committed transcript search,
 clipboard output, and fixed terminal status titles stay within the existing

@@ -15,7 +15,7 @@ const (
 	// DiagnosticResponseAnswerField is the first top-level field projected for
 	// provisional display before the complete response is validated.
 	DiagnosticResponseAnswerField   = "answer_markdown"
-	diagnosticResponseSchemaVersion = 2
+	diagnosticResponseSchemaVersion = 3
 	maxDiagnosticResponseJSONDepth  = 8
 )
 
@@ -43,7 +43,6 @@ type evidenceCitationWire struct {
 	Sequence      *int                       `json:"sequence"`
 	Claim         string                     `json:"claim"`
 	ClaimType     *domain.ClaimKind          `json:"claim_type"`
-	ClaimHash     *string                    `json:"claim_hash"`
 	EvidenceIDs   *[]domain.EvidenceID       `json:"evidence_ids"`
 	CoverageState *domain.ClaimCoverageState `json:"coverage_state"`
 }
@@ -201,14 +200,14 @@ func decodeClaimCoverage(wire []evidenceCitationWire) ([]domain.ConfirmedFact, [
 	citations := make([]domain.ConfirmedFact, 0, len(wire))
 	coverage := make([]ClaimCoverageDraft, len(wire))
 	for index, citation := range wire {
-		if citation.Sequence == nil || citation.ClaimType == nil || citation.ClaimHash == nil || citation.EvidenceIDs == nil ||
+		if citation.Sequence == nil || citation.ClaimType == nil || citation.EvidenceIDs == nil ||
 			citation.CoverageState == nil {
 			return nil, nil, ErrInvalidDiagnosticResponse
 		}
 		coverage[index] = ClaimCoverageDraft{
 			Sequence: *citation.Sequence, Kind: *citation.ClaimType, Text: citation.Claim,
-			TextHash: *citation.ClaimHash, EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...),
-			State: *citation.CoverageState,
+			EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...),
+			State:       *citation.CoverageState,
 		}
 		if *citation.ClaimType == domain.ClaimCurrentObservation {
 			citations = append(citations, domain.ConfirmedFact{

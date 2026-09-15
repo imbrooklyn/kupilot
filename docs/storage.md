@@ -155,7 +155,9 @@ authority.
 Migration 14 adds bounded purpose-specific `claim_coverage_json` and
 `plan_json` columns to Diagnosis rows. New writes decode these columns only
 through the fixed claim/Evidence and plan DTOs; legacy `NULL` values remain
-readable. The columns contain no Evidence payload, model response object,
+readable. Claim hashes stored in the coverage DTO are derived locally from
+normalized claim text and checked again when read. The columns contain no
+Evidence payload, model response object,
 queue state, executable input, ActionEnvelope, approval, or resumable plan
 authority.
 

@@ -154,7 +154,7 @@ an action phrase is authority.
 
 - Only deterministic local capability handling creates Evidence.
 - A new strict response with a missing, unknown, duplicate, cross-run,
-  cross-generation, stale, out-of-order, hash-mismatched, or unauthorized
+  cross-generation, stale, out-of-order, internally hash-inconsistent, or unauthorized
   Evidence reference fails closed and is not committed as a successful answer.
   Retained legacy records may still display their bounded validation warnings.
 - A proposal does not mean approved, attempted, accepted, or verified.
@@ -169,10 +169,11 @@ an action phrase is authority.
 Model output may still be incomplete or wrong. Evidence is a time-bounded
 projection and not a guarantee that cluster state is unchanged.
 
-Strict response schema 2 records only bounded declared claims, limitations,
+Strict response schema 3 records only bounded declared claims, limitations,
 source coverage, freshness/conflict state, Evidence identifiers, stop reason,
-or one to three typed clarification questions. Application checks provenance
-and derives the authoritative stop reason. This metadata proves structure and
+or one to three typed clarification questions. Application checks provenance,
+derives normalized claim hashes locally, and derives the authoritative stop
+reason. This metadata proves structure and
 ownership, not semantic correctness or exhaustive real-world coverage.
 
 Some compatible models emit commentary before or alongside a structured Tool

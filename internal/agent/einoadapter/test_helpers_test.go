@@ -401,7 +401,7 @@ func strictTestDiagnosis(content string) string {
 		return content
 	}
 	return strings.TrimSuffix(trimmed, "}") +
-		`,"response_schema_version":2,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
+		`,"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
 }
 
 func resourceCall(id, podName string) agent.ToolSelection {

@@ -16,7 +16,7 @@ func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.D
 	if message == nil || message.Role != schema.Assistant || message.Content == "" ||
 		message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 ||
 		unsupportedMessageFields(message) {
-		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelEnvelope, nil)
 	}
 	var (
 		draft agent.DiagnosisDraft
@@ -28,7 +28,7 @@ func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.D
 		draft, err = agent.DecodeDiagnosticResponse(message.Content)
 	}
 	if err != nil {
-		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
+		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelEnvelope, err)
 	}
 	return draft, nil
 }
@@ -59,7 +59,7 @@ func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agen
 		}
 	}
 	for _, coverage := range draft.ClaimCoverage {
-		values = append(values, coverage.Text, coverage.TextHash, string(coverage.Kind), string(coverage.State))
+		values = append(values, coverage.Text, string(coverage.Kind), string(coverage.State))
 	}
 	for _, hypothesis := range draft.Hypotheses {
 		values = append(values, hypothesis.Statement, hypothesis.Falsifier)

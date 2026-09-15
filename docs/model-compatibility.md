@@ -432,7 +432,7 @@ or summarization call.
 | Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
 | Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
 | Eligible durable recent tail after summarization | At least 16 user/assistant Messages and at most 25 so the cut remains on a complete-run boundary; current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
-| Retained final assistant answer representation | Complete current strict response schema 2 envelope containing the validated Markdown answer, empty Evidence/action/limitation/question arrays, and the current outcome members; raw model traffic is never replayed |
+| Retained final assistant answer representation | Complete current strict response schema 3 envelope containing the validated Markdown answer, empty Evidence/action/limitation/question arrays, and the current outcome members; raw model traffic is never replayed |
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |
@@ -587,7 +587,7 @@ synthetic English content and loopback `httptest` servers.
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 | Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
 | Scripted steer boundary routes | Summary-before-steer order, durable commit before model I/O, exact-once active input, intact Tool pairs, and zero model calls after a failed barrier |
-| Current-schema history routes | Complete schema 2 retained assistant representation and a later strict final without retired three-member imitation |
+| Current-schema history routes | Complete schema 3 retained assistant representation and a later strict final without retired three-member imitation |
 | Native Ollama request recorder | Exact `/api/chat`, no Authorization, NDJSON/JSON media, bounded native format/options, deterministic Tool-call pairing, usage normalization, and no redirect or fallback |
 
 <!-- markdownlint-enable MD013 -->
@@ -633,7 +633,7 @@ Before each real Agent endpoint entry, the run-bound Application preflight
 verifies exact input sequencing, scope/policy/profile/origin/consent, context
 coverage, Tool catalog, storage, budgets, sink, mode, and recovery state, then
 emits its content-free projection. New model final output must use strict
-response schema 2 and choose exactly one `answer` or `needs_user_input`
+response schema 3 and choose exactly one `answer` or `needs_user_input`
 outcome. The completeness manifest, clarification bounds, and authoritative
 stop reason are validated after Eino assembly without adding another model
 role or answer critic.
@@ -677,6 +677,18 @@ single-request observation with explicit `think: false` ended with empty
 content and no Tool call; it was not retried and is not counted as a pass. This
 evidence is exact-version compatibility only. Live Reviewer evaluation and
 live cluster integration were not run.
+
+After ADR-0056, a separately authorized bounded native run on the same date
+used Ollama `0.34.0`, `gpt-oss:20b`, and the loopback `/api/chat` route with
+synthetic Tool data and zero Kubernetes access. The four-call protocol suite
+sent 74,223 request bytes and reported 12,716 input, 462 output, and 13,178
+total tokens while validating a Tool result, schema 3 final, and later-turn
+schema 3 final. The full Agent then completed schema 3 after one Tool execution;
+two model requests sent 105,125 aggregate request bytes. Its final contained a
+verified current observation, an exact current-run Evidence reference, and a
+runtime-derived claim hash. No repair request, fallback, or retry followed
+validation. This is exact local compatibility evidence, not live cluster or
+general model-quality evidence.
 
 ## References
 

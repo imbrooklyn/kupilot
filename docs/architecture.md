@@ -480,7 +480,7 @@ Reviewer, attempt, ambiguity, and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
-The strict response schema 2 envelope contains bounded
+The strict response schema 3 envelope contains bounded
 `response_schema_version`, `outcome`, `answer_markdown`,
 `evidence_citations`, `proposed_actions`, `stop_reason`, `limitations`, and
 `questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
@@ -510,11 +510,12 @@ this restores local Eino pairing syntax without creating authority.
   safe proposal fields. It has no approval or executor authority.
 
 For new strict responses, runtime rejects missing, unknown, duplicate,
-cross-run, cross-generation, stale, out-of-order, hash-mismatched, or
+cross-run, cross-generation, stale, out-of-order, internally hash-inconsistent, or
 unauthorized claim/Evidence coverage before successful commit. Retained legacy
 records may still carry their bounded validation warnings. This validation does
-not claim semantic proof of arbitrary prose. The Evidence registry remains the
-source of accepted observations and observation time windows.
+not claim semantic proof of arbitrary prose. Claim hashes are derived locally
+after normalization. The Evidence registry remains the source of accepted
+observations and observation time windows.
 
 The prompt places `answer_markdown` first. The Eino boundary may pass its
 already decoded content chunks through an authority-free incremental JSON
@@ -802,7 +803,9 @@ Before each actual endpoint entry, a run-local bridge verifies the exact
 Session/Run, initial input and steer sequence, generations, profile/origin,
 consent, context coverage, Tool catalog, storage health, budget, sink, run mode,
 and recovery state. Its content-free event precedes model I/O. Strict response
-schema 2 then produces either a bounded answer manifest or typed clarification.
+schema 3 then produces either a bounded answer manifest or typed clarification.
+The Agent declares claim text, type, Evidence IDs, and coverage state; the
+runtime derives the normalized claim hash before binding the durable manifest.
 Application derives the terminal reason and safe next actions from accepted
 lifecycle state, so model prose cannot promote denied, partial, conflicting,
 unknown, or degraded work to completed.

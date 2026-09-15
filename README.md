@@ -219,7 +219,7 @@ Typed terminal reasons and next actions, bidirectional claim/Evidence
 navigation, provenance, content-free egress preflight and budget state, fixed
 Slash availability, a conservative terminal profile, `Ctrl+R` committed-input
 search, semantic transcript jumps, bounded `Alt+Z`/`Alt+Y` undo/redo, and local
-`/doctor` remain inside the same low-chrome screen. Strict response schema 2
+`/doctor` remain inside the same low-chrome screen. Strict response schema 3
 also admits one to three typed clarification questions. `NO_COLOR`, ANSI-16,
 reduced-motion, narrow-resize, IME/Unicode, and restored-scrollback behavior
 retain textual safety meaning.

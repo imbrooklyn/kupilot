@@ -463,7 +463,7 @@ func TestCoordinatorRejectsClarificationAfterToolLifecycle(t *testing.T) {
 			ID: domain.DiagnosisID(coordinatorUUID(961)), RunID: input.RunID(), Scope: input.Scope().Snapshot(),
 			AnswerMarkdown: answer, CreatedAt: clock.Now(), Clarification: &clarification,
 			Completeness: domain.AnswerCompletenessManifest{
-				SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 2,
+				SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 3,
 				StopReason: domain.RunTerminalNeedsUserInput, StopReasonBasis: domain.RunTerminalReasonFromClarification,
 			},
 		}

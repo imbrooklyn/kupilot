@@ -132,7 +132,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	usage.observe(textMessage)
 
 	toolMessages := []*schema.Message{
-		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 2, outcome as answer, stop_reason as completed, limitations as an empty array, and questions as an empty array."),
+		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 3, outcome as answer, stop_reason as completed, limitations as an empty array, and questions as an empty array."),
 		schema.UserMessage(`Call get_resource with {"detail":"summary","name":"synthetic-pod","namespace":null,"purpose":"Validate the protocol fixture.","resource_type":"pods"}. Do not answer in prose before the Tool call.`),
 	}
 	toolMessage, failure := client.stream(
@@ -284,6 +284,85 @@ func TestNativeOllamaFullAgentLive(t *testing.T) {
 		t.Fatalf("FAIL native Ollama full-Agent calls = %d, want 1..2", calls)
 	}
 	t.Logf("PASS native Ollama full Agent: calls=%d tools=%d request_bytes=%d", transport.calls.Load(), len(tool.Calls()), transport.requestBytes.Load())
+}
+
+// TestNativeOllamaEvidenceBackedAgentLive verifies the full Tool-to-final path
+// with synthetic Evidence. It never contacts Kubernetes or another data source.
+func TestNativeOllamaEvidenceBackedAgentLive(t *testing.T) {
+	if os.Getenv("KUPILOT_INTEGRATION_LIVE") != liveModelAuthorizationValue ||
+		os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET") != liveModelTargetOllama {
+		t.Skip("BLOCKED native Ollama Evidence integration: explicitly select the authorized ollama target")
+	}
+	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
+	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling {
+		t.Skip("BLOCKED native Ollama Evidence integration: provide the bounded authorized cost")
+	}
+
+	configuration, credential, _ := loadLiveModelProfile(t, liveModelTargetOllama)
+	if credential != nil {
+		credential.Destroy()
+		t.Fatal("native Ollama unexpectedly returned a credential")
+	}
+	transport := newLiveBudgetTransport(domain.ModelProviderOllama, 4, liveModelRequestByteCeiling)
+	client, modelError := newModelClientForTest(configuration, nil, nil, transport)
+	if modelError != nil {
+		t.Fatalf("FAIL native Ollama Evidence client preflight: %v", modelError)
+	}
+	clock := newTestClock()
+	var resultIndex int
+	tool := &recordingTool{execute: func(_ context.Context, call projectagent.BoundToolCall) domain.ToolResult {
+		resultIndex++
+		evidenceID := domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012x", 0x9000+resultIndex))
+		return successfulToolResult(t, call, evidenceID, clock.Now(), `{"phase":"Running"}`)
+	}}
+	adapter, err := newAdapter(runtimeConfig{
+		tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: &testIdentifiers{}, now: clock.Now,
+	}, client)
+	if err != nil {
+		client.close()
+		t.Fatalf("FAIL native Ollama Evidence adapter preflight: %v", err)
+	}
+	t.Cleanup(adapter.Close)
+	limits, err := projectagent.RunBudgetLimitsForProfile(projectagent.BudgetProfileExtended)
+	if err != nil {
+		t.Fatalf("FAIL native Ollama Evidence budget preflight: %v", err)
+	}
+	input, err := projectagent.NewRunInput(
+		testRunID, testSessionID, testMessageID,
+		"Call get_resource for sample-pod, then report the observed condition and cite its exact current-run Evidence ID.",
+		domain.ClusterScope{
+			Context: "test-context", Namespace: "test-namespace",
+			NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now(),
+		},
+		nil,
+		limits,
+	)
+	if err != nil {
+		t.Fatalf("FAIL native Ollama Evidence input preflight: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), domain.MaxModelRequestTimeout+time.Minute)
+	defer cancel()
+	outcome := adapter.Run(ctx, input, newEventRecorder())
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || len(tool.Calls()) < 1 {
+		t.Fatalf("MODEL_CAPABILITY_FAIL native Ollama Evidence outcome: status=%s diagnosis=%t class=%v tools=%d",
+			outcome.Status, outcome.Diagnosis != nil, outcome.ErrorClass, len(tool.Calls()))
+	}
+	verified := false
+	for _, claim := range outcome.Diagnosis.ClaimCoverage {
+		if claim.TextHash != domain.SHA256Hex(claim.Text) {
+			t.Fatal("FAIL native Ollama Evidence: runtime-derived claim hash was inconsistent")
+		}
+		if claim.Kind == domain.ClaimCurrentObservation && len(claim.EvidenceIDs) > 0 {
+			verified = true
+		}
+	}
+	if !verified {
+		t.Fatal("MODEL_CAPABILITY_FAIL native Ollama Evidence: no verified current observation was returned")
+	}
+	if calls := transport.calls.Load(); calls < 2 || calls > 4 {
+		t.Fatalf("FAIL native Ollama Evidence calls = %d, want 2..4", calls)
+	}
+	t.Logf("PASS native Ollama Evidence-backed Agent: calls=%d tools=%d request_bytes=%d", transport.calls.Load(), len(tool.Calls()), transport.requestBytes.Load())
 }
 
 type liveUsageObservation struct {
@@ -470,7 +549,7 @@ func validateLiveStructuredFinal(message *schema.Message) error {
 	if err != nil {
 		return fmt.Errorf("final response did not satisfy the current strict contract: %w", err)
 	}
-	if strings.TrimSpace(draft.AnswerMarkdown) == "" || draft.ResponseSchemaVersion != 2 ||
+	if strings.TrimSpace(draft.AnswerMarkdown) == "" || draft.ResponseSchemaVersion != 3 ||
 		len(draft.ConfirmedFacts) != 0 || len(draft.ClaimCoverage) != 0 || len(draft.RecommendedActions) != 0 ||
 		len(draft.MissingInformation) != 0 || draft.Clarification != nil {
 		return fmt.Errorf(

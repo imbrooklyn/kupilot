@@ -222,7 +222,7 @@ func (state *runState) validateDiagnosis(draft agent.DiagnosisDraft, modelDraft 
 		if errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
 			return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 		}
-		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
+		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelCoverage, err)
 	}
 	return diagnosis, nil
 }

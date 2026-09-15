@@ -16,6 +16,8 @@ var (
 const (
 	safeInternalFailure           = "The diagnostic runtime failed safely."
 	safeInvalidModelResponse      = "The model returned an invalid diagnostic response."
+	safeInvalidModelEnvelope      = "The model response did not match the required answer structure."
+	safeInvalidModelCoverage      = "The model answer did not pass local Evidence and safety validation."
 	safeInvalidToolResult         = "A cluster-reading tool returned data outside the safe result contract."
 	safeEventRejected             = "The diagnostic event stream could not be accepted safely."
 	safeScopeStale                = "The diagnostic run stopped because the Kubernetes context or namespace changed."

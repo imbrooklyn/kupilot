@@ -351,7 +351,7 @@ func claimCoverageRegistry(t *testing.T) (*EvidenceRegistry, RunInput, domain.Ev
 
 func validCoverageDraft(sequence int, kind domain.ClaimKind, text string, state domain.ClaimCoverageState, ids ...domain.EvidenceID) ClaimCoverageDraft {
 	return ClaimCoverageDraft{
-		Sequence: sequence, Kind: kind, Text: text, TextHash: domain.SHA256Hex(text),
+		Sequence: sequence, Kind: kind, Text: text,
 		EvidenceIDs: append([]domain.EvidenceID(nil), ids...), State: state,
 	}
 }
@@ -376,7 +376,7 @@ func TestClaimCoverageBindsObservationInferenceUncertaintyAndUnsupportedState(t 
 	}
 	for index, item := range diagnosis.ClaimCoverage {
 		if item.Sequence != index+1 || item.RunID != input.RunID() || item.Scope != input.Scope().Snapshot() ||
-			item.PolicyGeneration != input.PolicyGeneration() {
+			item.PolicyGeneration != input.PolicyGeneration() || item.TextHash != domain.SHA256Hex(item.Text) {
 			t.Fatalf("bound coverage[%d] = %#v", index, item)
 		}
 	}
@@ -412,9 +412,9 @@ func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
 			},
 		},
 		{
-			name: "hash mismatch",
-			mutate: func(_ *EvidenceRegistry, _ RunInput, _, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
-				(*coverage)[0].TextHash = domain.SHA256Hex("different text")
+			name: "duplicate claim",
+			mutate: func(_ *EvidenceRegistry, _ RunInput, first, _ domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
+				*coverage = append(*coverage, validCoverageDraft(2, domain.ClaimCurrentObservation, (*coverage)[0].Text, domain.ClaimCoverageVerified, first))
 			},
 		},
 		{
@@ -568,7 +568,7 @@ func TestAnswerCompletenessDistinguishesNegativeAndUnavailableSourceCoverage(t *
 				t.Fatalf("AcceptToolResult() error = %v", err)
 			}
 			diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-				AnswerMarkdown: "The bounded source state is reported without inferring omitted objects.", ResponseSchemaVersion: 2,
+				AnswerMarkdown: "The bounded source state is reported without inferring omitted objects.", ResponseSchemaVersion: 3,
 				SuggestedStopReason: domain.RunTerminalCompleted,
 			}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
 			if err != nil || len(diagnosis.Completeness.Sources) != 1 {
@@ -609,7 +609,7 @@ func TestAnswerCompletenessMarksExactOlderEvidenceSuperseded(t *testing.T) {
 	}
 	claim := "The Pod is not Ready."
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: claim, ResponseSchemaVersion: 2,
+		AnswerMarkdown: claim, ResponseSchemaVersion: 3,
 		ConfirmedFacts:      []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{testEvidenceID}}},
 		ClaimCoverage:       []ClaimCoverageDraft{validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, testEvidenceID)},
 		SuggestedStopReason: domain.RunTerminalCompleted,
@@ -640,7 +640,7 @@ func TestTypedClarificationHasNoEvidenceActionOrLimitationAuthority(t *testing.T
 		t.Fatalf("RenderClarificationMarkdown() error = %v", err)
 	}
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: answer, ResponseSchemaVersion: 2, SuggestedStopReason: domain.RunTerminalNeedsUserInput,
+		AnswerMarkdown: answer, ResponseSchemaVersion: 3, SuggestedStopReason: domain.RunTerminalNeedsUserInput,
 		Clarification: &request,
 	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
 	if err != nil || diagnosis.Clarification == nil || diagnosis.Completeness.StopReason != domain.RunTerminalNeedsUserInput ||
@@ -654,7 +654,7 @@ func TestModelSuggestedStopReasonCannotOverrideAcceptedCoverage(t *testing.T) {
 	registry, input, evidenceID, _ := claimCoverageRegistry(t)
 	claim := "The Pod is not Ready."
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: claim, ResponseSchemaVersion: 2,
+		AnswerMarkdown: claim, ResponseSchemaVersion: 3,
 		ConfirmedFacts: []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{evidenceID}}},
 		ClaimCoverage: []ClaimCoverageDraft{
 			validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, evidenceID),

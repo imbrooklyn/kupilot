@@ -438,7 +438,8 @@ allowlist. Only safe Session display metadata, the versioned safe summary and
 coverage explanation, committed user and final assistant text, validated answer
 metadata and legacy compatible Diagnosis fields, bounded claim/Evidence
 coverage metadata, and referenced Evidence summaries or expired markers are
-eligible.
+eligible. Claim hashes in that metadata are deterministic local derivatives of
+the retained normalized claim text, not model-supplied facts.
 Every eligible free-text field is redacted and bounded before rendering, and
 the complete document is processed and capped again.
 

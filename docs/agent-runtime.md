@@ -243,7 +243,7 @@ also binds the canonical source-origin hash, normalized series identity, and
 query window. Continuation tokens, generated PromQL/LogQL, and raw Kubernetes
 or data-source objects never enter Evidence.
 
-The final strict response schema 2 wire object emits `answer_markdown` first so
+The final strict response schema 3 wire object emits `answer_markdown` first so
 it can be projected without treating the rest of the envelope as visible text,
 then contains the remaining typed members:
 
@@ -255,9 +255,12 @@ then contains the remaining typed members:
 `answer_markdown` is bounded to 128 KiB before the complete Diagnosis ceiling
 is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
 without mandatory headings. A missing, unknown, duplicate, cross-run,
-cross-generation, stale, out-of-order, hash-mismatched, or unauthorized
+cross-generation, stale, out-of-order, internally hash-inconsistent, or unauthorized
 claim/Evidence reference rejects a new final result before successful commit.
 Retained legacy records may still expose their bounded validation warnings.
+The wire claim does not contain a model-supplied hash. Runtime derives the
+digest from bounded normalized claim text before constructing the durable
+manifest.
 
 Provisional text is delivery-only. It is independently bounded, checked for
 the exact model credential when one exists and for sensitive patterns across chunk boundaries,
@@ -427,7 +430,7 @@ At the Eino boundary, each retained final assistant answer is reconstructed in
 the complete current strict final-response JSON envelope. Only its locally
 validated visible Markdown is placed in `answer_markdown`;
 `evidence_citations`, `proposed_actions`, `limitations`, and `questions` are
-empty, while the remaining schema 2 outcome members retain the current grammar.
+empty, while the remaining schema 3 outcome members retain the current grammar.
 The durable Message remains the safe Markdown answer, not raw model traffic.
 This role-preserving representation prevents a prior visible answer from
 becoming a plain-text or retired-schema response example and cannot restore

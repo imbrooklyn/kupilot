@@ -20,6 +20,9 @@ func TestAdapterCompletesToolEvidenceAndValidatedDiagnosis(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
 	diagnosisJSON := readFixture(t, "agent-runtime-valid-diagnosis.json")
+	if _, err := agent.DecodeDiagnosticResponse(strictTestDiagnosis(diagnosisJSON)); err != nil {
+		t.Fatalf("strict Tool diagnosis fixture = %v", err)
+	}
 	model := &recordingModel{scripts: []modelScript{
 		scriptedChunks(toolCallChunks(resourceCall("call-1", "sample-pod"))...),
 		func(ctx context.Context, request recordedModelRequest) ([]*schema.Message, error) {
@@ -274,7 +277,7 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 			t.Fatalf("historic final answer = %#v, error = %v", historic, historyErr)
 		}
 		historicalDraft, historyErr := agent.DecodeDiagnosticResponse(request.Messages[2].Content)
-		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 2 ||
+		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 3 ||
 			len(historicalDraft.ConfirmedFacts) != 0 || len(historicalDraft.RecommendedActions) != 0 ||
 			len(historicalDraft.ClaimCoverage) != 0 || len(historicalDraft.MissingInformation) != 0 ||
 			historicalDraft.Clarification != nil {
@@ -848,7 +851,7 @@ func TestAdapterRejectsUnregisteredCitationWithoutGrantingAuthority(t *testing.T
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
 	if outcome.Status != domain.AgentRunStatusFailed || outcome.Diagnosis != nil || outcome.ErrorClass == nil ||
-		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse {
+		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.SafeMessage != safeInvalidModelCoverage {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
@@ -894,7 +897,8 @@ func TestAdapterRejectsMalformedFinalDiagnosis(t *testing.T) {
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
 	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
-		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.Diagnosis != nil {
+		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.Diagnosis != nil ||
+		outcome.SafeMessage != safeInvalidModelEnvelope {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {

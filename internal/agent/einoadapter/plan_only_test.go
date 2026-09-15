@@ -30,8 +30,8 @@ func planResponseJSON(title, step string, claim string, evidenceIDs ...domain.Ev
 			ids[index] = fmt.Sprintf("%q", id)
 		}
 		citations = fmt.Sprintf(
-			`{"sequence":1,"claim_type":"current_observation","claim":%q,"claim_hash":%q,"evidence_ids":[%s],"coverage_state":"verified"}`,
-			claim, domain.SHA256Hex(claim), strings.Join(ids, ","),
+			`{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%s],"coverage_state":"verified"}`,
+			claim, strings.Join(ids, ","),
 		)
 	}
 	return fmt.Sprintf(

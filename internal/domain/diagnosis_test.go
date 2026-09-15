@@ -165,6 +165,25 @@ func TestDiagnosisRejectsMixedClaimPolicyGenerations(t *testing.T) {
 	}
 }
 
+func TestClaimCoverageRejectsInternallyInconsistentRuntimeHash(t *testing.T) {
+	claim := "The current Pod readiness condition is false."
+	coverage := ClaimEvidenceCoverage{
+		Sequence: 1, Kind: ClaimCurrentObservation, Text: claim, TextHash: SHA256Hex(claim),
+		EvidenceIDs:      []EvidenceID{"00000000-0000-7000-8000-000000001403"},
+		RunID:            "00000000-0000-7000-8000-000000001401",
+		Scope:            ScopeSnapshot{Context: "test-context", Namespace: "test-namespace", Generation: 4},
+		PolicyGeneration: 7,
+		State:            ClaimCoverageVerified,
+	}
+	if !coverage.valid() {
+		t.Fatal("runtime-derived claim coverage was invalid")
+	}
+	coverage.TextHash = SHA256Hex("different normalized claim")
+	if coverage.valid() {
+		t.Fatal("internally inconsistent runtime hash was accepted")
+	}
+}
+
 func cloneDiagnosis(value Diagnosis) Diagnosis {
 	result := value
 	result.ConfirmedFacts = append([]ConfirmedFact(nil), value.ConfirmedFacts...)
