@@ -627,9 +627,13 @@ func (deniedIntegrationObservationActions) RecordObservationOutcome(context.Cont
 	return errors.New("observation action access was not expected")
 }
 
-func renderIntegrationUI(events []application.UIEvent) string {
+func renderIntegrationUI(events []application.UIEvent, widths ...int) string {
+	width := 120
+	if len(widths) != 0 {
+		width = widths[0]
+	}
 	model := tui.NewModel(tui.Config{
-		Width: 120, Height: 80, NoColor: true,
+		Width: width, Height: 80, NoColor: true,
 		Scope: tui.ScopeView{Context: "test-context", Namespace: "team-a", Generation: 7, ReadOnly: true, Verified: true},
 	})
 	for _, event := range events {
@@ -870,7 +874,7 @@ func (model *integrationModel) SetReviewPayloads(toolPurpose, diagnosis string) 
 func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	const claim = "The Pod is not Ready."
 	return fmt.Sprintf(
-		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"claim":%q,"claim_type":"current_observation","evidence_ids":[%q]}],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`,
 		claim, evidenceID,
 	)
 }
@@ -878,14 +882,14 @@ func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary string) string {
 	claim := "The projected condition includes token=" + canary
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%q],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		`{"answer_markdown":%q,"evidence_citations":[{"claim":%q,"claim_type":"current_observation","evidence_ids":[%q]}],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`,
 		claim, claim, evidenceID,
 	)
 }
 
 func integrationUnreferencedDiagnosisJSON(canary string) string {
 	return fmt.Sprintf(
-		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		`{"answer_markdown":%q,"evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`,
 		"Review the observation without claiming it; marker="+canary,
 	)
 }

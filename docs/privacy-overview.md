@@ -154,7 +154,7 @@ an action phrase is authority.
 
 - Only deterministic local capability handling creates Evidence.
 - A new strict response with a missing, unknown, duplicate, cross-run,
-  cross-generation, stale, out-of-order, internally hash-inconsistent, or unauthorized
+  cross-generation, stale, internally hash-inconsistent, or unauthorized
   Evidence reference fails closed and is not committed as a successful answer.
   Retained legacy records may still display their bounded validation warnings.
 - A proposal does not mean approved, attempted, accepted, or verified.
@@ -169,7 +169,7 @@ an action phrase is authority.
 Model output may still be incomplete or wrong. Evidence is a time-bounded
 projection and not a guarantee that cluster state is unchanged.
 
-Strict response schema 3 records only bounded declared claims, limitations,
+Strict response schema 4 records only bounded declared claims, limitations,
 source coverage, freshness/conflict state, Evidence identifiers, stop reason,
 or one to three typed clarification questions. Application checks provenance,
 derives normalized claim hashes locally, and derives the authoritative stop
@@ -445,3 +445,15 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Interaction failure diagnostics contain only fixed stage/reason codes and
+counters. They contain no raw response, Tool or Evidence payload, resource
+identity, endpoint, credential, or path. Clarification candidate presentation
+passes sensitivity checks even though runtime renders the validated typed
+questions instead.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

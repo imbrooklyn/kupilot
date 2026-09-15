@@ -101,8 +101,15 @@ func (state *runState) publish(ctx context.Context, event agent.RunEvent) error 
 	if err != nil {
 		return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 	}
-	if result == agent.EventSinkRejected {
-		return failedRuntime(domain.SafeErrorClassPersistenceUnavailable, safeEventRejected, nil)
+	switch result {
+	case agent.EventSinkRejected:
+		return failedAt(domain.FailureEventAcceptance, domain.SafeErrorClassInternal, nil)
+	case agent.EventSinkPreflightRejected:
+		return failedAt(domain.FailureRequestPreflight, domain.SafeErrorClassPolicyDenied, nil)
+	case agent.EventSinkStaleRejected:
+		return staleRuntime(nil)
+	case agent.EventSinkPersistenceRejected:
+		return failedAt(domain.FailurePersistence, domain.SafeErrorClassPersistenceUnavailable, nil)
 	}
 	return nil
 }
@@ -222,7 +229,7 @@ func (state *runState) validateDiagnosis(draft agent.DiagnosisDraft, modelDraft 
 		if errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
 			return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 		}
-		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelCoverage, err)
+		return domain.Diagnosis{}, failedAt(agent.InteractionFailureOf(err, domain.FailureClaimBinding), domain.SafeErrorClassInvalidExternalResponse, err)
 	}
 	return diagnosis, nil
 }
@@ -254,13 +261,14 @@ func (state *runState) finishFailure(ctx context.Context, err error) agent.RunOu
 	}
 	state.budget.Terminate(failure.stopReason)
 	event := terminalFailureEvent(failure)
+	event.Diagnostic = runtimeDiagnostic(failure)
 	terminalCtx := context.WithoutCancel(ctx)
 	_, _ = state.publisher.Publish(terminalCtx, event)
 	class := failure.class
 	outcome := agent.RunOutcome{
 		Status:      failure.status,
 		ErrorClass:  &class,
-		SafeMessage: failure.safeMessage,
+		SafeMessage: failure.safeMessage, Diagnostic: runtimeDiagnostic(failure),
 	}
 	if outcome.Validate(state.input) != nil {
 		return internalOutcome()

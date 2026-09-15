@@ -358,3 +358,14 @@ start time. Recovery is idempotent, honors Context cancellation, returns only a
 count, and never reconstructs or replays Agent, model, Tool, scope, approval, or
 write state. A validation or update failure rolls back the complete recovery
 operation and prevents resume results from being treated as available.
+
+## Deterministic response metadata and failure diagnostics
+
+No migration is required for response schema 4. The existing safe completeness
+JSON admits the new response version; durable Plan schema 1 remains unchanged.
+Released migrations are unchanged. Runtime failure diagnostics do not introduce
+a table, raw payload column, or second conversation store.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

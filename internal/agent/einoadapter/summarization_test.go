@@ -264,7 +264,7 @@ func TestEinoSummarySinkRejectionPreventsMainModelRequest(t *testing.T) {
 	sink := agent.EventSinkFunc(func(ctx context.Context, event agent.RunEvent) agent.EventSinkResult {
 		result := recorder.Publish(ctx, event)
 		if event.Kind == agent.RunEventSummaryReady {
-			return agent.EventSinkRejected
+			return agent.EventSinkPersistenceRejected
 		}
 		return result
 	})

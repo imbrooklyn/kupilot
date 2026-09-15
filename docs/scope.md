@@ -323,3 +323,13 @@ reuse are not new durable stores or resumable authority.
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Response schema 4 and plan wire schema 2 admit deterministic response
+normalization and fixed interaction failure diagnostics. They add no capability,
+data source, authority, retry, fallback, Agent, loop, or durable store.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

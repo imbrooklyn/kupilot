@@ -30,12 +30,12 @@ func planResponseJSON(title, step string, claim string, evidenceIDs ...domain.Ev
 			ids[index] = fmt.Sprintf("%q", id)
 		}
 		citations = fmt.Sprintf(
-			`{"sequence":1,"claim":%q,"claim_type":"current_observation","evidence_ids":[%s],"coverage_state":"verified"}`,
+			`{"claim":%q,"claim_type":"current_observation","evidence_ids":[%s]}`,
 			claim, strings.Join(ids, ","),
 		)
 	}
 	return fmt.Sprintf(
-		`{"schema_version":1,"title":%q,"steps":[{"sequence":1,"description":%q}],"limitations":["This plan carries no execution authority."],"evidence_citations":[%s]}`,
+		`{"schema_version":2,"title":%q,"steps":[{"description":%q}],"limitations":["This plan carries no execution authority."],"evidence_citations":[%s]}`,
 		title, step, citations,
 	)
 }
@@ -102,7 +102,7 @@ func TestPlanOnlyRejectsMalformedOverLimitAndActionBearingOutput(t *testing.T) {
 		content string
 	}{
 		{name: "malformed", content: `{"schema_version":1}`},
-		{name: "over steps", content: fmt.Sprintf(`{"schema_version":1,"title":"Too many","steps":[%s],"limitations":[],"evidence_citations":[]}`, strings.Join(overSteps, ","))},
+		{name: "over steps", content: fmt.Sprintf(`{"schema_version":2,"title":"Too many","steps":[%s],"limitations":[],"evidence_citations":[]}`, strings.Join(overSteps, ","))},
 		{name: "over bytes", content: planResponseJSON("Too large", strings.Repeat("x", domain.MaxPlanStepBytes+1), "")},
 		{name: "action bearing", content: strings.TrimSuffix(planResponseJSON("Unsafe", "Do nothing.", ""), "}") + `,"proposed_actions":[]}`},
 	} {

@@ -147,6 +147,7 @@ func (failure RunEventFailure) valid() bool {
 // RunEvent contains one typed payload plus publisher-owned ordering metadata.
 // It contains no framework callback, raw ToolResult, or vendor error.
 type RunEvent struct {
+	Diagnostic        domain.InteractionFailure
 	RunID             domain.AgentRunID
 	ScopeGeneration   int64
 	Sequence          int64
@@ -178,6 +179,10 @@ func (event RunEvent) Terminal() bool {
 
 // Validate checks payload exclusivity, provenance, bounds, and UTC metadata.
 func (event RunEvent) Validate() error {
+	if event.Diagnostic != "" && (!event.Diagnostic.Valid() || !event.Terminal() || event.Kind == RunEventRunCompleted) {
+		return ErrInvalidRunEvent
+	}
+
 	if !event.RunID.Valid() || event.ScopeGeneration < 1 || event.Sequence < 1 || event.Sequence > MaxRunEvents ||
 		event.OccurredAt.IsZero() || event.OccurredAt.Location() != time.UTC {
 		return ErrInvalidRunEvent
@@ -310,13 +315,21 @@ func (event RunEvent) validToolInvocation() bool {
 type EventSinkResult string
 
 const (
-	EventSinkAccepted EventSinkResult = "accepted"
-	EventSinkDegraded EventSinkResult = "degraded"
-	EventSinkRejected EventSinkResult = "rejected"
+	EventSinkAccepted            EventSinkResult = "accepted"
+	EventSinkDegraded            EventSinkResult = "degraded"
+	EventSinkRejected            EventSinkResult = "rejected"
+	EventSinkPreflightRejected   EventSinkResult = "preflight_rejected"
+	EventSinkStaleRejected       EventSinkResult = "stale_rejected"
+	EventSinkPersistenceRejected EventSinkResult = "persistence_rejected"
 )
 
 func (result EventSinkResult) valid() bool {
-	return result == EventSinkAccepted || result == EventSinkDegraded || result == EventSinkRejected
+	switch result {
+	case EventSinkAccepted, EventSinkDegraded, EventSinkRejected, EventSinkPreflightRejected, EventSinkStaleRejected, EventSinkPersistenceRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 // EventSink synchronously accepts ordered neutral events. The caller owns the

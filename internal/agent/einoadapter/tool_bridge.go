@@ -95,7 +95,7 @@ func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON stri
 	}
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
-		return failBatch(failedRuntime(domain.SafeErrorClassPolicyDenied, "The cluster-read request correlation is invalid.", nil))
+		return failBatch(failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil))
 	}
 	if err := bridge.state.toolBatchAbort(); err != nil {
 		return "", err
@@ -188,7 +188,7 @@ func sameJSON(left, right string) bool {
 
 func (state *runState) bindToolCalls(ctx context.Context, selections []agent.ToolSelection) error {
 	if len(selections) == 0 {
-		return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested an empty cluster-read batch.", nil)
+		return failedAt(domain.FailureToolSelection, domain.SafeErrorClassPolicyDenied, nil)
 	}
 	if err := state.checkScope(ctx); err != nil {
 		return err
@@ -206,11 +206,14 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 	seen := make(map[string]struct{}, len(selections))
 	seenInvocationIDs := make(map[domain.ToolInvocationID]struct{}, len(selections))
 	for index, selection := range selections {
+		if err := selection.Validate(); err != nil {
+			return failedAt(domain.FailureToolSelection, domain.SafeErrorClassPolicyDenied, err)
+		}
 		if state.input.Mode() == agent.RunModePlanOnly && !planSafeTool(selection.Name) {
 			return failedRuntime(domain.SafeErrorClassPolicyDenied, "Plan-only mode permits only the fixed safe-read Tool subset.", nil)
 		}
 		if _, duplicate := seen[selection.ID]; duplicate {
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
+			return failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil)
 		}
 		seen[selection.ID] = struct{}{}
 		invocationID, err := state.identifiers.NewToolInvocationID()
@@ -227,7 +230,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 				return failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 			}
 			if errors.Is(err, agent.ErrToolArgumentsRejected) {
-				return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", err)
+				return failedAt(domain.FailureToolSelection, domain.SafeErrorClassPolicyDenied, err)
 			}
 			if errors.Is(err, agent.ErrToolPolicyDenied) {
 				policyFeedbackNeeded = true
@@ -294,7 +297,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 		for _, execution := range entries {
 			if _, exists := state.boundCalls[execution.modelCall.ID]; exists {
 				state.mu.Unlock()
-				return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
+				return failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil)
 			}
 		}
 		for _, execution := range entries {
@@ -313,7 +316,7 @@ func (state *runState) bindToolCalls(ctx context.Context, selections []agent.Too
 	for _, execution := range entries {
 		if _, exists := state.boundCalls[execution.modelCall.ID]; exists {
 			state.mu.Unlock()
-			return failedRuntime(domain.SafeErrorClassPolicyDenied, "The model repeated a cluster-read request identifier.", nil)
+			return failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil)
 		}
 		if _, exists := state.toolInvocationIDs[execution.call.InvocationID()]; exists {
 			state.mu.Unlock()
@@ -347,7 +350,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	execution := state.boundCalls[callID]
 	if execution == nil || execution.executed || execution.toolName != name {
 		state.mu.Unlock()
-		return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The cluster-read request is not bound to this diagnostic run.", nil)
+		return "", failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil)
 	}
 	execution.executed = true
 	policyFeedback := execution.policyFeedback
@@ -355,7 +358,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	state.mu.Unlock()
 	if policyFeedback != "" {
 		if modelCall.ID != callID || modelCall.Name != name || modelCall.ArgumentsJSON != arguments {
-			return "", failedRuntime(domain.SafeErrorClassPolicyDenied, "The rejected cluster-read arguments changed before local policy feedback.", nil)
+			return "", failedAt(domain.FailureToolPairing, domain.SafeErrorClassPolicyDenied, nil)
 		}
 		if err := state.checkScope(ctx); err != nil {
 			return "", err
@@ -403,7 +406,12 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 		return "", state.failToolForRuntime(ctx, execution, err)
 	}
 	if toolContextError != nil {
-		return "", state.failToolForRuntime(ctx, execution, normalizeFrameworkError(toolContextError))
+		failure := normalizeFailure(nil, normalizeFrameworkError(toolContextError))
+		failure.diagnostic = domain.FailureToolCancelled
+		if errors.Is(toolContextError, context.DeadlineExceeded) {
+			failure.diagnostic = domain.FailureToolTimeout
+		}
+		return "", state.failToolForRuntime(ctx, execution, failure)
 	}
 	if result.Validate() != nil || result.InvocationID != execution.call.InvocationID() || result.Name != execution.call.Name() ||
 		result.Version != execution.call.Version() || result.Scope != execution.call.Scope().Snapshot() {
@@ -419,7 +427,7 @@ func (state *runState) executeTool(ctx context.Context, name domain.ToolName, ca
 	}
 	newEvidence, err := state.registry.AcceptToolResult(execution.call, result)
 	if err != nil {
-		return "", state.failTool(ctx, execution, domain.SafeErrorClassInvalidExternalResponse, safeInvalidToolResult, err)
+		return "", state.failToolForRuntime(ctx, execution, failedAt(domain.FailureEvidenceAcceptance, domain.SafeErrorClassInvalidExternalResponse, err))
 	}
 	terminal, kind, err := state.completedToolInvocation(execution, result, resultBytes)
 	if err != nil {
@@ -502,10 +510,10 @@ func (state *runState) completedToolInvocation(execution *boundExecution, result
 		invocation.SafeError = &result.Error.SafeMessage
 		kind = agent.RunEventToolCallDenied
 	default:
-		return domain.ToolInvocation{}, "", failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidToolResult, nil)
+		return domain.ToolInvocation{}, "", failedAt(domain.FailureToolResult, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	if invocation.Validate() != nil {
-		return domain.ToolInvocation{}, "", failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidToolResult, nil)
+		return domain.ToolInvocation{}, "", failedAt(domain.FailureToolResult, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	return invocation, kind, nil
 }
@@ -548,5 +556,10 @@ func (state *runState) failTool(ctx context.Context, execution *boundExecution, 
 	if errors.As(cause, &failure) {
 		return failure
 	}
-	return failedRuntime(class, message, cause)
+	failure = failedRuntime(class, message, cause)
+	if class == domain.SafeErrorClassInvalidExternalResponse {
+		failure.diagnostic = domain.FailureToolResult
+		failure.safeMessage = domain.FailureToolResult.SafeMessage()
+	}
+	return failure
 }

@@ -300,14 +300,14 @@ composer undo/redo, and redacted local `/doctor`. Every safety state has text
 or a stable symbol in `NO_COLOR`, ANSI-16, reduced-motion, narrow, and restored-
 scrollback modes.
 
-Strict response schema 3 supports either an answer or one to three typed
-clarification questions. It carries a bounded completeness manifest with
+Strict response schema 4 supports either an answer or one to three typed
+clarification questions. Runtime binds it to a bounded completeness manifest with
 authoritative stop reason, source coverage, freshness, exact typed conflict or
 supersession, limitations, and claim/Evidence provenance. Claim hashes are
 derived locally after bounded normalization rather than supplied by the model.
 Application may reuse only an exact complete same-run safe read within its
-code-owned freshness window. Clarification, plans, cached reads, and model stop
-suggestions create no action or approval authority.
+code-owned freshness window. Clarification, plans, cached reads, and provider
+finish reasons create no action or approval authority.
 
 ## Product identity and non-goals
 
@@ -345,3 +345,16 @@ needed for daily operations.
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Final response schema 4 leaves intent, claim types, exact Evidence references,
+and action proposals with the model. Runtime supplies ordering, structural
+coverage, stop reasons, and typed clarification rendering. Content-free failure
+stage/reason codes distinguish malformed responses, invalid bindings, and commit
+failures. A greeting without a current observation does not imply a missing
+cluster read.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

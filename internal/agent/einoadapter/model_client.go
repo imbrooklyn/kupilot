@@ -383,6 +383,9 @@ func (client *modelClient) streamBounded(
 	}
 	defer state.closeResponseBody()
 	message, err := collectModelMessage(requestContext, requestID, client.configuration.ProviderKind, stream, client.credential, observeContent)
+	if protocolErr := state.responseProtocolFailure(); protocolErr != nil {
+		err = protocolErr
+	}
 	if err != nil {
 		return nil, client.finishWithError(
 			requestID,
@@ -569,6 +572,18 @@ func mapModelRequestError(ctx context.Context, cause error, state *transportRequ
 		}
 	}
 	switch {
+	case errors.Is(cause, errProviderFinishDuplicate):
+		return modelFailure{code: domain.ModelErrorCodeDuplicateFinish, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
+	case errors.Is(cause, errNativeProviderReported):
+		return modelFailure{code: domain.ModelErrorCodeProviderReported, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
+	case errors.Is(cause, errProviderAfterFinish):
+		return modelFailure{code: domain.ModelErrorCodeAfterFinish, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
+	case errors.Is(cause, errProviderFinishMissing):
+		return modelFailure{code: domain.ModelErrorCodeMissingFinish, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
+	case errors.Is(cause, errProviderUsage):
+		return modelFailure{code: domain.ModelErrorCodeInvalidStreamUsage, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
+	case errors.Is(cause, errProviderStopReason):
+		return modelFailure{code: domain.ModelErrorCodeInvalidStopReason, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
 	case errors.Is(cause, errRedirectOriginDenied):
 		return modelFailure{
 			code: domain.ModelErrorCodeRedirectDenied, cause: modelFailureRedirectPolicy, httpStatus: observedHTTPStatus(state),

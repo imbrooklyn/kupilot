@@ -384,8 +384,9 @@ func TestClaimCoverageBindsObservationInferenceUncertaintyAndUnsupportedState(t 
 
 func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(*EvidenceRegistry, RunInput, domain.EvidenceID, domain.EvidenceID, *[]ClaimCoverageDraft, *DiagnosisMetadata)
+		name      string
+		normalize bool
+		mutate    func(*EvidenceRegistry, RunInput, domain.EvidenceID, domain.EvidenceID, *[]ClaimCoverageDraft, *DiagnosisMetadata)
 	}{
 		{
 			name: "missing Evidence",
@@ -406,7 +407,8 @@ func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
 			},
 		},
 		{
-			name: "out of order Evidence",
+			name:      "out of order Evidence",
+			normalize: true,
 			mutate: func(_ *EvidenceRegistry, _ RunInput, first, second domain.EvidenceID, coverage *[]ClaimCoverageDraft, _ *DiagnosisMetadata) {
 				(*coverage)[0].EvidenceIDs = []domain.EvidenceID{second, first}
 			},
@@ -470,9 +472,21 @@ func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
 				ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration(),
 			}
 			current.mutate(registry, input, firstID, secondID, &coverage, &metadata)
-			_, err := ValidateDiagnosis(DiagnosisDraft{
+			diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
 				AnswerMarkdown: "The Pod is not Ready.", ClaimCoverage: coverage,
 			}, metadata, registry)
+			if current.normalize {
+				if err != nil || diagnosis.Validate() != nil || len(diagnosis.ClaimCoverage) != 1 {
+					t.Fatalf("unambiguous Evidence ordering = %#v, %v", diagnosis, err)
+				}
+				claim := diagnosis.ClaimCoverage[0]
+				if len(claim.EvidenceIDs) != 2 || claim.EvidenceIDs[0] != firstID || claim.EvidenceIDs[1] != secondID ||
+					claim.RunID != input.RunID() || claim.Scope != input.Scope().Snapshot() ||
+					claim.PolicyGeneration != input.PolicyGeneration() || claim.TextHash != domain.SHA256Hex(claim.Text) {
+					t.Fatalf("normalization changed the Evidence set or authority: %#v", claim)
+				}
+				return
+			}
 			if !errors.Is(err, ErrInvalidDiagnosisDraft) {
 				t.Fatalf("ValidateDiagnosis() error = %v", err)
 			}

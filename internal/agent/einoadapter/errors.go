@@ -15,9 +15,6 @@ var (
 
 const (
 	safeInternalFailure           = "The diagnostic runtime failed safely."
-	safeInvalidModelResponse      = "The model returned an invalid diagnostic response."
-	safeInvalidModelEnvelope      = "The model response did not match the required answer structure."
-	safeInvalidModelCoverage      = "The model answer did not pass local Evidence and safety validation."
 	safeInvalidToolResult         = "A cluster-reading tool returned data outside the safe result contract."
 	safeEventRejected             = "The diagnostic event stream could not be accepted safely."
 	safeScopeStale                = "The diagnostic run stopped because the Kubernetes context or namespace changed."
@@ -25,6 +22,7 @@ const (
 )
 
 type runtimeFailure struct {
+	diagnostic     domain.InteractionFailure
 	status         domain.AgentRunStatus
 	class          domain.SafeErrorClass
 	safeMessage    string
@@ -119,4 +117,42 @@ func runtimeFailureFromBudget(err error) *runtimeFailure {
 	default:
 		return failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 	}
+}
+
+func failedAt(reason domain.InteractionFailure, class domain.SafeErrorClass, cause error) *runtimeFailure {
+	failure := failedRuntime(class, reason.SafeMessage(), cause)
+	failure.diagnostic = reason
+	return failure
+}
+
+func runtimeDiagnostic(failure *runtimeFailure) domain.InteractionFailure {
+	if failure.diagnostic.Valid() {
+		return failure.diagnostic
+	}
+	var prior *runtimeFailure
+	if errors.As(failure.cause, &prior) {
+		return runtimeDiagnostic(prior)
+	}
+	fallback := domain.FailureInternal
+	switch failure.class {
+	case domain.SafeErrorClassCancelled:
+		fallback = domain.FailureCancelled
+	case domain.SafeErrorClassTimeout:
+		fallback = domain.FailureTimeout
+	case domain.SafeErrorClassStaleScope:
+		fallback = domain.FailureStaleGeneration
+	case domain.SafeErrorClassSensitiveOutputBlocked:
+		fallback = domain.FailureSensitiveOutput
+	case domain.SafeErrorClassBudgetExhausted:
+		fallback = domain.FailureBudget
+	case domain.SafeErrorClassPersistenceUnavailable:
+		fallback = domain.FailurePersistence
+	case domain.SafeErrorClassInvalidInput, domain.SafeErrorClassConsentRequired:
+		fallback = domain.FailureRequestPreflight
+	case domain.SafeErrorClassPolicyDenied, domain.SafeErrorClassPermissionDenied:
+		fallback = domain.FailureToolPolicy
+	case domain.SafeErrorClassAuthenticationFailed, domain.SafeErrorClassRateLimited, domain.SafeErrorClassUnavailable:
+		fallback = domain.FailureProviderTransport
+	}
+	return agent.InteractionFailureOf(failure.cause, fallback)
 }

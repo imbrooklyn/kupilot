@@ -289,13 +289,13 @@ func invalidInputOutcome() agent.RunOutcome {
 	return agent.RunOutcome{
 		Status:      domain.AgentRunStatusFailed,
 		ErrorClass:  &class,
-		SafeMessage: "The diagnostic request is invalid.",
+		SafeMessage: "The diagnostic request is invalid.", Diagnostic: domain.FailureRequestPreflight,
 	}
 }
 
 func internalOutcome() agent.RunOutcome {
 	class := domain.SafeErrorClassInternal
-	return agent.RunOutcome{Status: domain.AgentRunStatusFailed, ErrorClass: &class, SafeMessage: safeInternalFailure}
+	return agent.RunOutcome{Status: domain.AgentRunStatusFailed, ErrorClass: &class, SafeMessage: safeInternalFailure, Diagnostic: domain.FailureInternal}
 }
 
 func normalizeFrameworkError(err error) error {

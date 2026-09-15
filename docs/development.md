@@ -338,3 +338,16 @@ quality evidence.
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Interaction conformance records statement coverage with go test -coverprofile
+and a separate auditable decision matrix. Go does not measure branch coverage
+natively. Scripted full-composition fixtures, bounded opt-in local Ollama
+conformance with synthetic Tools, and real-model quality evaluation are distinct
+evidence levels. A failed local scenario is recorded once without repair or
+retry.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

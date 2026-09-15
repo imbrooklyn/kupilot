@@ -115,7 +115,7 @@ func collectModelMessage(
 		}
 		if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
 			if usageSeen || !finishSeen && chunk.ResponseMeta.FinishReason == "" {
-				return nil, errMalformedProviderChunk
+				return nil, errProviderUsage
 			}
 			usageSeen = true
 		}
@@ -130,11 +130,11 @@ func collectModelMessage(
 		chunks = append(chunks, chunk)
 	}
 	if !finishSeen || len(chunks) == 0 {
-		return nil, errMalformedProviderChunk
+		return nil, errProviderFinishMissing
 	}
 	message, err := schema.ConcatMessages(chunks)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errMalformedProviderChunk, err)
+		return nil, fmt.Errorf("%w: %w", errMalformedProviderChunk, err)
 	}
 	if !assembledModelMessageWithinLimits(message, validator.discardedReasoningBytes) {
 		return nil, errModelResponseLimitReached
@@ -184,7 +184,7 @@ func (validator *modelStreamValidator) normalizeNativeChunk(chunk *schema.Messag
 	}
 	if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil && chunk.ResponseMeta.FinishReason == "" {
 		if !zeroModelUsage(chunk.ResponseMeta.Usage) {
-			return errMalformedProviderChunk
+			return errProviderUsage
 		}
 		chunk.ResponseMeta.Usage = nil
 	}
@@ -242,13 +242,16 @@ func (validator *modelStreamValidator) validateChunk(chunk *schema.Message, afte
 		usage = chunk.ResponseMeta.Usage
 	}
 	if afterFinish && (chunk.Content != "" || reasoningBytes != 0 || len(chunk.ToolCalls) != 0 || finishReason != "" || usage == nil) {
-		return errMalformedProviderChunk
+		if finishReason != "" {
+			return errProviderFinishDuplicate
+		}
+		return errProviderAfterFinish
 	}
 	if finishReason != "" && finishReason != "stop" && finishReason != "tool_calls" && finishReason != "length" {
-		return errUnsupportedProviderChunk
+		return errProviderStopReason
 	}
 	if usage != nil && !validModelUsage(usage) {
-		return errMalformedProviderChunk
+		return errProviderUsage
 	}
 
 	if reasoningBytes > domain.MaxModelMessageBytes-validator.discardedReasoningBytes {

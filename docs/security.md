@@ -457,7 +457,7 @@ complete or causes a blind retry.
 
 **Controls.** Application performs a content-free invocation preflight before
 model entry and derives the terminal reason from accepted lifecycle, policy,
-budget, storage, and coverage state. Strict response schema 3 separates answers
+budget, storage, and coverage state. Strict response schema 4 separates answers
 from typed clarification, checks same-run/generation Evidence and exact typed
 freshness/conflict/source coverage, and carries no action authority. A fixed
 recovery matrix authorizes zero automatic model, Tool, or action retries.
@@ -656,3 +656,16 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Response normalization never invents Evidence, scope, target, action, or intent.
+Duplicate and foreign references, malformed or unknown fields, missing/null
+required fields, stale generations, sensitivity, and budget violations remain
+denied. Runtime derives structural metadata only after validation. A
+presentation difference cannot grant authority; invalid final answers still
+cannot commit or drain queued input.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

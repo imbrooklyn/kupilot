@@ -417,3 +417,14 @@ these files or remove them when the setting is turned off.
 
 Set `logging.enabled: false` or `KUPILOT_LOG_ENABLED=false` to disable this
 sink. This is independent from the container-output category in `/privacy`.
+
+## Deterministic response metadata and failure diagnostics
+
+Response schema 4 is code-owned, not a configurable compatibility relaxation.
+There is no legacy-schema, repair, retry, or permissive-decoding option.
+Existing fixed provider selection, consent, budgets, and explicit
+structured-output settings continue to apply.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

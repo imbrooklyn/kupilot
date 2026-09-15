@@ -101,17 +101,13 @@ func (registry *EvidenceRegistry) AcceptToolResult(call BoundToolCall, result do
 		registry.order = append(registry.order, evidence.ID)
 	}
 	registry.invocations[result.InvocationID] = struct{}{}
-	gapAdded := false
 	if gap, ok := missingInformationForToolResult(result); ok && !hasMissingKind(registry.gaps, gap.Kind) {
 		registry.gaps = append(registry.gaps, gap)
-		gapAdded = true
 	}
 	if result.Truncation.Truncated {
 		registry.truncated = true
 	}
-	if len(result.Evidence) > 0 || result.Truncation.Truncated || gapAdded {
-		registry.revision++
-	}
+	registry.revision++
 	return len(result.Evidence), nil
 }
 
@@ -199,7 +195,7 @@ func (registry *EvidenceRegistry) seal(revision uint64) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	if registry.sealed || registry.revision != revision {
-		return ErrInvalidEvidenceRegistry
+		return interactionError(domain.FailureRegistryChanged, ErrInvalidEvidenceRegistry)
 	}
 	registry.sealed = true
 	return nil
@@ -276,20 +272,27 @@ const (
 func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registry *EvidenceRegistry) (domain.Diagnosis, error) {
 	if !metadata.ID.Valid() || metadata.CreatedAt.IsZero() || metadata.CreatedAt.Location() != time.UTC ||
 		metadata.CreatedAt.Nanosecond()%int(time.Millisecond) != 0 {
-		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		return domain.Diagnosis{}, interactionError(domain.FailureInternal, ErrInvalidDiagnosisDraft)
 	}
 	var err error
 	draft, err = sanitizeDiagnosisDraft(draft)
 	if err != nil {
 		return domain.Diagnosis{}, err
 	}
+	if draft.Clarification != nil {
+		rendered, err := RenderClarificationMarkdown(*draft.Clarification)
+		if err != nil {
+			return domain.Diagnosis{}, interactionError(domain.FailureClarification, err)
+		}
+		draft.AnswerMarkdown = rendered
+	}
 	if draft.AnswerMarkdown == "" {
-		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		return domain.Diagnosis{}, interactionError(domain.FailureFinalShape, ErrInvalidDiagnosisDraft)
 	}
 	if draft.Plan != nil {
 		rendered, renderErr := RenderPlanMarkdown(*draft.Plan)
 		if renderErr != nil || rendered != draft.AnswerMarkdown || len(draft.RecommendedActions) != 0 {
-			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+			return domain.Diagnosis{}, interactionError(domain.FailurePlan, ErrInvalidDiagnosisDraft)
 		}
 	}
 	if draft.Clarification != nil {
@@ -297,21 +300,27 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		if renderErr != nil || rendered != draft.AnswerMarkdown || draft.SuggestedStopReason != domain.RunTerminalNeedsUserInput ||
 			len(draft.ConfirmedFacts) != 0 || len(draft.Hypotheses) != 0 || len(draft.MissingInformation) != 0 || len(draft.RecommendedActions) != 0 ||
 			len(draft.ClaimCoverage) != 0 {
-			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+			return domain.Diagnosis{}, interactionError(domain.FailureClarification, ErrInvalidDiagnosisDraft)
 		}
 	}
 	snapshot, err := registry.snapshot()
 	if err != nil {
-		return domain.Diagnosis{}, err
+		return domain.Diagnosis{}, interactionError(domain.FailureEvidenceAcceptance, err)
+	}
+	if draft.Clarification != nil && len(snapshot.sources) != 0 {
+		return domain.Diagnosis{}, interactionError(domain.FailureClarification, ErrInvalidDiagnosisDraft)
 	}
 	warnings := make([]string, 0, 2)
 	confirmed := make([]domain.ConfirmedFact, 0, len(draft.ConfirmedFacts))
 	for _, fact := range draft.ConfirmedFacts {
-		if len(fact.EvidenceIDs) == 0 || !allEvidenceRegistered(fact.EvidenceIDs, snapshot.items) {
-			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		if len(fact.EvidenceIDs) == 0 {
+			return domain.Diagnosis{}, interactionError(domain.FailureClaimUnsupported, ErrInvalidDiagnosisDraft)
 		}
 		if hasDuplicateEvidenceIDs(fact.EvidenceIDs) {
-			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+			return domain.Diagnosis{}, interactionError(domain.FailureEvidenceDuplicate, ErrInvalidDiagnosisDraft)
+		}
+		if !allEvidenceRegistered(fact.EvidenceIDs, snapshot.items) {
+			return domain.Diagnosis{}, interactionError(domain.FailureEvidenceUnknown, ErrInvalidDiagnosisDraft)
 		}
 		confirmed = append(confirmed, fact)
 	}
@@ -320,11 +329,11 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		hypotheses[index] = hypothesis
 		for _, id := range hypothesis.SupportingEvidenceIDs {
 			if _, exists := snapshot.items[id]; !exists {
-				return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+				return domain.Diagnosis{}, interactionError(domain.FailureEvidenceUnknown, ErrInvalidDiagnosisDraft)
 			}
 		}
 		if hasDuplicateEvidenceIDs(hypothesis.SupportingEvidenceIDs) {
-			return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+			return domain.Diagnosis{}, interactionError(domain.FailureEvidenceDuplicate, ErrInvalidDiagnosisDraft)
 		}
 	}
 	missing := append([]domain.MissingInformation(nil), draft.MissingInformation...)
@@ -349,13 +358,6 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		truncated = true
 		detailState = domain.EvidenceDetailPartial
 	}
-	if draft.Clarification == nil && len(snapshot.items) == 0 && len(snapshot.sources) == 0 && !hasMissingKind(missing, domain.MissingInformationAbsent) {
-		missing = append(missing, domain.MissingInformation{
-			Kind:   domain.MissingInformationAbsent,
-			Detail: "No accepted cluster observation was collected for this diagnostic run.",
-			Impact: "No cluster observation can be presented as a confirmed fact.",
-		})
-	}
 	if truncated && !hasMissingKind(missing, domain.MissingInformationTruncated) {
 		missing = append(missing, domain.MissingInformation{
 			Kind:   domain.MissingInformationTruncated,
@@ -368,7 +370,7 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		return domain.Diagnosis{}, err
 	}
 	if observedTo != nil && metadata.CreatedAt.Before(*observedTo) {
-		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		return domain.Diagnosis{}, interactionError(domain.FailureInternal, ErrInvalidDiagnosisDraft)
 	}
 
 	responseSchemaVersion := draft.ResponseSchemaVersion
@@ -378,7 +380,7 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	manifest := buildAnswerCompleteness(coverage, missing, snapshot, draft.SuggestedStopReason, draft.Clarification != nil,
 		responseSchemaVersion, metadata.AuthoritativeStopReason)
 	if manifest.Validate() != nil {
-		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		return domain.Diagnosis{}, interactionError(domain.FailureClaimBinding, ErrInvalidDiagnosisDraft)
 	}
 	diagnosis := domain.Diagnosis{
 		ID:                   metadata.ID,
@@ -400,7 +402,7 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 	}
 	diagnosis.AnswerMarkdown = draft.AnswerMarkdown
 	if diagnosis.Validate() != nil {
-		return domain.Diagnosis{}, ErrInvalidDiagnosisDraft
+		return domain.Diagnosis{}, interactionError(domain.FailureFinalShape, ErrInvalidDiagnosisDraft)
 	}
 	if err := registry.seal(snapshot.revision); err != nil {
 		return domain.Diagnosis{}, err
@@ -422,13 +424,13 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 	if draft.Plan != nil {
 		result.Plan = clonePlan(draft.Plan)
 		if result.Plan == nil || result.Plan.Validate() != nil {
-			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+			return DiagnosisDraft{}, interactionError(domain.FailurePlan, ErrInvalidDiagnosisDraft)
 		}
 	}
 	if draft.Clarification != nil {
 		result.Clarification = cloneClarification(draft.Clarification)
 		if result.Clarification == nil || result.Clarification.Validate() != nil {
-			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+			return DiagnosisDraft{}, interactionError(domain.FailureClarification, ErrInvalidDiagnosisDraft)
 		}
 		for questionIndex := range result.Clarification.Questions {
 			prompt, err := sanitizeDiagnosisText(result.Clarification.Questions[questionIndex].Prompt)
@@ -445,16 +447,16 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 			}
 		}
 		if result.Clarification.Validate() != nil {
-			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+			return DiagnosisDraft{}, interactionError(domain.FailureClarification, ErrInvalidDiagnosisDraft)
 		}
 	}
 	if draft.AnswerMarkdown != "" {
 		answer, err := processModelMarkdown(draft.AnswerMarkdown, MaxAnswerMarkdownBytes)
-		if err != nil || answer == "" {
+		if err != nil || answer == "" && draft.Clarification == nil {
 			if errors.Is(err, ErrSensitiveModelTextBlocked) {
 				return DiagnosisDraft{}, err
 			}
-			return DiagnosisDraft{}, ErrInvalidDiagnosisDraft
+			return DiagnosisDraft{}, interactionError(InteractionFailureOf(err, domain.FailureFinalShape), ErrInvalidDiagnosisDraft)
 		}
 		result.AnswerMarkdown = answer
 	}
@@ -538,7 +540,7 @@ func bindClaimCoverage(
 	snapshot evidenceSnapshot,
 ) ([]domain.ClaimEvidenceCoverage, error) {
 	if len(drafts) > 100 || len(drafts) > 0 && !policy.Valid() {
-		return nil, ErrInvalidDiagnosisDraft
+		return nil, interactionError(domain.FailureClaimBinding, ErrInvalidDiagnosisDraft)
 	}
 	positions := make(map[domain.EvidenceID]int, len(snapshot.order))
 	for index, id := range snapshot.order {
@@ -548,26 +550,31 @@ func bindClaimCoverage(
 	result := make([]domain.ClaimEvidenceCoverage, len(drafts))
 	for index, draft := range drafts {
 		if draft.Sequence != index+1 {
-			return nil, ErrInvalidDiagnosisDraft
+			return nil, interactionError(domain.FailureInternal, ErrInvalidDiagnosisDraft)
 		}
 		textHash := domain.SHA256Hex(draft.Text)
 		if _, duplicate := seenClaims[textHash]; duplicate {
-			return nil, ErrInvalidDiagnosisDraft
+			return nil, interactionError(domain.FailureClaimDuplicate, ErrInvalidDiagnosisDraft)
 		}
 		seenClaims[textHash] = struct{}{}
-		lastPosition := -1
+		if hasDuplicateEvidenceIDs(draft.EvidenceIDs) {
+			return nil, interactionError(domain.FailureEvidenceDuplicate, ErrInvalidDiagnosisDraft)
+		}
 		for _, id := range draft.EvidenceIDs {
 			evidence, exists := snapshot.items[id]
-			position, ordered := positions[id]
-			if !exists || !ordered || evidence.RunID != registry.runID || evidence.Scope != registry.scope.Snapshot() ||
-				evidence.PolicyGeneration != policy || position <= lastPosition {
-				return nil, ErrInvalidDiagnosisDraft
+			_, ordered := positions[id]
+			if !exists || !ordered {
+				return nil, interactionError(domain.FailureEvidenceUnknown, ErrInvalidDiagnosisDraft)
 			}
-			lastPosition = position
+			if evidence.RunID != registry.runID || evidence.Scope != registry.scope.Snapshot() || evidence.PolicyGeneration != policy {
+				return nil, interactionError(domain.FailureEvidenceOwnership, ErrInvalidDiagnosisDraft)
+			}
 		}
+		ids := append([]domain.EvidenceID(nil), draft.EvidenceIDs...)
+		sort.Slice(ids, func(left, right int) bool { return positions[ids[left]] < positions[ids[right]] })
 		result[index] = domain.ClaimEvidenceCoverage{
 			Sequence: draft.Sequence, Kind: draft.Kind, Text: draft.Text, TextHash: textHash,
-			EvidenceIDs: append([]domain.EvidenceID(nil), draft.EvidenceIDs...), RunID: registry.runID,
+			EvidenceIDs: ids, RunID: registry.runID,
 			Scope: registry.scope.Snapshot(), PolicyGeneration: policy, State: draft.State,
 		}
 	}
@@ -760,7 +767,7 @@ func sourceFreshness(state domain.SourceCoverageState) domain.EvidenceFreshnessS
 
 func processModelMarkdown(value string, maximumBytes int) (string, error) {
 	if maximumBytes < 1 || len(value) > maximumBytes {
-		return "", errInvalidModelText
+		return "", interactionError(domain.FailureFinalLimit, errInvalidModelText)
 	}
 	processed, err := security.NewRedactor().ProcessLines(value, maximumBytes)
 	if errors.Is(err, security.ErrSensitiveOutputBlocked) {
@@ -781,15 +788,18 @@ func cloneResourceRef(reference *domain.ResourceRef) *domain.ResourceRef {
 }
 
 func sanitizeDiagnosisText(value string) (string, error) {
+	if len(value) > maxDiagnosisDraftTextBytes {
+		return "", interactionError(domain.FailureFinalLimit, ErrInvalidDiagnosisDraft)
+	}
 	processed, err := processModelText(value, maxDiagnosisDraftTextBytes)
 	if err != nil {
 		if errors.Is(err, ErrSensitiveModelTextBlocked) {
 			return "", err
 		}
-		return "", ErrInvalidDiagnosisDraft
+		return "", interactionError(domain.FailureFinalShape, ErrInvalidDiagnosisDraft)
 	}
 	if processed == "" {
-		return "", ErrInvalidDiagnosisDraft
+		return "", interactionError(domain.FailureFinalShape, ErrInvalidDiagnosisDraft)
 	}
 	return processed, nil
 }
@@ -838,6 +848,7 @@ func evidenceWindow(items map[domain.EvidenceID]domain.Evidence) (*time.Time, *t
 	}
 	var earliest, latest time.Time
 	truncated := false
+	partial := false
 	for _, evidence := range items {
 		if earliest.IsZero() || evidence.ObservedAt.Before(earliest) {
 			earliest = evidence.ObservedAt
@@ -846,9 +857,10 @@ func evidenceWindow(items map[domain.EvidenceID]domain.Evidence) (*time.Time, *t
 			latest = evidence.ObservedAt
 		}
 		truncated = truncated || evidence.Truncated
+		partial = partial || evidence.Partial
 	}
 	state := domain.EvidenceDetailAvailable
-	if truncated {
+	if truncated || partial {
 		state = domain.EvidenceDetailPartial
 	}
 	return &earliest, &latest, state, truncated

@@ -289,14 +289,14 @@ func (state *runState) acceptSummaryMessage(message *schema.Message, maximum int
 		!domain.ValidModelText(message.Content, maximum, false) ||
 		message.ResponseMeta != nil && message.ResponseMeta.FinishReason != "" && message.ResponseMeta.FinishReason != "stop" ||
 		credentialAppearsInStrings(state.client.credential, message.Content) {
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return nil, failedAt(domain.FailureSummaryResponse, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	processed, err := security.NewRedactor().ProcessLines(message.Content, maximum)
 	if errors.Is(err, security.ErrSensitiveOutputBlocked) {
 		return nil, failedRuntime(domain.SafeErrorClassSensitiveOutputBlocked, safeSensitiveModelTextBlocked, err)
 	}
 	if err != nil || processed.Truncated || processed.Value == "" {
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, err)
+		return nil, failedAt(domain.FailureSummaryResponse, domain.SafeErrorClassInvalidExternalResponse, err)
 	}
 	state.mu.Lock()
 	if state.summaryPlan == nil {

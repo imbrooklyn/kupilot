@@ -16,7 +16,7 @@ func TestHistoricalAssistantResponseUsesDiagnosticProtocolWithoutAuthority(t *te
 	if err != nil {
 		t.Fatalf("EncodeHistoricalAssistantResponse() error = %v", err)
 	}
-	const want = `{"answer_markdown":"Earlier visible answer.","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
+	const want = `{"answer_markdown":"Earlier visible answer.","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
 	if content != want {
 		t.Fatalf("encoded history = %q, want %q", content, want)
 	}
@@ -34,7 +34,7 @@ func TestHistoricalAssistantResponseUsesDiagnosticProtocolWithoutAuthority(t *te
 func TestDiagnosticResponseProtocolDecodesTypedAction(t *testing.T) {
 	t.Parallel()
 
-	content := `{"answer_markdown":"Scale only after review.","evidence_citations":[],"proposed_actions":[{"operation":"scale_workload","reason":"Restore capacity.","risk":"Changes replicas.","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api"},"parameters":{"kind":"replicas","value":"3"}}],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
+	content := `{"answer_markdown":"Scale only after review.","evidence_citations":[],"proposed_actions":[{"operation":"scale_workload","reason":"Restore capacity.","risk":"Changes replicas.","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api"},"parameters":{"kind":"replicas","value":"3"}}],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
 	draft, err := DecodeDiagnosticResponse(content)
 	if err != nil {
 		t.Fatalf("DecodeDiagnosticResponse() error = %v", err)
@@ -48,7 +48,7 @@ func TestDiagnosticResponseProtocolDecodesTypedAction(t *testing.T) {
 		action.Parameters.Kind != domain.ProposedActionParameterReplicas || action.Parameters.Value != "3" {
 		t.Fatalf("decoded action = %#v", action)
 	}
-	if draft.ResponseSchemaVersion != 3 {
+	if draft.ResponseSchemaVersion != 4 {
 		t.Fatalf("response schema version = %d", draft.ResponseSchemaVersion)
 	}
 }
@@ -56,12 +56,12 @@ func TestDiagnosticResponseProtocolDecodesTypedAction(t *testing.T) {
 func TestDiagnosticResponseProtocolDecodesClaimWithoutModelHash(t *testing.T) {
 	t.Parallel()
 
-	const content = `{"answer_markdown":"The Pod is not Ready.","evidence_citations":[{"sequence":1,"claim":"The projected Pod condition is not Ready.","claim_type":"current_observation","evidence_ids":["00000000-0000-7000-8000-000000008006"],"coverage_state":"verified"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`
+	const content = `{"answer_markdown":"The Pod is not Ready.","evidence_citations":[{"claim":"The projected Pod condition is not Ready.","claim_type":"current_observation","evidence_ids":["00000000-0000-7000-8000-000000008006"]}],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
 	draft, err := DecodeDiagnosticResponse(content)
 	if err != nil {
 		t.Fatalf("DecodeDiagnosticResponse() error = %v", err)
 	}
-	if draft.ResponseSchemaVersion != 3 || len(draft.ClaimCoverage) != 1 ||
+	if draft.ResponseSchemaVersion != 4 || len(draft.ClaimCoverage) != 1 ||
 		draft.ClaimCoverage[0].Text != "The projected Pod condition is not Ready." {
 		t.Fatalf("decoded claim = %#v", draft)
 	}
@@ -70,13 +70,13 @@ func TestDiagnosticResponseProtocolDecodesClaimWithoutModelHash(t *testing.T) {
 func TestDiagnosticResponseProtocolDecodesTypedClarification(t *testing.T) {
 	t.Parallel()
 
-	content := `{"answer_markdown":"More information is needed:\n\n1. Which workload should be inspected?\n   - api: API\n   - worker: Worker","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"needs_user_input","stop_reason":"needs_user_input","limitations":[],"questions":[{"sequence":1,"kind":"choice","prompt":"Which workload should be inspected?","choices":[{"id":"api","label":"API"},{"id":"worker","label":"Worker"}]}]}`
+	content := `{"answer_markdown":"More information is needed:\n\n1. Which workload should be inspected?\n   - api: API\n   - worker: Worker","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"needs_user_input","limitations":[],"questions":[{"kind":"choice","prompt":"Which workload should be inspected?","choices":[{"label":"API"},{"label":"Worker"}]}]}`
 	draft, err := DecodeDiagnosticResponse(content)
 	if err != nil {
 		t.Fatalf("DecodeDiagnosticResponse() error = %v", err)
 	}
 	if draft.Clarification == nil || len(draft.Clarification.Questions) != 1 ||
-		draft.SuggestedStopReason != domain.RunTerminalNeedsUserInput || draft.ResponseSchemaVersion != 3 {
+		draft.SuggestedStopReason != domain.RunTerminalNeedsUserInput || draft.ResponseSchemaVersion != 4 {
 		t.Fatalf("decoded clarification = %#v", draft)
 	}
 }
@@ -94,16 +94,16 @@ func TestDiagnosticResponseProtocolRejectsMalformedRepresentations(t *testing.T)
 		"excessive nesting":               strings.Repeat("[", maxDiagnosticResponseJSONDepth+2) + "0" + strings.Repeat("]", maxDiagnosticResponseJSONDepth+2),
 		"missing parameters":              `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[{"operation":"restart_deployment","reason":"reason","risk":"risk","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api"}}]}`,
 		"unknown target field":            `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[{"operation":"restart_deployment","reason":"reason","risk":"risk","prerequisites":[],"target":{"api_version":"apps/v1","kind":"Deployment","namespace":"payments","name":"api","uid":"forbidden"},"parameters":null}]}`,
-		"model-owned budget reason":       `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"budget_exhausted","limitations":[],"questions":[]}`,
-		"clarification limitation":        `{"answer_markdown":"More information is needed:\n\n1. What should be inspected?","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"needs_user_input","stop_reason":"needs_user_input","limitations":[{"kind":"absent","detail":"Missing.","impact":"Limited."}],"questions":[{"sequence":1,"kind":"free_form","prompt":"What should be inspected?","choices":[]}]}`,
-		"clarification question one over": `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[],"response_schema_version":3,"outcome":"needs_user_input","stop_reason":"needs_user_input","limitations":[],"questions":[{"sequence":1,"kind":"free_form","prompt":"One?","choices":[]},{"sequence":2,"kind":"free_form","prompt":"Two?","choices":[]},{"sequence":3,"kind":"free_form","prompt":"Three?","choices":[]},{"sequence":4,"kind":"free_form","prompt":"Four?","choices":[]}]}`,
+		"model-owned budget reason":       `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","stop_reason":"budget_exhausted","limitations":[],"questions":[]}`,
+		"clarification limitation":        `{"answer_markdown":"More information is needed:\n\n1. What should be inspected?","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"needs_user_input","limitations":[{"kind":"absent","detail":"Missing.","impact":"Limited."}],"questions":[{"kind":"free_form","prompt":"What should be inspected?","choices":[]}]}`,
+		"clarification question one over": `{"answer_markdown":"answer","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"needs_user_input","limitations":[],"questions":[{"kind":"free_form","prompt":"One?","choices":[]},{"kind":"free_form","prompt":"Two?","choices":[]},{"kind":"free_form","prompt":"Three?","choices":[]},{"kind":"free_form","prompt":"Four?","choices":[]}]}`,
 	}
 	tests["missing Evidence ID array"] = fmt.Sprintf(
-		`{"answer_markdown":"answer","evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"uncertainty","coverage_state":"limited"}],"proposed_actions":[]}`,
+		`{"answer_markdown":"answer","evidence_citations":[{"claim":%q,"claim_type":"uncertainty"}],"proposed_actions":[]}`,
 		"Current state is unknown.",
 	)
 	tests["legacy model claim hash"] = fmt.Sprintf(
-		`{"answer_markdown":"answer","evidence_citations":[{"sequence":1,"claim":%q,"claim_type":"uncertainty","claim_hash":%q,"evidence_ids":[],"coverage_state":"limited"}],"proposed_actions":[],"response_schema_version":3,"outcome":"answer","stop_reason":"completed","limitations":[],"questions":[]}`,
+		`{"answer_markdown":"answer","evidence_citations":[{"claim":%q,"claim_type":"uncertainty","claim_hash":%q,"evidence_ids":[]}],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`,
 		"Current state is unknown.", domain.SHA256Hex("Current state is unknown."),
 	)
 	for name, content := range tests {

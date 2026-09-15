@@ -53,16 +53,17 @@ type DoctorModelCompatibility struct {
 
 // UIDoctorResult is a versioned redacted local-only health projection.
 type UIDoctorResult struct {
-	SchemaVersion       string                   `json:"schema_version"`
-	ApplicationVersion  string                   `json:"application_version"`
-	ConfigurationSchema string                   `json:"configuration_schema"`
-	ProviderKind        string                   `json:"provider_kind"`
-	AgentOriginHash     string                   `json:"agent_origin_hash"`
-	ModelConfigured     bool                     `json:"model_configured"`
-	ModelCompatibility  DoctorModelCompatibility `json:"model_compatibility"`
-	Storage             SessionStorageHealth     `json:"storage"`
-	PersistenceDegraded bool                     `json:"persistence_degraded"`
-	Features            []DoctorFeature          `json:"features"`
+	LastInteractionFailure domain.InteractionFailure `json:"last_interaction_failure,omitempty"`
+	SchemaVersion          string                    `json:"schema_version"`
+	ApplicationVersion     string                    `json:"application_version"`
+	ConfigurationSchema    string                    `json:"configuration_schema"`
+	ProviderKind           string                    `json:"provider_kind"`
+	AgentOriginHash        string                    `json:"agent_origin_hash"`
+	ModelConfigured        bool                      `json:"model_configured"`
+	ModelCompatibility     DoctorModelCompatibility  `json:"model_compatibility"`
+	Storage                SessionStorageHealth      `json:"storage"`
+	PersistenceDegraded    bool                      `json:"persistence_degraded"`
+	Features               []DoctorFeature           `json:"features"`
 }
 
 // NewDoctorResult constructs the same typed local projection for the CLI
@@ -99,7 +100,7 @@ func NewDoctorResult(version, configSchema string, provider domain.ModelProvider
 func (result UIDoctorResult) Validate() error {
 	provider := domain.ModelProviderKind(result.ProviderKind)
 	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider)
-	if result.SchemaVersion != DoctorSchemaVersion || !validDoctorToken(result.ApplicationVersion, 128) ||
+	if result.LastInteractionFailure != "" && !result.LastInteractionFailure.Valid() || result.SchemaVersion != DoctorSchemaVersion || !validDoctorToken(result.ApplicationVersion, 128) ||
 		!validDoctorToken(result.ConfigurationSchema, 64) || !ok ||
 		!validPrivacyDigest(result.AgentOriginHash) || !result.Storage.valid() ||
 		result.ModelCompatibility.Runtime != DoctorRuntimeName || result.ModelCompatibility.RuntimeVersion != DoctorRuntimeVersion ||
@@ -151,6 +152,10 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	provider := coordinator.modelProvider
 	configured := coordinator.modelRuntime != nil
 	degraded := coordinator.persistenceDegraded
+	var diagnostic domain.InteractionFailure
+	if coordinator.lastResult != nil {
+		diagnostic = coordinator.lastResult.Diagnostic
+	}
 	coordinator.mu.Unlock()
 	if manager == nil {
 		return UIDoctorResult{}, ErrDoctorUnavailable
@@ -159,5 +164,10 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	if err != nil {
 		return UIDoctorResult{}, ErrDoctorUnavailable
 	}
-	return NewDoctorResult(version, configSchema, provider, coordinator.privacy.OriginHash(), configured, degraded, health)
+	result, err := NewDoctorResult(version, configSchema, provider, coordinator.privacy.OriginHash(), configured, degraded, health)
+	if err != nil {
+		return UIDoctorResult{}, err
+	}
+	result.LastInteractionFailure = diagnostic
+	return result, nil
 }

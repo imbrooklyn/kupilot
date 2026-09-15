@@ -716,3 +716,15 @@ before:
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Response schema 4 changes the model wire grammar, not the durable conversation
+source. Older safe Messages and manifests remain readable; replay reconstructs
+the current grammar without historic authority. Interaction failure stage/reason
+metadata is current-process diagnostic state. No raw response or copied
+conversation log is added to SQLite or exports.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

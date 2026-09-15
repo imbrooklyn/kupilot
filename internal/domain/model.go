@@ -215,6 +215,12 @@ const (
 	ModelErrorCodeServiceUnavailable   ModelErrorCode = "model_service_unavailable"
 	ModelErrorCodeUnsupportedResponse  ModelErrorCode = "model_response_unsupported"
 	ModelErrorCodeMalformedStream      ModelErrorCode = "model_stream_invalid"
+	ModelErrorCodeDuplicateFinish      ModelErrorCode = "model_stream_duplicate_finish"
+	ModelErrorCodeProviderReported     ModelErrorCode = "model_provider_reported_failure"
+	ModelErrorCodeAfterFinish          ModelErrorCode = "model_stream_after_finish"
+	ModelErrorCodeMissingFinish        ModelErrorCode = "model_stream_missing_finish"
+	ModelErrorCodeInvalidStreamUsage   ModelErrorCode = "model_stream_usage_invalid"
+	ModelErrorCodeInvalidStopReason    ModelErrorCode = "model_stop_reason_invalid"
 	ModelErrorCodeStreamLimitExceeded  ModelErrorCode = "model_stream_limit_exceeded"
 	ModelErrorCodeRedirectDenied       ModelErrorCode = "model_redirect_denied"
 	ModelErrorCodeTimeout              ModelErrorCode = "model_request_timeout"
@@ -347,6 +353,18 @@ func modelErrorDefinition(code ModelErrorCode) (SafeErrorClass, bool, string, bo
 		return SafeErrorClassUnsupported, false, "The model endpoint does not satisfy the supported compatibility profile.", true
 	case ModelErrorCodeMalformedStream:
 		return SafeErrorClassInvalidExternalResponse, false, "The model endpoint returned an invalid response stream.", true
+	case ModelErrorCodeDuplicateFinish:
+		return SafeErrorClassInvalidExternalResponse, false, FailureStreamDuplicate.SafeMessage(), true
+	case ModelErrorCodeProviderReported:
+		return SafeErrorClassUnavailable, false, FailureProviderReported.SafeMessage(), true
+	case ModelErrorCodeAfterFinish:
+		return SafeErrorClassInvalidExternalResponse, false, FailureStreamAfterFinish.SafeMessage(), true
+	case ModelErrorCodeMissingFinish:
+		return SafeErrorClassInvalidExternalResponse, false, FailureStreamIncomplete.SafeMessage(), true
+	case ModelErrorCodeInvalidStreamUsage:
+		return SafeErrorClassInvalidExternalResponse, false, FailureStreamUsage.SafeMessage(), true
+	case ModelErrorCodeInvalidStopReason:
+		return SafeErrorClassInvalidExternalResponse, false, FailureStopReason.SafeMessage(), true
 	case ModelErrorCodeStreamLimitExceeded:
 		return SafeErrorClassBudgetExhausted, false, "The model response stream exceeded a fixed limit.", true
 	case ModelErrorCodeRedirectDenied:

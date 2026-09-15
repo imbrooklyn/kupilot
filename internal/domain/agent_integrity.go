@@ -246,7 +246,7 @@ type AnswerCompletenessManifest struct {
 // Validate checks exact ordering, bounds, and internal Evidence references.
 func (manifest AnswerCompletenessManifest) Validate() error {
 	if manifest.SchemaVersion != AnswerCompletenessSchemaVersion ||
-		(manifest.ResponseSchemaVersion != 1 && manifest.ResponseSchemaVersion != 2 && manifest.ResponseSchemaVersion != 3) || !manifest.StopReason.Valid() ||
+		(manifest.ResponseSchemaVersion != 1 && manifest.ResponseSchemaVersion != 2 && manifest.ResponseSchemaVersion != 3 && manifest.ResponseSchemaVersion != 4) || !manifest.StopReason.Valid() ||
 		len(manifest.Claims) > maxDiagnosisItems || len(manifest.Limitations) > maxDiagnosisItems ||
 		len(manifest.Sources) > MaxAnswerSources {
 		return ErrInvalidAgentIntegrity

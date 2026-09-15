@@ -243,19 +243,19 @@ also binds the canonical source-origin hash, normalized series identity, and
 query window. Continuation tokens, generated PromQL/LogQL, and raw Kubernetes
 or data-source objects never enter Evidence.
 
-The final strict response schema 3 wire object emits `answer_markdown` first so
+The final strict response schema 4 wire object emits `answer_markdown` first so
 it can be projected without treating the rest of the envelope as visible text,
 then contains the remaining typed members:
 
 - `answer_markdown`;
 - `evidence_citations` and `proposed_actions`; and
-- `response_schema_version`, `outcome`, `stop_reason`, `limitations`, and
+- `response_schema_version`, `outcome`, `limitations`, and
   `questions`.
 
 `answer_markdown` is bounded to 128 KiB before the complete Diagnosis ceiling
 is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
 without mandatory headings. A missing, unknown, duplicate, cross-run,
-cross-generation, stale, out-of-order, internally hash-inconsistent, or unauthorized
+cross-generation, stale, internally hash-inconsistent, or unauthorized
 claim/Evidence reference rejects a new final result before successful commit.
 Retained legacy records may still expose their bounded validation warnings.
 The wire claim does not contain a model-supplied hash. Runtime derives the
@@ -430,7 +430,7 @@ At the Eino boundary, each retained final assistant answer is reconstructed in
 the complete current strict final-response JSON envelope. Only its locally
 validated visible Markdown is placed in `answer_markdown`;
 `evidence_citations`, `proposed_actions`, `limitations`, and `questions` are
-empty, while the remaining schema 3 outcome members retain the current grammar.
+empty, while the remaining schema 4 outcome members retain the current grammar.
 The durable Message remains the safe Markdown answer, not raw model traffic.
 This role-preserving representation prevents a prior visible answer from
 becoming a plain-text or retired-schema response example and cannot restore
@@ -594,3 +594,17 @@ or second request.
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Schema 4 derives claim/question/choice ordering, structural coverage, and final
+stop reasons locally. The model supplies intent and exact references. Required
+arrays remain non-null. Clarification answer_markdown may be empty or a bounded
+safe candidate; runtime renders typed questions after sensitivity checks. Object
+order affects only provisional display. Unique same-run references are
+normalized to registry acceptance order after all ownership checks. Actual gaps
+remain explicit; no-source conversational answers create no artificial gap.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

@@ -16,7 +16,7 @@ func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.D
 	if message == nil || message.Role != schema.Assistant || message.Content == "" ||
 		message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 ||
 		unsupportedMessageFields(message) {
-		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelEnvelope, nil)
+		return agent.DiagnosisDraft{}, failedAt(domain.FailureFinalShape, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	var (
 		draft agent.DiagnosisDraft
@@ -28,7 +28,7 @@ func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.D
 		draft, err = agent.DecodeDiagnosticResponse(message.Content)
 	}
 	if err != nil {
-		return agent.DiagnosisDraft{}, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelEnvelope, err)
+		return agent.DiagnosisDraft{}, failedAt(agent.InteractionFailureOf(err, domain.FailureFinalShape), domain.SafeErrorClassInvalidExternalResponse, err)
 	}
 	return draft, nil
 }

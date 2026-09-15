@@ -2,13 +2,11 @@
   "answer_markdown": "The Pod is not Ready. It may still be starting; recent Events were not collected, so the cause remains uncertain.",
   "evidence_citations": [
     {
-      "sequence": 1,
       "claim": "The projected Pod condition is not Ready.",
       "claim_type": "current_observation",
       "evidence_ids": [
         "00000000-0000-7000-8000-000000008006"
-      ],
-      "coverage_state": "verified"
+      ]
     }
   ],
   "proposed_actions": []

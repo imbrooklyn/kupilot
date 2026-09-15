@@ -208,14 +208,14 @@ func TestModelInvocationPreflightRejectionPerformsZeroModelCalls(t *testing.T) {
 	sink := agent.EventSinkFunc(func(ctx context.Context, event agent.RunEvent) agent.EventSinkResult {
 		result := recorder.Publish(ctx, event)
 		if event.Kind == agent.RunEventModelStreamStarted {
-			return agent.EventSinkRejected
+			return agent.EventSinkPreflightRejected
 		}
 		return result
 	})
 	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
 	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, sink)
 	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
-		*outcome.ErrorClass != domain.SafeErrorClassPersistenceUnavailable || len(model.Requests()) != 0 {
+		*outcome.ErrorClass != domain.SafeErrorClassPolicyDenied || outcome.Diagnostic != domain.FailureRequestPreflight || len(model.Requests()) != 0 {
 		t.Fatalf("preflight rejection outcome/model calls = %#v/%d", outcome, len(model.Requests()))
 	}
 	events := recorder.Events()
@@ -277,7 +277,7 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 			t.Fatalf("historic final answer = %#v, error = %v", historic, historyErr)
 		}
 		historicalDraft, historyErr := agent.DecodeDiagnosticResponse(request.Messages[2].Content)
-		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 3 ||
+		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 4 ||
 			len(historicalDraft.ConfirmedFacts) != 0 || len(historicalDraft.RecommendedActions) != 0 ||
 			len(historicalDraft.ClaimCoverage) != 0 || len(historicalDraft.MissingInformation) != 0 ||
 			historicalDraft.Clarification != nil {
@@ -851,7 +851,8 @@ func TestAdapterRejectsUnregisteredCitationWithoutGrantingAuthority(t *testing.T
 	outcome := testAdapter(t, clock, model, tool, guard).Run(context.Background(), input, recorder)
 
 	if outcome.Status != domain.AgentRunStatusFailed || outcome.Diagnosis != nil || outcome.ErrorClass == nil ||
-		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.SafeMessage != safeInvalidModelCoverage {
+		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.Diagnostic != domain.FailureEvidenceUnknown ||
+		outcome.SafeMessage != domain.FailureEvidenceUnknown.SafeMessage() {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {
@@ -898,7 +899,7 @@ func TestAdapterRejectsMalformedFinalDiagnosis(t *testing.T) {
 
 	if outcome.Status != domain.AgentRunStatusFailed || outcome.ErrorClass == nil ||
 		*outcome.ErrorClass != domain.SafeErrorClassInvalidExternalResponse || outcome.Diagnosis != nil ||
-		outcome.SafeMessage != safeInvalidModelEnvelope {
+		outcome.Diagnostic != domain.FailureFinalDuplicateField || outcome.SafeMessage != domain.FailureFinalDuplicateField.SafeMessage() {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	if len(tool.Calls()) != 0 || len(model.Requests()) != 1 {

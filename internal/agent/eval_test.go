@@ -147,11 +147,9 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 		t.Fatalf("decode semantic diagnosis fixture: %v", err)
 	}
 	type citation struct {
-		Sequence      int                       `json:"sequence"`
-		Claim         string                    `json:"claim"`
-		ClaimType     domain.ClaimKind          `json:"claim_type"`
-		EvidenceIDs   []domain.EvidenceID       `json:"evidence_ids"`
-		CoverageState domain.ClaimCoverageState `json:"coverage_state"`
+		Claim       string              `json:"claim"`
+		ClaimType   domain.ClaimKind    `json:"claim_type"`
+		EvidenceIDs []domain.EvidenceID `json:"evidence_ids"`
 	}
 	result := struct {
 		AnswerMarkdown        string                         `json:"answer_markdown"`
@@ -159,21 +157,19 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 		ProposedActions       []json.RawMessage              `json:"proposed_actions"`
 		ResponseSchemaVersion int                            `json:"response_schema_version"`
 		Outcome               string                         `json:"outcome"`
-		StopReason            domain.RunTerminalReason       `json:"stop_reason"`
 		Limitations           []domain.MissingInformation    `json:"limitations"`
 		Questions             []domain.ClarificationQuestion `json:"questions"`
 	}{
 		AnswerMarkdown: source.AnswerMarkdown, ProposedActions: source.ProposedActions,
-		ResponseSchemaVersion: 3, Outcome: "answer", StopReason: domain.RunTerminalCompleted,
+		ResponseSchemaVersion: 4, Outcome: "answer",
 		Limitations: []domain.MissingInformation{}, Questions: []domain.ClarificationQuestion{},
 	}
 	result.EvidenceCitations = make([]citation, len(source.EvidenceCitations))
 	for index, item := range source.EvidenceCitations {
 		result.EvidenceCitations[index] = citation{
-			Sequence: index + 1, ClaimType: domain.ClaimCurrentObservation,
-			Claim:         item.Claim,
-			EvidenceIDs:   append([]domain.EvidenceID(nil), item.EvidenceIDs...),
-			CoverageState: domain.ClaimCoverageVerified,
+			ClaimType:   domain.ClaimCurrentObservation,
+			Claim:       item.Claim,
+			EvidenceIDs: append([]domain.EvidenceID(nil), item.EvidenceIDs...),
 		}
 	}
 	encoded, err := json.Marshal(result)

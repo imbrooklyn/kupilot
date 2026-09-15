@@ -139,21 +139,23 @@ func TestCoordinatorRunPreflightRejectsUnboundInputAndBudgetBeforeModelCall(t *t
 				result, err := publisher.Publish(ctx, agent.RunEvent{
 					Kind: agent.RunEventModelStreamStarted, ModelRequestID: &requestID, ModelPreflight: preflight,
 				})
-				if err != nil || result != agent.EventSinkRejected {
+				if err != nil || result != agent.EventSinkPreflightRejected {
 					t.Fatalf("Publish(preflight) = %q, %v", result, err)
 				}
 				if result == agent.EventSinkAccepted {
 					modelCalls.Add(1)
 				}
-				class := domain.SafeErrorClassPersistenceUnavailable
+				class := domain.SafeErrorClassPolicyDenied
 				if result, err := publisher.Publish(ctx, agent.RunEvent{
-					Kind:    agent.RunEventRunFailed,
-					Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The model invocation was rejected before transport."},
+					Kind:       agent.RunEventRunFailed,
+					Diagnostic: domain.FailureRequestPreflight,
+					Failure:    &agent.RunEventFailure{Class: class, SafeMessage: "The model invocation was rejected before transport."},
 				}); err != nil || result == agent.EventSinkRejected {
 					t.Fatalf("Publish(failed) = %q, %v", result, err)
 				}
 				return agent.RunOutcome{
-					Status: domain.AgentRunStatusFailed, ErrorClass: &class,
+					Diagnostic: domain.FailureRequestPreflight,
+					Status:     domain.AgentRunStatusFailed, ErrorClass: &class,
 					SafeMessage: "The model invocation was rejected before transport.",
 				}
 			})
@@ -166,7 +168,7 @@ func TestCoordinatorRunPreflightRejectsUnboundInputAndBudgetBeforeModelCall(t *t
 				t.Fatalf("StartRun() error = %v", err)
 			}
 			result, err := coordinator.WaitRun(context.Background(), runID)
-			if err != nil || result.Status != domain.AgentRunStatusFailed || modelCalls.Load() != 0 {
+			if err != nil || result.Status != domain.AgentRunStatusFailed || result.Diagnostic != domain.FailureRequestPreflight || modelCalls.Load() != 0 {
 				t.Fatalf("preflight result/model calls = %#v/%d, %v", result, modelCalls.Load(), err)
 			}
 		})

@@ -91,6 +91,7 @@ type CoordinatorUIConfig struct {
 // RunResult is the bounded in-memory terminal result used by shutdown and
 // delivery coordination. Diagnosis content remains in the event stream.
 type RunResult struct {
+	Diagnostic          domain.InteractionFailure
 	RunID               domain.AgentRunID
 	Status              domain.AgentRunStatus
 	TerminalReason      domain.RunTerminalReason
@@ -200,12 +201,14 @@ type activeRun struct {
 	committedInputs          []agent.ConversationTurn
 	evidenceOrder            []domain.EvidenceID
 
-	lastAgentSequence int64
-	publishing        bool
-	terminal          bool
-	terminalStatus    domain.AgentRunStatus
-	persistenceBad    bool
-	terminalReason    domain.RunTerminalReason
+	lastAgentSequence   int64
+	publishing          bool
+	terminal            bool
+	terminalStatus      domain.AgentRunStatus
+	persistenceBad      bool
+	terminalReason      domain.RunTerminalReason
+	terminalDiagnostic  domain.InteractionFailure
+	rejectionDiagnostic domain.InteractionFailure
 }
 
 type pendingTool struct {
@@ -2562,11 +2565,15 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
 		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
 		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
-		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
-		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) ||
-		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration()) {
+		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted {
 		coordinator.mu.Unlock()
 		return agent.EventSinkRejected
+	}
+	if runEventRequiresCurrentScope(event.Kind) && (!coordinator.runScopeCurrentLocked(state) ||
+		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration())) {
+		state.rejectionDiagnostic = domain.FailureStaleGeneration
+		coordinator.mu.Unlock()
+		return agent.EventSinkStaleRejected
 	}
 	coordinator.mu.Unlock()
 	modelAuthorized := true
@@ -2579,15 +2586,20 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
 		event.ScopeGeneration != state.run.Scope.Generation || event.Sequence != state.lastAgentSequence+1 ||
 		state.lastAgentSequence == 0 && event.Kind != agent.RunEventRunStarted ||
-		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted ||
-		runEventRequiresCurrentScope(event.Kind) && !coordinator.runScopeCurrentLocked(state) ||
-		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration()) {
+		state.lastAgentSequence > 0 && event.Kind == agent.RunEventRunStarted {
 		coordinator.mu.Unlock()
 		return agent.EventSinkRejected
+	}
+	if runEventRequiresCurrentScope(event.Kind) && (!coordinator.runScopeCurrentLocked(state) ||
+		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration())) {
+		state.rejectionDiagnostic = domain.FailureStaleGeneration
+		coordinator.mu.Unlock()
+		return agent.EventSinkStaleRejected
 	}
 	state.publishing = true
 	state.lastAgentSequence = event.Sequence
 	if !modelAuthorized || privacyErr != nil {
+		state.rejectionDiagnostic = domain.FailureRequestPreflight
 		state.cancel()
 		coordinator.mu.Unlock()
 		if privacyErr != nil {
@@ -2595,13 +2607,21 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 			_ = coordinator.markRunPersistenceDegraded(ctx, state)
 		}
 		coordinator.finishPublishing(state)
-		return agent.EventSinkRejected
+		return agent.EventSinkPreflightRejected
 	}
 	action, err := coordinator.acceptEventLocked(state, event)
+	rejection := agent.EventSinkRejected
+	if err != nil {
+		state.rejectionDiagnostic = domain.FailureEventAcceptance
+		if event.Kind == agent.RunEventModelStreamStarted || event.Kind == agent.RunEventSummaryStarted {
+			state.rejectionDiagnostic = domain.FailureRequestPreflight
+			rejection = agent.EventSinkPreflightRejected
+		}
+	}
 	coordinator.mu.Unlock()
 	if err != nil {
 		coordinator.finishPublishing(state)
-		return agent.EventSinkRejected
+		return rejection
 	}
 
 	bridgeFailed := false
@@ -2653,6 +2673,9 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	coordinator.finishPublishing(state)
 	if bridgeFailed {
+		if persistenceErr != nil {
+			return agent.EventSinkPersistenceRejected
+		}
 		return agent.EventSinkRejected
 	}
 	if retentionFailed || persistenceFailed || state.persistenceBad {
@@ -3243,6 +3266,7 @@ func (coordinator *Coordinator) acceptEventLocked(state *activeRun, event agent.
 		state.terminal = true
 		state.terminalStatus = status
 		state.terminalReason = terminalReasonForAgentEvent(event, state.diagnosis)
+		state.terminalDiagnostic = event.Diagnostic
 		return persistenceAction{kind: persistTerminal, event: event, audit: terminalAudit(event)}, nil
 	default:
 		return persistenceAction{}, ErrInvalidAgentEvent
@@ -3546,12 +3570,13 @@ func (coordinator *Coordinator) executeRun(ctx context.Context, state *activeRun
 	reason := state.terminalReason
 	if state.persistenceBad {
 		reason = domain.RunTerminalPersistenceDegraded
+		state.terminalDiagnostic = domain.FailurePersistence
 	}
 	allowDrain := reason != domain.RunTerminalNeedsUserInput
 	inputEvent, successor := coordinator.finishConversationInputRunLocked(state, clean, allowDrain)
 	result := RunResult{
 		RunID: state.run.ID, Status: state.terminalStatus,
-		TerminalReason:      reason,
+		TerminalReason: reason, Diagnostic: state.terminalDiagnostic,
 		PersistenceDegraded: state.persistenceBad,
 	}
 	coordinator.lastResult = &result
@@ -3621,21 +3646,35 @@ func (coordinator *Coordinator) forceFailedTerminal(ctx context.Context, state *
 	state.terminal = true
 	state.terminalStatus = domain.AgentRunStatusFailed
 	state.terminalReason = domain.RunTerminalFailed
+	state.terminalDiagnostic = domain.FailureInternal
+	if state.rejectionDiagnostic.Valid() {
+		state.terminalDiagnostic = state.rejectionDiagnostic
+	}
+	if state.terminalDiagnostic == domain.FailureStaleGeneration {
+		state.terminalStatus = domain.AgentRunStatusStaleScope
+		state.terminalReason = domain.RunTerminalStaleGeneration
+	}
 	coordinator.mu.Unlock()
 	class := domain.SafeErrorClassInternal
 	event := agent.RunEvent{
-		Kind:    agent.RunEventRunFailed,
-		Failure: &agent.RunEventFailure{Class: class, SafeMessage: "The diagnostic run failed safely."},
+		Kind:       agent.RunEventRunFailed,
+		Diagnostic: state.terminalDiagnostic,
+		Failure:    &agent.RunEventFailure{Class: class, SafeMessage: state.terminalDiagnostic.SafeMessage()},
+	}
+	if state.terminalStatus == domain.AgentRunStatusStaleScope {
+		event.Kind = agent.RunEventRunStaleScope
+		event.Failure = nil
+		event.TerminationReason = agent.RunTerminationScopeChanged
 	}
 	terminalContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), coordinator.persistenceLimit)
 	defer cancel()
 	if err := coordinator.persistTerminal(terminalContext, state, event, terminalAudit(event)); err != nil {
 		_ = coordinator.markRunPersistenceDegraded(terminalContext, state)
 	}
-	_ = state.bridge.forceFailed(terminalContext, "The diagnostic run failed safely.")
+	_ = state.bridge.forceFailed(terminalContext, state.terminalReason, state.terminalDiagnostic)
 	coordinator.observe(terminalContext, RunObservation{
 		Kind: RunObservationTerminal, RunID: state.run.ID,
-		ScopeGeneration: state.run.Scope.Generation, Status: domain.AgentRunStatusFailed,
+		ScopeGeneration: state.run.Scope.Generation, Status: state.terminalStatus,
 		PersistenceDegraded: state.persistenceBad,
 	})
 }

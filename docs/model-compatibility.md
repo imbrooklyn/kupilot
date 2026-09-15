@@ -432,7 +432,7 @@ or summarization call.
 | Structurally admitted messages per Agent conversation | 4,418; Eino summarization triggers much earlier when context exceeds 160 messages or the 128 KiB content-resource threshold |
 | Eligible durable Session messages selected before translation | 4,096 and 4 MiB in committed order |
 | Eligible durable recent tail after summarization | At least 16 user/assistant Messages and at most 25 so the cut remains on a complete-run boundary; current-run Tool-call/Tool-result pairs remain Eino-managed after the cut and outside durable coverage |
-| Retained final assistant answer representation | Complete current strict response schema 3 envelope containing the validated Markdown answer, empty Evidence/action/limitation/question arrays, and the current outcome members; raw model traffic is never replayed |
+| Retained final assistant answer representation | Complete current strict response schema 4 envelope containing the validated Markdown answer, empty Evidence/action/limitation/question arrays, and the current outcome members; raw model traffic is never replayed |
 | Durable safe summary | 16 KiB plus exact coverage metadata; no raw Eino state or Tool transcript |
 | System, user, or Tool content in one input message | 64 KiB |
 | One assembled assistant response, including discarded reasoning | 128 KiB |
@@ -587,7 +587,7 @@ synthetic English content and loopback `httptest` servers.
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 | Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
 | Scripted steer boundary routes | Summary-before-steer order, durable commit before model I/O, exact-once active input, intact Tool pairs, and zero model calls after a failed barrier |
-| Current-schema history routes | Complete schema 3 retained assistant representation and a later strict final without retired three-member imitation |
+| Current-schema history routes | Complete schema 4 retained assistant representation and a later strict final without retired three-member imitation |
 | Native Ollama request recorder | Exact `/api/chat`, no Authorization, NDJSON/JSON media, bounded native format/options, deterministic Tool-call pairing, usage normalization, and no redirect or fallback |
 
 <!-- markdownlint-enable MD013 -->
@@ -633,7 +633,7 @@ Before each real Agent endpoint entry, the run-bound Application preflight
 verifies exact input sequencing, scope/policy/profile/origin/consent, context
 coverage, Tool catalog, storage, budgets, sink, mode, and recovery state, then
 emits its content-free projection. New model final output must use strict
-response schema 3 and choose exactly one `answer` or `needs_user_input`
+response schema 4 and choose exactly one `answer` or `needs_user_input`
 outcome. The completeness manifest, clarification bounds, and authoritative
 stop reason are validated after Eino assembly without adding another model
 role or answer critic.
@@ -704,3 +704,96 @@ general model-quality evidence.
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
 - [Eino releases](https://github.com/cloudwego/eino/releases)
+
+## Deterministic response metadata and failure diagnostics
+
+New final output uses schema 4. Citations contain only claim, claim_type, and
+evidence_ids. Runtime derives ordinal, hash, and structural support. Questions
+contain kind, prompt, and choices of label-only objects; code supplies local
+choice IDs and the visible rendering. Plan wire schema 2 contains
+description-only steps. Unknown or retired fields and old wire schemas fail
+closed. Unique accepted Evidence references may be reordered locally; duplicate
+or unknown references may not be repaired.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.
+
+## Observed local structural conformance (2026-09-16)
+
+The tested local target was Ollama **0.34.0**, model **gpt-oss:20b**, using the
+pinned native Eino adapter. Each campaign scheduled ten scenarios in each of
+three independent rounds, with a three-minute scenario deadline, at most four
+model calls and three synthetic Tool calls. Failed scenarios were not repaired
+or retried inside a run. No Kubernetes, Reviewer, external model, executor, or
+durable conversation store was used by this tagged fixture. Application, real
+temporary SQLite, resume, queue and TUI behavior have separate deterministic
+composition evidence in [Interaction Conformance](interaction-conformance.md).
+
+The latest campaign completed **24 of 30** scenario assertions. Six runs were
+rejected at fixed typed boundaries, with no subsequent invocation. This is not
+a three-round all-pass result and is not evidence of semantic answer quality.
+It measured 49 model calls, 19 synthetic Tool calls, zero Kubernetes calls, and
+2,542,287 request bytes. The provider supplied usage for 48 responses: 461,928
+input and 12,638 output tokens. The provider-error response supplied no usage;
+its tokens are unavailable, not measured zero. Total command wall time was
+340.588 seconds; scenario times below exclude command overhead.
+
+| Round | Scenario | M/T/K | Request bytes | Measured input/output tokens | Seconds | Structural result / exact reason |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | greeting | 1/0/0 | 51,158 | 9460/81 | 19.232 | PASS |
+| 1 | later_turn_identity | 1/0/0 | 51,475 | 9521/105 | 3.102 | PASS |
+| 1 | one_tool | 2/1/0 | 103,927 | 19282/674 | 18.659 | PASS |
+| 1 | list_final | 2/1/0 | 103,925 | 19281/263 | 7.581 | PASS |
+| 1 | list_inspect_final | 1/0/0 | 51,332 | 9486/1814 | 42.903 | FAIL / `evidence_reference_unknown` |
+| 1 | empty_result | 2/1/0 | 103,483 | 19169/574 | 15.468 | PASS |
+| 1 | partial_result | 2/1/0 | 103,923 | 19283/752 | 17.012 | PASS |
+| 1 | verified_observation | 2/1/0 | 103,899 | 19277/621 | 14.498 | PASS |
+| 1 | retained_history | 2/1/0 | 104,452 | 19386/527 | 12.525 | PASS |
+| 1 | clarification | 1/0/0 | 51,242 | 9476/497 | 10.967 | PASS |
+| 2 | greeting | 1/0/0 | 51,158 | 9460/84 | 2.123 | PASS |
+| 2 | later_turn_identity | 1/0/0 | 51,475 | 9521/99 | 2.567 | PASS |
+| 2 | one_tool | 2/1/0 | 103,921 | 19281/276 | 7.181 | PASS |
+| 2 | list_final | 1/0/0 | 51,277 | unavailable | 2.656 | FAIL / `provider_reported_failure` |
+| 2 | list_inspect_final | 3/2/0 | 158,109 | 29427/591 | 14.678 | PASS |
+| 2 | empty_result | 1/0/0 | 51,276 | 9480/67 | 1.791 | FAIL / `tool_call_malformed` |
+| 2 | partial_result | 2/1/0 | 103,923 | 19283/546 | 12.598 | PASS |
+| 2 | verified_observation | 2/1/0 | 103,899 | 19277/363 | 8.922 | PASS |
+| 2 | retained_history | 2/1/0 | 104,454 | 19386/321 | 8.301 | PASS |
+| 2 | clarification | 1/0/0 | 51,242 | 9476/417 | 9.284 | PASS |
+| 3 | greeting | 1/0/0 | 51,158 | 9460/95 | 2.316 | PASS |
+| 3 | later_turn_identity | 1/0/0 | 51,475 | 9521/135 | 3.364 | PASS |
+| 3 | one_tool | 2/1/0 | 103,928 | 19282/372 | 9.201 | PASS |
+| 3 | list_final | 2/1/0 | 103,933 | 19282/464 | 11.131 | PASS |
+| 3 | list_inspect_final | 3/2/0 | 158,130 | 29430/1021 | 25.569 | PASS |
+| 3 | empty_result | 2/1/0 | 103,473 | 19168/351 | 11.274 | FAIL / `final_shape_invalid` |
+| 3 | partial_result | 2/1/0 | 103,951 | 19287/753 | 21.140 | PASS |
+| 3 | verified_observation | 2/1/0 | 103,911 | 19279/464 | 12.906 | PASS |
+| 3 | retained_history | 1/0/0 | 51,536 | 9531/143 | 4.293 | FAIL / `tool_call_malformed` |
+| 3 | clarification | 1/0/0 | 51,242 | 9476/168 | 5.129 | FAIL / `final_field_unknown` |
+
+Failure stages were `claim_binding` for `evidence_reference_unknown`,
+`model_invocation` for `provider_reported_failure`, `tool_selection` for both
+`tool_call_malformed` results, and `final_decode` for `final_shape_invalid` and
+`final_field_unknown`. The unknown Evidence was declared before any Tool read.
+The provider failure was a non-empty native error record under HTTP 200. The
+malformed Tool calls invoked no handler. The invalid final after an empty read
+and the unknown clarification field supplied no uniquely recoverable accepted
+structure. Runtime did not guess missing intent, references, or fields. Actual
+response bytes were not retained, so these observations do not identify a raw
+field value or explain the provider's internal failure.
+
+Two earlier fixed campaigns are retained as distinct observations, not hidden
+retries or replacement results:
+
+| Campaign | Scenario assertions | M/T/K | Request bytes | Wall seconds | Measurement limits |
+| --- | --- | --- | --- | --- | --- |
+| Initial | 25/30 PASS | 50/19/0 | 2,594,336 | 388.878 | Usage observer missed the structured-model instance; usage unavailable. Two safe insufficient-Evidence responses did not perform the scenario's requested Tool work. |
+| Instrumented | 25/30 PASS | 50/20/0 | 2,593,001 | 390.896 | 48 measured responses: 461,412 input and 15,189 output tokens. Two generic stream failures predated the native error-record observer; their cause cannot be retrospectively attributed. |
+
+Later campaigns followed explicit fixture measurement and typed classification
+changes; none changed authority or added runtime retries. The three campaigns
+together made 149 model calls and 58 synthetic Tool calls, with zero Kubernetes
+calls. The deterministic regression suite is the correctness authority. Real
+cluster integration, Reviewer evaluation, broad model quality, and release
+evidence: **Not run**.

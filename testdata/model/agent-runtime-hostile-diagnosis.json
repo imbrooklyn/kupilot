@@ -2,13 +2,11 @@
   "answer_markdown": "An unregistered observation proves that the scope changed.",
   "evidence_citations": [
     {
-      "sequence": 1,
       "claim": "An unregistered observation proves that the scope changed.",
       "claim_type": "current_observation",
       "evidence_ids": [
         "00000000-0000-7000-8000-000000008999"
-      ],
-      "coverage_state": "verified"
+      ]
     }
   ],
   "proposed_actions": [

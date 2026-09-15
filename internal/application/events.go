@@ -1171,6 +1171,7 @@ const (
 // UITerminalOutcome is Application-authoritative and deliberately contains no
 // dynamic error, scope, resource, or answer text.
 type UITerminalOutcome struct {
+	Diagnostic  domain.InteractionFailure
 	Reason      domain.RunTerminalReason
 	NextActions []UINextAction
 	Budget      []UIBudgetMeasure
@@ -1234,7 +1235,7 @@ func ProjectTerminalOutcome(reason domain.RunTerminalReason) (UITerminalOutcome,
 
 func (outcome UITerminalOutcome) valid() bool {
 	want, err := ProjectTerminalOutcome(outcome.Reason)
-	if err != nil || len(want.NextActions) != len(outcome.NextActions) || !validFineGrainedBudget(outcome.Budget) {
+	if err != nil || outcome.Diagnostic != "" && (!outcome.Diagnostic.Valid() || outcome.Reason == domain.RunTerminalCompleted) || len(want.NextActions) != len(outcome.NextActions) || !validFineGrainedBudget(outcome.Budget) {
 		return false
 	}
 	for index := range want.NextActions {
@@ -2138,31 +2139,31 @@ func (bridge *eventBridge) accept(ctx context.Context, event agent.RunEvent) err
 			AnswerProvenance:   &provenance,
 		})
 	case agent.RunEventRunFailed:
-		terminal, err := bridge.projectTerminal(terminalReasonForFailure(event.Failure.Class))
+		terminal, err := bridge.projectTerminal(terminalReasonForFailure(event.Failure.Class), event.Diagnostic)
 		if err != nil {
 			return err
 		}
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: event.Failure.SafeMessage, TerminalOutcome: &terminal})
 	case agent.RunEventRunCancelled:
-		terminal, err := bridge.projectTerminal(domain.RunTerminalCancelled)
+		terminal, err := bridge.projectTerminal(domain.RunTerminalCancelled, event.Diagnostic)
 		if err != nil {
 			return err
 		}
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunCancelled, Text: "The diagnostic run was cancelled.", TerminalOutcome: &terminal})
 	case agent.RunEventRunTimedOut:
-		terminal, err := bridge.projectTerminal(domain.RunTerminalTimedOut)
+		terminal, err := bridge.projectTerminal(domain.RunTerminalTimedOut, event.Diagnostic)
 		if err != nil {
 			return err
 		}
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run reached its time limit.", TerminalOutcome: &terminal})
 	case agent.RunEventRunStaleScope:
-		terminal, err := bridge.projectTerminal(domain.RunTerminalStaleGeneration)
+		terminal, err := bridge.projectTerminal(domain.RunTerminalStaleGeneration, event.Diagnostic)
 		if err != nil {
 			return err
 		}
 		return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: "The diagnostic run stopped because the Kubernetes context or namespace changed.", TerminalOutcome: &terminal})
 	case agent.RunEventRunInterrupted:
-		terminal, err := bridge.projectTerminal(domain.RunTerminalUnknown)
+		terminal, err := bridge.projectTerminal(domain.RunTerminalUnknown, event.Diagnostic)
 		if err != nil {
 			return err
 		}
@@ -2232,8 +2233,8 @@ func (bridge *eventBridge) persistenceDegraded(ctx context.Context) error {
 	})
 }
 
-func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) error {
-	if bridge == nil || ctx == nil || ctx.Err() != nil || bridge.terminal || safeMessage == "" {
+func (bridge *eventBridge) forceFailed(ctx context.Context, reason domain.RunTerminalReason, diagnostic domain.InteractionFailure) error {
+	if bridge == nil || ctx == nil || ctx.Err() != nil || bridge.terminal || !diagnostic.Valid() {
 		return ErrInvalidUIEvent
 	}
 	if !bridge.started {
@@ -2243,14 +2244,14 @@ func (bridge *eventBridge) forceFailed(ctx context.Context, safeMessage string) 
 		}
 	}
 	bridge.pendingDelta = ""
-	terminal, err := bridge.projectTerminal(domain.RunTerminalFailed)
+	terminal, err := bridge.projectTerminal(reason, diagnostic)
 	if err != nil {
 		return err
 	}
-	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: safeMessage, TerminalOutcome: &terminal})
+	return bridge.emitTerminal(ctx, UIEvent{Kind: UIEventRunFailed, Text: diagnostic.SafeMessage(), TerminalOutcome: &terminal})
 }
 
-func (bridge *eventBridge) projectTerminal(reason domain.RunTerminalReason) (UITerminalOutcome, error) {
+func (bridge *eventBridge) projectTerminal(reason domain.RunTerminalReason, diagnostic ...domain.InteractionFailure) (UITerminalOutcome, error) {
 	if bridge.persistenceBad {
 		reason = domain.RunTerminalPersistenceDegraded
 	}
@@ -2270,6 +2271,12 @@ func (bridge *eventBridge) projectTerminal(reason domain.RunTerminalReason) (UIT
 			setBudgetMeasure(bridge.terminalBudget, UIBudgetWallMilliseconds, elapsed, UIBudgetMeasured)
 		}
 		outcome.Budget = append([]UIBudgetMeasure(nil), bridge.terminalBudget...)
+	}
+	if len(diagnostic) > 0 {
+		outcome.Diagnostic = diagnostic[0]
+	}
+	if bridge.persistenceBad {
+		outcome.Diagnostic = domain.FailurePersistence
 	}
 	return outcome, nil
 }

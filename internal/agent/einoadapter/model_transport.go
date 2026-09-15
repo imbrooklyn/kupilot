@@ -3,6 +3,7 @@ package einoadapter
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -109,6 +110,25 @@ func (state *transportRequestState) responseLimitReached() bool {
 	return body != nil && body.limitReached()
 }
 
+// responseProtocolFailure is read only after the Eino stream has terminated.
+// The body observer can catch an error the SDK consumed while coalescing data.
+func (state *transportRequestState) responseProtocolFailure() error {
+	state.mu.Lock()
+	responseBody := state.responseBody
+	state.mu.Unlock()
+	switch body := responseBody.(type) {
+	case *boundedSSEBody:
+		body.protocolMu.Lock()
+		defer body.protocolMu.Unlock()
+		return body.protocolFailure
+	case *boundedNDJSONBody:
+		body.protocolMu.Lock()
+		defer body.protocolMu.Unlock()
+		return body.protocolFailure
+	}
+	return nil
+}
+
 type boundedResponseBody interface {
 	io.ReadCloser
 	limitReached() bool
@@ -190,9 +210,9 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	}
 	var boundedBody boundedResponseBody
 	if state.responseMode == transportResponseStream && transport.provider == domain.ModelProviderOpenAI {
-		boundedBody = &boundedSSEBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
+		boundedBody = &boundedSSEBody{ReadCloser: response.Body, maximumBytes: state.responseLimit, validateEvents: true}
 	} else if state.responseMode == transportResponseStream {
-		boundedBody = &boundedNDJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
+		boundedBody = &boundedNDJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit, validateEvents: true}
 	} else {
 		boundedBody = &boundedJSONBody{ReadCloser: response.Body, maximumBytes: state.responseLimit}
 	}
@@ -268,6 +288,11 @@ type boundedSSEBody struct {
 	dataLeadingSpace bool
 	failure          error
 	maximumBytes     int
+	validateEvents   bool
+	payload          []byte
+	order            sseOrder
+	protocolMu       sync.Mutex
+	protocolFailure  error
 }
 
 func (body *boundedSSEBody) Close() error {
@@ -292,8 +317,17 @@ func (body *boundedSSEBody) Read(target []byte) (int, error) {
 	count, readError := body.ReadCloser.Read(target)
 	for index := 0; index < count; index++ {
 		if !body.accept(target[index]) {
-			body.failure = errModelResponseLimitReached
+			if body.failure == nil {
+				body.failure = errModelResponseLimitReached
+			}
 			return index, body.failure
+		}
+	}
+	if readError == io.EOF && body.validateEvents && body.dataLine {
+		body.failure = body.observeOrder()
+		body.resetLine()
+		if body.failure != nil {
+			return count, body.failure
 		}
 	}
 	return count, readError
@@ -309,6 +343,12 @@ func (body *boundedSSEBody) accept(current byte) bool {
 		return false
 	}
 	if current == '\n' {
+		if body.validateEvents && body.dataLine {
+			if err := body.observeOrder(); err != nil {
+				body.failure = err
+				return false
+			}
+		}
 		body.resetLine()
 		return true
 	}
@@ -328,6 +368,9 @@ func (body *boundedSSEBody) accept(current byte) bool {
 	if !body.dataLine {
 		return true
 	}
+	if body.validateEvents {
+		body.payload = append(body.payload, current)
+	}
 	if body.lineBytes == len(body.linePrefix)+1 && current == ' ' {
 		body.dataLeadingSpace = true
 	}
@@ -343,22 +386,40 @@ func (body *boundedSSEBody) limitReached() bool {
 }
 
 func (body *boundedSSEBody) resetLine() {
+	clear(body.payload)
+	body.payload = body.payload[:0]
 	body.lineBytes = 0
 	body.linePrefixBytes = 0
 	body.dataLine = false
 	body.dataLeadingSpace = false
 }
 
+func (body *boundedSSEBody) observeOrder() error {
+	err := body.order.accept(body.payload)
+	if err != nil {
+		body.protocolMu.Lock()
+		body.protocolFailure = err
+		body.protocolMu.Unlock()
+	}
+	return err
+}
+
 type boundedNDJSONBody struct {
 	io.ReadCloser
-	closeOnce    sync.Once
-	closeError   error
-	totalBytes   int
-	recordBytes  int
-	records      int
-	maximumBytes int
-	failure      error
+	closeOnce       sync.Once
+	closeError      error
+	totalBytes      int
+	recordBytes     int
+	records         int
+	maximumBytes    int
+	failure         error
+	validateEvents  bool
+	payload         []byte
+	protocolMu      sync.Mutex
+	protocolFailure error
 }
+
+var errNativeProviderReported = errors.New("native model provider reported failure")
 
 func (body *boundedNDJSONBody) Close() error {
 	body.closeOnce.Do(func() { body.closeError = body.ReadCloser.Close() })
@@ -380,8 +441,16 @@ func (body *boundedNDJSONBody) Read(target []byte) (int, error) {
 	count, readError := body.ReadCloser.Read(target)
 	for index := 0; index < count; index++ {
 		if !body.accept(target[index], maximum) {
-			body.failure = errModelResponseLimitReached
+			if body.failure == nil {
+				body.failure = errModelResponseLimitReached
+			}
 			return index, body.failure
+		}
+	}
+	if readError == io.EOF && body.validateEvents && len(body.payload) > 0 {
+		if err := body.observeProviderError(); err != nil {
+			body.failure = err
+			return count, err
 		}
 	}
 	return count, readError
@@ -396,12 +465,40 @@ func (body *boundedNDJSONBody) accept(current byte, maximum int) bool {
 		if body.recordBytes == 0 {
 			return false
 		}
+		if body.validateEvents {
+			if err := body.observeProviderError(); err != nil {
+				body.failure = err
+				return false
+			}
+		}
 		body.records++
 		body.recordBytes = 0
 		return body.records <= domain.MaxModelStreamChunks
 	}
 	body.recordBytes++
+	if body.validateEvents && body.recordBytes <= domain.MaxModelStreamChunkBytes {
+		body.payload = append(body.payload, current)
+	}
 	return body.recordBytes <= domain.MaxModelStreamChunkBytes
+}
+
+func (body *boundedNDJSONBody) observeProviderError() error {
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	err := json.Unmarshal(body.payload, &envelope)
+	clear(body.payload)
+	body.payload = body.payload[:0]
+	if err != nil {
+		return nil
+	} // Eino owns malformed-record decoding.
+	if envelope.Error == "" {
+		return nil
+	}
+	body.protocolMu.Lock()
+	body.protocolFailure = errNativeProviderReported
+	body.protocolMu.Unlock()
+	return errNativeProviderReported
 }
 
 func (body *boundedNDJSONBody) limitReached() bool {

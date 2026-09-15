@@ -498,6 +498,7 @@ type RunIdentifierSource interface {
 // RunOutcome is the sole synchronous terminal value returned by AgentRunner.
 // Raw adapter and framework errors are intentionally absent.
 type RunOutcome struct {
+	Diagnostic  domain.InteractionFailure
 	Status      domain.AgentRunStatus
 	Diagnosis   *domain.Diagnosis
 	ErrorClass  *domain.SafeErrorClass
@@ -507,7 +508,7 @@ type RunOutcome struct {
 // Validate checks terminal uniqueness and binds a successful Diagnosis to the
 // immutable run and scope.
 func (outcome RunOutcome) Validate(input RunInput) error {
-	if input.Validate() != nil || !outcome.Status.Terminal() {
+	if input.Validate() != nil || !outcome.Status.Terminal() || outcome.Diagnostic != "" && (!outcome.Diagnostic.Valid() || outcome.Status == domain.AgentRunStatusCompleted) {
 		return ErrInvalidRunOutcome
 	}
 	if outcome.Status == domain.AgentRunStatusCompleted {

@@ -53,6 +53,30 @@ func TestEveryRunTerminalReasonHasOneFixedSafeNextActionProjection(t *testing.T)
 	}
 }
 
+func TestTerminalDiagnosticsCannotChangeNextActionsOrLabelSuccessAsFailure(t *testing.T) {
+	outcome, err := ProjectTerminalOutcome(domain.RunTerminalFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := append([]UINextAction(nil), outcome.NextActions...)
+	outcome.Diagnostic = domain.FailureFinalJSON
+	if !outcome.valid() || !reflect.DeepEqual(before, outcome.NextActions) {
+		t.Fatal("diagnostic changed terminal authority")
+	}
+	outcome.Diagnostic = "model-selected-retry"
+	if outcome.valid() {
+		t.Fatal("unknown diagnostic was accepted")
+	}
+	outcome, err = ProjectTerminalOutcome(domain.RunTerminalCompleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome.Diagnostic = domain.FailureFinalJSON
+	if outcome.valid() {
+		t.Fatal("successful completion carried failure metadata")
+	}
+}
+
 func TestAnswerTerminalReasonPriorityIsTypedAndOrderIndependent(t *testing.T) {
 	sources := []domain.AnswerSourceCoverage{
 		{

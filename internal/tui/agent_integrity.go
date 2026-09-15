@@ -45,6 +45,9 @@ func renderTerminalOutcome(outcome application.UITerminalOutcome) string {
 		actions[index] = terminalActionLabel(action)
 	}
 	result := "Result: " + strings.ReplaceAll(string(outcome.Reason), "_", " ")
+	if outcome.Diagnostic.Valid() {
+		result += " · Boundary: " + string(outcome.Diagnostic.Stage()) + "/" + string(outcome.Diagnostic)
+	}
 	if len(outcome.Budget) > 0 {
 		result += " · Budget snapshot: 17 categories · input " + terminalBudgetValue(outcome.Budget, application.UIBudgetModelInputBytes) +
 			" · attempts " + terminalBudgetValue(outcome.Budget, application.UIBudgetModelAttempts) +

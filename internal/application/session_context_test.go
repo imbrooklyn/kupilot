@@ -275,7 +275,7 @@ func TestCoordinatorSummaryStorageFailureRejectsBeforeMainModelWork(t *testing.T
 	if err != nil {
 		t.Fatalf("WaitRun() error = %v", err)
 	}
-	if summaryResult := <-summaryResults; summaryResult != agent.EventSinkRejected {
+	if summaryResult := <-summaryResults; summaryResult != agent.EventSinkPersistenceRejected {
 		t.Fatalf("summary sink result = %q", summaryResult)
 	}
 	if result.Status != domain.AgentRunStatusFailed || !result.PersistenceDegraded ||
@@ -338,10 +338,10 @@ func TestCoordinatorRejectsSummaryReturnedAfterScopeGenerationChanged(t *testing
 	if err != nil {
 		t.Fatalf("WaitRun() error = %v", err)
 	}
-	if summaryResult := <-summaryResults; summaryResult != agent.EventSinkRejected {
+	if summaryResult := <-summaryResults; summaryResult != agent.EventSinkStaleRejected {
 		t.Fatalf("stale summary sink result = %q", summaryResult)
 	}
-	if result.Status != domain.AgentRunStatusFailed || result.PersistenceDegraded || persistence.summaryWrites() != 0 {
+	if result.Status != domain.AgentRunStatusStaleScope || result.Diagnostic != domain.FailureStaleGeneration || result.PersistenceDegraded || persistence.summaryWrites() != 0 {
 		t.Fatalf("stale run/writes = %#v/%d", result, persistence.summaryWrites())
 	}
 }

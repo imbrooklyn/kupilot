@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -15,7 +16,7 @@ const (
 	// DiagnosticResponseAnswerField is the first top-level field projected for
 	// provisional display before the complete response is validated.
 	DiagnosticResponseAnswerField   = "answer_markdown"
-	diagnosticResponseSchemaVersion = 3
+	diagnosticResponseSchemaVersion = 4
 	maxDiagnosticResponseJSONDepth  = 8
 )
 
@@ -29,22 +30,28 @@ var (
 )
 
 type diagnosticResponseWire struct {
-	AnswerMarkdown        *string                         `json:"answer_markdown"`
-	EvidenceCitations     *[]evidenceCitationWire         `json:"evidence_citations"`
-	ProposedActions       *[]proposedActionWire           `json:"proposed_actions"`
-	ResponseSchemaVersion *int                            `json:"response_schema_version,omitempty"`
-	Outcome               *string                         `json:"outcome,omitempty"`
-	StopReason            *domain.RunTerminalReason       `json:"stop_reason,omitempty"`
-	Limitations           *[]domain.MissingInformation    `json:"limitations,omitempty"`
-	Questions             *[]domain.ClarificationQuestion `json:"questions,omitempty"`
+	AnswerMarkdown        *string                      `json:"answer_markdown"`
+	EvidenceCitations     *[]evidenceCitationWire      `json:"evidence_citations"`
+	ProposedActions       *[]proposedActionWire        `json:"proposed_actions"`
+	ResponseSchemaVersion *int                         `json:"response_schema_version,omitempty"`
+	Outcome               *string                      `json:"outcome,omitempty"`
+	Limitations           *[]domain.MissingInformation `json:"limitations,omitempty"`
+	Questions             *[]clarificationQuestionWire `json:"questions"`
 }
 
 type evidenceCitationWire struct {
-	Sequence      *int                       `json:"sequence"`
-	Claim         string                     `json:"claim"`
-	ClaimType     *domain.ClaimKind          `json:"claim_type"`
-	EvidenceIDs   *[]domain.EvidenceID       `json:"evidence_ids"`
-	CoverageState *domain.ClaimCoverageState `json:"coverage_state"`
+	Claim       string               `json:"claim"`
+	ClaimType   *domain.ClaimKind    `json:"claim_type"`
+	EvidenceIDs *[]domain.EvidenceID `json:"evidence_ids"`
+}
+
+type clarificationQuestionWire struct {
+	Kind    domain.ClarificationQuestionKind `json:"kind"`
+	Prompt  string                           `json:"prompt"`
+	Choices []clarificationChoiceWire        `json:"choices"`
+}
+type clarificationChoiceWire struct {
+	Label string `json:"label"`
 }
 
 type proposedActionTargetWire struct {
@@ -70,17 +77,15 @@ func EncodeHistoricalAssistantResponse(answer string) (string, error) {
 	citations := make([]evidenceCitationWire, 0)
 	actions := make([]proposedActionWire, 0)
 	limitations := make([]domain.MissingInformation, 0)
-	questions := make([]domain.ClarificationQuestion, 0)
+	questions := make([]clarificationQuestionWire, 0)
 	version := diagnosticResponseSchemaVersion
 	outcome := "answer"
-	stopReason := domain.RunTerminalCompleted
 	wire := diagnosticResponseWire{
 		AnswerMarkdown:        &answer,
 		EvidenceCitations:     &citations,
 		ProposedActions:       &actions,
 		ResponseSchemaVersion: &version,
 		Outcome:               &outcome,
-		StopReason:            &stopReason,
 		Limitations:           &limitations,
 		Questions:             &questions,
 	}
@@ -100,28 +105,17 @@ func EncodeHistoricalAssistantResponse(answer string) (string, error) {
 // DecodeDiagnosticResponse applies the single project-owned final response
 // protocol. Eino and provider types never enter this contract.
 func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
-	if !domain.ValidModelText(content, domain.MaxModelMessageBytes, false) {
-		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
-	}
-	if err := rejectDuplicateJSONKeys(content); err != nil {
-		return DiagnosisDraft{}, fmt.Errorf("%w: %w", ErrInvalidDiagnosticResponse, err)
+	if err := validateResponseWire(content, wireAnswer); err != nil {
+		return DiagnosisDraft{}, err
 	}
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
 	var wire diagnosticResponseWire
 	if err := decoder.Decode(&wire); err != nil {
-		return DiagnosisDraft{}, fmt.Errorf("%w: %w", ErrInvalidDiagnosticResponse, err)
+		return DiagnosisDraft{}, responseError(domain.FailureFinalShape, err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
-	}
-	if wire.AnswerMarkdown == nil || wire.EvidenceCitations == nil || wire.ProposedActions == nil {
-		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
-	}
-	if wire.ResponseSchemaVersion == nil || *wire.ResponseSchemaVersion != diagnosticResponseSchemaVersion || wire.Outcome == nil ||
-		wire.StopReason == nil || !validModelSuggestedStopReason(*wire.StopReason) || wire.Limitations == nil || wire.Questions == nil {
-		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+	if *wire.ResponseSchemaVersion != diagnosticResponseSchemaVersion {
+		return DiagnosisDraft{}, responseError(domain.FailureFinalSchema, nil)
 	}
 	citations, coverage, err := decodeClaimCoverage(*wire.EvidenceCitations)
 	if err != nil {
@@ -131,7 +125,7 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 	for index, action := range *wire.ProposedActions {
 		parameters, err := decodeProposedActionParameters(action.Parameters)
 		if err != nil {
-			return DiagnosisDraft{}, fmt.Errorf("%w: %w", ErrInvalidDiagnosticResponse, err)
+			return DiagnosisDraft{}, responseError(domain.FailureFinalShape, err)
 		}
 		target := &domain.ResourceRef{
 			APIVersion: action.Target.APIVersion,
@@ -155,59 +149,56 @@ func DecodeDiagnosticResponse(content string) (DiagnosisDraft, error) {
 		RecommendedActions:    actions,
 		ClaimCoverage:         coverage,
 	}
-	draft.SuggestedStopReason = *wire.StopReason
+	draft.SuggestedStopReason = domain.RunTerminalCompleted
 	draft.MissingInformation = append([]domain.MissingInformation(nil), (*wire.Limitations)...)
 	switch *wire.Outcome {
 	case "answer":
-		if len(*wire.Questions) != 0 || *wire.StopReason == domain.RunTerminalNeedsUserInput {
-			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		if len(*wire.Questions) != 0 {
+			return DiagnosisDraft{}, responseError(domain.FailureFinalShape, nil)
 		}
 	case "needs_user_input":
-		if *wire.StopReason != domain.RunTerminalNeedsUserInput || len(citations) != 0 || len(actions) != 0 || len(coverage) != 0 ||
+		if len(citations) != 0 || len(actions) != 0 || len(coverage) != 0 ||
 			len(*wire.Limitations) != 0 {
-			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+			return DiagnosisDraft{}, responseError(domain.FailureFinalShape, nil)
 		}
 		request := domain.ClarificationRequest{
 			SchemaVersion: domain.AnswerCompletenessSchemaVersion,
-			Questions:     append([]domain.ClarificationQuestion(nil), (*wire.Questions)...),
+			Questions:     make([]domain.ClarificationQuestion, len(*wire.Questions)),
+		}
+		for index, question := range *wire.Questions {
+			choices := make([]domain.ClarificationChoiceValue, len(question.Choices))
+			for choiceIndex, choice := range question.Choices {
+				choices[choiceIndex] = domain.ClarificationChoiceValue{ID: strconv.Itoa(choiceIndex + 1), Label: choice.Label}
+			}
+			request.Questions[index] = domain.ClarificationQuestion{Sequence: index + 1, Kind: question.Kind, Prompt: question.Prompt, Choices: choices}
 		}
 		if request.Validate() != nil {
-			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+			return DiagnosisDraft{}, responseError(domain.FailureClarification, nil)
 		}
-		rendered, err := RenderClarificationMarkdown(request)
-		if err != nil || rendered != draft.AnswerMarkdown {
-			return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
-		}
+		// Keep candidate text until the adapter credential and sensitivity guards
+		// have checked it. ValidateDiagnosis renders the sanitized typed questions.
 		draft.Clarification = &request
+		draft.SuggestedStopReason = domain.RunTerminalNeedsUserInput
 	default:
-		return DiagnosisDraft{}, ErrInvalidDiagnosticResponse
+		return DiagnosisDraft{}, responseError(domain.FailureFinalShape, nil)
 	}
 	return draft, nil
-}
-
-func validModelSuggestedStopReason(reason domain.RunTerminalReason) bool {
-	switch reason {
-	case domain.RunTerminalCompleted, domain.RunTerminalPartialResult, domain.RunTerminalInsufficientEvidence,
-		domain.RunTerminalSourceUnavailable, domain.RunTerminalPolicyDenied, domain.RunTerminalConflictingEvidence,
-		domain.RunTerminalNeedsUserInput:
-		return true
-	default:
-		return false
-	}
 }
 
 func decodeClaimCoverage(wire []evidenceCitationWire) ([]domain.ConfirmedFact, []ClaimCoverageDraft, error) {
 	citations := make([]domain.ConfirmedFact, 0, len(wire))
 	coverage := make([]ClaimCoverageDraft, len(wire))
 	for index, citation := range wire {
-		if citation.Sequence == nil || citation.ClaimType == nil || citation.EvidenceIDs == nil ||
-			citation.CoverageState == nil {
-			return nil, nil, ErrInvalidDiagnosticResponse
+		if citation.ClaimType == nil || citation.EvidenceIDs == nil {
+			return nil, nil, responseError(domain.FailureFinalMissingField, nil)
+		}
+		state, err := structuralClaimState(*citation.ClaimType, len(*citation.EvidenceIDs))
+		if err != nil {
+			return nil, nil, err
 		}
 		coverage[index] = ClaimCoverageDraft{
-			Sequence: *citation.Sequence, Kind: *citation.ClaimType, Text: citation.Claim,
-			EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...),
-			State:       *citation.CoverageState,
+			Sequence: index + 1, Kind: *citation.ClaimType, Text: citation.Claim,
+			EvidenceIDs: append([]domain.EvidenceID(nil), (*citation.EvidenceIDs)...), State: state,
 		}
 		if *citation.ClaimType == domain.ClaimCurrentObservation {
 			citations = append(citations, domain.ConfirmedFact{
@@ -252,7 +243,7 @@ func rejectDuplicateJSONKeys(value string) error {
 
 func scanJSONValue(decoder *json.Decoder, depth int) error {
 	if depth > maxDiagnosticResponseJSONDepth {
-		return ErrInvalidDiagnosisDraft
+		return interactionError(domain.FailureFinalLimit, ErrInvalidDiagnosisDraft)
 	}
 	token, err := decoder.Token()
 	if err != nil {
@@ -275,7 +266,7 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 				return ErrInvalidDiagnosisDraft
 			}
 			if _, duplicate := seen[key]; duplicate {
-				return ErrInvalidDiagnosisDraft
+				return interactionError(domain.FailureFinalDuplicateField, ErrInvalidDiagnosisDraft)
 			}
 			seen[key] = struct{}{}
 			if err := scanJSONValue(decoder, depth+1); err != nil {
@@ -300,4 +291,39 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 		return ErrInvalidDiagnosisDraft
 	}
 	return nil
+}
+
+func structuralClaimState(kind domain.ClaimKind, references int) (domain.ClaimCoverageState, error) {
+	switch kind {
+	case domain.ClaimCurrentObservation:
+		if references == 0 {
+			return "", responseError(domain.FailureClaimUnsupported, nil)
+		}
+		return domain.ClaimCoverageVerified, nil
+	case domain.ClaimInference, domain.ClaimRecommendation:
+		if references > 0 {
+			return domain.ClaimCoverageSupported, nil
+		}
+		return domain.ClaimCoverageLimited, nil
+	case domain.ClaimUncertainty:
+		if references == 0 {
+			return domain.ClaimCoverageLimited, nil
+		}
+	case domain.ClaimUnsupportedObservation:
+		if references == 0 {
+			return domain.ClaimCoverageUnsupported, nil
+		}
+	default:
+		return "", responseError(domain.FailureClaimKind, nil)
+	}
+	return "", responseError(domain.FailureClaimBinding, nil)
+}
+
+func responseError(reason domain.InteractionFailure, cause error) error {
+	if cause == nil {
+		cause = ErrInvalidDiagnosticResponse
+	} else {
+		cause = fmt.Errorf("%w: %w", ErrInvalidDiagnosticResponse, cause)
+	}
+	return interactionError(reason, cause)
 }

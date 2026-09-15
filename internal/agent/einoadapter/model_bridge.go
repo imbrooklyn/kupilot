@@ -260,20 +260,20 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 		len(message.AssistantGenMultiContent) != 0 || message.Name != "" ||
 		message.ToolCallID != "" || message.ToolName != "" || message.ReasoningContent != "" ||
 		message.Extra != nil || message.ResponseMeta == nil || message.ResponseMeta.LogProbs != nil {
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return nil, failedAt(domain.FailureStreamUnsupported, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 
 	switch message.ResponseMeta.FinishReason {
 	case "stop":
 		if len(message.ToolCalls) != 0 || !domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, false) {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return nil, failedAt(domain.FailureStreamUnsupported, domain.SafeErrorClassInvalidExternalResponse, nil)
 		}
 		message.Role = schema.Assistant
 		message.ResponseMeta = nil
 		return message, nil
 	case "length":
 		if len(message.ToolCalls) != 0 {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return nil, failedAt(domain.FailureStreamUnsupported, domain.SafeErrorClassInvalidExternalResponse, nil)
 		}
 		return nil, localRuntimeStop(
 			agent.RunStopStepLimit,
@@ -283,13 +283,13 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 		)
 	case "tool_calls":
 		if len(message.ToolCalls) == 0 || len(message.ToolCalls) > domain.MaxAgentToolCalls {
-			return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return nil, failedAt(domain.FailureStreamUnsupported, domain.SafeErrorClassInvalidExternalResponse, nil)
 		}
 		calls := make([]agent.ToolSelection, len(message.ToolCalls))
 		for index, call := range message.ToolCalls {
 			if call.Extra != nil || call.Type != "" && call.Type != "function" ||
 				call.Index == nil || *call.Index != index {
-				return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				return nil, failedAt(domain.FailureStreamUnsupported, domain.SafeErrorClassInvalidExternalResponse, nil)
 			}
 			calls[index] = agent.ToolSelection{
 				ID:            call.ID,
@@ -297,7 +297,7 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 				ArgumentsJSON: call.Function.Arguments,
 			}
 			if calls[index].Validate() != nil {
-				return nil, failedRuntime(domain.SafeErrorClassPolicyDenied, "The model requested a cluster read outside the fixed policy.", nil)
+				return nil, failedAt(domain.FailureToolSelection, domain.SafeErrorClassPolicyDenied, nil)
 			}
 		}
 		if err := state.bindToolCalls(ctx, calls); err != nil {
@@ -318,13 +318,13 @@ func (state *runState) acceptModelMessage(ctx context.Context, message *schema.M
 		message.ResponseMeta = nil
 		return message, nil
 	default:
-		return nil, failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return nil, failedAt(domain.FailureStopReason, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 }
 
 func runtimeFailureFromModel(modelError *domain.ModelError) *runtimeFailure {
 	if modelError == nil || modelError.Validate() != nil {
-		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return failedAt(domain.FailureInternal, domain.SafeErrorClassInternal, nil)
 	}
 	switch modelError.Class() {
 	case domain.SafeErrorClassCancelled:
@@ -344,6 +344,35 @@ func runtimeFailureFromModel(modelError *domain.ModelError) *runtimeFailure {
 			cause:       modelError,
 		}
 	default:
-		return failedRuntime(modelError.Class(), modelError.SafeMessage(), modelError)
+		reason := domain.FailureProviderTransport
+		switch modelError.Code() {
+		case domain.ModelErrorCodeInvalidRequest:
+			reason = domain.FailureRequestPreflight
+		case domain.ModelErrorCodeRequestTooLarge, domain.ModelErrorCodeStreamLimitExceeded:
+			reason = domain.FailureBudget
+		case domain.ModelErrorCodeUnsupportedResponse:
+			reason = domain.FailureProviderProtocol
+		case domain.ModelErrorCodeMalformedStream:
+			reason = domain.FailureStreamMalformed
+		case domain.ModelErrorCodeDuplicateFinish:
+			reason = domain.FailureStreamDuplicate
+		case domain.ModelErrorCodeProviderReported:
+			reason = domain.FailureProviderReported
+		case domain.ModelErrorCodeAfterFinish:
+			reason = domain.FailureStreamAfterFinish
+		case domain.ModelErrorCodeMissingFinish:
+			reason = domain.FailureStreamIncomplete
+		case domain.ModelErrorCodeInvalidStreamUsage:
+			reason = domain.FailureStreamUsage
+		case domain.ModelErrorCodeInvalidStopReason:
+			reason = domain.FailureStopReason
+		case domain.ModelErrorCodeRedirectDenied:
+			reason = domain.FailureProviderProtocol
+		case domain.ModelErrorCodeInternal:
+			reason = domain.FailureInternal
+		}
+		failure := failedRuntime(modelError.Class(), modelError.SafeMessage(), modelError)
+		failure.diagnostic = reason
+		return failure
 	}
 }

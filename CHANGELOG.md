@@ -52,6 +52,13 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Advance new model output to response schema 4 and plan wire schema 2. Derive
+  ordinals, structural coverage, stop reasons, and clarification rendering in
+  runtime code. Normalize unique validated Evidence references into acceptance
+  order while retaining strict ownership, generation, and authority checks.
+- Classify interaction failures with content-free stage/reason diagnostics
+  across the Agent, Application, and TUI boundaries.
+
 - Derive claim SHA-256 metadata in deterministic runtime code after bounded
   normalization instead of requiring the Agent model to calculate it. Strict
   response schema 3 keeps all same-run/generation Evidence checks while

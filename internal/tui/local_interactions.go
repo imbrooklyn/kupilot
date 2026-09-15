@@ -53,6 +53,9 @@ func (model *Model) showDoctor(result application.UIDoctorResult) {
 		capabilities.NativeClipboard, capabilities.OSC52, capabilities.Multiplexer, capabilities.RemoteSession,
 		capabilities.Title, capabilities.Notification, capabilities.Color, capabilities.AlternateScreen, capabilities.ReducedMotion, capabilities.Scrollback)
 	fmt.Fprintf(&builder, "Stream recovery: %s\n", result.ModelCompatibility.StreamContinuation)
+	if result.LastInteractionFailure.Valid() {
+		fmt.Fprintf(&builder, "Last interaction: %s/%s\n", result.LastInteractionFailure.Stage(), result.LastInteractionFailure)
+	}
 	builder.WriteString("Checks are local and redacted. No model, Kubernetes, Tool, Reviewer, approval, process, or executor call was made.")
 	model.showDialog("Doctor", builder.String())
 }

@@ -480,9 +480,9 @@ Reviewer, attempt, ambiguity, and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
-The strict response schema 3 envelope contains bounded
+The strict response schema 4 envelope contains bounded
 `response_schema_version`, `outcome`, `answer_markdown`,
-`evidence_citations`, `proposed_actions`, `stop_reason`, `limitations`, and
+`evidence_citations`, `proposed_actions`, `limitations`, and
 `questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
 
 Eligible historic assistant answers are translated into this complete current
@@ -510,7 +510,7 @@ this restores local Eino pairing syntax without creating authority.
   safe proposal fields. It has no approval or executor authority.
 
 For new strict responses, runtime rejects missing, unknown, duplicate,
-cross-run, cross-generation, stale, out-of-order, internally hash-inconsistent, or
+cross-run, cross-generation, stale, internally hash-inconsistent, or
 unauthorized claim/Evidence coverage before successful commit. Retained legacy
 records may still carry their bounded validation warnings. This validation does
 not claim semantic proof of arbitrary prose. Claim hashes are derived locally
@@ -803,9 +803,10 @@ Before each actual endpoint entry, a run-local bridge verifies the exact
 Session/Run, initial input and steer sequence, generations, profile/origin,
 consent, context coverage, Tool catalog, storage health, budget, sink, run mode,
 and recovery state. Its content-free event precedes model I/O. Strict response
-schema 3 then produces either a bounded answer manifest or typed clarification.
-The Agent declares claim text, type, Evidence IDs, and coverage state; the
-runtime derives the normalized claim hash before binding the durable manifest.
+schema 4 then produces either a bounded answer manifest or typed clarification.
+The Agent declares claim text, type, and exact Evidence IDs. Runtime derives
+sequence, structural coverage, and the normalized claim hash before binding the
+durable manifest.
 Application derives the terminal reason and safe next actions from accepted
 lifecycle state, so model prose cannot promote denied, partial, conflicting,
 unknown, or degraded work to completed.
@@ -843,3 +844,16 @@ freshness/conflict, and checked/not-checked source state.
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
 - [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+
+## Deterministic response metadata and failure diagnostics
+
+Response schema 4 removes model-supplied sequence, coverage state, and stop
+reason fields. Plan wire schema 2 removes step sequences; the durable Plan
+remains schema 1. Runtime normalizes unique validated Evidence references to
+acceptance order and renders typed questions. Project-owned failure stage/reason
+values cross the Agent, Application, and delivery boundaries without raw errors
+or payloads.
+
+See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+and [Interaction Conformance](interaction-conformance.md) for the exact contract
+and verification boundaries.

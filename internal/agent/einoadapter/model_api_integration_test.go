@@ -132,7 +132,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	usage.observe(textMessage)
 
 	toolMessages := []*schema.Message{
-		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 3, outcome as answer, stop_reason as completed, limitations as an empty array, and questions as an empty array."),
+		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 4, outcome as answer, limitations as an empty array, and questions as an empty array."),
 		schema.UserMessage(`Call get_resource with {"detail":"summary","name":"synthetic-pod","namespace":null,"purpose":"Validate the protocol fixture.","resource_type":"pods"}. Do not answer in prose before the Tool call.`),
 	}
 	toolMessage, failure := client.stream(

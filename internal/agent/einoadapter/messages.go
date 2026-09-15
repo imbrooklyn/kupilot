@@ -50,35 +50,35 @@ func newInitialMessages(input agent.RunInput) ([]*schema.Message, error) {
 // It deliberately does not translate the messages into a second protocol DTO.
 func (state *runState) validateConversation(messages []*schema.Message) error {
 	if len(messages) == 0 || len(messages) > maxConversationMessages {
-		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	for index, message := range messages {
 		if message == nil || unsupportedMessageFields(message) {
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 		}
 		switch message.Role {
 		case schema.System:
 			if index != 0 || !domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) ||
 				message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 {
-				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 			}
 		case schema.User:
 			if !domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) ||
 				message.ToolCallID != "" || message.ToolName != "" || len(message.ToolCalls) != 0 {
-				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 			}
 		case schema.Assistant:
 			if message.ToolCallID != "" || message.ToolName != "" ||
 				!domain.ValidModelText(message.Content, domain.MaxModelMessageBytes, true) ||
 				(message.Content == "") == (len(message.ToolCalls) == 0) ||
 				len(message.ToolCalls) > domain.MaxAgentToolCalls {
-				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 			}
 			seen := make(map[string]struct{}, len(message.ToolCalls))
 			for index, call := range message.ToolCalls {
 				if call.Extra != nil || call.Type != "" && call.Type != "function" ||
 					call.Index != nil && *call.Index != index {
-					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+					return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 				}
 				selection := agent.ToolSelection{
 					ID:            call.ID,
@@ -86,10 +86,10 @@ func (state *runState) validateConversation(messages []*schema.Message) error {
 					ArgumentsJSON: call.Function.Arguments,
 				}
 				if selection.Validate() != nil {
-					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+					return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 				}
 				if _, duplicate := seen[selection.ID]; duplicate {
-					return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+					return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 				}
 				seen[selection.ID] = struct{}{}
 			}
@@ -98,10 +98,10 @@ func (state *runState) validateConversation(messages []*schema.Message) error {
 			if !domain.ValidModelText(message.Content, domain.MaxModelInputMessageBytes, false) ||
 				!domain.ValidModelToken(message.ToolCallID, domain.MaxModelToolCallIDBytes) ||
 				len(message.ToolCalls) != 0 || !name.Valid() || !state.boundToolName(message.ToolCallID, name) {
-				return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+				return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 			}
 		default:
-			return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+			return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 		}
 	}
 	return state.validateCurrentRunInputs(messages)
@@ -125,7 +125,7 @@ func (state *runState) validateCurrentRunInputs(messages []*schema.Message) erro
 		}
 	}
 	if len(users) < len(expected) {
-		return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+		return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 	}
 	for start := 0; start <= len(users)-len(expected); start++ {
 		matched := true
@@ -139,7 +139,7 @@ func (state *runState) validateCurrentRunInputs(messages []*schema.Message) erro
 			return nil
 		}
 	}
-	return failedRuntime(domain.SafeErrorClassInvalidExternalResponse, safeInvalidModelResponse, nil)
+	return failedAt(domain.FailureRetainedContext, domain.SafeErrorClassInvalidExternalResponse, nil)
 }
 
 func unsupportedMessageFields(message *schema.Message) bool {
