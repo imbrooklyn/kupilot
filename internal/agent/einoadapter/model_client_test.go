@@ -320,12 +320,16 @@ func TestNativeOllamaRunsFullAgentComposition(t *testing.T) {
 		t.Fatalf("newAdapter() error = %v", err)
 	}
 	t.Cleanup(adapter.Close)
-	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	limits, err := agent.RunBudgetLimitsForProfile(agent.BudgetProfileExtended)
+	if err != nil {
+		t.Fatalf("RunBudgetLimitsForProfile() error = %v", err)
+	}
+	input := testInput(t, clock, limits)
 	recorder := newEventRecorder()
 	outcome := adapter.Run(context.Background(), input, recorder)
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||
 		outcome.Diagnosis.AnswerMarkdown != "I am Kupilot." || requests.Load() != 1 {
-		t.Fatalf("native Ollama full Agent outcome/requests/events/log = %#v/%d/%#v/%s", outcome, requests.Load(), recorder.Events(), logBuffer.String())
+		t.Fatalf("native Ollama extended full Agent outcome/requests/events/log = %#v/%d/%#v/%s", outcome, requests.Load(), recorder.Events(), logBuffer.String())
 	}
 }
 

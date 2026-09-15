@@ -255,7 +255,10 @@ func TestNativeOllamaFullAgentLive(t *testing.T) {
 		t.Fatalf("FAIL native Ollama full-Agent adapter preflight: %v", err)
 	}
 	t.Cleanup(adapter.Close)
-	limits := projectagent.DefaultRunBudgetLimits()
+	limits, err := projectagent.RunBudgetLimitsForProfile(projectagent.BudgetProfileExtended)
+	if err != nil {
+		t.Fatalf("FAIL native Ollama full-Agent budget preflight: %v", err)
+	}
 	input, err := projectagent.NewRunInput(
 		testRunID, testSessionID, testMessageID,
 		"Who are you? Return a brief identity answer without inspecting cluster state.",
@@ -269,7 +272,7 @@ func TestNativeOllamaFullAgentLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FAIL native Ollama full-Agent input preflight: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), liveModelSuiteTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), domain.MaxModelRequestTimeout+time.Minute)
 	defer cancel()
 	outcome := adapter.Run(ctx, input, newEventRecorder())
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||

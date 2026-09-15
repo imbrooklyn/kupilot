@@ -4,9 +4,41 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestModelCallPreflightAcceptsEveryBudgetProfileTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, profile := range []BudgetProfile{BudgetProfileCompact, BudgetProfileBalanced, BudgetProfileExtended} {
+		limits, err := RunBudgetLimitsForProfile(profile)
+		if err != nil {
+			t.Fatalf("RunBudgetLimitsForProfile(%q) error = %v", profile, err)
+		}
+		preflight := ModelCallPreflight{
+			Kind: ModelCallAgent, MessageCount: 1, MessageBytes: 1,
+			CurrentInputCount: 1, CurrentInputDigest: domain.SHA256Hex("profile-" + string(profile)),
+			ReservedRequestBytes: limits.ModelRequestBytes, ReservedOutputBytes: domain.MaxModelMessageBytes,
+			ReservedStreamBytes: limits.ModelStreamBytes,
+			ReservedNanoseconds: limits.ModelRequestTimeout.Nanoseconds(), ReservedCostUnits: 1,
+		}
+		if !preflight.valid(RunEventModelStreamStarted) {
+			t.Fatalf("%q model preflight rejected its code-owned timeout %s", profile, limits.ModelRequestTimeout)
+		}
+	}
+
+	over := ModelCallPreflight{
+		Kind: ModelCallAgent, MessageCount: 1, MessageBytes: 1,
+		CurrentInputCount: 1, CurrentInputDigest: domain.SHA256Hex("over-timeout"),
+		ReservedRequestBytes: 1, ReservedOutputBytes: 1, ReservedStreamBytes: 1,
+		ReservedNanoseconds: int64(domain.MaxModelRequestTimeout + time.Nanosecond), ReservedCostUnits: 1,
+	}
+	if over.valid(RunEventModelStreamStarted) {
+		t.Fatal("model preflight accepted a timeout above the code-owned ceiling")
+	}
+}
 
 func TestEventPublisherAssignsOrderAndAllowsExactlyOneTerminal(t *testing.T) {
 	clock := newFakeClock()

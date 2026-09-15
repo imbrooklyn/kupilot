@@ -52,6 +52,9 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Aligned model-egress preflight validation with the code-owned 900-second
+  model-request ceiling so the `extended` budget profile reaches the configured
+  provider instead of failing before transport.
 - Fixed native Ollama AgentRuns failing before transport because the
   provisional-answer credential guard incorrectly required a credential from
   credential-free providers. The streaming redaction and strict response

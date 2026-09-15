@@ -125,7 +125,7 @@ func (preflight ModelCallPreflight) valid(eventKind RunEventKind) bool {
 		preflight.ReservedRequestBytes >= preflight.MessageBytes && preflight.ReservedRequestBytes <= domain.MaxModelRequestBytes &&
 		preflight.ReservedOutputBytes > 0 && preflight.ReservedOutputBytes <= domain.MaxModelMessageBytes &&
 		preflight.ReservedStreamBytes >= 0 && preflight.ReservedStreamBytes <= domain.MaxModelStreamBytes &&
-		preflight.ReservedNanoseconds > 0 && preflight.ReservedNanoseconds <= int64(10*time.Minute) &&
+		preflight.ReservedNanoseconds > 0 && preflight.ReservedNanoseconds <= int64(domain.MaxModelRequestTimeout) &&
 		preflight.ReservedCostUnits > 0
 }
 
