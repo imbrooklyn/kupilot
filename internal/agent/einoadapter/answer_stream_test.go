@@ -84,6 +84,20 @@ func TestCredentialStreamGuardNeverEmitsSplitCredentialPrefix(t *testing.T) {
 	t.Fatal("split credential was not detected")
 }
 
+func TestCredentialStreamGuardPassesContentWhenProviderHasNoCredential(t *testing.T) {
+	t.Parallel()
+
+	guard := credentialStreamGuard{}
+	first, found := guard.push("native ", false)
+	if found || first != "native " {
+		t.Fatalf("first credential-free fragment = %q/%t", first, found)
+	}
+	second, found := guard.push("response", true)
+	if found || second != "response" {
+		t.Fatalf("final credential-free fragment = %q/%t", second, found)
+	}
+}
+
 func TestProvisionalEventBudgetIsSharedByTheEntireRun(t *testing.T) {
 	t.Parallel()
 

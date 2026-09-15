@@ -52,6 +52,11 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Fixed native Ollama AgentRuns failing before transport because the
+  provisional-answer credential guard incorrectly required a credential from
+  credential-free providers. The streaming redaction and strict response
+  gates remain active, and a full-Agent native Ollama integration fixture now
+  covers this boundary.
 - Renamed the unreleased `openai_compatible` configuration value to `openai`
   and added a forward-only migration that translates historical model-request
   metadata without restoring transport authority. Native Ollama examples and

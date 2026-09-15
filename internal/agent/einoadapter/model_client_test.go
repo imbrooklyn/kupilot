@@ -281,6 +281,54 @@ func TestNativeOllamaUsesExactCredentialFreeEinoRequestAndNDJSONStream(t *testin
 	}
 }
 
+func TestNativeOllamaRunsFullAgentComposition(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	var requests atomic.Int32
+	var logBuffer bytes.Buffer
+	diagnosis := strictTestDiagnosis(`{"answer_markdown":"I am Kupilot.","evidence_citations":[],"proposed_actions":[]}`)
+	content, err := json.Marshal(diagnosis)
+	if err != nil {
+		t.Fatalf("marshal diagnosis: %v", err)
+	}
+	client, modelError := newModelClientForTest(
+		fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
+		nil,
+		fixtureLogger(&logBuffer),
+		roundTripFunc(func(*http.Request) (*http.Response, error) {
+			requests.Add(1)
+			body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":` + string(content) + `},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}` + "\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/x-ndjson"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		}),
+	)
+	if modelError != nil {
+		t.Fatalf("newModelClientForTest() error = %v", modelError)
+	}
+	adapter, err := newAdapter(runtimeConfig{
+		tools:       fixedHandlers(new(recordingTool)),
+		scopeGuard:  newTestScopeGuard(),
+		identifiers: &testIdentifiers{},
+		now:         clock.Now,
+	}, client)
+	if err != nil {
+		client.close()
+		t.Fatalf("newAdapter() error = %v", err)
+	}
+	t.Cleanup(adapter.Close)
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	recorder := newEventRecorder()
+	outcome := adapter.Run(context.Background(), input, recorder)
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||
+		outcome.Diagnosis.AnswerMarkdown != "I am Kupilot." || requests.Load() != 1 {
+		t.Fatalf("native Ollama full Agent outcome/requests/events/log = %#v/%d/%#v/%s", outcome, requests.Load(), recorder.Events(), logBuffer.String())
+	}
+}
+
 func TestNativeOllamaOmitsThinkingWhenReasoningEffortIsOmitted(t *testing.T) {
 	t.Parallel()
 

@@ -39,7 +39,7 @@ func newProvisionalAnswer(
 	credential *config.SecretValue,
 ) (*provisionalAnswer, error) {
 	redactor, err := security.NewStreamingRedactor(agent.MaxAnswerMarkdownBytes)
-	if ctx == nil || stop == nil || state == nil || credential == nil || !credential.IsSet() || err != nil {
+	if ctx == nil || stop == nil || state == nil || credential != nil && !credential.IsSet() || err != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 	}
 	return &provisionalAnswer{
@@ -142,11 +142,14 @@ type credentialStreamGuard struct {
 }
 
 func (guard *credentialStreamGuard) push(value string, final bool) (string, bool) {
-	if guard == nil || guard.credential == nil {
+	if guard == nil {
 		return "", true
 	}
 	candidate := guard.pending + value
 	guard.pending = ""
+	if guard.credential == nil {
+		return candidate, false
+	}
 	admitted := ""
 	found := false
 	if err := guard.credential.Use(func(secret string) {

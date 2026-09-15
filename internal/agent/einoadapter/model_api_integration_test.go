@@ -215,6 +215,74 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	)
 }
 
+// TestNativeOllamaFullAgentLive exercises the complete ADK Agent composition,
+// including provisional answer projection, with a credential-free native
+// Ollama client. Any selected Tool is handled by a synthetic in-memory result;
+// the test never contacts Kubernetes or another data source.
+func TestNativeOllamaFullAgentLive(t *testing.T) {
+	if os.Getenv("KUPILOT_INTEGRATION_LIVE") != liveModelAuthorizationValue ||
+		os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET") != liveModelTargetOllama {
+		t.Skip("BLOCKED native Ollama full-Agent integration: explicitly select the authorized ollama target")
+	}
+	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
+	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling {
+		t.Skip("BLOCKED native Ollama full-Agent integration: provide the bounded authorized cost")
+	}
+
+	configuration, credential, _ := loadLiveModelProfile(t, liveModelTargetOllama)
+	if credential != nil {
+		credential.Destroy()
+		t.Fatal("native Ollama unexpectedly returned a credential")
+	}
+	transport := newLiveBudgetTransport(domain.ModelProviderOllama, 2, liveModelRequestByteCeiling)
+	client, modelError := newModelClientForTest(configuration, nil, nil, transport)
+	if modelError != nil {
+		t.Fatalf("FAIL native Ollama full-Agent client preflight: %v", modelError)
+	}
+	clock := newTestClock()
+	tool := &recordingTool{execute: func(_ context.Context, call projectagent.BoundToolCall) domain.ToolResult {
+		return domain.ToolResult{
+			InvocationID: call.InvocationID(), Name: call.Name(), Version: call.Version(),
+			Scope: call.Scope().Snapshot(), ObservedAt: clock.Now(),
+			Status: domain.ToolResultStatusSuccess, DataJSON: `{}`,
+		}
+	}}
+	adapter, err := newAdapter(runtimeConfig{
+		tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: &testIdentifiers{}, now: clock.Now,
+	}, client)
+	if err != nil {
+		client.close()
+		t.Fatalf("FAIL native Ollama full-Agent adapter preflight: %v", err)
+	}
+	t.Cleanup(adapter.Close)
+	limits := projectagent.DefaultRunBudgetLimits()
+	input, err := projectagent.NewRunInput(
+		testRunID, testSessionID, testMessageID,
+		"Who are you? Return a brief identity answer without inspecting cluster state.",
+		domain.ClusterScope{
+			Context: "test-context", Namespace: "test-namespace",
+			NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now(),
+		},
+		nil,
+		limits,
+	)
+	if err != nil {
+		t.Fatalf("FAIL native Ollama full-Agent input preflight: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveModelSuiteTimeout)
+	defer cancel()
+	outcome := adapter.Run(ctx, input, newEventRecorder())
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||
+		strings.TrimSpace(outcome.Diagnosis.AnswerMarkdown) == "" {
+		t.Fatalf("MODEL_CAPABILITY_FAIL native Ollama full-Agent outcome: status=%s diagnosis=%t class=%v",
+			outcome.Status, outcome.Diagnosis != nil, outcome.ErrorClass)
+	}
+	if calls := transport.calls.Load(); calls < 1 || calls > 2 {
+		t.Fatalf("FAIL native Ollama full-Agent calls = %d, want 1..2", calls)
+	}
+	t.Logf("PASS native Ollama full Agent: calls=%d tools=%d request_bytes=%d", transport.calls.Load(), len(tool.Calls()), transport.requestBytes.Load())
+}
+
 type liveUsageObservation struct {
 	responses int
 	input     int
