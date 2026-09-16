@@ -109,6 +109,12 @@ continuation tokens are not model content.
 Resource names and operational text may themselves be sensitive. Redaction
 reduces risk but cannot guarantee recognition of every private value.
 
+Native request correction restores only static Tool schemas and the configured
+temperature, already admitted to the same role and origin. It introduces no
+source or data category and does not change consent meaning. Its temporary
+request buffer and model/provider responses remain excluded from ordinary
+logs, TUI, SQLite, and exports; safe tests report fixed codes and counts only.
+
 ## Data excluded from model content
 
 Kupilot never includes:

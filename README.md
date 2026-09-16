@@ -76,6 +76,15 @@ automatically.
 
 Kupilot supports two fixed provider kinds: `openai` for Eino's OpenAI Chat
 Completions component and `ollama` for Eino's native loopback Ollama component.
+
+Native Ollama preserves the bound Tool schemas and explicitly configured
+temperature zero at the request boundary. The tested Ollama 0.34.0 /
+gpt-oss:20b combination still fails some strict Tool selections; request fidelity
+does not establish reliable model capability. Historical
+local conformance recorded before this request-fidelity fix omitted that field;
+it does not prove explicit-zero behavior or stable model Tool capability. See
+[Model Compatibility](docs/model-compatibility.md) for the measured limitations.
+
 Each required `agent` or optional `approval_reviewer` profile selects exactly
 one kind, origin, credential policy, consent tuple, and finite budget. There is
 no provider auto-detection, router, fallback, load balancing, or cross-origin

@@ -212,6 +212,12 @@ or endpoint error body. The endpoint origin itself belongs to typed local
 configuration; the database stores only the consent and request hashes needed by
 the accepted contracts.
 
+The native request-fidelity guard's bound catalog reference and corrected
+request buffer exist only for the current call. They are not a durable
+conversation record or new retention category. Request/response bytes and
+provider error text remain excluded; the existing safe metadata policy above
+continues to apply ([ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md)).
+
 ### 3.3 ToolInvocation and Evidence
 
 Eligible operational detail is limited to:

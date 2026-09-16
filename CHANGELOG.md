@@ -4,6 +4,21 @@ This file records notable user-visible changes to Kupilot.
 
 ## Unreleased (`v0.5` development)
 
+### Fixed
+
+- Preserve complete bound native Ollama Tool parameter schemas lost by the
+  pinned SDK. The existing guard checks the immutable catalog and final byte
+  ceiling before I/O; all unrelated request bytes remain unchanged. Add a
+  full-Agent deterministic request regression and an opt-in nine-call local
+  comparison. The tested Ollama/model combination still fails strict Tool
+  selection; no output repair, retry, or reduced-catalog fallback is added.
+- Preserve explicitly configured native Ollama temperature zero on the wire.
+  The pinned SDK previously omitted it, allowing a server/model default.
+  The guarded transport restores only this scalar and checks the final byte
+  ceiling; invalid options still make zero external calls. Historical local
+  conformance results are qualified because they did not transmit zero.
+  Malformed provider Tool output remains rejected without repair or retry.
+
 ### Added
 
 - Added explicit `openai` and native loopback `ollama` provider kinds. Ollama

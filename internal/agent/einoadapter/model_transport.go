@@ -135,10 +135,11 @@ type boundedResponseBody interface {
 }
 
 type guardedRoundTripper struct {
-	base       http.RoundTripper
-	origin     *url.URL
-	credential *config.SecretValue
-	provider   domain.ModelProviderKind
+	base        http.RoundTripper
+	origin      *url.URL
+	credential  *config.SecretValue
+	provider    domain.ModelProviderKind
+	temperature float64
 }
 
 func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -156,6 +157,13 @@ func (transport *guardedRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	}
 	if !transport.validRequest(request, state.requestLimit) {
 		return nil, errTransportRequestInvalid
+	}
+	if transport.provider == domain.ModelProviderOllama {
+		corrected, err := nativeOllamaRequest(request, transport.temperature, state.requestLimit)
+		if err != nil {
+			return nil, err
+		}
+		request = corrected
 	}
 	if transport.provider == domain.ModelProviderOpenAI {
 		if transport.credential == nil {

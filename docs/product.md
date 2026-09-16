@@ -212,6 +212,12 @@ OpenAI requires its fixed role credential; native Ollama requires
 Summarization reuses `agent` with an independent reserved budget; there is no
 prebuilt `context_compactor` role.
 
+Native request correctness and model capability are separate requirements.
+The runtime preserves explicitly configured temperature and bound Tool schemas
+before I/O, but unsupported or malformed model output still fails closed.
+The exact local capability limitations are recorded in
+[Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
+
 Inside `internal/agent/einoadapter`, stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware own the framework conversation
 loop. The current stable path uses eligible messages from the existing SQLite

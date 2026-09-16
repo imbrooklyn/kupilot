@@ -503,6 +503,15 @@ network I/O. Native Tool calls receive only a request-bound deterministic ID
 and ordinal inside the adapter because the Ollama protocol carries neither;
 this restores local Eino pairing syntax without creating authority.
 
+The same transport restores an SDK-omitted native temperature when the frozen
+configuration explicitly selects zero (ADR-0058), and restores each bound Tool's
+parameters from its validated code-owned schema (ADR-0059). Exact Tool count,
+order, identity, and description must match the call's immutable binding. All
+other bytes remain Eino-owned. Final byte ceilings and cancellation still
+apply; invalid requests fail before I/O. This does not repair provider output
+or emulate missing model capabilities. See
+[ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md).
+
 - Markdown is the visible answer and receives no mandatory local headings.
 - An Evidence citation binds a bounded claim to one or more accepted current-run
   Evidence IDs.

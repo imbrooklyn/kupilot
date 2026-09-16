@@ -27,8 +27,15 @@ decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v16`
+- System prompt: `kupilot-agent-policy-v18`
 - Capability catalog: `kupilot-operational-tools-v5`
+
+The native Eino request guard carries the validated Tool catalog only through
+the current call context and restores its parameter-schema spans before I/O
+([ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md)). Eino still owns the
+single Agent loop and request assembly. Invalid bindings, cancellation, and
+final request-byte excess remain terminal; provider-generated arguments are
+never repaired. Summary and Reviewer requests remain Tool-free.
 
 ## Frozen run input
 
@@ -127,7 +134,7 @@ retry. Active-run disagreement resynchronizes delivery to the exact current run;
 scope or resource disagreement uses the existing picker or a later explicit
 resubmit as projected by Application.
 
-A schema-2 final chooses exactly one `answer` or `needs_user_input` outcome.
+A schema-4 final chooses exactly one `answer` or `needs_user_input` outcome.
 Clarification carries one to three bounded typed questions, creates no Tool,
 Evidence, ActionEnvelope, approval, Reviewer call, or execution, and suppresses
 queue drain. A user's response starts a new explicit run. For answers,

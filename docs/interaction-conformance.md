@@ -219,6 +219,75 @@ external branch.
 
 ## Evidence levels
 
+### Native request temperature decisions
+
+ADR-0058 corrects request fidelity independently of model capability. The
+following deterministic tests use no model or Kubernetes endpoint:
+
+| Decision outcomes | Tests |
+| --- | --- |
+| Explicit zero, default 0.1, upper bound 0.2; streaming, summary, review | `TestNativeOllamaTemperatureFieldIsAlwaysExplicit` |
+| Empty/nonempty options; present zero/nonzero; whitespace, escaped keys, nested unrelated fields; exact byte preservation | `TestNativeOllamaRequestPreservesAllOtherBytes` |
+| Missing/null/array/duplicate options; missing nonzero/null/string/duplicate/mismatched temperature and nonzero underflow; malformed key/value/end and trailing input; zero external calls | `TestNativeOllamaRequestDenialsMakeZeroExternalCalls` |
+| Corrected request exactly at the byte ceiling vs one-over with zero calls | `TestNativeOllamaCorrectedRequestByteCeiling` |
+| Read failure with wrapped cause; cancellation before/during read; timeout; declared-length mismatch; actual one-over; body closure and zero calls | `TestNativeOllamaRequestReadAndLifecycleDenials` |
+| Full Agent completion with one request carrying explicit zero | `TestNativeOllamaRunsFullAgentComposition` |
+
+These checks establish the wire setting, not a model's ability to produce valid
+Tool arguments. Provider failures remain failures without automatic retries.
+
+For this correction, Go 1.25.13 statement coverage was measured before changes
+at `d11c634c6635440c5784b2fca898b074beac2e1c` and after the correction using
+temporary profiles. `internal/agent/einoadapter` increased from 81.6% to 82.2%;
+both functions in `ollama_request.go` reached 100% statement coverage. The
+other measured packages stayed at 78.4% (`agent`), 71.9% (`application`), and
+76.8% (`tui`). This is statement coverage; the decision table above is a
+separate manually auditable record, not a measured branch percentage.
+
+### Native bound Tool schema decisions
+
+ADR-0059 extends the existing native request guard, without changing model
+output validation. These tests are deterministic and perform no real model,
+Tool, or Kubernetes I/O:
+
+| Decision outcomes | Tests |
+| --- | --- |
+| Full and plan-only bindings; complete and lossy input schemas; exact replacement and unrelated-byte preservation; body closure, ContentLength, GetBody | `TestNativeCatalogPreservesOtherBytesAndHTTPFraming` |
+| Missing/null/object/empty/duplicate Tool arrays; missing/one-over/reordered/unbound catalogs; unknown names, changed descriptions/types, unknown Tool/function fields; duplicate type/function/name/description/parameters; missing/null/array/string/malformed parameters; exact error and zero network calls | `TestNativeCatalogEnvelopeDenialsHaveZeroExternalCalls` |
+| Final request exactly at its byte ceiling vs one-over; exact framing and zero-call denial | `TestNativeCatalogExactLimitAndOneOver` |
+| Full/plan-only binding and rebinding, Stream delegation, invalid rebinding | `TestNativeCatalogBoundViewsDelegateAndFreezeCatalog` |
+| Wrapped SDK binding cause; Generate delegation; later caller mutation cannot change the frozen catalog | `TestNativeCatalogBindingPreservesCauseAndGenerateDelegates` |
+| Tool-free absent/empty catalog vs malformed JSON | `TestNativeCatalogToolFreeAndMalformedHelpers` |
+| Cancellation after restoration and before acceptance; no corrected request escapes | `TestNativeCatalogCancellationBeforeCorrectedBodyAcceptance` |
+| Cancellation before/during read, timeout, read failure, length mismatch and actual one-over; closed body and zero calls | `TestNativeOllamaRequestReadAndLifecycleDenials` |
+| Full Agent greeting followed by retained Namespace question; exact settings, current-question uniqueness, all 14 schema comparisons; safe provider rejection, two fixture model calls, zero Tool/Kubernetes calls | `TestNativeOllamaRequestFidelityAudit`, `TestNativeOllamaRequestAuditComparator` |
+| Three test-only request variants preserve history, authority instructions and intended catalog; valid strict Tool binding, exactly one fixture call each, fixed parser-error observation | Tagged `TestNativeOllamaSelectionProbeFixture` (also race checked) |
+
+The request boundary keeps existing typed reasons: an unsupported native
+request envelope uses `model_invocation/provider_protocol_unsupported` (the
+existing transport-validation class, before actual I/O); corrected-byte excess uses
+`runtime_budget_exhausted`, and lifecycle failures use `run_cancelled` or
+`run_timed_out`. No request denial adds model/Tool/Kubernetes calls. Successful
+restoration grants no authority and schedules no additional call. Failure
+persistence and queue rules are unchanged from the matrix above.
+
+Fresh Go 1.25.13 statement coverage for this schema correction increased
+`internal/agent/einoadapter` from **82.2% to 82.8%**. Together with ADR-0058 the
+change from the clean base is **81.6% to 82.8%**. Both new production files,
+`ollama_request.go` and `ollama_catalog.go`, have **100% statement coverage**,
+including every explicit error-return statement. `agent` remains **78.4%**,
+`application` **71.9%**, and `tui` **76.8%**. Profiles are temporary artifacts.
+Go does not measure branch coverage: the table is the manual decision record,
+not a branch percentage or a claim that every legacy branch is covered.
+
+The bounded local comparison is separate evidence: full requests passed 0/3,
+single-Tool requests 3/3, and requests without final protocol text 2/3. It
+executed no Tool or Kubernetes call and is not an end-to-end Agent success.
+Exact versions, failures, usage and timings are in
+[Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
+
+### Interpretation
+
 Go `-coverprofile` is statement coverage, not native branch coverage. A decision
 matrix must name tests for both outcomes of changed decisions and explicit
 error returns. Deterministic full-composition tests use recording transports,

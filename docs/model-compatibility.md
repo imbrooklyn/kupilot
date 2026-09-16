@@ -328,7 +328,20 @@ Eino's native Ollama component owns serialization and decoding. The request
 contains the configured model, bounded messages, fixed Tool schemas, native
 `stream`, native `format`, and bounded `options`. Kupilot maps the configured
 temperature and an explicitly endpoint-evidenced positive output limit to the
-native options. `json_object` selects Ollama's fixed JSON format; `prompt`
+native options. Explicit zero must be present as `options.temperature: 0`.
+The pinned SDK omits zero, so the guarded transport restores only this missing
+configured scalar, preserves every other request byte, and rechecks the final
+request ceiling. A present mismatched, null, or duplicate temperature, missing
+nonzero temperature, or invalid options fails before network I/O. This fixed
+request correction does not repair provider output or model Tool arguments;
+see [ADR-0058](adr/0058-preserve-explicit-native-model-temperature.md).
+ADR-0059 additionally restores only bound Tool parameter-schema byte spans
+from the validated catalog. The exact bound Tool count, order, identities,
+and descriptions must match before any replacement. Missing or invalid
+envelopes and an oversized final request fail before I/O. All other bytes are
+preserved; no provider output is repaired. See
+[ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md).
+`json_object` selects Ollama's fixed JSON format; `prompt`
 omits it. Unsupported model or format behavior fails the single request.
 An omitted `reasoning_effort` also omits native `think`; explicit `none` sends
 `think: false`. Interactive switching to Ollama chooses the omitted form rather
@@ -368,6 +381,111 @@ v0.54.0, `x/term` v0.43.0, and `x/text` v0.37.0 requirements. All retain the
 repository's Go 1.25 minimum. The project vulnerability gate must remain
 clean; the fact that Kupilot does not configure an SSH transport is not used to
 waive a reachable dependency finding.
+
+### Native Tool schema fidelity limitation
+
+The 2026-09-16 deterministic request audit found an independent request defect
+in native Eino Ollama v0.1.9 with its v0.1.0 native client. All 14 catalog
+schemas are intact before native conversion. The final serialized request
+preserves Tool names, descriptions, root required fields, top-level types
+(including null), and enums, but loses:
+
+- array item schemas, including `list_resources.filters.items`;
+- nested object properties and required fields, including `get_events.resource`;
+- `additionalProperties: false`; and
+- numeric, string, array-size, and pattern constraints.
+
+Even the flat `get_cluster_overview` schema loses its limit bounds and purpose
+length constraints. The audit reports 147 differing constraint paths per
+request; this count includes missing parent structures and is not a count of
+independent defects. Greeting and retained-query requests have the same losses.
+
+The same fixture confirms explicit temperature 0.1, output limit 2048,
+`format: "json"`, absent `think`, ordered retained history, and exactly one
+current question. Request sizes are 51,133 and 51,391 bytes. Each audit run made
+two scripted model calls and zero live model, Tool-handler, or Kubernetes calls. The
+scripted second response confirms the existing safe
+`model_invocation/provider_reported_failure` projection without retry; it does
+not reproduce an Ollama generation failure.
+
+This is a reproducible request-fidelity defect, not evidence that schema loss
+caused an observed incomplete Tool-argument JSON response. Runtime Tool binding
+still enforces the original strict schema and grants no additional authority.
+The native component's converter copies only each top-level property's type,
+description, and enum; the native client's property representation also lacks
+nested object and constraint fields. Repairing only `items` would be incomplete.
+
+There is also a provider limitation. Ollama 0.34.0's
+[native API types](https://github.com/ollama/ollama/blob/v0.34.0/api/types.go)
+represent array items, nested properties, and nested required fields, but do
+not represent all catalog keywords such as numeric/length constraints or
+`additionalProperties`. Preserving bytes in the SDK alone therefore does not
+establish that all constraints reach the model. Runtime validation remains the
+authority boundary regardless of what a provider exposes to its model.
+
+ADR-0059 repairs the project request boundary using only the already bound
+code-owned parameter-schema spans. The full Agent audit is now an ordinary
+deterministic regression and passes for all 14 schemas, with zero differing
+constraint paths. Corrected greeting and retained-query requests contain
+53,599 and 53,857 bytes. Temperature, format, thinking omission, history, Tool
+identities, and all unrelated bytes remain unchanged. Dependency versions are
+unchanged. No complete stable upstream repair was available at verification;
+the upstream main-branch array fix is neither complete nor a pinned release.
+
+### Bounded native first-call comparison
+
+On 2026-09-17, after that request audit passed, nine independent first-call
+measurements used native Eino, Ollama **0.34.0**, and **gpt-oss:20b**, digest
+`17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7`.
+The fixed settings were temperature **0.1**, output ceiling **2048**,
+`format: "json"`, and omitted `think`. Synthetic retained greeting history
+preceded one Namespace question. No Home configuration was read or changed.
+
+Three interleaved rounds compared the full initial Agent request, a test-only
+reduction to `get_cluster_overview`, and a test-only removal of the final
+response protocol section. Mandatory authority instructions and retained
+history remained. Each sample made exactly one model call, with no Tool or
+Kubernetes execution, no persistence, and no retry. The selected Tool's strict
+project binding had to succeed for a structural PASS. This does not validate
+a subsequent Tool result, final answer, or complete AgentRun.
+
+| Round | Request variant | Structural result | Exact stage/reason | Bytes | Measured input/output tokens | Wall seconds |
+| --- | --- | --- | --- | ---: | --- | ---: |
+| 1 | Full | FAIL | `model_invocation/provider_reported_failure` | 53,857 | unavailable | 25.102 |
+| 1 | Single Tool | PASS | none | 42,111 | 8,370 / 125 | 16.819 |
+| 1 | Without final protocol | FAIL | `tool_selection/tool_call_malformed` | 49,738 | 8,714 / 101 | 16.985 |
+| 2 | Full | FAIL | `tool_selection/tool_call_malformed` | 53,857 | 9,500 / 95 | 2.194 |
+| 2 | Single Tool | PASS | none | 42,111 | 8,370 / 123 | 3.034 |
+| 2 | Without final protocol | PASS | none | 49,738 | 8,714 / 186 | 4.208 |
+| 3 | Full | FAIL | `model_invocation/provider_reported_failure` | 53,857 | unavailable | 2.763 |
+| 3 | Single Tool | PASS | none | 42,111 | 8,370 / 100 | 2.273 |
+| 3 | Without final protocol | PASS | none | 49,738 | 8,714 / 163 | 3.717 |
+
+The suite used **9 model calls, 0 Tool calls, 0 Kubernetes calls**, and
+**437,118 request bytes**. Command wall time was **79.250 seconds**; the live
+assertion gate was **FAIL** (five of nine selections passed). Both provider
+failures were observed in memory as Tool parsing errors with unexpected JSON
+end. Only fixed booleans and classifications were emitted; raw traffic and
+arguments were not recorded. The two project parameter rejections were not
+field-audited after the run, so this evidence cannot identify their exact bad
+argument or establish that any missing intent was uniquely recoverable.
+
+Request schema loss is proven independently and corrected, but these results
+do not show it caused the earlier parsing failure. The tested provider/model
+combination remains unreliable for the full request. Three samples per variant
+do not prove that catalog size or protocol text is the cause, that a reduced
+request is reliably compatible, or that the model alone caused server parsing
+failure. Ollama generation and parser behavior remain inseparable in this
+measurement. Provider-discarded schema constraints remain an explicit upstream
+limitation, enforced locally rather than emulated.
+
+The project therefore keeps the full production catalog, prompt, strict
+arguments, and existing typed failure mapping. No output repair, guessed
+parameter, retry, reduced-catalog fallback, configuration change, SDK fork, or
+additional model probe follows this result. Deterministic fixtures establish
+request correctness and safety; this local comparison establishes only the
+listed structural observations. Real Kubernetes, model semantic quality,
+remote CI, and release evidence were **Not run** during this local campaign.
 
 ## Implemented Agent capability validation strategy
 
@@ -729,6 +847,13 @@ or retried inside a run. No Kubernetes, Reviewer, external model, executor, or
 durable conversation store was used by this tagged fixture. Application, real
 temporary SQLite, resume, queue and TUI behavior have separate deterministic
 composition evidence in [Interaction Conformance](interaction-conformance.md).
+
+Parameter evidence correction: the campaigns below configured temperature zero,
+but the pinned SDK omitted that field from the HTTP request. Effective
+temperature depended on server/model defaults and was not measured. These
+results do not establish explicit-zero behavior or a benefit from lowering
+temperature. Their recorded counts and outcomes remain historical observations;
+they are not post-ADR-0058 conformance evidence.
 
 The latest campaign completed **24 of 30** scenario assertions. Six runs were
 rejected at fixed typed boundaries, with no subsequent invocation. This is not

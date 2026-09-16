@@ -167,6 +167,13 @@ binding receives only fixed local policy feedback; rejected arguments are not
 echoed and Tool handler and Kubernetes call counts remain zero. Unknown,
 malformed, authority-bearing, and sensitive selections still fail terminally.
 
+The native request guard restores parameter schemas only from the immutable
+catalog validated at binding. Exact Tool identities, order, descriptions, and
+count must match before restoration. Neither request metadata nor a provider's
+partial JSON Schema support grants authority: returned arguments still pass
+strict local binding. Invalid envelopes and corrected request-size excess make
+zero model network calls ([ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md)).
+
 ### T02: Cross-Namespace or cross-Context confusion
 
 **Threat.** A broader namespace policy causes observations to be mislabeled as

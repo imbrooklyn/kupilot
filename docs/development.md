@@ -108,6 +108,51 @@ download. Supply its exact loopback server base and already-available model.
 It exercises Eino's native Ollama `/api/chat` component and asserts that no
 bearer credential is sent.
 
+Request fixtures must assert the presence and value of native temperature,
+including explicit zero, rather than decoding into a value that conflates an
+absent field with zero. Historical campaigns before ADR-0058 omitted the
+configured zero on the wire and cannot establish explicit-zero behavior.
+
+Before evaluating native Tool capability, run the ordinary deterministic
+request-fidelity regression. It runs the full Agent adapter with a scripted
+greeting, retained history, and a Namespace question. Its recording transport
+performs zero endpoint, Tool-handler, or Kubernetes calls and stores no traffic:
+
+```sh
+GOTOOLCHAIN=go1.25.13 go test -count=1 -v ./internal/agent/einoadapter \
+  -run '^TestNativeOllamaRequest(FidelityAudit|AuditComparator)$'
+```
+
+This gate checks the complete code-owned schema at the final wire boundary.
+Do not weaken expected schemas to bless a lossy dependency conversion. The
+native guard restores only the bound parameter-schema spans and explicit zero;
+all other bytes remain Eino-owned. See [ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md).
+
+A separate explicitly authorized experiment compares three first-call request
+variants in three interleaved rounds. It is fixed to local Ollama, gpt-oss:20b,
+temperature 0.1, output limit 2048, JSON format, and omitted thinking. It makes
+at most nine independent model calls and executes no Tool or Kubernetes call.
+It does not read Home configuration or perform retries. Run its synthetic
+harness first:
+
+```sh
+GOTOOLCHAIN=go1.25.13 go test -tags=integration -race -count=1 \
+  ./internal/agent/einoadapter -run '^TestNativeOllamaSelectionProbeFixture$'
+
+KUPILOT_INTEGRATION_LIVE=authorized \
+KUPILOT_INTEGRATION_MODEL_TARGET=ollama \
+KUPILOT_INTEGRATION_MAX_COST_USD=0 \
+KUPILOT_OLLAMA_SELECTION_PROBE=authorized \
+GOTOOLCHAIN=go1.25.13 go test -tags=integration -count=1 -timeout=28m -v \
+  ./internal/agent/einoadapter -run '^TestNativeOllamaSelectionProbeLive$'
+```
+
+The live test reports fixed classifications, bytes, measured usage when
+available, and time. It never records traffic or arguments. It can fail even
+when deterministic request fidelity passes; see the exact observations and
+limits in [Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
+The two reduced variants are experiments, not production prompts or catalogs.
+
 ```sh
 KUPILOT_INTEGRATION_LIVE=authorized \
 KUPILOT_INTEGRATION_MAX_COST_USD=0 \

@@ -292,12 +292,15 @@ func TestNativeOllamaRunsFullAgentComposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal diagnosis: %v", err)
 	}
+	configuration := fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second)
+	configuration.Temperature = 0
 	client, modelError := newModelClientForTest(
-		fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
+		configuration,
 		nil,
 		fixtureLogger(&logBuffer),
-		roundTripFunc(func(*http.Request) (*http.Response, error) {
+		roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			requests.Add(1)
+			assertNativeWireTemperature(t, request, 0)
 			body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":` + string(content) + `},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}` + "\n"
 			return &http.Response{
 				StatusCode: http.StatusOK,

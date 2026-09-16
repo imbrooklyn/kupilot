@@ -205,7 +205,7 @@ an actual key so it remains safe to copy and inspect.
 | `models.agent.api_key` | Optional plaintext OpenAI credential extracted before ordinary typed configuration decode. It is forbidden for `ollama`. |
 | `models.agent.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. For native Ollama, omission leaves `think` absent while `none` sends `think: false`. Interactive provider switching selects omission because it does not ask a separate reasoning question. |
 | `models.agent.response_format` | Effective fixed value `prompt` or `json_object`; omission resolves to `prompt`. `json_object` selects the provider's fixed JSON-object response constraint only when the exact endpoint has proved support. It never enables probing, fallback, or retry. |
-| `models.agent.temperature` | Required; accepted range `0` through `0.2`. |
+| `models.agent.temperature` | Required; accepted range `0` through `0.2`. Explicit `0` is sent to the provider, including native Ollama; it does not mean omission or a server-selected default. |
 | `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
 | `models.agent.request_timeout_seconds` | Required; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
 | `models.agent.streaming` | Required fixed value `true`. |

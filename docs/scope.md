@@ -209,6 +209,12 @@ balancing, cross-origin retry, or model-selected endpoint. OpenAI credentials
 are opaque; Ollama accepts none. Consent remains role-, origin-, policy-, and
 category-bound.
 
+ADR-0059 admits only bounded restoration of code-owned native request metadata
+lost by the pinned serializer. It does not admit generated-argument repair,
+provider-feature emulation, prompt-specific routing, or a reduced-catalog
+fallback. A provider/model combination can remain incompatible after this
+request-fidelity correction.
+
 Every AgentRun after the first question in a Session must receive one ordered,
 bounded representation of all retained eligible prior user and final assistant
 messages. Standard mode supplies it in process and after explicit cross-process

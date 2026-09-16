@@ -138,10 +138,11 @@ func newModelClientWithTransport(
 	}
 	client := &http.Client{
 		Transport: &guardedRoundTripper{
-			base:       transport,
-			origin:     origin,
-			credential: credential,
-			provider:   configuration.ProviderKind,
+			base:        transport,
+			origin:      origin,
+			credential:  credential,
+			provider:    configuration.ProviderKind,
+			temperature: configuration.Temperature,
 		},
 		CheckRedirect: redirectPolicy(origin, configuration.ProviderKind),
 	}
@@ -296,7 +297,13 @@ func (client *modelClient) withTools(tools []*schema.ToolInfo) (einomodel.ToolCa
 	if model == nil || validateAnyBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	bound, err := model.WithTools(tools)
+	var bound einomodel.ToolCallingChatModel
+	var err error
+	if client.configuration.ProviderKind == domain.ModelProviderOllama {
+		bound, err = bindNativeCatalog(model, tools)
+	} else {
+		bound, err = model.WithTools(tools)
+	}
 	if err != nil {
 		return nil, failedRuntime(domain.SafeErrorClassUnsupported, "The configured model cannot accept the fixed Tool catalog.", err)
 	}
@@ -314,7 +321,8 @@ func (client *modelClient) structuredOutputModel() einomodel.ToolCallingChatMode
 }
 
 // stream sends one Eino-generated request and returns one assembled Eino
-// assistant message. It observes the generated payload without replacing it.
+// assistant message. Only the bounded native request corrections in ADR-0059
+// may replace code-owned metadata before transport.
 func (client *modelClient) stream(
 	ctx context.Context,
 	requestID domain.ModelRequestID,
