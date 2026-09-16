@@ -300,6 +300,13 @@ composer undo/redo, and redacted local `/doctor`. Every safety state has text
 or a stable symbol in `NO_COLOR`, ANSI-16, reduced-motion, narrow, and restored-
 scrollback modes.
 
+Slash suggestions rank available commands before unavailable commands, retaining
+the existing match order within each group before applying the visible-row limit.
+Unavailable commands retain their state and reason but cannot be selected for
+completion. Completion rechecks current availability; with no available match,
+Tab leaves the draft unchanged. Explicit command submission still checks current
+availability before dispatch.
+
 Strict response schema 4 supports either an answer or one to three typed
 clarification questions. Runtime binds it to a bounded completeness manifest with
 authoritative stop reason, source coverage, freshness, exact typed conflict or

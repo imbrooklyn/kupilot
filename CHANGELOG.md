@@ -52,6 +52,8 @@ This file records notable user-visible changes to Kupilot.
 
 ### Changed
 
+- Rank available Slash commands first and skip unavailable commands during
+  completion, including after command availability changes.
 - Advance new model output to response schema 4 and plan wire schema 2. Derive
   ordinals, structural coverage, stop reasons, and clarification rendering in
   runtime code. Normalize unique validated Evidence references into acceptance

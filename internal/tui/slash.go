@@ -167,24 +167,28 @@ func findSlashCommand(name string) (SlashCommand, bool) {
 	return SlashCommand{}, false
 }
 
-// FilterSlashCommands performs stable local matching and returns at most eight rows.
-func FilterSlashCommands(query string) []SlashCommand {
+// filterSlashCommands ranks available matches first before limiting visible rows.
+func (model Model) filterSlashCommands(query string) []SlashCommand {
 	if query != strings.ToLower(query) || !validSlashFilter(query) {
 		return nil
 	}
 	type match struct {
-		command SlashCommand
-		score   int
-		index   int
+		command   SlashCommand
+		score     int
+		index     int
+		available bool
 	}
 	matches := make([]match, 0, len(fixedSlashCommands))
 	for index, command := range fixedSlashCommands {
 		score, ok := slashMatchScore(command, query)
 		if ok {
-			matches = append(matches, match{command: command, score: score, index: index})
+			matches = append(matches, match{command: command, score: score, index: index, available: model.slashAvailability(command).available()})
 		}
 	}
 	sort.SliceStable(matches, func(left, right int) bool {
+		if matches[left].available != matches[right].available {
+			return matches[left].available
+		}
 		if matches[left].score == matches[right].score {
 			return matches[left].index < matches[right].index
 		}

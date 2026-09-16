@@ -486,6 +486,9 @@ func (model *Model) reflow() {
 	availableSuggestions := max(1, model.height-reservedWithoutSuggestions-1)
 	visible := min(MaxPickerCandidates, availableSuggestions)
 	model.slashMenu.SetMaxVisible(visible)
+	if model.slashMenu.Open() {
+		model.syncSlashMenu()
+	}
 	model.contextPicker.SetMaxVisible(visible)
 	model.namespacePicker.SetMaxVisible(visible)
 	model.resourcePicker.SetMaxVisible(visible)

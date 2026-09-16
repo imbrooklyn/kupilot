@@ -15,6 +15,7 @@ type SlashCandidate struct {
 	Summary      string
 	Availability string
 	Reason       string
+	Disabled     bool
 }
 
 // SlashMenuStyles provides semantic styles without embedding command behavior.
@@ -37,7 +38,7 @@ type SlashMenu struct {
 
 // NewSlashMenu creates a closed menu with no input control of its own.
 func NewSlashMenu(styles SlashMenuStyles) SlashMenu {
-	return SlashMenu{maxVisible: MaxSlashCandidates, width: 80, styles: styles}
+	return SlashMenu{selected: -1, maxVisible: MaxSlashCandidates, width: 80, styles: styles}
 }
 
 // SetStyles updates presentation without changing candidates or selection.
@@ -45,13 +46,22 @@ func (menu *SlashMenu) SetStyles(styles SlashMenuStyles) { menu.styles = styles 
 
 // SetCandidates opens the menu and defensively copies at most eight rows.
 func (menu *SlashMenu) SetCandidates(candidates []SlashCandidate) {
+	previous, _ := menu.SelectedCandidate()
 	limit := min(len(candidates), MaxSlashCandidates, menu.maxVisible)
 	menu.candidates = append(menu.candidates[:0], candidates[:limit]...)
 	menu.open = true
-	if len(menu.candidates) == 0 {
-		menu.selected = 0
-	} else if menu.selected >= len(menu.candidates) {
-		menu.selected = len(menu.candidates) - 1
+	menu.selected = -1
+	for index, candidate := range menu.candidates {
+		if candidate.Disabled {
+			continue
+		}
+		if menu.selected < 0 {
+			menu.selected = index
+		}
+		if candidate.Name == previous.Name {
+			menu.selected = index
+			break
+		}
 	}
 }
 
@@ -59,7 +69,7 @@ func (menu *SlashMenu) SetCandidates(candidates []SlashCandidate) {
 func (menu *SlashMenu) SetMaxVisible(limit int) {
 	menu.maxVisible = max(1, min(limit, MaxSlashCandidates))
 	if len(menu.candidates) > menu.maxVisible {
-		menu.candidates = menu.candidates[:menu.maxVisible]
+		menu.SetCandidates(menu.candidates)
 	}
 }
 
@@ -70,7 +80,7 @@ func (menu *SlashMenu) SetWidth(width int) { menu.width = max(1, width) }
 func (menu *SlashMenu) Close() {
 	menu.open = false
 	menu.candidates = nil
-	menu.selected = 0
+	menu.selected = -1
 }
 
 // Open reports whether the candidate region is present.
@@ -81,7 +91,7 @@ func (menu SlashMenu) Candidates() []SlashCandidate {
 	return append([]SlashCandidate(nil), menu.candidates...)
 }
 
-// Selected returns the current row index.
+// Selected returns the current row index, or -1 when no row is available.
 func (menu SlashMenu) Selected() int { return menu.selected }
 
 // SelectedCandidate returns the current row when one exists.
@@ -89,18 +99,31 @@ func (menu SlashMenu) SelectedCandidate() (SlashCandidate, bool) {
 	if !menu.open || len(menu.candidates) == 0 || menu.selected < 0 || menu.selected >= len(menu.candidates) {
 		return SlashCandidate{}, false
 	}
-	return menu.candidates[menu.selected], true
+	candidate := menu.candidates[menu.selected]
+	return candidate, !candidate.Disabled
 }
 
-// Move changes selection with wraparound.
+// Move changes selection with wraparound, skipping disabled rows.
 func (menu *SlashMenu) Move(delta int) {
-	if len(menu.candidates) == 0 {
+	available := make([]int, 0, len(menu.candidates))
+	position := 0
+	for index, candidate := range menu.candidates {
+		if candidate.Disabled {
+			continue
+		}
+		if index == menu.selected {
+			position = len(available)
+		}
+		available = append(available, index)
+	}
+	if len(available) == 0 {
 		return
 	}
-	menu.selected = (menu.selected + delta) % len(menu.candidates)
-	if menu.selected < 0 {
-		menu.selected += len(menu.candidates)
+	position = (position + delta) % len(available)
+	if position < 0 {
+		position += len(available)
 	}
+	menu.selected = available[position]
 }
 
 // Height returns the number of rows currently rendered.

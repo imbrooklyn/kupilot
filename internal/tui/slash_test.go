@@ -89,17 +89,18 @@ func TestParseSlashDraftRules(t *testing.T) {
 func TestFilterSlashCommandsIsStableAndBounded(t *testing.T) {
 	t.Parallel()
 
-	all := FilterSlashCommands("")
+	model := newTestModel()
+	all := model.filterSlashCommands("")
 	if len(all) != MaxSlashCandidates {
 		t.Fatalf("empty filter count = %d, want %d", len(all), MaxSlashCandidates)
 	}
-	if got := FilterSlashCommands("res"); len(got) == 0 || got[0].Name != "resource" {
+	if got := model.filterSlashCommands("res"); len(got) == 0 || got[0].Name != "resource" {
 		t.Fatalf("alias filter = %#v", got)
 	}
-	if got := FilterSlashCommands("priv"); len(got) != 1 || got[0].Name != "privacy" {
+	if got := model.filterSlashCommands("priv"); len(got) != 1 || got[0].Name != "privacy" {
 		t.Fatalf("prefix filter = %#v", got)
 	}
-	if got := FilterSlashCommands("does-not-exist"); len(got) != 0 {
+	if got := model.filterSlashCommands("does-not-exist"); len(got) != 0 {
 		t.Fatalf("unknown filter = %#v", got)
 	}
 }

@@ -1467,25 +1467,27 @@ func (model *Model) syncSlashMenu() {
 		return
 	}
 	query := strings.TrimPrefix(draft, "/")
-	commands := FilterSlashCommands(query)
+	commands := model.filterSlashCommands(query)
 	candidates := make([]components.SlashCandidate, 0, len(commands))
 	for _, command := range commands {
 		availability := model.slashAvailability(command)
 		candidates = append(candidates, components.SlashCandidate{
 			Name: command.Name, Usage: command.Usage, Summary: command.Summary,
 			Availability: string(availability.State), Reason: availability.Reason,
+			Disabled: !availability.available(),
 		})
 	}
 	model.slashMenu.SetCandidates(candidates)
 }
 
 func (model *Model) completeSlashSelection() {
+	model.syncSlashMenu()
 	candidate, ok := model.slashMenu.SelectedCandidate()
 	if !ok {
 		return
 	}
 	command, ok := findSlashCommand(candidate.Name)
-	if !ok {
+	if !ok || !model.slashAvailability(command).available() {
 		return
 	}
 	value := "/" + command.Name
