@@ -1,5 +1,14 @@
 # Kupilot Scope
 
+## Native Eino ownership
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+current Eino ownership and protocol rules. Application directly composes
+Eino ADK; native message types remain private to Application. OpenAI profiles
+explicitly select `chat_completions` or `responses`; omission keeps the existing
+Chat Completions behavior. There is one Agent/Runner per run, no automatic
+protocol selection, retry, fallback, or additional conversation store.
+
 - Status: Accepted `v0.5` target
 - Date: 2026-09-07
 

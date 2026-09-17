@@ -12,7 +12,7 @@ func TestInteractionFailuresAreClosedContentFreeBoundaryValues(t *testing.T) {
 	}{
 		{"request_preflight", []InteractionFailure{FailureRequestPreflight}},
 		{"retained_context", []InteractionFailure{FailureRetainedContext, FailureSummaryResponse}},
-		{"model_invocation", []InteractionFailure{FailureProviderTransport, FailureProviderProtocol, FailureProviderReported}},
+		{"model_invocation", []InteractionFailure{FailureProviderTransport, FailureProviderProtocol, FailureProviderReported, FailureProviderRequest}},
 		{"stream_assembly", []InteractionFailure{FailureStreamMalformed, FailureStreamUnsupported, FailureStopReason, FailureStreamDuplicate, FailureStreamAfterFinish, FailureStreamIncomplete, FailureStreamUsage}},
 		{"tool_selection", []InteractionFailure{FailureToolSelection, FailureToolPolicy, FailureToolPairing}},
 		{"tool_execution", []InteractionFailure{FailureToolResult, FailureToolCancelled, FailureToolTimeout}},

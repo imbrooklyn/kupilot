@@ -45,7 +45,7 @@ type CoordinatorConfig struct {
 	Tools               ToolEvidencePersistence
 	Audits              AuditPersistence
 	Scope               ActiveScope
-	Runner              agent.AgentRunner
+	Runner              runExecutor
 	ModelRuntime        ModelRuntime
 	ModelFactory        ModelRuntimeFactory
 	ModelProfiles       ModelProfileWriter
@@ -113,7 +113,7 @@ type Coordinator struct {
 	tools                ToolEvidencePersistence
 	audits               AuditPersistence
 	scope                ActiveScope
-	runner               agent.AgentRunner
+	runner               runExecutor
 	modelRuntime         ModelRuntime
 	modelFactory         ModelRuntimeFactory
 	modelProfiles        ModelProfileWriter
@@ -179,7 +179,7 @@ type activeRun struct {
 	modelOriginHash          string
 	consentRevision          uint64
 	permissionProfile        domain.PermissionProfile
-	runner                   agent.AgentRunner
+	runner                   runExecutor
 	run                      domain.AgentRun
 	cancel                   context.CancelFunc
 	done                     chan struct{}

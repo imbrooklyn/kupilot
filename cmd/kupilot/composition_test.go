@@ -143,7 +143,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 		t.Fatalf("os.ReadFile(main.go) error = %v", err)
 	}
 	mainSource := string(mainContent)
-	if strings.Count(mainSource, "openaicompat.New(") != 0 || strings.Count(mainSource, "einoadapter.New(") != 1 ||
+	if strings.Count(mainSource, "openaicompat.New(") != 0 || strings.Count(mainSource, "application.NewEinoRuntime(") != 1 ||
 		strings.Count(mainSource, "tools.NewToolCatalog(") != 1 ||
 		strings.Count(mainSource, "sqlite.NewScopePreferenceRepository(") != 1 ||
 		strings.Count(mainSource, "ScopePreferences: scopePreferenceRepository") != 1 ||
@@ -159,7 +159,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 		strings.Count(mainSource, "kube.NewDeploymentRestarter(") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRolloutObserver(") != 1 {
 		t.Fatalf("composition constructor counts are model=%d agent=%d catalog=%d scope-preference=%d",
-			strings.Count(mainSource, "openaicompat.New("), strings.Count(mainSource, "einoadapter.New("),
+			strings.Count(mainSource, "openaicompat.New("), strings.Count(mainSource, "application.NewEinoRuntime("),
 			strings.Count(mainSource, "tools.NewToolCatalog("),
 			strings.Count(mainSource, "sqlite.NewScopePreferenceRepository("))
 	}
@@ -208,7 +208,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 	if err != nil {
 		t.Fatalf("filepath.WalkDir() error = %v", err)
 	}
-	if providerConstructors != 1 || !strings.HasSuffix(providerPath, "internal/agent/einoadapter/model_client.go") {
+	if providerConstructors != 1 || !strings.HasSuffix(providerPath, "internal/application/eino_model_client.go") {
 		t.Fatalf("provider constructors/path = %d/%q", providerConstructors, providerPath)
 	}
 }

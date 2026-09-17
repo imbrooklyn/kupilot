@@ -109,7 +109,7 @@ const (
 	ModelTransportPolicyLoopbackHTTPNoRedirect ModelTransportPolicy = "loopback_http_no_redirect"
 )
 
-// ModelReasoningEffort is the optional fixed Chat Completions reasoning mode.
+// ModelReasoningEffort is the optional fixed provider reasoning mode.
 // The empty value omits the provider field; none explicitly disables reasoning.
 type ModelReasoningEffort string
 
@@ -117,6 +117,30 @@ const (
 	ModelReasoningEffortOmitted ModelReasoningEffort = ""
 	ModelReasoningEffortNone    ModelReasoningEffort = "none"
 )
+
+// Valid reports an explicit provider reasoning effort without inferring model capability.
+func (effort ModelReasoningEffort) Valid() bool {
+	switch effort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
+}
+
+// ModelAPIProtocol selects the configured OpenAI API without automatic negotiation.
+type ModelAPIProtocol string
+
+const (
+	ModelAPIProtocolChatCompletions ModelAPIProtocol = "chat_completions"
+	ModelAPIProtocolResponses       ModelAPIProtocol = "responses"
+)
+
+func (protocol ModelAPIProtocol) Valid(provider ModelProviderKind) bool {
+	if provider == ModelProviderOllama {
+		return protocol == ""
+	}
+	return protocol == "" || protocol == ModelAPIProtocolChatCompletions || protocol == ModelAPIProtocolResponses
+}
 
 // ModelResponseFormat is one explicit structured-output request contract.
 type ModelResponseFormat string
@@ -140,10 +164,11 @@ type ModelConfiguration struct {
 	Endpoint            string
 	Origin              string
 	Model               string
+	APIProtocol         ModelAPIProtocol
 	ReasoningEffort     ModelReasoningEffort
 	ResponseFormat      ModelResponseFormat
 	APIKeySource        ModelAPIKeySource
-	Temperature         float64
+	Temperature         *float64
 	MaxOutputTokens     int
 	RequestTimeout      time.Duration
 	StreamingRequired   bool
@@ -157,13 +182,13 @@ func (configuration ModelConfiguration) Validate() error {
 		!configuration.ProviderKind.Valid() || !configuration.validProviderPolicy() ||
 		!validModelEndpoint(configuration.Endpoint, configuration.Origin) ||
 		!validModelIdentifier(configuration.Model) ||
-		configuration.ReasoningEffort != ModelReasoningEffortOmitted && configuration.ReasoningEffort != ModelReasoningEffortNone ||
+		!configuration.ReasoningEffort.Valid() || !configuration.APIProtocol.Valid(configuration.ProviderKind) ||
 		!configuration.ResponseFormat.Valid() ||
-		math.IsNaN(configuration.Temperature) || math.IsInf(configuration.Temperature, 0) ||
-		configuration.Temperature < 0 || configuration.Temperature > 0.2 ||
+		configuration.Temperature == nil && configuration.ProviderKind == ModelProviderOllama ||
+		configuration.Temperature != nil && (math.IsNaN(*configuration.Temperature) || math.IsInf(*configuration.Temperature, 0) || *configuration.Temperature < 0 || *configuration.Temperature > 0.2) ||
 		configuration.MaxOutputTokens < 0 ||
 		configuration.RequestTimeout <= 0 || configuration.RequestTimeout > MaxModelRequestTimeout ||
-		configuration.Role == ModelRoleAgent && (!configuration.StreamingRequired || !configuration.ToolCallingRequired) ||
+		configuration.Role == ModelRoleAgent && ((!configuration.StreamingRequired && configuration.APIProtocol != ModelAPIProtocolResponses) || (configuration.StreamingRequired && configuration.APIProtocol == ModelAPIProtocolResponses) || !configuration.ToolCallingRequired) ||
 		configuration.Role == ModelRoleApprovalReviewer && (configuration.StreamingRequired || configuration.ToolCallingRequired) {
 		return ErrInvalidModelConfiguration
 	}
@@ -178,7 +203,8 @@ func (configuration ModelConfiguration) validProviderPolicy() bool {
 	case ModelProviderOllama:
 		return configuration.APIKeySource == ModelAPIKeySourceNone &&
 			configuration.TransportPolicy == ModelTransportPolicyLoopbackHTTPNoRedirect &&
-			validNativeOllamaEndpoint(configuration.Endpoint)
+			validNativeOllamaEndpoint(configuration.Endpoint) &&
+			(configuration.ReasoningEffort == "" || configuration.ReasoningEffort == "none" || configuration.ReasoningEffort == "low" || configuration.ReasoningEffort == "medium" || configuration.ReasoningEffort == "high")
 	default:
 		return false
 	}
@@ -214,6 +240,7 @@ const (
 	ModelErrorCodeRateLimited          ModelErrorCode = "model_rate_limited"
 	ModelErrorCodeServiceUnavailable   ModelErrorCode = "model_service_unavailable"
 	ModelErrorCodeUnsupportedResponse  ModelErrorCode = "model_response_unsupported"
+	ModelErrorCodeRequestRejected      ModelErrorCode = "model_request_rejected"
 	ModelErrorCodeMalformedStream      ModelErrorCode = "model_stream_invalid"
 	ModelErrorCodeDuplicateFinish      ModelErrorCode = "model_stream_duplicate_finish"
 	ModelErrorCodeProviderReported     ModelErrorCode = "model_provider_reported_failure"
@@ -351,6 +378,8 @@ func modelErrorDefinition(code ModelErrorCode) (SafeErrorClass, bool, string, bo
 		return SafeErrorClassUnavailable, true, "The configured model endpoint is unavailable.", true
 	case ModelErrorCodeUnsupportedResponse:
 		return SafeErrorClassUnsupported, false, "The model endpoint does not satisfy the supported compatibility profile.", true
+	case ModelErrorCodeRequestRejected:
+		return SafeErrorClassUnsupported, false, "The model endpoint rejected the request. Check the model profile settings.", true
 	case ModelErrorCodeMalformedStream:
 		return SafeErrorClassInvalidExternalResponse, false, "The model endpoint returned an invalid response stream.", true
 	case ModelErrorCodeDuplicateFinish:

@@ -14,6 +14,7 @@ const (
 	FailureProviderTransport   InteractionFailure = "provider_transport_failed"
 	FailureProviderReported    InteractionFailure = "provider_reported_failure"
 	FailureProviderProtocol    InteractionFailure = "provider_protocol_unsupported"
+	FailureProviderRequest     InteractionFailure = "provider_request_rejected"
 	FailureStreamMalformed     InteractionFailure = "stream_malformed"
 	FailureStreamDuplicate     InteractionFailure = "stream_finish_duplicate"
 	FailureStreamAfterFinish   InteractionFailure = "stream_event_after_finish"
@@ -63,7 +64,7 @@ func (failure InteractionFailure) Stage() InteractionStage {
 		return "request_preflight"
 	case FailureRetainedContext, FailureSummaryResponse:
 		return "retained_context"
-	case FailureProviderTransport, FailureProviderProtocol, FailureProviderReported:
+	case FailureProviderTransport, FailureProviderProtocol, FailureProviderReported, FailureProviderRequest:
 		return "model_invocation"
 	case FailureStreamMalformed, FailureStreamUnsupported, FailureStopReason,
 		FailureStreamDuplicate, FailureStreamAfterFinish, FailureStreamIncomplete, FailureStreamUsage:

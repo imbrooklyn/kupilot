@@ -17,7 +17,7 @@ import (
 	"time"
 
 	agentcore "github.com/imbrooklyn/kupilot/internal/agent"
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
+	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
@@ -573,7 +573,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	tool := &scriptedKubeTool{t: t, base: evalBaseTime, clock: clock, scopeNamespace: scopeNamespace, target: resource, steps: fixture.Steps}
 	guard := &fixtureScopeGuard{scope: scope}
 	sink := &fixtureEventSink{}
-	adapter, err := einoadapter.New(einoadapter.Config{
+	adapter, err := application.NewEinoRuntime(application.EinoConfig{
 		ModelConfiguration: domain.ModelConfiguration{
 			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAI,
@@ -582,7 +582,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 			Model:               "eval-model",
 			ResponseFormat:      domain.ModelResponseFormatPrompt,
 			APIKeySource:        domain.ModelAPIKeySourceRuntime,
-			Temperature:         0.1,
+			Temperature:         evalTemperature(0.1),
 			MaxOutputTokens:     2048,
 			RequestTimeout:      time.Second,
 			StreamingRequired:   true,
@@ -597,7 +597,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	})
 	if err != nil {
 		credential.Destroy()
-		t.Fatalf("einoadapter.New() error = %v", err)
+		t.Fatalf("application.NewEinoRuntime() error = %v", err)
 	}
 	defer adapter.Close()
 	outcome := adapter.Run(context.Background(), input, sink)
@@ -1245,3 +1245,5 @@ func sameStringSet(left, right []string) bool {
 	}
 	return true
 }
+
+func evalTemperature(value float64) *float64 { return &value }

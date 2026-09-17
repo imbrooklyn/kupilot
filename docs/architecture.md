@@ -1,5 +1,14 @@
 # Kupilot Architecture
 
+## Native Eino ownership
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+current Eino ownership and protocol rules. Application directly composes
+Eino ADK; native message types remain private to Application. OpenAI profiles
+explicitly select `chat_completions` or `responses`; omission keeps the existing
+Chat Completions behavior. There is one Agent/Runner per run, no automatic
+protocol selection, retry, fallback, or additional conversation store.
+
 Status: Accepted architecture target for Kupilot `v0.5`.
 
 The checked-in implementation now includes the named-model, stable Eino ADK,
@@ -33,9 +42,9 @@ define the admitted behavior.
 4. `internal/cli` and `internal/tui` are delivery adapters. They use only typed
    Application commands, queries, DTOs, and events. Bubble Tea `Update` and
    `View` perform no business I/O.
-5. `internal/agent/einoadapter` is the sole Eino, model-provider, and model
-   transport boundary. Vendor message, stream, callback, Tool, HTTP, and error
-   types do not escape it.
+5. Application directly composes Eino ADK, native model components and the
+   bounded model transport. Native types remain private to Application; no
+   framework-neutral Agent facade sits between Application and Eino.
 6. `internal/tools` owns strict capability handlers and the narrow Kubernetes
    ports each handler consumes. A handler does not receive a generic client,
    REST request builder, GVR, selector, repository, or executor.
@@ -164,7 +173,7 @@ flowchart TB
     App["internal/application\nuse cases and ports"]
     Domain["internal/domain\npure values"]
     Agent["internal/agent\nrun contracts"]
-    Eino["internal/agent/einoadapter\nEino runtime and model boundary"]
+    Eino["Eino ADK and native model components"]
     Tools["internal/tools\ntyped capabilities"]
     Kube["internal/kube\nclient-go adapters"]
     SQLite["internal/persistence/sqlite\nstorage adapters"]
@@ -173,7 +182,7 @@ flowchart TB
     Root --> CLI
     Root --> TUI
     Root --> App
-    Root --> Eino
+    App --> Eino
     Root --> Tools
     Root --> Kube
     Root --> SQLite
@@ -181,7 +190,7 @@ flowchart TB
     CLI --> App
     TUI --> App
     App --> Domain
-    Eino --> Agent
+    App --> Agent
     Agent --> Domain
     Tools --> Agent
     Tools --> Domain
@@ -204,7 +213,7 @@ Kubernetes, Tool, persistence, approval-service, or executor implementations.
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | Domain | Values, enums, validation, transitions, stable safe classes | I/O, frameworks, clients, SQL, UI state |
-| Application | Session/run/scope use cases, Last active, deletion plans, policy generation, permission routing, preflight, terminal reasons, coverage/recovery, consent, event ordering, `/status`, persistence intent, approval coordination | SDK calls, SQL, terminal rendering, Kubernetes projection |
+| Application | Session/run/scope use cases, Last active, deletion plans, policy generation, permission routing, preflight, terminal reasons, coverage/recovery, consent, event ordering, `/status`, persistence intent, approval coordination, native Eino composition | SQL, terminal rendering, Kubernetes projection |
 | Agent | Immutable run policy, model-role and capability contracts, Evidence-reference validation | A parallel ReAct loop, live scope mutation, client-go, SQLite, TUI state, executor calls |
 | Tools | Strict schemas, canonical arguments, projected results, Evidence construction | Generic Kubernetes access, repositories, TUI, approval authority |
 | Infrastructure | Kubeconfig and client lifecycle, typed Kubernetes calls, model/data-source/process transport, storage mappings | End-to-end product decisions or policy widening |
@@ -221,7 +230,7 @@ sequenceDiagram
     participant TUI
     participant App as Application
     participant Store as Persistence port
-    participant Agent as AgentRunner
+    participant Agent as Application-owned Eino ADK
     participant Model
     participant Tool as Capability handler
     participant Kube as Kubernetes adapter
@@ -267,9 +276,9 @@ one FIFO successor; every unsafe or unknown terminal outcome suppresses
 automatic drain.
 
 The model/Tool middle segment is owned by Eino ADK `ChatModelAgent` and `Runner`
-inside `einoadapter` and repeats within frozen role and capability budgets.
-Application selects eligible ordered same-Session context; the adapter converts
-it once. Kupilot does not run a parallel conversation or ReAct loop. Calls are
+inside Application and repeats within frozen role and capability budgets.
+Application selects eligible ordered same-Session context and translates it
+once into native Eino messages. Kupilot does not run a parallel conversation or ReAct loop. Calls are
 serial unless a later Accepted decision defines an owned bounded coordinator.
 The provisional projector does not interpret response modality or create
 authority. A requested Tool clears text projected from that pre-Tool turn. No
@@ -494,8 +503,7 @@ serializes that setting for structured Agent or Reviewer output; Agent summaries
 remain plain text. Prompt-only mode remains available, and neither mode permits
 capability probing, fallback, or a second request.
 
-The model boundary contains two concrete fixed component constructions, not a
-provider router: `openai` uses Eino OpenAI Chat Completions and `ollama` uses
+The model boundary contains fixed native component constructions: `openai` selects native Chat Completions or Responses explicitly and `ollama` uses
 Eino native Ollama `/api/chat` at an explicit loopback origin. Application
 freezes one selected kind per role. The guarded transport enforces the selected
 path, media type, credential policy, body limits, and redirect policy before
@@ -631,7 +639,7 @@ and its own durable outcome, and any retry requires a fresh envelope.
 Representative contracts are:
 
 ```text
-AgentRunner.Run(ctx, safe Session context, immutable RunInput, RunEventSink)
+EinoRuntime.Run(ctx, immutable RunInput with safe Session context, RunEventSink)
     -> validated Diagnosis or classified terminal error
 
 RunInputBridge.Claim/Commit(ctx, exact run and generation)
@@ -679,7 +687,7 @@ invalid. Kupilot does not add a second conversation loop, memory manager,
 summary engine, or framework-neutral runtime facade.
 
 The run-local input bridge is not a framework-neutral Agent facade. It is the
-narrow consumer port required by the one Eino adapter to claim one steer and
+narrow consumer port required by the Application-owned Eino composition to claim one steer and
 run the Application commit barrier. Application's single queue mutex owns FIFO
 drain, LIFO edit, revisions, invalidation, and the edit-versus-drain race.
 
@@ -790,7 +798,7 @@ Required deterministic checks include:
 Application owns the one-shot plan arm, queue revision mutations, manual
 compaction intent, and pressure projection. Delivery owns only the single-
 composer search interaction, explicit clipboard gesture, and rendering of
-fixed title states. `internal/agent/einoadapter` invokes the same Eino
+fixed title states. `internal/application` invokes the same Eino
 summarization middleware for automatic and manual compaction and freezes plan
 mode into the existing `RunInput`. It remains the only Eino/provider boundary.
 

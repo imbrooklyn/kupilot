@@ -285,7 +285,7 @@ test-integration-contracts:
 	$(GO_CMD) test -tags=integration -count=1 -v ./internal/application ./internal/config -run '^(TestReviewerApplicationIntegrationContract|TestNamedModelRolesIntegrationContract)$$'
 
 test-integration-model:
-	$(GO_CMD) test -tags=integration -count=1 -v ./internal/agent/einoadapter -run '^(TestModelAPIIntegrationDeterministicContract|TestModelAPIIntegrationLive)$$'
+	$(GO_CMD) test -tags=integration -count=1 -v ./internal/application -run '^(TestModelAPIIntegrationDeterministicContract|TestModelAPIIntegrationLive)$$'
 
 test-integration-model-preferred:
 	KUPILOT_INTEGRATION_MODEL_TARGET=preferred $(MAKE) --no-print-directory test-integration-model
@@ -294,16 +294,16 @@ test-integration-model-ollama:
 	KUPILOT_INTEGRATION_MODEL_TARGET=ollama $(MAKE) --no-print-directory test-integration-model
 
 test-integration-session:
-	$(GO_CMD) test -tags=integration -count=1 -v ./internal/application ./internal/agent/einoadapter ./cmd/kupilot -run '^TestSessionContext.*IntegrationContract$$'
+	$(GO_CMD) test -tags=integration -count=1 -v ./internal/application ./cmd/kupilot -run '^TestSessionContext.*IntegrationContract$$'
 
 test-integration-kubernetes:
 	$(GO_CMD) test -tags=integration -count=1 -v ./internal/kube -run '^TestKubernetesIntegration$$'
 
 test-reviewer-eval-offline:
-	$(GO_CMD) test -count=1 -v ./internal/agent/einoadapter -run '^TestReviewerOfflineEvaluation$$'
+	$(GO_CMD) test -count=1 -v ./internal/application -run '^TestReviewerOfflineEvaluation$$'
 
 test-reviewer-eval-live:
-	$(GO_CMD) test -tags=integration -count=1 -v ./internal/agent/einoadapter -run '^TestReviewerLiveEvaluation$$'
+	$(GO_CMD) test -tags=integration -count=1 -v ./internal/application -run '^TestReviewerLiveEvaluation$$'
 
 test-integration: test-integration-contracts test-integration-session test-integration-model test-reviewer-eval-offline test-reviewer-eval-live test-integration-kubernetes
 

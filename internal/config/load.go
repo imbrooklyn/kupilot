@@ -356,6 +356,7 @@ type modelProfileDocument struct {
 	ProviderKind          *string                   `yaml:"provider_kind,omitempty"`
 	Endpoint              *string                   `yaml:"endpoint,omitempty"`
 	Model                 *string                   `yaml:"model,omitempty"`
+	APIProtocol           *string                   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
 	ReasoningEffort       *string                   `yaml:"reasoning_effort,omitempty"`
 	ResponseFormat        *string                   `yaml:"response_format,omitempty"`
 	Temperature           *float64                  `yaml:"temperature,omitempty"`
@@ -393,7 +394,9 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 	}
 	config := Defaults()
 	applyRootDocument(&config, document)
-	config.Models.Agent = applyProfileDocument(defaultAgentProfile(), document.Models.Agent)
+	agentBase := defaultAgentProfile()
+	agentBase.Temperature = nil
+	config.Models.Agent = applyProfileDocument(agentBase, document.Models.Agent)
 	if reviewer := document.Models.ApprovalReviewer; reviewer != nil {
 		if reviewer.Name == nil || reviewer.Role == nil || reviewer.InheritAgent == nil || reviewer.CredentialReference == nil {
 			return Config{}, schemaError("The approval_reviewer profile must explicitly name its role, inheritance choice, and credential reference.")
@@ -402,6 +405,7 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 			return Config{}, schemaError("A non-inheriting approval_reviewer profile must provide every model setting.")
 		}
 		base := defaultReviewerProfile()
+		base.Temperature = nil
 		if *reviewer.InheritAgent {
 			base = config.Models.Agent
 			base.Role = ModelRoleApprovalReviewer
@@ -417,7 +421,7 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 func (profile *modelProfileDocument) complete(requireInheritance bool) bool {
 	return profile != nil && profile.Name != nil && profile.Role != nil && profile.CredentialReference != nil &&
 		(!requireInheritance || profile.InheritAgent != nil) && profile.ProviderKind != nil && profile.Endpoint != nil &&
-		profile.Model != nil && profile.Temperature != nil &&
+		profile.Model != nil &&
 		profile.RequestTimeoutSeconds != nil && profile.Streaming != nil && profile.ToolCallingRequired != nil
 }
 
@@ -523,6 +527,9 @@ func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocu
 	if document.Model != nil {
 		profile.Model = *document.Model
 	}
+	if document.APIProtocol != nil {
+		profile.APIProtocol = *document.APIProtocol
+	}
 	if document.ReasoningEffort != nil {
 		profile.ReasoningEffort = *document.ReasoningEffort
 	}
@@ -530,7 +537,7 @@ func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocu
 		profile.ResponseFormat = *document.ResponseFormat
 	}
 	if document.Temperature != nil {
-		profile.Temperature = *document.Temperature
+		profile.Temperature = document.Temperature
 	}
 	if document.MaxOutputTokens != nil {
 		profile.MaxOutputTokens = *document.MaxOutputTokens
@@ -799,7 +806,7 @@ func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 			return yamlString(value)
 		case "inherit_agent":
 			return yamlScalar(value, "!!bool")
-		case "provider_kind", "endpoint", "model", "reasoning_effort", "response_format":
+		case "provider_kind", "endpoint", "model", "reasoning_effort", "api_protocol", "response_format":
 			return yamlString(value)
 		case "api_key":
 			return allowCredential && yamlString(value)
@@ -1174,7 +1181,7 @@ func applyEnvironment(config *Config, lookup func(string) (string, bool)) error 
 		{[]string{"KUPILOT_AGENT_ENDPOINT", "KUPILOT_MODEL_ENDPOINT"}, environmentString, func(value any) { config.Models.Agent.Endpoint = value.(string) }},
 		{[]string{"KUPILOT_AGENT_MODEL", "KUPILOT_MODEL"}, environmentString, func(value any) { config.Models.Agent.Model = value.(string) }},
 		{[]string{"KUPILOT_AGENT_REASONING_EFFORT", "KUPILOT_MODEL_REASONING_EFFORT"}, environmentString, func(value any) { config.Models.Agent.ReasoningEffort = value.(string) }},
-		{[]string{"KUPILOT_AGENT_TEMPERATURE", "KUPILOT_MODEL_TEMPERATURE"}, environmentFloat, func(value any) { config.Models.Agent.Temperature = value.(float64) }},
+		{[]string{"KUPILOT_AGENT_TEMPERATURE", "KUPILOT_MODEL_TEMPERATURE"}, environmentFloat, func(value any) { temperature := value.(float64); config.Models.Agent.Temperature = &temperature }},
 		{[]string{"KUPILOT_AGENT_MAX_OUTPUT_TOKENS", "KUPILOT_MODEL_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { config.Models.Agent.MaxOutputTokens = value.(int) }},
 		{[]string{"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS", "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { config.Models.Agent.RequestTimeoutSeconds = value.(int) }},
 		{[]string{"KUPILOT_EXEC_CREDENTIALS"}, environmentString, func(value any) { config.Kubernetes.ExecCredentials = value.(string) }},
@@ -1205,7 +1212,7 @@ func applyEnvironment(config *Config, lookup func(string) (string, bool)) error 
 			{[]string{"KUPILOT_APPROVAL_REVIEWER_ENDPOINT"}, environmentString, func(value any) { reviewer.Endpoint = value.(string) }},
 			{[]string{"KUPILOT_APPROVAL_REVIEWER_MODEL"}, environmentString, func(value any) { reviewer.Model = value.(string) }},
 			{[]string{"KUPILOT_APPROVAL_REVIEWER_REASONING_EFFORT"}, environmentString, func(value any) { reviewer.ReasoningEffort = value.(string) }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_TEMPERATURE"}, environmentFloat, func(value any) { reviewer.Temperature = value.(float64) }},
+			{[]string{"KUPILOT_APPROVAL_REVIEWER_TEMPERATURE"}, environmentFloat, func(value any) { temperature := value.(float64); reviewer.Temperature = &temperature }},
 			{[]string{"KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { reviewer.MaxOutputTokens = value.(int) }},
 			{[]string{"KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { reviewer.RequestTimeoutSeconds = value.(int) }},
 		}

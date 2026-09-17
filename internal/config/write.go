@@ -57,10 +57,11 @@ type writableModelProfile struct {
 	ProviderKind          string                   `yaml:"provider_kind"`
 	Endpoint              string                   `yaml:"endpoint"`
 	Model                 string                   `yaml:"model"`
+	APIProtocol           string                   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
 	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty"`
 	ResponseFormat        string                   `yaml:"response_format"`
 	APIKey                string                   `yaml:"api_key,omitempty"`
-	Temperature           float64                  `yaml:"temperature"`
+	Temperature           *float64                 `yaml:"temperature,omitempty"`
 	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty"`
 	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds"`
 	Streaming             bool                     `yaml:"streaming"`
@@ -120,6 +121,12 @@ func SaveModelProfilesWithDataSources(
 		// model-owned default instead of carrying an OpenAI-specific explicit
 		// disable value across provider kinds.
 		base.Models.Agent.ReasoningEffort = ""
+		base.Models.Agent.APIProtocol = ""
+		base.Models.Agent.Streaming = true
+		if base.Models.Agent.Temperature == nil {
+			temperature := 0.1
+			base.Models.Agent.Temperature = &temperature
+		}
 	}
 	base.Models.Agent.Endpoint = profile.Endpoint
 	base.Models.Agent.Origin = ""
@@ -130,6 +137,7 @@ func SaveModelProfilesWithDataSources(
 		reviewer.Endpoint = base.Models.Agent.Endpoint
 		reviewer.Origin = ""
 		reviewer.Model = base.Models.Agent.Model
+		reviewer.APIProtocol = base.Models.Agent.APIProtocol
 		reviewer.ReasoningEffort = base.Models.Agent.ReasoningEffort
 		reviewer.ResponseFormat = base.Models.Agent.ResponseFormat
 		reviewer.Temperature = base.Models.Agent.Temperature
@@ -248,7 +256,7 @@ func writableProfile(profile ModelProfileConfig) writableModelProfile {
 		Name: profile.Name, Role: profile.Role, InheritAgent: profile.InheritAgent,
 		CredentialReference: profile.CredentialReference,
 		ProviderKind:        profile.ProviderKind, Endpoint: profile.Endpoint, Model: profile.Model,
-		ReasoningEffort: profile.ReasoningEffort, ResponseFormat: profile.ResponseFormat, Temperature: profile.Temperature,
+		APIProtocol: profile.APIProtocol, ReasoningEffort: profile.ReasoningEffort, ResponseFormat: profile.ResponseFormat, Temperature: profile.Temperature,
 		MaxOutputTokens: profile.MaxOutputTokens, RequestTimeoutSeconds: profile.RequestTimeoutSeconds,
 		Streaming: profile.Streaming, ToolCallingRequired: profile.ToolCallingRequired,
 	}

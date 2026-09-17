@@ -168,9 +168,10 @@ type ModelProfileConfig struct {
 	Endpoint              string                   `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	Origin                string                   `yaml:"-" json:"origin,omitempty"`
 	Model                 string                   `yaml:"model,omitempty" json:"model,omitempty"`
+	APIProtocol           string                   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
 	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 	ResponseFormat        string                   `yaml:"response_format" json:"response_format"`
-	Temperature           float64                  `yaml:"temperature" json:"temperature"`
+	Temperature           *float64                 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
 	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
 	Streaming             bool                     `yaml:"streaming" json:"streaming"`
@@ -583,9 +584,10 @@ type Overrides struct {
 }
 
 func defaultAgentProfile() ModelProfileConfig {
+	temperature := DefaultModelTemperature
 	return ModelProfileConfig{
 		Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
-		ProviderKind: ProviderOpenAI, Temperature: DefaultModelTemperature,
+		ProviderKind: ProviderOpenAI, Temperature: &temperature,
 		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultModelRequestTimeoutSeconds,
 		Streaming:             true, ToolCallingRequired: true,
@@ -593,10 +595,11 @@ func defaultAgentProfile() ModelProfileConfig {
 }
 
 func defaultReviewerProfile() ModelProfileConfig {
+	temperature := 0.0
 	return ModelProfileConfig{
 		Name: "approval-reviewer", Role: ModelRoleApprovalReviewer,
 		CredentialReference: ModelCredentialApprovalReviewer,
-		ProviderKind:        ProviderOpenAI, Temperature: 0,
+		ProviderKind:        ProviderOpenAI, Temperature: &temperature,
 		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultReviewerTimeoutSeconds,
 		Streaming:             false, ToolCallingRequired: false,

@@ -166,9 +166,14 @@ func (result ModelSetupResult) Validate() error {
 	return nil
 }
 
+// runExecutor is the Coordinator test seam for one supervised run.
+type runExecutor interface {
+	Run(context.Context, agent.RunInput, agent.EventSink) agent.RunOutcome
+}
+
 // ModelRuntime owns one constructed Agent runner and all of its model resources.
 type ModelRuntime interface {
-	agent.AgentRunner
+	runExecutor
 	agent.ContextCompactor
 	Close()
 	ModelName() string

@@ -1606,7 +1606,7 @@ func (sink *recordingUIEvents) events() []UIEvent {
 func newCoordinatorHarness(
 	t *testing.T,
 	clock *coordinatorClock,
-	runner agent.AgentRunner,
+	runner runExecutor,
 ) (*Coordinator, *memoryCoordinatorPersistence, *coordinatorScope, *recordingUIEvents) {
 	t.Helper()
 	persistence := new(memoryCoordinatorPersistence)

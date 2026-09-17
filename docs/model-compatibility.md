@@ -1,5 +1,14 @@
 # Model Compatibility Contract
 
+## Native Eino ownership
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+current Eino ownership and protocol rules. Application directly composes
+Eino ADK; native message types remain private to Application. OpenAI profiles
+explicitly select `chat_completions` or `responses`; omission keeps the existing
+Chat Completions behavior. There is one Agent/Runner per run, no automatic
+protocol selection, retry, fallback, or additional conversation store.
+
 This document defines the two fixed model provider kinds and explicit named-
 profile contract accepted for Kupilot `v0.5`. The checked-in runtime implements the
 required `agent` profile, optional `approval_reviewer` transport seam, Eino ADK
@@ -23,7 +32,7 @@ product label or provider claim.
 
 Kupilot admits exactly two provider kinds, `openai` and `ollama`, while allowing
 the two fixed explicitly configured profiles and canonical origins. `openai`
-uses Eino's OpenAI Chat Completions component. `ollama` uses Eino's native
+selects Eino's native Chat Completions or Responses component explicitly. `ollama` uses Eino's native
 Ollama component at an explicit loopback origin. The fixed consumer roles are
 required `agent` and optional `approval_reviewer`.
 Summarization reuses `agent` with an independent reserved budget; there is no
@@ -40,7 +49,9 @@ Each profile explicitly selects `response_format: prompt` or
 selected Eino component for its JSON-object mode. It is not inferred from the
 origin or model name and never triggers a probe, downgrade, fallback, or retry.
 
-Agent requests remain streamed Chat Completions with structured Tool calls.
+Agent requests use native structured Tool calls. Chat Completions and Ollama
+stream; Responses requires explicit `streaming: false` because the pinned Eino
+stream converter loses encrypted reasoning at item completion (ADR-0061).
 Reviewer requests are separate strict non-streaming, no-Tool requests that may
 return only `approve`, `deny`, or `escalate_to_user` plus a bounded rationale.
 Reviewer failure authorizes nothing and never falls back to the Agent or
@@ -59,9 +70,9 @@ to-token estimate, or old global `8192` value is sufficient evidence.
 
 ## Internal boundary
 
-`internal/agent/einoadapter` is the sole Eino and model-provider boundary.
-Domain, Agent core, Application, Tools, persistence, CLI, and TUI contain no
-HTTP, SSE, Eino, SDK, or provider values. The composition root gives this
+`internal/application` is the sole Eino and model-provider boundary.
+Domain, Agent core, Tools, persistence, CLI, and TUI contain no
+Eino or provider values. Application directly owns ADK and its native models. The composition root gives this
 boundary explicit role-bound model dependencies, opaque credentials, fixed
 Tool handlers, and project-owned run-policy services. It creates no service
 locator or provider router.
@@ -128,9 +139,10 @@ objects, injected authority fields, and sensitive model text remain terminal.
 
 The production model transport uses
 `github.com/cloudwego/eino-ext/components/model/openai` v0.1.13 and
-`github.com/cloudwego/eino-ext/components/model/ollama` v0.1.9 with
-`github.com/cloudwego/eino` v0.9.19. Both components, the ReAct runtime, and the
-hardened `net/http` wrapper are contained in `internal/agent/einoadapter`.
+`github.com/cloudwego/eino-ext/components/model/ollama` v0.1.9, and native
+`agenticopenai v0.2.2`, with `github.com/cloudwego/eino v0.9.19`. The components,
+ReAct runtime, and the
+hardened `net/http` wrapper are contained in `internal/application`.
 
 Those pins are the implemented runtime and the exact tagged source reviewed for
 this slice. Eino v0.9.19 is the exact stable target at commit
@@ -145,7 +157,8 @@ project-owned selection bridge and does not adopt `TurnLoop`, a prerelease
 Session API, or a second runtime.
 
 The reviewed OpenAI extension v0.1.13 source revision is
-`0ebab92e14f26088411dbc440a1ebdc904ccd8a1`; the pinned ACL is v0.1.17 and
+`0ebab92e14f26088411dbc440a1ebdc904ccd8a1`; the current pinned ACL is
+`v0.1.18-0.20260527084435-846f52bd97c6` and
 `go-openai` is v0.1.2. The reviewed stable native Ollama extension v0.1.9
 source revision is `9b7587b89863115eb89f172858fdd3b4de30c3e7`; it uses
 `github.com/eino-contrib/ollama` v0.1.0 at revision
@@ -210,7 +223,8 @@ non-sensitive values:
 - A fixed response format of `prompt` or explicitly endpoint-proved
   `json_object`. The latter constrains structured Agent or Reviewer output but
   never Agent-summary prose.
-- Required streaming and structured Tool-calling flags for `agent`; fixed
+- Structured Tool calling for `agent`; streaming for Chat Completions/Ollama
+  and explicit non-streaming for Responses; fixed
   non-streaming and Tool-free flags for `approval_reviewer`.
 - The fixed transport policy: verified HTTPS or explicit loopback HTTP for
   `openai`; explicit loopback HTTP and no redirect for `ollama`.
@@ -243,7 +257,7 @@ field. The selection is frozen configuration rather than endpoint inference.
 `max_tokens` is present only when typed configuration explicitly sets
 `models.agent.max_output_tokens` from endpoint evidence. When configuration sets
 `models.agent.reasoning_effort: none`, Eino also emits
-`reasoning_effort: "none"`; otherwise that field is absent. The adapter never
+the configured reasoning-effort field; omission leaves it absent. The adapter never
 infers it from a model name or retries based on endpoint error text. Temperature
 is the one fixed, adapter-owned Eino `ExtraFields` entry: its value is the
 validated configuration scalar, not user-provided extension data. This avoids
@@ -344,7 +358,7 @@ preserved; no provider output is repaired. See
 `json_object` selects Ollama's fixed JSON format; `prompt`
 omits it. Unsupported model or format behavior fails the single request.
 An omitted `reasoning_effort` also omits native `think`; explicit `none` sends
-`think: false`. Interactive switching to Ollama chooses the omitted form rather
+`think: false`; `low`, `medium`, and `high` send that native thinking level. Interactive switching to Ollama chooses the omitted form rather
 than carrying an OpenAI-specific explicit disable value into the new provider.
 The adapter does not select a value from the model name or retry a response
 whose Tool behavior is incompatible with the explicit setting.
@@ -377,7 +391,7 @@ protocol fallback, or automatic resend.
 The initial production-call-graph scan found GO-2026-5018 reachable through
 the native client's imported SSH helper at `golang.org/x/crypto` v0.44.0.
 Kupilot therefore pins fixed v0.52.0 plus its minimum compatible `x/net`
-v0.54.0, `x/term` v0.43.0, and `x/text` v0.37.0 requirements. All retain the
+v0.55.0, `x/term` v0.43.0, and `x/text` v0.39.0 requirements. All retain the
 repository's Go 1.25 minimum. The project vulnerability gate must remain
 clean; the fact that Kupilot does not configure an SSH transport is not used to
 waive a reachable dependency finding.
@@ -504,28 +518,28 @@ successful result.
 
 | Behavior | Requirement |
 | --- | --- |
-| OpenAI Chat Completions JSON request | Required for `openai` |
+| OpenAI JSON request | Explicit `chat_completions` or `responses` protocol |
 | Native Ollama `/api/chat` request | Required for `ollama` |
-| SSE streaming | Required for `openai` |
+| SSE streaming | Required for OpenAI Chat Completions; Responses streaming is not admitted |
 | NDJSON streaming | Required for `ollama` |
 | Structured function Tool calls | Required |
 | Strict JSON object Tool schemas | Required |
-| Indexed, fragmented Tool arguments | Required from `openai`; distinct indexes may interleave |
+| Indexed, fragmented Tool arguments | Chat Completions only; distinct indexes may interleave |
 | Complete native Tool argument object | Required from `ollama` |
 | Tool-call identifier and index | Provider-supplied for `openai`; deterministic request-bound adapter values for `ollama` |
 | Provider-specific `strict` Tool flag | Not required and not used as an authority boundary |
 | Tool-argument whitespace and key order | Valid bounded JSON object accepted; canonicalized after strict binding |
 | Commentary accompanying a Tool selection | Accepted only with `tool_calls`; bounded and discarded |
-| Eino-recognized reasoning content | Accepted only as matching, bounded metadata; credential-checked and discarded before assembly |
+| Eino-recognized reasoning | Chat/Ollama display-only metadata is checked and discarded; native Responses reasoning remains ephemeral in the same run |
 | Usage chunk | Optional |
 | `X-Request-ID` response header | Optional |
 | `[DONE]` after a finish reason | Optional; terminal EOF is accepted |
 | Response-format control | Not required and not used as a safety boundary |
-| Non-streaming content response | Unsupported for Agent requests |
+| Non-streaming content response | Required for native Responses; unsupported for other Agent protocols |
 | Multiple response choices | Unsupported |
 | Multiline SSE data records or provider-specific event types | Unsupported |
 | Tool selection encoded in prose or fenced JSON | Unsupported |
-| Responses API | Unsupported |
+| Responses API | Native Eino AgenticMessage and ADK, explicit configuration, no hosted Tools or remote state |
 | Provider auto-detection, fallback, or routing | Unsupported |
 | Anthropic-, Gemini-, or other provider-specific protocols | Unsupported |
 
@@ -602,6 +616,7 @@ the remaining run budget.
 | HTTP 403 | `permission_denied` | No |
 | HTTP 429 | `rate_limited` | Yes, subject to fixed runtime policy |
 | HTTP 5xx or transport unavailability | `unavailable` | Yes, subject to fixed runtime policy |
+| HTTP 400 or 422: request rejected (`model_request_rejected`) | `unsupported` | No; check the explicit model profile |
 | Other HTTP status or unsupported media/finish behavior | `unsupported` | No |
 | Malformed, ambiguous, incomplete, or reordered stream | `invalid_external_response` | No |
 | Request, stream, event, or argument byte limit | `budget_exhausted` | No |
@@ -619,6 +634,11 @@ its typed error wrapper. A generic SDK failure after an accepted HTTP 200 SSE
 response is `invalid_external_response`, not `unavailable`.
 
 ## Endpoint, credential, and logging rules
+
+HTTP request rejection is reported as `model_invocation/provider_request_rejected`,
+separately from unsupported response media or stream behavior. It cannot identify
+the rejected parameter without endpoint-specific evidence. Kupilot never parses
+error prose to change settings or resend a request; see [ADR-0060](adr/0060-distinguish-provider-request-rejection.md).
 
 The endpoint comes only from typed user configuration. Model output, Tool
 arguments, messages, resumed history, and Kubernetes content cannot change it.
@@ -922,3 +942,73 @@ together made 149 model calls and 58 synthetic Tool calls, with zero Kubernetes
 calls. The deterministic regression suite is the correctness authority. Real
 cluster integration, Reviewer evaluation, broad model quality, and release
 evidence: **Not run**.
+
+## Native Responses dependency and fidelity gate
+
+ADR-0061 admits Application-owned native Eino composition with core `v0.9.19`
+and `agenticopenai v0.2.2`. The latter brings OpenAI Go SDK `v3.35.0` and pins
+ACL `v0.1.18-0.20260527084435-846f52bd97c6` transitively; this ACL revision is a
+pseudo-version, not a stable ACL release. The module graph and checksums remain
+explicit in `go.mod` and `go.sum`. Eino and its extensions use Apache-2.0;
+OpenAI Go uses Apache-2.0 and the new Azure SDK/tidwall dependencies use MIT.
+These dependencies do not enable Azure routing or hosted capabilities.
+
+The recording fixture `TestNativeResponsesAgentToolAndFinal` sends native
+reasoning plus a function call, executes one synthetic Tool, and proves that
+Eino sends the encrypted reasoning and paired function result in the next
+request. It also checks `store: false`, disabled truncation, explicit reasoning,
+JSON mode and absence of `previous_response_id`. The separate pinned streaming
+fixture demonstrates upstream loss of `encrypted_content`; it is evidence for
+denying that configuration, not a passing streaming capability claim.
+
+Responses uses `Generate` and therefore has no provisional text projection.
+Failed/incomplete provider statuses, malformed Tools, unsupported content,
+invalid Evidence, expired authority, budget exhaustion and persistence failure
+remain distinct local denials. Model reasoning does not enter durable history.
+The full composition matrix runs both native message protocols with real
+SQLite, synthetic Tools and zero Kubernetes I/O, including resume, steer,
+queue, cancellation, timeout and stale generations.
+
+### Native Responses endpoint observation
+
+A bounded opt-in run on 2026-09-17 used the configured compatible HTTPS origin
+and requested model identifier `gpt-5.6-luna`, native Responses, JSON-object
+output, a 2048-output-token ceiling, and omitted temperature. The first seven
+cases kept reasoning effort omitted; the eighth case explicitly selected
+`medium`. This final suite used the dependency graph with the required
+`x/net` and `x/text` security updates. There was no Kubernetes or live Reviewer access. Every Tool
+result was synthetic, and raw model/Tool/reasoning content was not retained.
+
+| Scenario | Model / Tool calls | Request bytes | Measured input / output tokens | Wall seconds | Structural result |
+| --- | --- | --- | --- | --- | --- |
+| Greeting | 1 / 0 | 53,513 | 10,683 / 53 | 4.802 | PASS |
+| Later-turn identity | 1 / 0 | 53,879 | 10,744 / 56 | 4.798 | PASS |
+| One Tool and current observation | 2 / 1 | 110,245 | 21,748 / 173 | 9.366 | PASS |
+| List, Inspect and final | 3 / 2 | 168,872 | 33,183 / 350 | 16.746 | PASS |
+| Empty result | 2 / 1 | 109,818 | 21,637 / 251 | 10.548 | PASS |
+| Partial result | 2 / 1 | 110,252 | 21,752 / 308 | 11.569 | PASS |
+| Typed clarification | 1 / 0 | 53,597 | 10,699 / 139 | 4.976 | PASS |
+| Explicit medium reasoning with a Tool | 2 / 1 | 110,679 | 21,802 / 394 | 14.786 | PASS |
+
+The explicit reasoning case reported 52 reasoning tokens and two encrypted
+reasoning items. The suite completed in 77.60 seconds: 14 model calls,
+6 synthetic Tool calls, 770,855 request bytes, 152,248 input tokens and
+1,724 output tokens. Estimated standard token cost was USD 0.032518 using the
+[published model prices](https://developers.openai.com/api/docs/models/gpt-5.6-luna),
+without cached-input discounts. This is an estimate for the configured service,
+not its invoice or proof of its backend model identity.
+
+An earlier corrected campaign also passed the same eight scenarios, with the
+explicit reasoning case run separately. It made 14 model calls and 6 synthetic
+Tool calls, with measured usage priced at USD 0.032638. The two successful
+campaigns therefore total USD 0.065156 in estimated standard token cost. Each
+scenario was an explicit independent test; the runtime performed no retry.
+
+Before the configuration correction, two controlled requests with explicit
+temperature 0.1 returned HTTP 400, classified as
+`model_invocation/provider_request_rejected`. The second observation identified
+only fixed parameter-category markers for unsupported temperature. Their usage
+was unavailable. The correction made temperature optional; it did not disable
+reasoning, retry automatically, or repair model output. These observations
+establish compatibility for the tested settings and synthetic tasks, not broad
+model quality, real cluster behavior, or release readiness.

@@ -20,12 +20,15 @@ models:
     role: agent
     credential_ref: agent
     provider_kind: openai
+    # Optional: responses requires streaming: false with the pinned Eino component.
+    api_protocol: chat_completions
     endpoint: https://model.example.invalid/v1
     model: diagnostic-model
     # reasoning_effort: none
     # prompt keeps prompt-only JSON guidance. json_object may be selected only
     # after the exact endpoint is known to support that Chat Completions field.
     response_format: prompt
+    # Omit temperature for OpenAI endpoints that require native sampling defaults.
     temperature: 0.1
     # max_output_tokens is omitted until the selected endpoint has exact
     # evidence. Byte, call, time, stream, and cost-unit limits still apply.

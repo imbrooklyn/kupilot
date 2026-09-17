@@ -1,5 +1,14 @@
 # Kupilot Product Contract
 
+## Native Eino ownership
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+current Eino ownership and protocol rules. Application directly composes
+Eino ADK; native message types remain private to Application. OpenAI profiles
+explicitly select `chat_completions` or `responses`; omission keeps the existing
+Chat Completions behavior. There is one Agent/Runner per run, no automatic
+protocol selection, retry, fallback, or additional conversation store.
+
 - Status: Accepted `v0.5` target
 - Date: 2026-09-07
 
@@ -218,7 +227,7 @@ before I/O, but unsupported or malformed model output still fails closed.
 The exact local capability limitations are recorded in
 [Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
 
-Inside `internal/agent/einoadapter`, stable Eino ADK `ChatModelAgent`, `Runner`,
+Inside `internal/application`, stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware own the framework conversation
 loop. The current stable path uses eligible messages from the existing SQLite
 repository through a thin selection and translation bridge. Runner-managed

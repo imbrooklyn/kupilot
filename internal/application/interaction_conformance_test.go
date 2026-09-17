@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/config"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -37,10 +36,11 @@ type interactionStep struct {
 
 // interactionModel records only synthetic traffic and has no live endpoint.
 type interactionModel struct {
-	mu       sync.Mutex
-	steps    []interactionStep
-	requests []integrationModelRequest
-	bytes    int
+	responses bool
+	mu        sync.Mutex
+	steps     []interactionStep
+	requests  []integrationModelRequest
+	bytes     int
 }
 
 func (model *interactionModel) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -50,6 +50,35 @@ func (model *interactionModel) ServeHTTP(writer http.ResponseWriter, request *ht
 	if err != nil || json.Unmarshal(body, &captured) != nil {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
+	}
+	if model.responses {
+		var native struct {
+			Input []struct {
+				Role    string
+				Content json.RawMessage
+			}
+		}
+		if json.Unmarshal(body, &native) != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, item := range native.Input {
+			if item.Role == "" {
+				continue
+			}
+			var content string
+			if json.Unmarshal(item.Content, &content) != nil {
+				var parts []struct{ Text string }
+				if json.Unmarshal(item.Content, &parts) != nil {
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				for _, part := range parts {
+					content += part.Text
+				}
+			}
+			captured.Messages = append(captured.Messages, integrationModelMessage{Role: item.Role, Content: content})
+		}
 	}
 	model.mu.Lock()
 	index := len(model.requests)
@@ -76,6 +105,23 @@ func (model *interactionModel) ServeHTTP(writer http.ResponseWriter, request *ht
 	}
 	if step.provider == "timeout" {
 		<-request.Context().Done()
+		return
+	}
+	if model.responses {
+		writer.Header().Set("Content-Type", "application/json")
+		if step.provider == "malformed" {
+			_, _ = io.WriteString(writer, "{invalid}")
+			return
+		}
+		output := fmt.Sprintf(`[{"type":"message","id":"msg_fixture","role":"assistant","status":"completed","content":[{"type":"output_text","text":%q,"annotations":[]}]}]`, step.final)
+		if step.tool != "" {
+			arguments := `{"detail":"summary","name":"synthetic-ns","namespace":null,"purpose":"Inspect the synthetic Namespace.","resource_type":"namespaces"}`
+			if step.tool == domain.ToolNameListResources {
+				arguments = `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List synthetic Namespaces.","resource_type":"namespaces"}`
+			}
+			output = fmt.Sprintf(`[{"type":"function_call","id":"fc_%d","call_id":"call-%d","name":%q,"arguments":%q,"status":"completed"}]`, index, index, step.tool, arguments)
+		}
+		_, _ = fmt.Fprintf(writer, `{"id":"resp_fixture","status":"completed","output":%s}`, output)
 		return
 	}
 	writer.Header().Set("Content-Type", "text/event-stream")
@@ -220,7 +266,7 @@ type interactionHarness struct {
 }
 
 type interactionRuntime struct {
-	*einoadapter.Adapter
+	*application.EinoRuntime
 	origin string
 }
 
@@ -229,6 +275,7 @@ func (interactionRuntime) ModelName() string      { return "synthetic-model" }
 func (interactionRuntime) ProfileName() string    { return "agent" }
 
 type interactionScenario struct {
+	responses    bool
 	name         string
 	steps        []interactionStep
 	toolMode     string
@@ -307,7 +354,7 @@ func newInteractionHarness(t *testing.T, scenario interactionScenario) *interact
 		activeScope = scopeManager
 		t.Cleanup(func() { _ = scopeManager.Close() })
 	}
-	model := &interactionModel{steps: scenario.steps}
+	model := &interactionModel{steps: scenario.steps, responses: scenario.responses}
 	server := httptest.NewServer(model)
 	t.Cleanup(server.Close)
 	privacy, err := application.NewPrivacyManager(application.PrivacyManagerConfig{Store: sqlite.NewPrivacyRepository(db), Origin: server.URL, Now: clock.Now})
@@ -320,7 +367,7 @@ func newInteractionHarness(t *testing.T, scenario interactionScenario) *interact
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := einoadapter.New(einoadapter.Config{ModelConfiguration: domain.ModelConfiguration{ProfileName: "agent", Role: domain.ModelRoleAgent, ProviderKind: domain.ModelProviderOpenAI, Endpoint: server.URL + "/v1", Origin: server.URL, Model: "synthetic-model", ResponseFormat: domain.ModelResponseFormatPrompt, APIKeySource: domain.ModelAPIKeySourceRuntime, Temperature: 0.1, MaxOutputTokens: 2048, RequestTimeout: time.Second, StreamingRequired: true, ToolCallingRequired: true, TransportPolicy: domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP}, Credential: &credential, Tools: handlers, ScopeGuard: activeScope, Identifiers: ids, Now: clock.Now})
+	adapter, err := application.NewEinoRuntime(application.EinoConfig{ModelConfiguration: domain.ModelConfiguration{ProfileName: "agent", Role: domain.ModelRoleAgent, ProviderKind: domain.ModelProviderOpenAI, Endpoint: server.URL + "/v1", Origin: server.URL, Model: "synthetic-model", ResponseFormat: domain.ModelResponseFormatPrompt, APIKeySource: domain.ModelAPIKeySourceRuntime, Temperature: integrationTemperature(0.1), MaxOutputTokens: 2048, RequestTimeout: time.Second, StreamingRequired: !scenario.responses, APIProtocol: interactionProtocol(scenario.responses), ToolCallingRequired: true, TransportPolicy: domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP}, Credential: &credential, Tools: handlers, ScopeGuard: activeScope, Identifiers: ids, Now: clock.Now})
 	if err != nil {
 		credential.Destroy()
 		t.Fatal(err)
@@ -335,7 +382,7 @@ func newInteractionHarness(t *testing.T, scenario interactionScenario) *interact
 		limits.ToolRequestTimeout = time.Nanosecond
 	}
 	policies := new(interactionPolicies)
-	configuration := application.CoordinatorConfig{Sessions: sessions, Runs: interactionRunStore{RunPersistence: runs, failBegin: scenario.failBegin, failComplete: scenario.failComplete}, RunInputs: runs, Tools: sqlite.NewToolInvocationRepository(db), Audits: sqlite.NewAuditRepository(db), Scope: activeScope, ModelRuntime: interactionRuntime{Adapter: adapter, origin: server.URL}, Identifiers: ids, AuditIdentifiers: ids, Questions: security.NewRedactor(), Privacy: privacy, RunResourcePolicies: policies, ModelContext: messages, UIEvents: events, Observer: newIntegrationObserver(), Now: clock.Now, BudgetLimits: limits}
+	configuration := application.CoordinatorConfig{Sessions: sessions, Runs: interactionRunStore{RunPersistence: runs, failBegin: scenario.failBegin, failComplete: scenario.failComplete}, RunInputs: runs, Tools: sqlite.NewToolInvocationRepository(db), Audits: sqlite.NewAuditRepository(db), Scope: activeScope, ModelRuntime: interactionRuntime{EinoRuntime: adapter, origin: server.URL}, Identifiers: ids, AuditIdentifiers: ids, Questions: security.NewRedactor(), Privacy: privacy, RunResourcePolicies: policies, ModelContext: messages, UIEvents: events, Observer: newIntegrationObserver(), Now: clock.Now, BudgetLimits: limits}
 	if scenario.resume {
 		service := interactionSessionAdapter{service: sessioncontract.NewService(sessions, sessions, messages, runs, runs)}
 		configuration.UI = &application.CoordinatorUIConfig{Sessions: service, Search: sessions, Titles: service, Startup: service, Scopes: scopeManager, ScopePreferences: sqlite.NewScopePreferenceRepository(db)}
@@ -415,111 +462,129 @@ func TestInteractionCompositionScenarioMatrix(t *testing.T) {
 		{name: "presentation order", steps: []interactionStep{{final: `{"questions":[],"limitations":[],"outcome":"answer","response_schema_version":4,"proposed_actions":[],"evidence_citations":[],"answer_markdown":"Hello from the fixture."}`}}, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
 		{name: "commit failure", steps: []interactionStep{{final: interactionGreeting}}, failComplete: true, wantReason: domain.RunTerminalPersistenceDegraded, wantFailure: domain.FailurePersistence, wantMessages: 1},
 	}
-	for _, scenario := range cases {
-		t.Run(scenario.name, func(t *testing.T) {
-			harness := newInteractionHarness(t, scenario)
-			if scenario.history {
-				_, result := harness.run(t, "\u4f60\u597d")
-				if result.TerminalReason != domain.RunTerminalCompleted {
-					t.Fatalf("greeting = %#v", result)
+	for _, native := range []bool{false, true} {
+		for _, scenario := range cases {
+			if native && (scenario.name == "duplicate provider finish" || scenario.name == "out of order provider event") {
+				continue
+			}
+			scenario.responses = native
+			t.Run(fmt.Sprintf("responses=%t/%s", native, scenario.name), func(t *testing.T) {
+				harness := newInteractionHarness(t, scenario)
+				if scenario.history {
+					_, result := harness.run(t, "\u4f60\u597d")
+					if result.TerminalReason != domain.RunTerminalCompleted {
+						t.Fatalf("greeting = %#v", result)
+					}
 				}
-			}
-			if scenario.plan {
-				outcome, err := harness.coordinator.ExecuteUICommand(context.Background(), application.UICommand{Kind: application.UICommandArmPlan, RequestID: 96})
-				if err != nil || outcome.Failure != "" {
-					t.Fatalf("plan = %#v, %v", outcome, err)
+				if scenario.plan {
+					outcome, err := harness.coordinator.ExecuteUICommand(context.Background(), application.UICommand{Kind: application.UICommandArmPlan, RequestID: 96})
+					if err != nil || outcome.Failure != "" {
+						t.Fatalf("plan = %#v, %v", outcome, err)
+					}
 				}
-			}
-			runID, result := harness.run(t, "\u73b0\u5728\u96c6\u7fa4\u6709\u54ea\u4e9b ns")
-			if result.TerminalReason != scenario.wantReason || result.Diagnostic != scenario.wantFailure {
-				t.Fatalf("terminal = %#v, want %s/%s", result, scenario.wantReason, scenario.wantFailure)
-			}
-			requests := harness.model.snapshot()
-			calls, evidence := harness.tool.snapshot()
-			if len(requests) != len(scenario.steps) || len(calls) != scenario.wantTools {
-				t.Fatalf("model/Tool/Kubernetes calls = %d/%d/0, want %d/%d/0", len(requests), len(calls), len(scenario.steps), scenario.wantTools)
-			}
-			for _, call := range calls {
-				if call.RunID() != runID || call.Scope().Generation != 7 || call.PolicyGeneration() != 1 {
-					t.Fatalf("Tool binding = %#v", call)
+				runID, result := harness.run(t, "\u73b0\u5728\u96c6\u7fa4\u6709\u54ea\u4e9b ns")
+				if result.TerminalReason != scenario.wantReason || result.Diagnostic != scenario.wantFailure {
+					t.Fatalf("terminal = %#v, want %s/%s", result, scenario.wantReason, scenario.wantFailure)
 				}
-			}
-			for index, item := range evidence {
-				wantID := domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 9500+index))
-				if item.ID != wantID || item.Validate() != nil || item.RunID != runID || item.Scope.Generation != 7 || item.PolicyGeneration != 1 {
-					t.Fatalf("Evidence binding = %#v", item)
+				requests := harness.model.snapshot()
+				calls, evidence := harness.tool.snapshot()
+				if len(requests) != len(scenario.steps) || len(calls) != scenario.wantTools {
+					t.Fatalf("model/Tool/Kubernetes calls = %d/%d/0, want %d/%d/0", len(requests), len(calls), len(scenario.steps), scenario.wantTools)
 				}
-			}
-			page, err := harness.messages.ListCommittedBySession(context.Background(), sessioncontract.MessagePageRequest{SessionID: harness.session.ID, Limit: sessioncontract.MaxMessagePageSize})
-			if err != nil || len(page.Messages) != scenario.wantMessages {
-				t.Fatalf("committed Messages = %d, %v, want %d", len(page.Messages), err, scenario.wantMessages)
-			}
-			seen := make(map[domain.MessageID]struct{})
-			for _, message := range page.Messages {
-				if _, duplicate := seen[message.ID]; duplicate {
-					t.Fatal("duplicate committed transcript row")
+				for _, call := range calls {
+					if call.RunID() != runID || call.Scope().Generation != 7 || call.PolicyGeneration() != 1 {
+						t.Fatalf("Tool binding = %#v", call)
+					}
 				}
-				seen[message.ID] = struct{}{}
-				if strings.Contains(message.Content, "evidence_citations") {
-					t.Fatal("wire envelope persisted as transcript")
+				for index, item := range evidence {
+					wantID := domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 9500+index))
+					if item.ID != wantID || item.Validate() != nil || item.RunID != runID || item.Scope.Generation != 7 || item.PolicyGeneration != 1 {
+						t.Fatalf("Evidence binding = %#v", item)
+					}
 				}
-			}
-			terminals := 0
-			wantText := "Synthetic Namespace observations are available."
-			switch scenario.name {
-			case "greeting", "empty result", "unavailable source", "presentation order", "commit failure":
-				wantText = "Hello from the fixture."
-			case "typed clarification":
-				wantText = "More information is needed:\n\n1. Which namespace?\n   - 1: Working namespace\n   - 2: Another namespace"
-			case "plan only":
-				wantText = "## Bounded plan\n\n1. Inspect one admitted resource."
-			}
-			if scenario.wantFailure.Valid() && scenario.wantFailure != domain.FailurePersistence {
-				wantText = scenario.wantFailure.SafeMessage()
-				if scenario.wantFailure == domain.FailureToolTimeout {
-					wantText = "The diagnostic run reached its time limit."
+				page, err := harness.messages.ListCommittedBySession(context.Background(), sessioncontract.MessagePageRequest{SessionID: harness.session.ID, Limit: sessioncontract.MaxMessagePageSize})
+				if err != nil || len(page.Messages) != scenario.wantMessages {
+					t.Fatalf("committed Messages = %d, %v, want %d", len(page.Messages), err, scenario.wantMessages)
 				}
-				if scenario.wantFailure == domain.FailureStreamMalformed {
-					wantText = "The model endpoint returned an invalid response stream."
+				seen := make(map[domain.MessageID]struct{})
+				for _, message := range page.Messages {
+					if _, duplicate := seen[message.ID]; duplicate {
+						t.Fatal("duplicate committed transcript row")
+					}
+					seen[message.ID] = struct{}{}
+					if strings.Contains(message.Content, "evidence_citations") {
+						t.Fatal("wire envelope persisted as transcript")
+					}
 				}
-			}
-			for _, event := range harness.events.Events() {
-				if event.ConversationInput != nil && event.ConversationInput.Status.Queued != 0 {
-					t.Fatal("scenario without queued input created a queued successor")
+				terminals := 0
+				wantText := "Synthetic Namespace observations are available."
+				switch scenario.name {
+				case "greeting", "empty result", "unavailable source", "presentation order", "commit failure":
+					wantText = "Hello from the fixture."
+				case "typed clarification":
+					wantText = "More information is needed:\n\n1. Which namespace?\n   - 1: Working namespace\n   - 2: Another namespace"
+				case "plan only":
+					wantText = "## Bounded plan\n\n1. Inspect one admitted resource."
 				}
-				if event.RunID != runID || !event.Terminal() {
-					continue
+				if scenario.wantFailure.Valid() && scenario.wantFailure != domain.FailurePersistence {
+					wantText = scenario.wantFailure.SafeMessage()
+					if scenario.wantFailure == domain.FailureToolTimeout {
+						wantText = "The diagnostic run reached its time limit."
+					}
+					if scenario.wantFailure == domain.FailureStreamMalformed {
+						wantText = "The model endpoint returned an invalid response stream."
+					}
 				}
-				terminals++
-				if event.Validate() != nil || event.TerminalOutcome == nil || event.TerminalOutcome.Reason != scenario.wantReason || event.TerminalOutcome.Diagnostic != scenario.wantFailure {
-					t.Fatalf("terminal TUI projection = %#v", event)
+				for _, event := range harness.events.Events() {
+					if event.ConversationInput != nil && event.ConversationInput.Status.Queued != 0 {
+						t.Fatal("scenario without queued input created a queued successor")
+					}
+					if event.RunID != runID || !event.Terminal() {
+						continue
+					}
+					terminals++
+					if event.Validate() != nil || event.TerminalOutcome == nil || event.TerminalOutcome.Reason != scenario.wantReason || event.TerminalOutcome.Diagnostic != scenario.wantFailure {
+						t.Fatalf("terminal TUI projection = %#v", event)
+					}
+					if event.Text != wantText {
+						t.Fatalf("unsafe or inaccurate terminal message = %q", event.Text)
+					}
 				}
-				if event.Text != wantText {
-					t.Fatalf("unsafe or inaccurate terminal message = %q", event.Text)
+				if terminals != 1 {
+					t.Fatalf("terminal rows = %d, want 1", terminals)
 				}
-			}
-			if terminals != 1 {
-				t.Fatalf("terminal rows = %d, want 1", terminals)
-			}
-			frame := renderIntegrationUI(harness.events.Events())
-			// The ordinary narrow row intentionally elides provenance metadata.
-			// Inspect a wide frame as well to assert its complete terminal value.
-			wideFrame := renderIntegrationUI(harness.events.Events(), 2048)
-			if !strings.Contains(wideFrame, "Result: "+strings.ReplaceAll(string(scenario.wantReason), "_", " ")) {
-				t.Fatal("TUI did not render the exact terminal state")
-			}
-			if strings.Contains(frame, "evidence_citations") || strings.Contains(frame, "synthetic-conformance-credential") || strings.Contains(frame, "http://") {
-				t.Fatal("TUI exposed wire or endpoint content")
-			}
-			if scenario.history {
-				assertHistoricalResponseProtocol(t, requests[1], "\u73b0\u5728\u96c6\u7fa4\u6709\u54ea\u4e9b ns")
-			}
-		})
+				frame := renderIntegrationUI(harness.events.Events())
+				// The ordinary narrow row intentionally elides provenance metadata.
+				// Inspect a wide frame as well to assert its complete terminal value.
+				wideFrame := renderIntegrationUI(harness.events.Events(), 2048)
+				if !strings.Contains(wideFrame, "Result: "+strings.ReplaceAll(string(scenario.wantReason), "_", " ")) {
+					t.Fatal("TUI did not render the exact terminal state")
+				}
+				if strings.Contains(frame, "evidence_citations") || strings.Contains(frame, "synthetic-conformance-credential") || strings.Contains(frame, "http://") {
+					t.Fatal("TUI exposed wire or endpoint content")
+				}
+				if scenario.history {
+					assertHistoricalResponseProtocol(t, requests[1], "\u73b0\u5728\u96c6\u7fa4\u6709\u54ea\u4e9b ns")
+				}
+			})
+		}
 	}
 }
 
+func interactionProtocol(native bool) domain.ModelAPIProtocol {
+	if native {
+		return domain.ModelAPIProtocolResponses
+	}
+	return domain.ModelAPIProtocolChatCompletions
+}
+
 func TestInteractionCompositionPrecommitFailureMakesZeroRuntimeCalls(t *testing.T) {
-	harness := newInteractionHarness(t, interactionScenario{failBegin: true})
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", native), func(t *testing.T) { testInteractionPrecommit(t, native) })
+	}
+}
+func testInteractionPrecommit(t *testing.T, native bool) {
+	harness := newInteractionHarness(t, interactionScenario{responses: native, failBegin: true})
 	_, err := harness.coordinator.StartRun(context.Background(), application.StartRunCommand{SessionID: harness.session.ID, Question: "A bounded question."})
 	if !errors.Is(err, application.ErrPersistenceUnavailable) {
 		t.Fatalf("precommit error = %v", err)
@@ -533,3 +598,5 @@ func TestInteractionCompositionPrecommitFailureMakesZeroRuntimeCalls(t *testing.
 		t.Fatalf("precommit ghost Messages = %d, %v", len(page.Messages), err)
 	}
 }
+
+func integrationTemperature(value float64) *float64 { return &value }

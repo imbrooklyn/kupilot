@@ -463,3 +463,11 @@ questions instead.
 See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract
 and verification boundaries.
+
+## Native Responses run state
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) permits bounded native
+reasoning items only in current-run Application/Eino state and requests to the
+same consented model destination. These protocol items carry no authority and
+never enter TUI, logs, SQLite, export, or resumed history. Responses requests
+disable provider storage, automatic caching, truncation, and SDK retries.

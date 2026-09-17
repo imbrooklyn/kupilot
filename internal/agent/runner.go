@@ -473,13 +473,6 @@ func WithRunMode(input RunInput, mode RunMode) (RunInput, error) {
 // Application before the run goroutine starts.
 func (input RunInput) Steering() RunSteeringBridge { return input.steering }
 
-// AgentRunner is the active consumer-owned single-run port. Implementations
-// block until exactly one terminal outcome, honor ctx, and publish only
-// project-owned ordered events. Production composition binds einoadapter.
-type AgentRunner interface {
-	Run(context.Context, RunInput, EventSink) RunOutcome
-}
-
 // RunScopeGuard is the Application-supplied freshness gate for the immutable
 // ClusterScope. Implementations return false without performing model or Tool
 // I/O when the exact scope generation is no longer current.
@@ -495,7 +488,7 @@ type RunIdentifierSource interface {
 	NewDiagnosisID() (domain.DiagnosisID, error)
 }
 
-// RunOutcome is the sole synchronous terminal value returned by AgentRunner.
+// RunOutcome is the sole synchronous terminal value returned by Application.
 // Raw adapter and framework errors are intentionally absent.
 type RunOutcome struct {
 	Diagnostic  domain.InteractionFailure

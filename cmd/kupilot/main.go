@@ -16,7 +16,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/approval"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
@@ -339,9 +338,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 				}
 				reviewerSecret = &clone
 			}
-			reviewer, reviewerErr := einoadapter.NewReviewer(einoadapter.ReviewerConfig{
+			reviewer, reviewerErr := application.NewReviewer(application.ReviewerConfig{
 				ModelConfiguration: modelConfiguration(*reviewerProfile), Credential: reviewerSecret,
-				Logger: logger, Diagnostics: einoadapter.DiagnosticOptions{Sensitive: loaded.Logging.SensitiveDiagnostics},
+				Logger: logger, Diagnostics: application.DiagnosticOptions{Sensitive: loaded.Logging.SensitiveDiagnostics},
 			})
 			if reviewerErr != nil {
 				if reviewerSecret != nil {
@@ -1135,6 +1134,12 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 	if request.ProviderKind == domain.ModelProviderOllama {
 		settings.Models.Agent.CredentialReference = config.ModelCredentialNone
 		settings.Models.Agent.ReasoningEffort = ""
+		settings.Models.Agent.APIProtocol = ""
+		settings.Models.Agent.Streaming = true
+		if settings.Models.Agent.Temperature == nil {
+			temperature := 0.1
+			settings.Models.Agent.Temperature = &temperature
+		}
 	}
 	settings.Models.Agent.Endpoint = request.Endpoint
 	settings.Models.Agent.Origin = ""
@@ -1150,11 +1155,11 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		}
 		credential = &value
 	}
-	agentAdapter, err := einoadapter.New(einoadapter.Config{
+	agentAdapter, err := application.NewEinoRuntime(application.EinoConfig{
 		ModelConfiguration: modelConfiguration(settings.Models.Agent),
 		Credential:         credential,
 		Logger:             factory.logger,
-		Diagnostics:        einoadapter.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
+		Diagnostics:        application.DiagnosticOptions{Sensitive: settings.Logging.SensitiveDiagnostics},
 		Tools:              factory.tools,
 		ScopeGuard:         factory.scope,
 		Identifiers:        factory.identifiers,
@@ -1166,11 +1171,7 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		}
 		return nil, err
 	}
-	return &compositionModelRuntime{
-		agent:   agentAdapter,
-		profile: settings.Models.Agent.Name,
-		name:    settings.Models.Agent.Model, origin: settings.Models.Agent.Origin,
-	}, nil
+	return agentAdapter, nil
 }
 
 type compositionModelProfileWriter struct {
@@ -1202,68 +1203,6 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 	return config.SaveModelProfilesWithDataSources(ctx, writer.paths, writer.base, config.ModelProfile{
 		ProviderKind: string(request.ProviderKind), Endpoint: request.Endpoint, Model: request.Model,
 	}, credential, writer.reviewerFileCredential, writer.prometheusFileCredential, writer.lokiFileCredential)
-}
-
-type compositionModelRuntime struct {
-	once    sync.Once
-	agent   *einoadapter.Adapter
-	profile string
-	name    string
-	origin  string
-}
-
-func (runtime *compositionModelRuntime) Run(
-	ctx context.Context,
-	input agent.RunInput,
-	sink agent.EventSink,
-) agent.RunOutcome {
-	if runtime == nil || runtime.agent == nil {
-		return agent.RunOutcome{}
-	}
-	return runtime.agent.Run(ctx, input, sink)
-}
-
-func (runtime *compositionModelRuntime) Compact(
-	ctx context.Context,
-	input agent.ManualCompactionInput,
-	sink agent.ManualCompactionEventSink,
-) (agent.ManualCompactionResult, error) {
-	if runtime == nil || runtime.agent == nil {
-		return agent.ManualCompactionResult{}, agent.ErrInvalidManualCompaction
-	}
-	return runtime.agent.Compact(ctx, input, sink)
-}
-
-func (runtime *compositionModelRuntime) Close() {
-	if runtime == nil {
-		return
-	}
-	runtime.once.Do(func() {
-		if runtime.agent != nil {
-			runtime.agent.Close()
-		}
-	})
-}
-
-func (runtime *compositionModelRuntime) ModelName() string {
-	if runtime == nil {
-		return ""
-	}
-	return runtime.name
-}
-
-func (runtime *compositionModelRuntime) Origin() string {
-	if runtime == nil {
-		return ""
-	}
-	return runtime.origin
-}
-
-func (runtime *compositionModelRuntime) ProfileName() string {
-	if runtime == nil {
-		return ""
-	}
-	return runtime.profile
 }
 
 func applicationSecret(secret *config.SecretValue) (*application.ModelSetupSecret, error) {
@@ -1308,7 +1247,7 @@ type runtimeComposition struct {
 	sourceCredentials []*config.SecretValue
 	prometheus        *observability.PrometheusClient
 	loki              *observability.LokiClient
-	reviewer          *einoadapter.Reviewer
+	reviewer          *application.Reviewer
 	closed            bool
 }
 
@@ -1445,10 +1384,10 @@ func modelConfiguration(value config.ModelProfileConfig) domain.ModelConfigurati
 		ProfileName: value.Name, Role: domain.ModelRole(value.Role),
 		ProviderKind: domain.ModelProviderKind(value.ProviderKind),
 		Endpoint:     value.Endpoint, Origin: value.Origin, Model: value.Model,
-		APIKeySource:    apiKeySource,
-		ReasoningEffort: domain.ModelReasoningEffort(value.ReasoningEffort),
-		ResponseFormat:  domain.ModelResponseFormat(value.ResponseFormat),
-		Temperature:     value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
+		APIKeySource: apiKeySource,
+		APIProtocol:  domain.ModelAPIProtocol(value.APIProtocol), ReasoningEffort: domain.ModelReasoningEffort(value.ReasoningEffort),
+		ResponseFormat: domain.ModelResponseFormat(value.ResponseFormat),
+		Temperature:    value.Temperature, MaxOutputTokens: value.MaxOutputTokens,
 		RequestTimeout:    time.Duration(value.RequestTimeoutSeconds) * time.Second,
 		StreamingRequired: value.Streaming, ToolCallingRequired: value.ToolCallingRequired,
 		TransportPolicy: transportPolicy,

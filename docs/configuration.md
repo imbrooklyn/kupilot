@@ -74,9 +74,19 @@ and structured Tool compatibility is checked by the first consented model
 request; Kupilot does not probe, auto-detect, route, or fall back to another
 provider.
 
+For OpenAI, `models.agent.api_key` is the file credential field and
+`credential_ref: agent` binds it to the Agent. The transport sends it only as a
+Bearer Authorization header. An HTTP 400 or 422 is a request rejection, not proof
+that this field name or the credential is wrong. Check the endpoint's supported
+combination of model, protocol, reasoning, sampling, response format, and
+function calling. For native Responses reasoning, select `api_protocol:
+responses` with `streaming: false`. Omit temperature when the endpoint requires
+its sampling default. Explicit settings are never silently removed after an
+error, and reasoning is never disabled automatically.
+
 The loaded configuration always contains one named `agent` profile and may
 contain one `approval_reviewer` profile. Each profile explicitly binds one
-`openai` Chat Completions or native loopback `ollama` model identifier,
+`openai` Chat Completions/Responses or native loopback `ollama` model identifier,
 canonical origin, exact credential policy, finite limits, and exactly one
 consumer role. A Reviewer may inherit
 the Agent origin and selected settings, use the same origin with another model,
@@ -180,6 +190,14 @@ notifications remain disabled; there is no notification command, external
 clipboard helper, deletion bypass, retry, continuation, cache TTL, dynamic
 command, or per-run budget selector.
 
+## Native protocol selection
+
+Under [ADR-0061](adr/0061-use-eino-directly-in-application.md), OpenAI profiles
+may set `api_protocol: responses` with `streaming: false` to use the native
+Eino Responses component.
+Omission retains `chat_completions`. Native Ollama does not accept this setting.
+Reasoning effort remains explicit and is never disabled as a fallback.
+
 ## Implemented version 1 fields
 
 The complete YAML schema is shown in
@@ -203,12 +221,13 @@ an actual key so it remains safe to copy and inspect.
 | `models.agent.endpoint` | Required key and may be empty until interactive setup. `openai` requires HTTPS except for explicit loopback HTTP. Native `ollama` requires explicit loopback HTTP and uses the configured server base without `/v1` or `/api/chat`. |
 | `models.agent.model` | Required key and may be empty until interactive setup; non-empty values are 1–128 admitted ASCII bytes. Endpoint and model must be either both empty or both non-empty. |
 | `models.agent.api_key` | Optional plaintext OpenAI credential extracted before ordinary typed configuration decode. It is forbidden for `ollama`. |
-| `models.agent.reasoning_effort` | Omitted by default; `none` is the only admitted explicit value. For native Ollama, omission leaves `think` absent while `none` sends `think: false`. Interactive provider switching selects omission because it does not ask a separate reasoning question. |
+| `models.agent.api_protocol` | OpenAI: omitted or `chat_completions` preserves the existing API; `responses` selects native Responses. Ollama requires omission. No automatic negotiation. |
+| `models.agent.reasoning_effort` | Omitted preserves the provider default. OpenAI accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` as explicit settings; the endpoint must support the selection. Ollama accepts omitted, `none`, `low`, `medium`, or `high`. `none` disables thinking; other levels remain native. |
 | `models.agent.response_format` | Effective fixed value `prompt` or `json_object`; omission resolves to `prompt`. `json_object` selects the provider's fixed JSON-object response constraint only when the exact endpoint has proved support. It never enables probing, fallback, or retry. |
-| `models.agent.temperature` | Required; accepted range `0` through `0.2`. Explicit `0` is sent to the provider, including native Ollama; it does not mean omission or a server-selected default. |
+| `models.agent.temperature` | OpenAI: optional; omit to preserve provider sampling defaults. Explicit values from 0 through 0.2 are sent unchanged, including zero. Ollama requires an explicit value. Null is rejected. |
 | `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
 | `models.agent.request_timeout_seconds` | Required; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
-| `models.agent.streaming` | Required fixed value `true`. |
+| `models.agent.streaming` | `true` for Chat Completions and Ollama; explicit `false` for Responses while the pinned native streaming converter loses encrypted reasoning. |
 | `models.agent.tool_calling_required` | Required fixed value `true`. |
 | `models.approval_reviewer` | Optional typed profile. `name`, `role: approval_reviewer`, `inherit_agent`, and `credential_ref` are always explicit. A non-inheriting profile supplies every non-secret model field. The resolved Reviewer is fixed non-streaming and Tool-free. Its `response_format` has the same explicit `prompt` or `json_object` contract. |
 | `models.approval_reviewer.api_key` | Optional plaintext key only when `credential_ref: approval_reviewer`; it conflicts with `credential_ref: agent`. |

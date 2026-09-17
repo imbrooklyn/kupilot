@@ -75,7 +75,7 @@ failure. Tool/Evidence metadata already accepted cannot authorize an answer.
 | Submit / start | Existing `QuestionStartFailureReason` below | Reject before start; recover the editor using the typed recovery action | `0/0/0` | none |
 | Request preflight | `request_preflight_rejected` | Reject input/consent/reservation mismatch before the next content request; review current consent or policy | prefix | input |
 | Retained context | `retained_context_rejected`, `summary_response_rejected` | Reject incomplete coverage, invalid history translation or unsafe/invalid summary; no current-question-only fallback | prefix | input; last summary unchanged |
-| Model invocation | `provider_transport_failed`, `provider_protocol_unsupported`, `provider_reported_failure` | Fixed transport class/code, unsupported profile, or native error record; inspect local doctor/configuration before an explicit question | prefix, at most one attempt per invocation | input |
+| Model invocation | `provider_transport_failed`, `provider_request_rejected`, `provider_protocol_unsupported`, `provider_reported_failure` | Fixed transport class/code, HTTP 400/422 request rejection, unsupported profile, or native error record; inspect local doctor/configuration before an explicit question | prefix, at most one attempt per invocation | input |
 | Stream assembly | `stream_malformed`, `stream_event_unsupported` | Reject invalid JSON/UTF-8, unsupported message shape, or an untyped provider failure; no reconstruction or reattachment | prefix | input |
 | Stream ordering / stop | `stream_finish_duplicate`, `stream_event_after_finish`, `stream_finish_missing`, `stream_usage_invalid`, `provider_stop_reason_invalid` | Reject duplicate/out-of-order/incomplete finish, inconsistent usage or unknown finish; exact finish and optional one usage record are allowed | prefix | input |
 | Tool selection | `tool_call_malformed`, `tool_policy_denied`, `tool_pairing_rejected` | Reject malformed closed arguments, hard policy, repeated/cross-bound request IDs or changed bound arguments; no handler call for rejected batch | prefix; rejected Tool adds `0/0` | input |
@@ -89,10 +89,10 @@ failure. Tool/Evidence metadata already accepted cannot authorize an answer.
 | Application event acceptance | `application_event_rejected` | Reject wrong identity, sequence, pairing or terminal state; no second terminal event | prefix | input |
 | Internal invariant | `internal_invariant_failed` | Reject invalid local IDs, clocks, generated state or an adapter returning without an accepted terminal; inspect doctor | prefix | input |
 
-The native `provider_reported_failure` observer recognizes only the typed
-non-empty NDJSON `error` field. It does not inspect the error wording. Unknown
-errors remain fail-closed and are not retrospectively attributed to that field
-without evidence. The original fixed `ModelErrorCode` and `SafeErrorClass`
+For native Ollama, `provider_reported_failure` recognizes the typed non-empty
+NDJSON `error` field. Native Responses uses the decoded `failed` or `cancelled`
+response status. Neither path inspects error wording. Unknown errors remain
+fail-closed and are not retrospectively attributed without evidence. The original fixed `ModelErrorCode` and `SafeErrorClass`
 continue to distinguish transport authentication, rate limit, timeout, redirect,
 media, budget and protocol results inside the adapter.
 
@@ -202,7 +202,7 @@ repository.
 | Package | Before | After |
 | --- | --- | --- |
 | `internal/agent` | 74.0% | 78.4% |
-| `internal/agent/einoadapter` | 78.6% | 81.6% |
+| `internal/application` | 78.6% | 81.6% |
 | `internal/application` | 70.8% | 71.9% |
 | `internal/tui` | 76.4% | 76.4% |
 
@@ -238,7 +238,7 @@ Tool arguments. Provider failures remain failures without automatic retries.
 
 For this correction, Go 1.25.13 statement coverage was measured before changes
 at `d11c634c6635440c5784b2fca898b074beac2e1c` and after the correction using
-temporary profiles. `internal/agent/einoadapter` increased from 81.6% to 82.2%;
+temporary profiles. `internal/application` increased from 81.6% to 82.2%;
 both functions in `ollama_request.go` reached 100% statement coverage. The
 other measured packages stayed at 78.4% (`agent`), 71.9% (`application`), and
 76.8% (`tui`). This is statement coverage; the decision table above is a
@@ -272,7 +272,7 @@ restoration grants no authority and schedules no additional call. Failure
 persistence and queue rules are unchanged from the matrix above.
 
 Fresh Go 1.25.13 statement coverage for this schema correction increased
-`internal/agent/einoadapter` from **82.2% to 82.8%**. Together with ADR-0058 the
+`internal/application` from **82.2% to 82.8%**. Together with ADR-0058 the
 change from the clean base is **81.6% to 82.8%**. Both new production files,
 `ollama_request.go` and `ollama_catalog.go`, have **100% statement coverage**,
 including every explicit error-return statement. `agent` remains **78.4%**,
@@ -296,3 +296,39 @@ integration or semantic answer quality. Opt-in bounded local Ollama conformance
 records only version/model/scenario, call and byte/usage counts, wall time, and
 typed structural outcomes. Release evidence and real-model quality evaluation
 are separate and cannot be inferred from either fixture class.
+
+## Application-owned native Eino decisions
+
+ADR-0061 moves the existing Eino boundary into Application and admits a second
+explicit native OpenAI API. The two configurations share the same Application
+pipeline and safety controls; one Agent/Runner is constructed for each run.
+No second loop is used to recover a failed request.
+
+| Decision | Allow / deny evidence |
+| --- | --- |
+| Protocol and sampling admission | `TestNativeModelProtocolAndOptionalTemperatureConfiguration`: existing Chat defaults, Responses non-streaming, omitted OpenAI temperature; streaming mismatch, unknown/duplicate/null protocol and null temperature denied |
+| Configuration persistence and provider switch | `TestSaveNativeResponsesProfilePreservesOmissionAndReasoning`: native fields and omitted sampling round trip; explicit Ollama setup restores its required native fields |
+| Reasoning and Tool state | `TestNativeResponsesAgentToolAndFinal`: exactly two native model calls, one synthetic Tool, encrypted reasoning and correlated Tool output retained in the second request |
+| Pinned upstream streaming loss | `TestNativeResponsesPinnedStreamingReasoningLimitation`: demonstrate missing encrypted content and reject streaming Responses configuration before a model call |
+| Provider terminal admission | `TestNativeResponsesRejectsUnsafeTerminalBeforeTools`: missing/unknown status, reported failure, unspecified/content-filter incomplete state, contradictory completion, and duplicate calls terminate with exact typed reasons and zero Tool calls |
+| Native message bytes and sensitive fields | `TestNativeResponsesTerminalLimitsAndCredentialProjection`: exact limit / one-over; decoded quoted credentials in reasoning or Tool metadata denied; `TestNativeResponsesOpaqueMetadataCannotHideEscapedCredential` covers encoded SDK metadata |
+| Native summary and commit barrier | `TestNativeResponsesSummaryAndCommitBarrier`: Eino summary retains bounded history and current input; transport, sensitive output and persistence rejection prevent the main model call |
+| Native Tool-free review | `TestNativeResponsesReviewerIsToolFree`: one non-streaming native request, no Tools or sampling override, strict result projection and invalid-risk rejection |
+| Eino iteration budget | `TestNativeEinoIterationLimitIsBudgetStop`: the SDK sentinel preserves its cause and maps to the local model-call budget stop |
+| End-to-end outcomes, history and rendering | Both protocols run `TestInteractionCompositionScenarioMatrix`, including greeting, List/Inspect, empty/partial/unavailable data, Evidence references, clarification, plan mode and final persistence failure |
+| End-to-end lifecycle and queue | Both protocols run cancellation/timeout/staleness, explicit resume, multi-boundary steer/queue, and precommit-failure composition tests with exact calls and committed rows |
+
+The composition suite has 56 protocol/scenario combinations. Native Responses
+uses JSON generation, so the two SSE-only event-order cases apply only to Chat
+Completions. Existing native Ollama request, Tool-schema and stream-order
+regressions remain in the merged Application package. These are deterministic
+structural tests with synthetic Tools and zero real Kubernetes access.
+
+Statement coverage measured from the pre-change HEAD archive and the refactored
+worktree was Agent 78.4% before/after, TUI 76.8% before/after, and Application
+71.9% plus the former adapter 82.8% before, versus merged Application 74.9%
+after. For a comparable combined population, Application plus Eino increased
+from 8,414/11,312 statements (74.38%) to 8,680/11,587 (74.91%). Package moves
+change the denominator. Go reports statement coverage, not native branch
+coverage; the decision table is a separate review aid, not a percentage or a
+claim of exhaustive model-output exploration.

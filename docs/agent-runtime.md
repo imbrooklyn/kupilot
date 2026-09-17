@@ -1,8 +1,17 @@
 # Agent Runtime
 
+## Native Eino ownership
+
+[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+current Eino ownership and protocol rules. Application directly composes
+Eino ADK; native message types remain private to Application. OpenAI profiles
+explicitly select `chat_completions` or `responses`; omission keeps the existing
+Chat Completions behavior. There is one Agent/Runner per run, no automatic
+protocol selection, retry, fallback, or additional conversation store.
+
 Kupilot runs one supervised AgentRun at a time. Stable Eino ADK
 `ChatModelAgent`, `Runner`, message state, Tool-message pairing, and
-summarization middleware are confined to `internal/agent/einoadapter`; the rest
+summarization middleware are confined to `internal/application`; the rest
 of the system sees project-owned Session context, run inputs, events, bound
 capabilities, Evidence, ActionEnvelopes, outcomes, and safe errors.
 Application separately owns active-run input identity, queue state,

@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,12 @@ func (harness *interactionHarness) assertTerminal(t *testing.T, runID domain.Age
 }
 
 func TestInteractionCompositionCancellationTimeoutAndStaleness(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", native), func(t *testing.T) { testInteractionCancellationTimeoutAndStaleness(t, native) })
+	}
+}
+
+func testInteractionCancellationTimeoutAndStaleness(t *testing.T, native bool) {
 	for _, mode := range []string{"cancel", "timeout", "scope", "policy", "transport"} {
 		t.Run(mode, func(t *testing.T) {
 			entered, release := make(chan struct{}), make(chan struct{})
@@ -136,7 +143,7 @@ func TestInteractionCompositionCancellationTimeoutAndStaleness(t *testing.T) {
 				step.provider = mode
 				step.release = nil
 			}
-			harness := newInteractionHarness(t, interactionScenario{steps: []interactionStep{step}})
+			harness := newInteractionHarness(t, interactionScenario{responses: native, steps: []interactionStep{step}})
 			runID, err := harness.coordinator.StartRun(context.Background(), application.StartRunCommand{SessionID: harness.session.ID, Question: "A bounded question."})
 			if err != nil {
 				t.Fatal(err)
@@ -190,7 +197,13 @@ func TestInteractionCompositionCancellationTimeoutAndStaleness(t *testing.T) {
 }
 
 func TestInteractionCompositionExplicitResumeThenTool(t *testing.T) {
-	harness := newInteractionHarness(t, interactionScenario{resume: true, steps: []interactionStep{{final: interactionGreeting}, {tool: domain.ToolNameListResources}, {final: interactionFinal(interactionClaim(0, "The resumed Namespace is Active."))}}})
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", native), func(t *testing.T) { testInteractionExplicitResumeThenTool(t, native) })
+	}
+}
+
+func testInteractionExplicitResumeThenTool(t *testing.T, native bool) {
+	harness := newInteractionHarness(t, interactionScenario{responses: native, resume: true, steps: []interactionStep{{final: interactionGreeting}, {tool: domain.ToolNameListResources}, {final: interactionFinal(interactionClaim(0, "The resumed Namespace is Active."))}}})
 	_, first := harness.run(t, "Hello.")
 	if first.TerminalReason != domain.RunTerminalCompleted {
 		t.Fatalf("first = %#v", first)
@@ -229,6 +242,12 @@ func TestInteractionCompositionExplicitResumeThenTool(t *testing.T) {
 }
 
 func TestInteractionCompositionSteersAcrossBoundariesAndQueueDrain(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", native), func(t *testing.T) { testInteractionSteersAcrossBoundariesAndQueueDrain(t, native) })
+	}
+}
+
+func testInteractionSteersAcrossBoundariesAndQueueDrain(t *testing.T, native bool) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "commit and drain", true: "reject and recover"}[fail], func(t *testing.T) {
 			firstEntered, firstRelease := make(chan struct{}), make(chan struct{})
@@ -242,7 +261,7 @@ func TestInteractionCompositionSteersAcrossBoundariesAndQueueDrain(t *testing.T)
 			if !fail {
 				steps = append(steps, interactionStep{final: interactionGreeting, entered: nextEntered, release: nextRelease})
 			}
-			harness := newInteractionHarness(t, interactionScenario{steps: steps})
+			harness := newInteractionHarness(t, interactionScenario{responses: native, steps: steps})
 			runID, err := harness.coordinator.StartRun(context.Background(), application.StartRunCommand{SessionID: harness.session.ID, Question: "List and inspect the synthetic Namespace."})
 			if err != nil {
 				t.Fatal(err)

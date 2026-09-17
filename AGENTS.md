@@ -183,8 +183,10 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
 - `internal/cli` and `internal/tui` MUST remain delivery adapters and depend on
   Application commands, queries, DTOs, and events. They MUST NOT call model,
   Eino, Kubernetes, Tool, persistence, Reviewer, or executor implementations.
-- `internal/agent/einoadapter` MUST be the only Eino, provider, message, Tool,
-  callback, stream, and transport boundary. No Eino/provider type may escape.
+- `internal/application` MUST directly compose Eino ADK and native model
+  components under ADR-0061. Eino/provider types MUST NOT enter Domain,
+  delivery, Tools, Kubernetes, or persistence. MUST NOT recreate an Agent
+  facade or the removed `internal/agent/einoadapter` package.
 - `internal/tools` MUST own strict capability handlers and the narrow ports
   they consume. Handlers MUST NOT import TUI, Application orchestration,
   repositories, persistence, Eino, or a generic Kubernetes/process client.
@@ -203,7 +205,7 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
 
 - MUST directly reuse stable Eino ADK `ChatModelAgent`, `Runner`, message state,
   Tool-message pairing, ReAct iteration/events, and summarization middleware
-  inside `internal/agent/einoadapter`.
+  inside `internal/application`.
 - MUST NOT implement another conversation/ReAct loop, `MemoryManager`, general
   Context manager, tokenizer, summarizer/summary engine, generic checkpoint or
   event store, second durable conversation log, raw Eino transcript, or a

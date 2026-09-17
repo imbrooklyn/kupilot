@@ -8,5 +8,5 @@ import "testing"
 // different-origin/different-credential, and absent-credential configuration
 // from one strict versioned load contract.
 func TestNamedModelRolesIntegrationContract(t *testing.T) {
-	TestLoadVersion2NamedProfilesAndIndependentCredentials(t)
+	TestLoadVersion1NamedProfilesAndIndependentCredentials(t)
 }

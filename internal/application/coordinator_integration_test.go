@@ -16,7 +16,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
 	"github.com/imbrooklyn/kupilot/internal/config"
@@ -109,7 +108,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.NewSecretValue() error = %v", err)
 	}
-	agentAdapter, err := einoadapter.New(einoadapter.Config{
+	agentAdapter, err := application.NewEinoRuntime(application.EinoConfig{
 		ModelConfiguration: domain.ModelConfiguration{
 			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAI,
@@ -118,7 +117,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 			Model:               "integration-model",
 			ResponseFormat:      domain.ModelResponseFormatPrompt,
 			APIKeySource:        domain.ModelAPIKeySourceRuntime,
-			Temperature:         0.1,
+			Temperature:         integrationTemperature(0.1),
 			MaxOutputTokens:     2048,
 			RequestTimeout:      time.Second,
 			StreamingRequired:   true,
@@ -133,7 +132,7 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	})
 	if err != nil {
 		modelCredential.Destroy()
-		t.Fatalf("einoadapter.New() error = %v", err)
+		t.Fatalf("application.NewEinoRuntime() error = %v", err)
 	}
 	defer agentAdapter.Close()
 	uiEvents := newIntegrationUIEvents()

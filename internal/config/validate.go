@@ -179,13 +179,19 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 	default:
 		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "Each models profile provider_kind must be openai or ollama.")
 	}
-	if profile.ReasoningEffort != "" && profile.ReasoningEffort != ModelReasoningEffortNone {
-		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Model profile reasoning_effort must be omitted or set to none.")
+	if !domain.ModelReasoningEffort(profile.ReasoningEffort).Valid() {
+		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Model profile reasoning_effort is unsupported.")
+	}
+	if !domain.ModelAPIProtocol(profile.APIProtocol).Valid(domain.ModelProviderKind(profile.ProviderKind)) {
+		return newSafeError(ClassConfigurationInvalid, "config_api_protocol_invalid", "validate_configuration", "OpenAI api_protocol must be chat_completions or responses; Ollama uses its native protocol.")
+	}
+	if profile.ProviderKind == ProviderOllama && profile.ReasoningEffort != "" && profile.ReasoningEffort != "none" && profile.ReasoningEffort != "low" && profile.ReasoningEffort != "medium" && profile.ReasoningEffort != "high" {
+		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Native Ollama reasoning_effort must be omitted, none, low, medium, or high.")
 	}
 	if profile.ResponseFormat != ModelResponseFormatPrompt && profile.ResponseFormat != ModelResponseFormatJSONObject {
 		return newSafeError(ClassConfigurationInvalid, "config_response_format_invalid", "validate_configuration", "Model profile response_format must be prompt or json_object.")
 	}
-	if math.IsNaN(profile.Temperature) || math.IsInf(profile.Temperature, 0) || profile.Temperature < 0 || profile.Temperature > 0.2 {
+	if profile.Temperature == nil && profile.ProviderKind == ProviderOllama || profile.Temperature != nil && (math.IsNaN(*profile.Temperature) || math.IsInf(*profile.Temperature, 0) || *profile.Temperature < 0 || *profile.Temperature > 0.2) {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "Model profile temperature must be between 0 and 0.2.")
 	}
 	if profile.MaxOutputTokens < 0 {
@@ -194,9 +200,9 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 	if profile.RequestTimeoutSeconds < 1 || profile.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
 		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "Model profile request_timeout_seconds must be between 1 and 900.")
 	}
-	if expectedRole == ModelRoleAgent && (!profile.Streaming || !profile.ToolCallingRequired) ||
+	if expectedRole == ModelRoleAgent && ((!profile.Streaming && profile.APIProtocol != "responses") || (profile.Streaming && profile.APIProtocol == "responses") || !profile.ToolCallingRequired) ||
 		expectedRole == ModelRoleApprovalReviewer && (profile.Streaming || profile.ToolCallingRequired) {
-		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "The agent profile must stream with Tools; the approval_reviewer profile must be non-streaming and Tool-free.")
+		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "The agent requires Tools and streaming except native Responses, which requires streaming false; approval_reviewer is non-streaming and Tool-free.")
 	}
 	if profile.Endpoint != "" {
 		endpoint, origin, ok := canonicalEndpoint(profile.Endpoint)

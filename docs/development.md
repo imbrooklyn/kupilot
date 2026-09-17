@@ -119,7 +119,7 @@ greeting, retained history, and a Namespace question. Its recording transport
 performs zero endpoint, Tool-handler, or Kubernetes calls and stores no traffic:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -count=1 -v ./internal/agent/einoadapter \
+GOTOOLCHAIN=go1.25.13 go test -count=1 -v ./internal/application \
   -run '^TestNativeOllamaRequest(FidelityAudit|AuditComparator)$'
 ```
 
@@ -137,14 +137,14 @@ harness first:
 
 ```sh
 GOTOOLCHAIN=go1.25.13 go test -tags=integration -race -count=1 \
-  ./internal/agent/einoadapter -run '^TestNativeOllamaSelectionProbeFixture$'
+  ./internal/application -run '^TestNativeOllamaSelectionProbeFixture$'
 
 KUPILOT_INTEGRATION_LIVE=authorized \
 KUPILOT_INTEGRATION_MODEL_TARGET=ollama \
 KUPILOT_INTEGRATION_MAX_COST_USD=0 \
 KUPILOT_OLLAMA_SELECTION_PROBE=authorized \
 GOTOOLCHAIN=go1.25.13 go test -tags=integration -count=1 -timeout=28m -v \
-  ./internal/agent/einoadapter -run '^TestNativeOllamaSelectionProbeLive$'
+  ./internal/application -run '^TestNativeOllamaSelectionProbeLive$'
 ```
 
 The live test reports fixed classifications, bytes, measured usage when
@@ -225,7 +225,7 @@ development must inspect `go.mod`, `go env GOMODCACHE`, and tagged source and
 tests for the exact Eino and Eino OpenAI versions. Stable Eino ADK
 `ChatModelAgent`, `Runner`, message state, Tool pairing, events, and
 summarization middleware must be reused directly inside
-`internal/agent/einoadapter`.
+`internal/application`.
 
 The active-run input bridge is pinned to Eino v0.9.19 handler ordering:
 summarization first, then a `BeforeModelRewriteState` steer claim whose returned
@@ -396,3 +396,22 @@ retry.
 See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract
 and verification boundaries.
+
+## Native Responses conformance
+
+`TestNativeResponsesAgentToolAndFinal` and the dual-protocol interaction matrix
+are deterministic and require no credentials or external service. The pinned
+SDK streaming-fidelity fixture must remain a visible admission gate until an
+upstream stable release preserves encrypted reasoning items. Do not repair raw
+provider events locally.
+
+The separate `TestNativeResponsesAgentLive` integration-tagged test uses the
+explicit local Agent profile with synthetic Tools and no Kubernetes client.
+It requires `KUPILOT_INTEGRATION_LIVE=authorized`,
+`KUPILOT_NATIVE_RESPONSES_LIVE=authorized`, and
+`KUPILOT_INTEGRATION_MAX_COST_USD=3`. It selects Responses explicitly in memory,
+keeps reasoning enabled, limits calls and output tokens, stops on the first
+failed scenario, and reports only structural outcomes, usage and counts.
+Its fixed price estimate applies only to its admitted model; provider billing
+remains separate. Raw response, reasoning, credential and endpoint values are
+never test output or artifacts. This opt-in test is absent from every CI gate.

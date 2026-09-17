@@ -4,7 +4,28 @@ This file records notable user-visible changes to Kupilot.
 
 ## Unreleased (`v0.5` development)
 
+### Changed
+
+- Application directly composes Eino ADK and native model components. Remove
+  the isolated Agent adapter, neutral Agent port, redundant model wrapper,
+  and composition forwarding object.
+- Add explicitly configured native Responses with reasoning and Tool state
+  retained by Eino within each run. The pinned component requires explicit
+  non-streaming mode because its stream conversion loses encrypted reasoning.
+- OpenAI temperature may be omitted; explicit values remain unchanged. Admit
+  native reasoning levels without model-name inference or automatic downgrade.
+
+### Security
+
+- Upgrade `golang.org/x/net` to v0.55.0 and `golang.org/x/text` to v0.39.0
+  for the reachable GO-2026-5026 and GO-2026-5970 findings. Both retain the
+  repository's Go 1.25 minimum; no vulnerability check is suppressed.
+
 ### Fixed
+
+- Distinguish HTTP 400/422 model request rejection from unsupported response
+  protocols. Safe diagnostics identify the request boundary and ask the user to
+  check the configured profile; no automatic setting change or retry is added.
 
 - Preserve complete bound native Ollama Tool parameter schemas lost by the
   pinned SDK. The existing guard checks the immutable catalog and final byte

@@ -23,8 +23,8 @@ func TestApplicationImportBoundaryIsStatic(t *testing.T) {
 		t.Fatalf("os.ReadDir() error = %v", err)
 	}
 	prohibited := []string{
-		"database/sql", "net/http", "os/exec",
-		"charm.land/bubbletea", "github.com/cloudwego/eino", "github.com/jmoiron/sqlx",
+		"database/sql", "os/exec",
+		"charm.land/bubbletea", "github.com/jmoiron/sqlx",
 		"k8s.io/", "modernc.org/sqlite",
 		"github.com/imbrooklyn/kupilot/internal/agent/einoadapter",
 		"github.com/imbrooklyn/kupilot/internal/cli",

@@ -187,7 +187,7 @@ func TestLoadParsesAdmittedTypedEnvironmentValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || got.Models.Agent.Temperature != 0.2 ||
+	if got.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || *got.Models.Agent.Temperature != 0.2 ||
 		got.Models.Agent.MaxOutputTokens != 1024 || got.Models.Agent.RequestTimeoutSeconds != 30 {
 		t.Errorf("typed model environment values = %#v", got.Models.Agent)
 	}
@@ -209,7 +209,7 @@ func TestLoadAcceptsZeroModelTemperature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.Models.Agent.Temperature != 0 {
+	if *got.Models.Agent.Temperature != 0 {
 		t.Fatalf("Temperature = %v, want 0", got.Models.Agent.Temperature)
 	}
 }

@@ -13,7 +13,7 @@ func TestModelConfigurationRequiresOneExplicitResponseFormat(t *testing.T) {
 		ProfileName: "agent", Role: ModelRoleAgent, ProviderKind: ModelProviderOpenAI,
 		Endpoint: "http://127.0.0.1:11434/v1", Origin: "http://127.0.0.1:11434", Model: "fixture-model",
 		ResponseFormat: ModelResponseFormatPrompt, APIKeySource: ModelAPIKeySourceRuntime,
-		Temperature: 0.1, RequestTimeout: time.Minute, StreamingRequired: true, ToolCallingRequired: true,
+		Temperature: testTemperature(0.1), RequestTimeout: time.Minute, StreamingRequired: true, ToolCallingRequired: true,
 		TransportPolicy: ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP,
 	}
 	if err := configuration.Validate(); err != nil {
@@ -36,7 +36,7 @@ func TestModelConfigurationSeparatesOpenAIAndNativeOllamaAuthority(t *testing.T)
 		ProfileName: "agent", Role: ModelRoleAgent, ProviderKind: ModelProviderOllama,
 		Endpoint: "http://127.0.0.1:11434", Origin: "http://127.0.0.1:11434", Model: "fixture-model",
 		ResponseFormat: ModelResponseFormatJSONObject, APIKeySource: ModelAPIKeySourceNone,
-		Temperature: 0.1, RequestTimeout: 10 * time.Minute, StreamingRequired: true, ToolCallingRequired: true,
+		Temperature: testTemperature(0.1), RequestTimeout: 10 * time.Minute, StreamingRequired: true, ToolCallingRequired: true,
 		TransportPolicy: ModelTransportPolicyLoopbackHTTPNoRedirect,
 	}
 	if err := native.Validate(); err != nil {
@@ -158,3 +158,5 @@ func TestValidStrictModelToolSchemaRequiresClosedObjects(t *testing.T) {
 		})
 	}
 }
+
+func testTemperature(value float64) *float64 { return &value }

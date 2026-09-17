@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/cli"
 	"github.com/imbrooklyn/kupilot/internal/config"
@@ -174,7 +173,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 		t.Fatalf("EnvironmentSecretSource.Read() error = %v", err)
 	}
 	tool := &assuranceNoopTool{}
-	adapter, modelErr := einoadapter.New(einoadapter.Config{
+	adapter, modelErr := application.NewEinoRuntime(application.EinoConfig{
 		ModelConfiguration: domain.ModelConfiguration{
 			ProfileName: "agent", Role: domain.ModelRoleAgent,
 			ProviderKind:        domain.ModelProviderOpenAI,
@@ -183,7 +182,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 			Model:               "assurance-model",
 			ResponseFormat:      domain.ModelResponseFormatPrompt,
 			APIKeySource:        domain.ModelAPIKeySourceRuntime,
-			Temperature:         0.1,
+			Temperature:         integrationTemperature(0.1),
 			MaxOutputTokens:     256,
 			RequestTimeout:      time.Second,
 			StreamingRequired:   true,
@@ -203,7 +202,7 @@ func prepareModelAssuranceBoundary(t *testing.T) assuranceBoundary {
 	})
 	if modelErr != nil {
 		credential.Destroy()
-		t.Fatalf("einoadapter.New() error = %v", modelErr)
+		t.Fatalf("application.NewEinoRuntime() error = %v", modelErr)
 	}
 	defer adapter.Close()
 	input, err := agent.NewRunInput(

@@ -83,7 +83,7 @@ func TestReadOnlyToolPathContainsNoWriteShellOrGenericKubernetesEscape(t *testin
 		filepath.Join(repositoryRoot, "internal", "tools", "get_pod_logs.go"),
 		filepath.Join(repositoryRoot, "internal", "tools", "get_previous_pod_logs.go"),
 		filepath.Join(repositoryRoot, "internal", "tools", "get_related_resources.go"),
-		filepath.Join(repositoryRoot, "internal", "agent", "einoadapter", "tool_bridge.go"),
+		filepath.Join(repositoryRoot, "internal", "application", "eino_tool_bridge.go"),
 	}
 	deniedImports := []string{
 		"os/exec",

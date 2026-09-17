@@ -74,8 +74,9 @@ automatically.
 
 ## Models and Session context
 
-Kupilot supports two fixed provider kinds: `openai` for Eino's OpenAI Chat
-Completions component and `ollama` for Eino's native loopback Ollama component.
+Kupilot supports two fixed provider kinds: `openai` for Eino's native Chat
+Completions or Responses component and `ollama` for Eino's native loopback
+Ollama component.
 
 Native Ollama preserves the bound Tool schemas and explicitly configured
 temperature zero at the request boundary. The tested Ollama 0.34.0 /
@@ -85,13 +86,19 @@ local conformance recorded before this request-fidelity fix omitted that field;
 it does not prove explicit-zero behavior or stable model Tool capability. See
 [Model Compatibility](docs/model-compatibility.md) for the measured limitations.
 
+Select `api_protocol: responses` and `streaming: false` explicitly for native
+Responses reasoning and local Tools. The pinned Eino Responses streaming
+converter loses encrypted reasoning items, so that streaming configuration is
+rejected. Kupilot does not disable reasoning or repair provider events. See
+[ADR-0061](docs/adr/0061-use-eino-directly-in-application.md).
+
 Each required `agent` or optional `approval_reviewer` profile selects exactly
 one kind, origin, credential policy, consent tuple, and finite budget. There is
 no provider auto-detection, router, fallback, load balancing, or cross-origin
 retry. Summarization reuses `agent`; no `context_compactor` role is prebuilt.
 
 The `v0.5` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
-message state, and summarization middleware inside the one Eino adapter. Kupilot
+message state, and summarization middleware directly inside Application. Kupilot
 does not build another conversation loop, memory manager, summary engine,
 checkpoint store, or framework facade. Until a stable Eino runner-managed
 Session passes the documented adoption gate, the existing safe SQLite Messages
@@ -100,7 +107,7 @@ remain the durable source through a thin ordered bridge.
 Retained assistant answers are reconstructed with the complete current strict
 response grammar and empty historic authority arrays. Profiles default to
 prompt-only structured output and may explicitly select `json_object` only for
-an endpoint proved to support that Chat Completions constraint. Kupilot performs
+an endpoint proved to support the selected native JSON constraint. Kupilot performs
 no capability probe, automatic downgrade, fallback, or retry.
 
 Every question after the first in a Session receives one ordered, bounded

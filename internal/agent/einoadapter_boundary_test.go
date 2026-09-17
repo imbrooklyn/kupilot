@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/imbrooklyn/kupilot/internal/agent/einoadapter"
+	"github.com/imbrooklyn/kupilot/internal/application"
 )
 
 func TestDomainDoesNotReintroduceNeutralModelProtocolDTOs(t *testing.T) {
@@ -81,9 +81,9 @@ func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			inAgentAdapter := strings.HasPrefix(relative, filepath.Join("internal", "agent", "einoadapter")+string(filepath.Separator))
-			if strings.HasPrefix(importPath, "github.com/cloudwego/eino") && !inAgentAdapter {
-				t.Errorf("%s imports Eino outside an admitted adapter: %s", relative, importPath)
+			inApplication := strings.HasPrefix(relative, filepath.Join("internal", "application")+string(filepath.Separator))
+			if strings.HasPrefix(importPath, "github.com/cloudwego/eino") && !inApplication {
+				t.Errorf("%s imports Eino outside Application: %s", relative, importPath)
 			}
 			if importPath == "github.com/imbrooklyn/kupilot/internal/llm/openaicompat" {
 				t.Errorf("%s imports the removed parallel model adapter: %s", relative, importPath)
@@ -98,9 +98,9 @@ func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 
 func TestExportedAgentAdapterBoundaryContainsNoEinoTypes(t *testing.T) {
 	types := []reflect.Type{
-		reflect.TypeOf(einoadapter.Config{}),
-		reflect.TypeOf(einoadapter.New),
-		reflect.TypeOf((*einoadapter.Adapter)(nil)),
+		reflect.TypeOf(application.EinoConfig{}),
+		reflect.TypeOf(application.NewEinoRuntime),
+		reflect.TypeOf((*application.EinoRuntime)(nil)),
 	}
 	for _, current := range types {
 		assertNoEinoType(t, current, map[reflect.Type]bool{})
@@ -119,13 +119,14 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 		t.Fatal("runtime.Caller() did not return the test path")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	adapterRoot := filepath.Join(repositoryRoot, "internal", "agent", "einoadapter")
+	adapterRoot := filepath.Join(repositoryRoot, "internal", "application")
 	forbiddenTypes := map[string]bool{
 		"MemoryManager": true, "ConversationLoop": true, "ReActLoop": true,
 		"CheckpointStore": true, "TranscriptStore": true, "ContextProvider": true,
-		"SummaryEngine": true, "Summarizer": true,
+		"SummaryEngine": true, "Summarizer": true, "guardedChatModel": true,
 	}
 	runnerCalls, chatModelAgentCalls, summarizationCalls := 0, 0, 0
+	typedRunnerCalls, typedAgentCalls, typedSummaryCalls := 0, 0, 0
 	err := filepath.WalkDir(filepath.Join(repositoryRoot, "internal"), func(path string, entry os.DirEntry, walkError error) error {
 		if walkError != nil {
 			return walkError
@@ -145,6 +146,9 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 			t.Errorf("%s references the prohibited Eino outer TurnLoop", path)
 		}
 		if strings.HasPrefix(path, adapterRoot+string(filepath.Separator)) {
+			typedRunnerCalls += strings.Count(text, "adk.NewTypedRunner(")
+			typedAgentCalls += strings.Count(text, "adk.NewTypedChatModelAgent(")
+			typedSummaryCalls += strings.Count(text, "summarization.NewTyped(")
 			runnerCalls += strings.Count(text, "adk.NewRunner(")
 			chatModelAgentCalls += strings.Count(text, "adk.NewChatModelAgent(")
 			summarizationCalls += strings.Count(text, "summarization.New(")
@@ -164,6 +168,9 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("WalkDir() error = %v", err)
+	}
+	if typedRunnerCalls != 1 || typedAgentCalls != 1 || typedSummaryCalls != 1 {
+		t.Fatalf("native ADK constructors=%d/%d/%d", typedRunnerCalls, typedAgentCalls, typedSummaryCalls)
 	}
 	if runnerCalls != 1 || chatModelAgentCalls != 1 || summarizationCalls != 1 {
 		t.Fatalf("production Eino constructors = Runner %d, ChatModelAgent %d, summarization %d; want 1/1/1",
