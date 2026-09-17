@@ -78,6 +78,9 @@ func NewComposer(styles ComposerStyles, maxBytes int) Composer {
 		key.WithHelp("shift+enter", "newline"),
 	)
 	input.KeyMap.Paste = key.Binding{}
+	input.KeyMap.CopySelection = key.Binding{}
+	input.KeyMap.LineStart.SetKeys(append(input.KeyMap.LineStart.Keys(), "super+left")...)
+	input.KeyMap.LineEnd.SetKeys(append(input.KeyMap.LineEnd.Keys(), "super+right")...)
 	input.SetStyles(styles.Textarea)
 	// A real terminal cursor gives the operating system input method the exact
 	// insertion point. A virtual cursor is only painted into text and causes IME
@@ -118,13 +121,17 @@ func (composer Composer) Update(msg tea.Msg) (Composer, tea.Cmd, error) {
 			additional = len(value.Text)
 		}
 	}
-	if additional > 0 && composer.maxBytes > 0 && len(composer.input.Value())+additional > composer.maxBytes {
+	replacementBytes := len(original) + additional
+	if additional > 0 {
+		replacementBytes -= len(composer.input.SelectedText())
+	}
+	if additional > 0 && composer.maxBytes > 0 && replacementBytes > composer.maxBytes {
 		return composer, nil, ErrComposerLimit
 	}
 
 	var cmd tea.Cmd
 	composer.input, cmd = composer.input.Update(msg)
-	if additional > 0 && len(composer.input.Value()) != len(original)+additional {
+	if additional > 0 && len(composer.input.Value()) != replacementBytes {
 		composer.input.SetValue(original)
 		composer.input.MoveToEnd()
 		return composer, nil, ErrComposerLimit

@@ -19,6 +19,25 @@ fallback. A picker, completion, modal, Reviewer, approval, input method, paste,
 selection, or composer edit keeps its existing precedence. `Ctrl+C` and `Esc`
 retain their documented cancellation behavior.
 
+`Ctrl+A`/`Ctrl+E` or `Home`/`End` move to the current line's start/end without
+leaving the composer. Command+Left/Right work when the terminal forwards those
+keys directly or maps them to these line-navigation keys. Terminal-owned
+shortcuts depend on your terminal configuration. `Alt+E` opens supporting
+observations; `Esc` returns to the composer with the draft preserved.
+
+| Cursor operation | Keys |
+| --- | --- |
+| Previous/next character | Left/Right or `Ctrl+B/F` |
+| Previous/next word | Option/Alt+Left/Right, `Alt+B/F`, or Ctrl+Left/Right |
+| Previous/next visual line | Up/Down or `Ctrl+P/N` (Up/Down recall history only at the documented input boundaries) |
+| Select characters/words | Shift+Left/Right or Option/Alt/Ctrl+Shift+Left/Right |
+| Delete previous/next word | Option/Alt/Ctrl+Backspace/Delete; `Ctrl+W`/`Alt+D` |
+
+Typing or pasting replaces the selected text within the existing draft limit.
+Selection remains local to the composer; `/copy` still copies only an eligible
+committed assistant answer. Word and logical-line boundaries follow Bubbles;
+repeated `Ctrl+A/E` stays at the current line boundary.
+
 A single-leading-slash entry is handled by the fixed local Slash registry and
 is not queued or steered. Start ordinary chat with `//` when the text itself
 must begin with a slash. `!` input is rejected; it never opens a shell.
@@ -77,7 +96,7 @@ generations; once it does, a recovered draft may be discarded even though its
 preserved provenance names an earlier invalidated generation.
 
 `/copy` copies only the latest committed successful assistant final answer
-when terminal-native clipboard support is known. `/find` or `Ctrl+F` reuses the
+when terminal-native clipboard support is known. `/find` or `Alt+S` reuses the
 composer to search the current committed transcript; fixed next/previous keys
 navigate and Escape restores the prior draft. Neither interaction includes
 queue, composer, streaming, failed, or recovered content.
@@ -92,8 +111,8 @@ Session switch, deletion, and shutdown isolate or clear the in-memory stacks.
 
 Committed transcript landmarks use fixed shortcuts: `Alt+U`/`Alt+Shift+U` for
 user input, `Alt+A`/`Alt+Shift+A` for assistant finals,
-`Alt+F`/`Alt+Shift+F` for failure or unknown, and
-`Alt+P`/`Alt+Shift+P` for approval. `Ctrl+E` opens the claim index; Left/Right
+`Alt+I`/`Alt+Shift+I` for failure or unknown, and
+`Alt+P`/`Alt+Shift+P` for approval. `Alt+E` opens the claim index; Left/Right
 select a claim and Up/Down select only Evidence cited by it. These jumps
 do not create a transcript page or interfere with terminal mouse selection.
 

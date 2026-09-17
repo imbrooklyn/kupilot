@@ -86,9 +86,9 @@ func TestFindReusesComposerNavigatesAndLeavesNoShutdownState(t *testing.T) {
 	before := model.TerminalTranscript()
 	model.composer.SetValue("preserved ordinary draft")
 
-	model, command := updateModel(t, model, tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	model, command := updateModel(t, model, tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt})
 	if command != nil || !model.searchMode || model.EditorCount() != 1 {
-		t.Fatalf("Ctrl+F search state = command %t mode %t editors %d", command != nil, model.searchMode, model.EditorCount())
+		t.Fatalf("Alt+S search state = command %t mode %t editors %d", command != nil, model.searchMode, model.EditorCount())
 	}
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "needle"})
 	current, total, active := model.transcript.SearchState()

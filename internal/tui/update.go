@@ -40,10 +40,11 @@ Enter sends when idle and steers an active run at its next model boundary. Durin
 Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up when the composer is empty.
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
-Ctrl+E opens supporting observation details. Esc interrupts an active run when no local interaction owns it.
-Ctrl+F reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
+Alt+E opens supporting observation details. Ctrl+A/E moves to the line start/end. Esc interrupts an active run when no local interaction owns it.
+Alt+S reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
+Ctrl+B/F moves by character; Alt+B/F and Alt/Ctrl+Left/Right move by word.
 Ctrl+R searches committed submitted input; Alt+Z and Alt+Y provide bounded composer undo and redo.
-Alt+U/A/F/P jumps to the previous user/final/failure/approval item; add Shift for the next item. Ctrl+E navigates cited Evidence.
+Alt+U/A/I/P jumps to the previous user/final/failure/approval item; add Shift for the next item. Alt+E navigates cited Evidence.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
 // Update reduces one message into pure UI state. The TerminalRuntime wrapper,

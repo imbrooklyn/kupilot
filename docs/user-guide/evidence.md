@@ -16,11 +16,11 @@ log viewer, YAML viewer, or proof of causality.
 
 Completed answers do not show Evidence IDs, citation aliases, or repeated
 reference rows. Those correlation values remain internal and machine-checked.
-Pressing `Ctrl+E` explicitly enters observation inspection and shows only the
+Pressing `Alt+E` explicitly enters observation inspection and shows only the
 selected position and a friendly state such as `ready` or `partial` before the
 safe detail is opened.
 
-- Press `Ctrl+E` to open the newest committed final's claim index. Legacy
+- Press `Alt+E` to open the newest committed final's claim index. Legacy
   retained answers without claim metadata open their supporting observations
   directly.
 - Press `Left` and `Right` to move between declared claims. Press `Up` or
@@ -28,7 +28,7 @@ safe detail is opened.
   references cited by the selected claim.
 - Press `Enter` to request the selected safe detail.
 - Press `Enter` in an open detail to return to the exact claim selection.
-  Press `Esc` or `Ctrl+E` to leave inspection. `Esc` also cancels a pending
+  Press `Esc` or `Alt+E` to leave inspection. `Esc` also cancels a pending
   display request; a later result is discarded.
 
 A final answer's claim index opens the exact Evidence IDs cited by that claim.

@@ -23,6 +23,13 @@ This file records notable user-visible changes to Kupilot.
 
 ### Fixed
 
+- Keep composer line navigation focused when committed answers have supporting
+  observations. Move observation inspection to `Alt+E`, preserve `Ctrl+E` for
+  line end, and accept directly delivered Command+Left/Right in the editor.
+- Preserve `Alt+B/F` word movement and `Ctrl+B/F` character movement. Move
+  transcript search to `Alt+S` and failure navigation to `Alt+I`/`Alt+Shift+I`.
+  Upgrade Bubbles to v2.2.1 for native Ctrl-word navigation, bounded word-left
+  termination, and selection; selection replacement respects composer limits.
 - Distinguish HTTP 400/422 model request rejection from unsupported response
   protocols. Safe diagnostics identify the request boundary and ask the user to
   check the configured profile; no automatic setting change or retry is added.

@@ -21,7 +21,7 @@ func TestEvidenceDetailUpdateRejectsLateRequestRunScopeAndSequence(t *testing.T)
 	t.Parallel()
 
 	model, reference := modelWithEvidenceReference(t)
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 
@@ -71,7 +71,7 @@ func TestEvidenceDetailSinkCanaryNeverRendersRawInputs(t *testing.T) {
 	t.Parallel()
 
 	model, _ := modelWithEvidenceReference(t)
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 	fake := &evidenceCanaryApplication{
@@ -116,7 +116,7 @@ func TestEvidenceDetailKeyboardNavigationAndCancellation(t *testing.T) {
 	if !model.slashMenu.Open() {
 		t.Fatal("test setup did not open composer suggestions")
 	}
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	if model.slashMenu.Open() || model.pickerOpen() {
 		t.Fatal("Evidence selection left a second navigation surface open")
 	}
@@ -152,7 +152,7 @@ func TestEvidenceDetailNarrowNoColorPartialAndExpiredStates(t *testing.T) {
 	t.Parallel()
 
 	model, _ := modelWithEvidenceReference(t)
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 	partial := evidenceDetailResult(query, strings.Repeat("bounded projected condition ", 16))
@@ -168,7 +168,7 @@ func TestEvidenceDetailNarrowNoColorPartialAndExpiredStates(t *testing.T) {
 	}
 
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query = evidenceDetailQueryFromCmd(t, cmd)
 	expired := application.UIEvidenceDetailResult{RequestID: query.RequestID, Reference: query.Reference}
@@ -185,7 +185,7 @@ func TestEvidenceDetailScopeChangeClearsPendingRequest(t *testing.T) {
 	t.Parallel()
 
 	model, _ := modelWithEvidenceReference(t)
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 	model.pendingScopeID = 51
@@ -232,7 +232,7 @@ func TestEvidenceDetailReferencesSurviveSafeHistoryRestore(t *testing.T) {
 			EvidenceReferences: []application.UIEvidenceReference{reference},
 		}},
 	})
-	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
 	model, cmd := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	query := evidenceDetailQueryFromCmd(t, cmd)
 	content := model.View().Content

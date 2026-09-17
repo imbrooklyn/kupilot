@@ -322,6 +322,16 @@ completion. Completion rechecks current availability; with no available match,
 Tab leaves the draft unchanged. Explicit command submission still checks current
 availability before dispatch.
 
+Composer cursor navigation remains editor-owned: `Ctrl+B/F` moves by character;
+`Alt+B/F`, Alt+Left/Right, and Ctrl+Left/Right move by word. `Ctrl+A`/`Ctrl+E`, `Home`/`End`,
+and directly delivered Command+Left/Right move to the line start/end without
+changing focus. `Alt+E` explicitly opens or closes supporting-observation
+inspection under [ADR-0062](adr/0062-preserve-composer-line-navigation.md).
+Transcript search uses `Alt+S` or `/find`; failure navigation uses
+`Alt+I`/`Alt+Shift+I`. Native Bubbles v2.2.1 owns movement and selection, including
+safe termination at empty and whitespace-only input boundaries. Selection
+replacement respects the existing byte limit and creates no clipboard authority.
+
 Strict response schema 4 supports either an answer or one to three typed
 clarification questions. Runtime binds it to a bounded completeness manifest with
 authoritative stop reason, source coverage, freshness, exact typed conflict or

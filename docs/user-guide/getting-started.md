@@ -199,7 +199,7 @@ guide grants no capability that policy and composition have not enabled.
 5. Enter an operational question. Kupilot durably begins the run before model
    or cluster I/O, freezes Context, working Namespace, namespace policy, and
    budget, and shows compact bounded activity steps.
-6. Review the free-form Markdown answer and use `Ctrl+E` for bounded supporting
+6. Review the free-form Markdown answer and use `Alt+E` for bounded supporting
    observations. Any proposed action remains unexecuted until its exact current
    permission route, approval, revalidation, and durable pre-audit succeed.
 
@@ -241,9 +241,9 @@ Key bindings include `Enter` to submit, `Shift+Enter` or `Alt+Enter` for a
 newline, `Ctrl+J` for a newline when the terminal can distinguish it, `Tab` for
 completion, arrow keys or `Ctrl+P`/`Ctrl+N` for bounded choices, `Esc` to close or
 cancel the current picker/dialog, `Page Up`/`Page Down` for the transcript,
-`Ctrl+E` to inspect observation details, `Ctrl+R` for committed-input reverse
-search, `Ctrl+F` for committed-transcript search, `Alt+Z`/`Alt+Y` for bounded
-undo/redo, semantic `Alt+U`/`Alt+A`/`Alt+F`/`Alt+P` landmark pairs,
+`Alt+E` to inspect observation details, `Ctrl+R` for committed-input reverse
+search, `Alt+S` for committed-transcript search, `Alt+Z`/`Alt+Y` for bounded
+undo/redo, semantic `Alt+U`/`Alt+A`/`Alt+I`/`Alt+P` landmark pairs,
 `Ctrl+X` to cancel a run, and `Ctrl+C`
 to cancel the active local interaction first. Model setup, Pickers, observation
 detail, privacy, export, deletion, resume-scope, and approval interactions own
