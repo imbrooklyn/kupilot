@@ -180,7 +180,7 @@ func TestSecurityAssuranceKubernetesCredentialSourceMatrix(t *testing.T) {
 		var commandCalls atomic.Int32
 		configure := func(factory *ClientFactory) {
 			factory.environment = func() []string {
-				return []string{"PATH=/usr/bin:/bin", config.ModelAPIKeyEnvironmentVariable + "=" + modelKeyCanary}
+				return []string{"PATH=/usr/bin:/bin", config.AgentAPIKeyEnvironmentVariable + "=" + modelKeyCanary}
 			}
 			factory.commandContext = func(ctx context.Context, command string, arguments ...string) *exec.Cmd {
 				commandCalls.Add(1)
@@ -323,7 +323,7 @@ func assertCredentialBoundaryExcludes(t *testing.T, canaries []string, values ..
 	}
 	childEnvironment := config.FilterChildEnvironment([]string{
 		"PATH=/usr/bin:/bin",
-		config.ModelAPIKeyEnvironmentVariable + "=" + strings.Repeat("z", 43) + "-generated",
+		config.AgentAPIKeyEnvironmentVariable + "=" + strings.Repeat("z", 43) + "-generated",
 	})
 	formatted = append(formatted, strings.Join(childEnvironment, "\x00"))
 	for _, canary := range canaries {

@@ -157,7 +157,7 @@ func TestToolInvocationRepositoryAtomicallyStoresInvocationAndEvidence(t *testin
 	}
 }
 
-func TestMigrationTenAdmitsCompleteToolCatalog(t *testing.T) {
+func TestInitialSchemaAdmitsCompleteToolCatalog(t *testing.T) {
 	db := openTestDB(t, context.Background(), testStateDir(t), "complete-tool-catalog")
 	run := seedStandardRun(t, db, "00000000-0000-7000-8000-000000003101", "00000000-0000-7000-8000-000000003102", "00000000-0000-7000-8000-000000003103", time.UnixMilli(300).UTC())
 	repository := NewToolInvocationRepository(db)

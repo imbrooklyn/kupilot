@@ -28,8 +28,8 @@ func TestReviewerLiveEvaluation(t *testing.T) {
 		t.Skip("BLOCKED live Reviewer eval: set both live authorization variables only after endpoint and cost authorization")
 	}
 	target := os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET")
-	if target != liveModelTargetPreferred && target != liveModelTargetOllama {
-		t.Skip("BLOCKED live Reviewer eval: select exactly preferred or ollama")
+	if target != liveModelTargetPreferred {
+		t.Skip("BLOCKED live Reviewer eval: select preferred")
 	}
 	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
 	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling || target == liveModelTargetPreferred && maximumCost == 0 {

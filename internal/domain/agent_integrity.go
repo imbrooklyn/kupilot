@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	AnswerCompletenessSchemaVersion = "kupilot.answer-completeness/v2"
+	AnswerCompletenessSchemaVersion = "kupilot.answer-completeness/v1"
 	MaxClarificationQuestions       = 3
 	MaxClarificationChoices         = 3
 	MaxAnswerSources                = 100
@@ -246,7 +246,7 @@ type AnswerCompletenessManifest struct {
 // Validate checks exact ordering, bounds, and internal Evidence references.
 func (manifest AnswerCompletenessManifest) Validate() error {
 	if manifest.SchemaVersion != AnswerCompletenessSchemaVersion ||
-		(manifest.ResponseSchemaVersion != 1 && manifest.ResponseSchemaVersion != 2 && manifest.ResponseSchemaVersion != 3 && manifest.ResponseSchemaVersion != 4) || !manifest.StopReason.Valid() ||
+		manifest.ResponseSchemaVersion != 1 || !manifest.StopReason.Valid() ||
 		len(manifest.Claims) > maxDiagnosisItems || len(manifest.Limitations) > maxDiagnosisItems ||
 		len(manifest.Sources) > MaxAnswerSources {
 		return ErrInvalidAgentIntegrity
@@ -420,8 +420,8 @@ func DeriveAnswerTerminalReason(
 	}
 }
 
-// Empty reports whether the manifest predates this schema. It is used only to
-// read retained v1 rows and never for newly validated model output.
+// Empty reports an absent manifest in a partial safe projection. Validated
+// model terminal results always carry a manifest.
 func (manifest AnswerCompletenessManifest) Empty() bool {
 	return manifest.SchemaVersion == "" && manifest.ResponseSchemaVersion == 0 && len(manifest.Claims) == 0 && len(manifest.Limitations) == 0 &&
 		len(manifest.Sources) == 0 && manifest.StopReason == "" && manifest.StopReasonBasis == ""

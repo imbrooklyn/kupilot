@@ -1,5 +1,11 @@
 # Kupilot Scope
 
+The current full scope targets the unreleased `v0.1.0` under
+[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md). It supports
+OpenAI only, through the existing native Eino Chat Completions and Responses
+components. Historical milestone labels do not restrict this baseline to the
+earlier read-only implementation.
+
 ## Native Eino ownership
 
 [ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
@@ -9,17 +15,17 @@ explicitly select `chat_completions` or `responses`; omission keeps the existing
 Chat Completions behavior. There is one Agent/Runner per run, no automatic
 protocol selection, retry, fallback, or additional conversation store.
 
-- Status: Accepted `v0.5` target
+- Status: Accepted `v0.1.0` target
 - Date: 2026-09-07
 
 The current code includes the named-model and safe Session-context runtime,
 broad read/observability, remote-diagnostic adapters, deterministic permission
 foundation, typed remediation, and default-off exact local-process slices. The
-items below define the complete admitted `v0.5` scope. Deterministic reachability
+items below define the complete admitted `v0.1.0` scope. Deterministic reachability
 for one slice is not live-integration or release evidence, and no broader
 capability may be inferred from it.
 
-## In scope for `v0.5`
+## In scope for `v0.1.0`
 
 - One local process, one local user, one low-chrome Agent-first TUI, one active
   AgentRun, and one verified Kubernetes Context at a time.
@@ -47,7 +53,7 @@ capability may be inferred from it.
 - Permission profiles `read-only`, `ask`, `auto-review`, `full-access`, and
   `custom`; `ask` is the default.
 - A required `agent` model role, an optional `approval_reviewer` role, and
-  explicit named `openai` Chat Completions or native loopback `ollama`
+  explicit OpenAI Chat Completions or Responses
   profiles, with no detection, fallback, or routing.
 - Standard and minimal Session model-memory modes, explicit resume, direct Eino
   ADK message-state and summarization reuse, bounded safe summary coverage and
@@ -211,12 +217,12 @@ plan. Generic patch/apply/edit/delete/YAML and command fallback remain denied.
 
 ## Model and Session scope
 
-Each profile selects exactly one fixed provider kind: `openai` Chat Completions
-or native loopback `ollama`. Each role binds one explicit profile and origin.
-There is no automatic discovery, protocol translation, fallback, router, load
-balancing, cross-origin retry, or model-selected endpoint. OpenAI credentials
-are opaque; Ollama accepts none. Consent remains role-, origin-, policy-, and
-category-bound.
+OpenAI is the only supported model provider. Chat Completions and Responses
+are explicit native Eino protocols. Each fixed role binds its own profile,
+origin and opaque credential. Consent remains role-, origin-, policy- and
+category-bound. No provider discovery, routing, fallback or retry exists.
+No native request rewriting, generated-argument repair or provider-feature
+emulation is admitted.
 
 ADR-0059 admits only bounded restoration of code-owned native request metadata
 lost by the pinned serializer. It does not admit generated-argument repair,
@@ -337,11 +343,11 @@ reuse are not new durable stores or resumable authority.
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 
-Response schema 4 and plan wire schema 2 admit deterministic response
+Response schema 1 and plan wire schema 1 admit deterministic response
 normalization and fixed interaction failure diagnostics. They add no capability,
 data source, authority, retry, fallback, Agent, loop, or durable store.
 

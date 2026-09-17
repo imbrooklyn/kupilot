@@ -49,34 +49,6 @@ func TestModelSetupSecretRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestModelSetupRequestSeparatesProviderCredentialContracts(t *testing.T) {
-	t.Parallel()
-
-	native := ModelSetupRequest{
-		RequestID: 82, ProviderKind: domain.ModelProviderOllama,
-		Endpoint: "http://127.0.0.1:11434", Model: "fixture-model", Persist: true,
-	}
-	if err := native.Validate(); err != nil {
-		t.Fatalf("Validate(native Ollama) error = %v", err)
-	}
-	secret, err := NewModelSetupSecret("generated-provider-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer secret.Destroy()
-	native.Secret = secret
-	if !errors.Is(native.Validate(), ErrModelSetupInvalid) {
-		t.Fatal("native Ollama setup accepted a credential")
-	}
-	openAI := native
-	openAI.ProviderKind = domain.ModelProviderOpenAI
-	openAI.Endpoint = "https://model.example.test/v1"
-	openAI.Secret = nil
-	if !errors.Is(openAI.Validate(), ErrModelSetupInvalid) {
-		t.Fatal("OpenAI setup accepted a missing credential")
-	}
-}
-
 func TestCoordinatorUnconfiguredModelDeniesRunBeforePersistenceOrAgent(t *testing.T) {
 	t.Parallel()
 	var runnerCalls atomic.Int64
@@ -175,31 +147,6 @@ func TestCoordinatorModelSetupPersistenceFailureKeepsOldRuntime(t *testing.T) {
 	if !errors.Is(err, ErrModelSetupFailed) || coordinator.runner != oldRuntime || oldRuntime.closed.Load() != 0 ||
 		replacement.closed.Load() != 1 || secret.IsSet() {
 		t.Fatalf("failed replacement = %v runner=%T oldClose=%d newClose=%d secret=%v", err, coordinator.runner, oldRuntime.closed.Load(), replacement.closed.Load(), secret.IsSet())
-	}
-}
-
-func TestCoordinatorSameOriginProviderSwitchDurablyInvalidatesConsent(t *testing.T) {
-	t.Parallel()
-	oldRuntime := &recordingModelRuntime{name: "old-model", origin: "https://model.example"}
-	coordinator, _, _, _ := newCoordinatorHarness(t, newCoordinatorClock(), oldRuntime)
-	coordinator.modelRuntime = oldRuntime
-	replacement := &recordingModelRuntime{name: "native-model", origin: "https://model.example"}
-	coordinator.modelFactory = &recordingModelFactory{build: func(ModelSetupRequest) (ModelRuntime, error) {
-		return replacement, nil
-	}}
-	coordinator.modelProfiles = new(recordingModelProfiles)
-
-	result, err := coordinator.ConfigureModel(context.Background(), ModelSetupRequest{
-		RequestID: 96, ProviderKind: domain.ModelProviderOllama,
-		Endpoint: "http://127.0.0.1:11434", Model: "native-model",
-	})
-	if err != nil || result.ProviderKind != domain.ModelProviderOllama || coordinator.runner != replacement ||
-		oldRuntime.closed.Load() != 1 || replacement.closed.Load() != 0 {
-		t.Fatalf("same-origin provider switch = %#v/%v runner=%T oldClose=%d newClose=%d",
-			result, err, coordinator.runner, oldRuntime.closed.Load(), replacement.closed.Load())
-	}
-	if allowed, err := coordinator.privacy.AuthorizeModel(context.Background()); err != nil || allowed {
-		t.Fatalf("same-origin provider consent = %v/%v", allowed, err)
 	}
 }
 

@@ -494,7 +494,7 @@ func seedCompleteSessionGraph(t *testing.T, db *DB, rawSessionID string) domain.
 				requested_at_ms, expires_at_ms, state_changed_at_ms
 			) VALUES (
 				?, ?, ?, 'kupilot.action-envelope/v1', 'kupilot.action-digest/v1',
-				'restart_deployment', 'restart_deployment/v1', 'kupilot.action-policy/2026-09-04', 'ask',
+				'restart_deployment', 'restart_deployment/v1', 'kupilot.action-policy/v1', 'ask',
 				1, 'review', 'cluster_mutation', 'test-context', 'test-namespace',
 				'current', 1, 'apps/v1', 'Deployment',
 				'test-namespace', 'sample-workload', 'synthetic-deployment-uid', '17', '',

@@ -1,11 +1,10 @@
 # Release Process
 
 > [!NOTE]
-> This runbook describes the historical `v0.3.0` artifact matrix. It has not
-> been requalified for the current unreleased `v0.5` implementation and does
-> not authorize a release or publication. A `v0.5` release requires an updated
-> matrix and fresh security, compatibility, migration, RBAC, and artifact
-> evidence.
+> This is the unreleased v0.1.0 release runbook. No public release exists.
+> Version and project schemas remain at their initial values until first
+> publication. This document neither authorizes publication nor claims release
+> evidence; candidate validation requires separately observed results.
 
 Kupilot releases are built locally from the repository `Makefile`. The release
 configuration produces versioned, CGO-free archives for the four supported
@@ -20,23 +19,23 @@ and [Development and CI Gates](development.md) before preparing a candidate.
 
 ## Supported artifacts
 
-The formal `v0.3` release matrix is:
+The formal `v0.1.0` release matrix is:
 
 | Operating system | Architecture | Archive |
 | --- | --- | --- |
-| macOS | `amd64` | `kupilot_0.3.0_darwin_amd64.tar.gz` |
-| macOS | `arm64` | `kupilot_0.3.0_darwin_arm64.tar.gz` |
-| Linux | `amd64` | `kupilot_0.3.0_linux_amd64.tar.gz` |
-| Linux | `arm64` | `kupilot_0.3.0_linux_arm64.tar.gz` |
+| macOS | `amd64` | `kupilot_0.1.0_darwin_amd64.tar.gz` |
+| macOS | `arm64` | `kupilot_0.1.0_darwin_arm64.tar.gz` |
+| Linux | `amd64` | `kupilot_0.1.0_linux_amd64.tar.gz` |
+| Linux | `arm64` | `kupilot_0.1.0_linux_arm64.tar.gz` |
 
-Windows is experimental and has no `v0.3` release artifact. Each archive
+Windows is experimental and has no `v0.1.0` release artifact. Each archive
 contains exactly `kupilot` and the unmodified Apache-2.0 `LICENSE`. Source
 files, local documentation, configuration, databases, SQLite sidecars, logs,
 and credentials are not release assets.
 
 Each archive has a sibling SPDX 2.3 JSON SBOM named
 `ARCHIVE.tar.gz.spdx.json`. One
-`kupilot_0.3.0_checksums.txt` file contains SHA-256 checksums for all four
+`kupilot_0.1.0_checksums.txt` file contains SHA-256 checksums for all four
 archives and all four SBOMs. The nine files are the complete upload allowlist;
 GoReleaser working metadata, unpackaged binaries, and its effective
 configuration are not release assets.
@@ -71,39 +70,30 @@ Release linker flags inject only these non-sensitive values:
 
 `built` is deliberately the commit time, not the wall-clock packaging time.
 The binary also reports the exact Go version and its target operating system
-and architecture. A `v0.3.0` artifact therefore has this output shape:
+and architecture. A `v0.1.0` artifact therefore has this output shape:
 
 <!-- markdownlint-disable MD013 -->
 ```text
-kupilot version=v0.3.0 commit=0123456789ab built=2026-01-02T03:04:05Z go=go1.25.13 platform=darwin/arm64
+kupilot version=v0.1.0 commit=0123456789ab built=2026-01-02T03:04:05Z go=go1.25.13 platform=darwin/arm64
 ```
 <!-- markdownlint-enable MD013 -->
 
-Development builds retain honest `dev` or `unknown` values. Runtime
+Development builds report v0.1.0; unavailable commit/build time stays `unknown`. Runtime
 environment variables cannot override build metadata.
 
 ## Database upgrade and application rollback
 
-Kupilot storage uses four immutable, checksummed, forward-only migrations. A
-released `v0.1` database contains migrations 1 and 2, `v0.2` adds migration 3,
-and `v0.3` adds migration 4. Opening a valid older database with `v0.3` applies
-only the missing migrations in order. An unknown, corrupt, checksum-mismatched,
-or newer schema fails closed; Kupilot never deletes, replaces, or recreates it
-silently.
+Kupilot has one initial version-1 schema. Before publication, correct it in
+place without adding development compatibility migrations or incrementing
+schema versions. After publication, released migrations become immutable.
+Unknown, corrupt, checksum-mismatched or newer storage fails closed without
+silent deletion or recreation.
 
-Before the first `v0.3` open, stop every Kupilot process and make an
-owner-protected backup of the exact database and any existing `-journal`,
-`-wal`, and `-shm` sidecars under the operator's backup policy. Do not copy a
-live database as an application rollback mechanism. Kupilot has no down
-migrations, and an older binary must not open a database after a newer migration
-has committed.
-
-To roll back the application, stop Kupilot and restore the complete matching
-pre-upgrade backup before starting the older binary. Never edit a migration,
-its checksum ledger, or the upgraded database to imitate a downgrade. Any
-pending or approved-but-not-executed restart approval becomes terminal and
-non-executable during validated process-start recovery; migration, rollback, or
-restart never replays an AgentRun, model request, Tool call, approval, or write.
+A development reset requires stopping the database owner and preserving a
+consistent owner-protected backup first. Old development binaries and backups
+are not a supported upgrade or rollback path. Never package user state,
+credentials or local backups into release artifacts. See [Storage](storage.md)
+and [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 ## Local candidate dry run
 
@@ -113,7 +103,7 @@ before packaging:
 
 ```sh
 GOTOOLCHAIN=go1.25.13 make check-all
-GOTOOLCHAIN=go1.25.13 make release-dry-run RELEASE_VERSION=0.3.0
+GOTOOLCHAIN=go1.25.13 make release-dry-run RELEASE_VERSION=0.1.0
 ```
 
 The dry-run target performs the following fixed sequence:
@@ -150,7 +140,7 @@ candidate being published is authoritative for that candidate.
 - [ ] The worktree is clean, `HEAD` is the reviewed release commit, and the
   intended version is not already published or associated with another
   commit.
-- [ ] `CHANGELOG.md` describes only shipped `v0.3.0` behavior and known
+- [ ] `CHANGELOG.md` describes only shipped `v0.1.0` behavior and known
   limitations.
 - [ ] `LICENSE` is the standard Apache License 2.0 text and has not been
   rewritten.
@@ -166,11 +156,11 @@ candidate being published is authoritative for that candidate.
   [ADR-0028](adr/0028-support-macos-and-linux-with-experimental-windows.md),
   [Dependency Compatibility](compatibility.md), and
   [Kubernetes Compatibility](kubernetes-compatibility.md).
-- [ ] The released-schema matrix upgrades `v0.1` through `v0.2` to `v0.3`, and
-  the no-down-migration backup-and-restore rollback instructions have been
-  reviewed without editing a released migration.
-- [ ] Static composition evidence confirms that the candidate binary remains
-  read-only and does not construct the isolated `v0.2` restart executor.
+- [ ] Fresh creation, exact-schema reopen, incompatible/corrupt storage denial,
+  authority persistence and rollback of failed transactions pass for the single
+  initial schema.
+- [ ] Composition uses one Application authority and one Eino Agent/Runner;
+  all admitted effectful operations retain decision and durable audit gates.
 - [ ] No source or documentation claims a Windows artifact, package-manager
   installation, signed artifact, notarized artifact, or automated publisher.
 
@@ -179,7 +169,7 @@ candidate being published is authoritative for that candidate.
 - [ ] `GOTOOLCHAIN=go1.25.13 make check-all` passes with a current
   vulnerability database.
 - [ ] `GOTOOLCHAIN=go1.25.13 make release-dry-run
-  RELEASE_VERSION=0.3.0` passes from the same commit.
+  RELEASE_VERSION=0.1.0` passes from the same commit.
 - [ ] A second dry run produces the same SHA-256 value for each of the four
   archives.
 - [ ] The candidate directory contains exactly four archives, four sibling
@@ -209,7 +199,7 @@ candidate being published is authoritative for that candidate.
 ### Manual publication
 
 - [ ] A maintainer has separately authorized tag creation and publication.
-- [ ] The immutable `v0.3.0` tag identifies the exact commit used for the final
+- [ ] The immutable `v0.1.0` tag identifies the exact commit used for the final
   candidate. A tag is never moved or reused.
 - [ ] Release notes are derived from the matching `CHANGELOG.md` entry and do
   not promise unsupported behavior.
@@ -220,7 +210,7 @@ candidate being published is authoritative for that candidate.
   offline smoke.
 - [ ] The draft is published only after the download verification passes.
 
-Checksums detect corruption but do not authenticate the publisher. The `v0.3`
+Checksums detect corruption but do not authenticate the publisher. The `v0.1.0`
 process does not create signatures, notarization, provenance attestations, or
 package-manager metadata. Apply the repository host's access controls and the
 organization's release-approval policy accordingly.
@@ -249,7 +239,7 @@ Kubernetes, contacting a model endpoint, or entering the TUI.
 
 For the safe startup-error check, point `KUPILOT_HOME` at a nonexistent child of
 an empty temporary tree; set `KUBECONFIG` to an empty test file; leave
-`KUPILOT_MODEL_API_KEY` absent; and invoke Kupilot with an absolute path to a
+`KUPILOT_AGENT_API_KEY` absent; and invoke Kupilot with an absolute path to a
 nonexistent configuration file. The command must return a safe
 `config_file_unavailable` error, must not echo an environment value, and must
 not create Home, a database, WAL/SHM sidecar, or log.

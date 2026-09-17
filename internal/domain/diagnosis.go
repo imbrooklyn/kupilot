@@ -208,9 +208,8 @@ type MissingInformation struct {
 	Impact string                 `json:"impact"`
 }
 
-// RecommendedAction is retained as the durable compatibility name for a
-// bounded proposed action. Operation and Target are populated by the v0.4
-// protocol; legacy rows may contain only explanatory text.
+// RecommendedAction is a bounded proposed action. A typed operation and target
+// may accompany explanatory text; neither creates execution authority.
 type RecommendedAction struct {
 	Operation     ApprovalOperation         `json:"operation,omitempty"`
 	Target        *ResourceRef              `json:"target,omitempty"`
@@ -221,8 +220,8 @@ type RecommendedAction struct {
 	Executed      bool                      `json:"executed"`
 }
 
-// Diagnosis is the locally validated terminal answer. The four legacy
-// collections remain readable for storage compatibility; new answers use
+// Diagnosis is the locally validated terminal answer. The typed collections
+// carry safe claim, limitation and proposed-action projections alongside
 // AnswerMarkdown, citation-backed ConfirmedFacts, and typed proposed actions.
 type Diagnosis struct {
 	ID                   DiagnosisID

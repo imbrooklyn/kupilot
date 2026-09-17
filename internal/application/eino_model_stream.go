@@ -74,22 +74,18 @@ func validateResponseChunk(
 func collectModelMessage(
 	ctx context.Context,
 	requestID domain.ModelRequestID,
-	provider domain.ModelProviderKind,
 	stream *schema.StreamReader[*schema.Message],
 	credential *config.SecretValue,
 	observeContent func(string) error,
 ) (*schema.Message, error) {
-	if ctx == nil || !requestID.Valid() || !provider.Valid() || stream == nil ||
-		provider == domain.ModelProviderOpenAI && (credential == nil || !credential.IsSet()) ||
-		provider == domain.ModelProviderOllama && credential != nil && credential.IsSet() {
+	if ctx == nil || !requestID.Valid() || stream == nil || credential == nil || !credential.IsSet() {
 		return nil, errTransportRequestInvalid
 	}
 	defer stream.Close()
 
 	chunks := make([]*schema.Message, 0, 16)
 	validator := modelStreamValidator{
-		provider: provider, requestID: requestID,
-		scanner: credentialScanner{credential: credential}, nativeToolCalls: make(map[string]struct{}),
+		scanner: credentialScanner{credential: credential},
 	}
 	finishSeen := false
 	usageSeen := false
@@ -106,9 +102,6 @@ func collectModelMessage(
 		}
 		if len(chunks) >= domain.MaxModelStreamChunks {
 			return nil, errModelResponseLimitReached
-		}
-		if err := validator.normalizeNativeChunk(chunk); err != nil {
-			return nil, err
 		}
 		if err := validator.validateChunk(chunk, finishSeen); err != nil {
 			return nil, err
@@ -166,58 +159,6 @@ func assembledModelMessageWithinLimits(message *schema.Message, discardedReasoni
 type modelStreamValidator struct {
 	scanner                 credentialScanner
 	discardedReasoningBytes int
-	provider                domain.ModelProviderKind
-	requestID               domain.ModelRequestID
-	nativeToolIndex         int
-	nativeToolCalls         map[string]struct{}
-}
-
-func (validator *modelStreamValidator) normalizeNativeChunk(chunk *schema.Message) error {
-	if validator == nil || validator.provider != domain.ModelProviderOllama {
-		return nil
-	}
-	if chunk == nil || len(chunk.Extra) != 0 {
-		return errUnsupportedProviderChunk
-	}
-	if chunk.ReasoningContent != "" {
-		chunk.Extra = map[string]any{einoReasoningContentKey: chunk.ReasoningContent}
-	}
-	if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil && chunk.ResponseMeta.FinishReason == "" {
-		if !zeroModelUsage(chunk.ResponseMeta.Usage) {
-			return errProviderUsage
-		}
-		chunk.ResponseMeta.Usage = nil
-	}
-	for index := range chunk.ToolCalls {
-		call := &chunk.ToolCalls[index]
-		if call.ID != "" || call.Index != nil || call.Type != "function" ||
-			call.Function.Name == "" || call.Function.Arguments == "" {
-			return errUnsupportedProviderChunk
-		}
-		identity := call.Function.Name + "\x00" + call.Function.Arguments
-		if _, duplicate := validator.nativeToolCalls[identity]; duplicate {
-			return errUnsupportedProviderChunk
-		}
-		validator.nativeToolCalls[identity] = struct{}{}
-		ordinal := validator.nativeToolIndex
-		call.Index = &ordinal
-		call.ID = nativeOllamaToolCallID(validator.requestID, ordinal)
-		validator.nativeToolIndex++
-	}
-	if validator.nativeToolIndex > 0 && chunk.ResponseMeta != nil && chunk.ResponseMeta.FinishReason == "stop" {
-		chunk.ResponseMeta.FinishReason = "tool_calls"
-	}
-	return nil
-}
-
-func nativeOllamaToolCallID(requestID domain.ModelRequestID, ordinal int) string {
-	digest := domain.SHA256Hex("ollama-tool-call\x00" + string(requestID) + "\x00" + fmt.Sprintf("%d", ordinal))
-	return "ollama-call-" + digest[:32]
-}
-
-func zeroModelUsage(usage *schema.TokenUsage) bool {
-	return usage != nil && usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0 &&
-		usage.PromptTokenDetails.CachedTokens == 0 && usage.CompletionTokensDetails.ReasoningTokens == 0
 }
 
 func (validator *modelStreamValidator) validateChunk(chunk *schema.Message, afterFinish bool) error {
@@ -346,21 +287,9 @@ func (validator *modelStreamValidator) admitAndClearEinoMetadata(message *schema
 func admitAndClearNonStreamingMetadata(
 	message *schema.Message,
 	credential *config.SecretValue,
-	provider domain.ModelProviderKind,
 ) error {
-	if message == nil || !provider.Valid() ||
-		provider == domain.ModelProviderOpenAI && (credential == nil || !credential.IsSet()) ||
-		provider == domain.ModelProviderOllama && credential != nil && credential.IsSet() {
+	if message == nil || credential == nil || !credential.IsSet() {
 		return errUnsupportedProviderChunk
-	}
-	if provider == domain.ModelProviderOllama {
-		if len(message.Extra) != 0 || !utf8.ValidString(message.ReasoningContent) ||
-			len(message.ReasoningContent) > domain.MaxModelMessageBytes ||
-			credentialAppearsInStrings(credential, message.ReasoningContent) {
-			return errUnsupportedProviderChunk
-		}
-		message.ReasoningContent = ""
-		return nil
 	}
 	if len(message.Extra) == 0 {
 		return nil

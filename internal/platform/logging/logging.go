@@ -265,7 +265,7 @@ func sanitizeAttr(attr slog.Attr) (slog.Attr, bool) {
 		}
 	case "provider_kind":
 		attr.Value = attr.Value.Resolve()
-		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "openai", "ollama") {
+		if attr.Value.Kind() != slog.KindString || attr.Value.String() != "openai" {
 			return slog.Attr{}, false
 		}
 	case "phase":

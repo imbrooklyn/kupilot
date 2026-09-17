@@ -1,6 +1,6 @@
 # Least-Privilege Kubernetes RBAC
 
-This page defines the Accepted `v0.5` RBAC target and identifies the currently
+This page defines the Accepted `v0.1.0` RBAC target and identifies the currently
 implemented slices. The primary checked-in YAML grants the built-in broad-read
 resources and existing Events/logs/relationships. Supervised mutations remain
 in separate capability-specific fixtures. Secret metadata, Pod/Node metrics,
@@ -19,7 +19,7 @@ ServiceAccount, RoleBinding, or ClusterRoleBinding because subjects and
 administration workflows are cluster-specific. The files here define reusable
 rules only; an administrator must review placeholders and create the binding.
 
-## `v0.5` capability-split target
+## `v0.1.0` capability-split target
 
 Each optional capability must have a separate reviewed fixture or documented
 rule set and must be bound only where enabled:
@@ -95,7 +95,7 @@ application policy to `current` when cluster-wide namespaced visibility is not
 intended. Do not rely on RBAC alone to explain which policy is active; `/status`
 shows the immutable run policy.
 
-## Current `v0.5` read and observability surface
+## Current `v0.1.0` read and observability surface
 
 <!-- markdownlint-disable MD013 -->
 
@@ -133,7 +133,7 @@ requests. Create another reviewed rule for each additional Pod or use a
 separately reviewed bounded Namespace-wide binding when exact names cannot be
 known ahead of time.
 
-## Current `v0.5` cluster-scoped read surface
+## Current `v0.1.0` cluster-scoped read surface
 
 [cluster-observer-cluster-role.yaml](cluster-observer-cluster-role.yaml) grants
 `get` and `list` for Namespace, Node, and PersistentVolume. Bind it only when

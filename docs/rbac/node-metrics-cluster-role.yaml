@@ -1,4 +1,4 @@
-# Optional v0.5 one-Node metrics fixture. Replace both resourceNames together.
+# Optional v0.1.0 one-Node metrics fixture. Replace both resourceNames together.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

@@ -1,6 +1,6 @@
 # Kupilot User Guide
 
-This guide describes the current deterministic `v0.5` implementation boundary.
+This guide describes the current deterministic `v0.1.0` implementation boundary.
 Named model roles, safe Session context/summarization, expanded diagnostics,
 permission routing, the shared ActionEnvelope dispatcher, typed remediation,
 and default-off exact local execution are present. This does not claim a live
@@ -23,7 +23,7 @@ integration or release artifact.
   endpoint, path, and logging schema.
 - [Operational and Diagnostic Capabilities](../diagnostic-capabilities.md): the
   typed resource catalog, regression scenarios, Evidence, and action boundary.
-- [Permissions and Controlled Actions](approval.md): `v0.5` permission profiles,
+- [Permissions and Controlled Actions](approval.md): `v0.1.0` permission profiles,
   Reviewer routing, ActionEnvelope, one-attempt execution, and verification,
   plus the currently composed typed remediation and local-process boundaries.
 - [Least-Privilege RBAC](../rbac/README.md): exact Kubernetes verbs, resources,

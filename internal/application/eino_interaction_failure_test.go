@@ -23,7 +23,6 @@ func TestModelFailureProjectionRetainsExactBoundaryWithoutAnotherCall(t *testing
 		{errProviderFinishMissing, domain.ModelErrorCodeMissingFinish, domain.FailureStreamIncomplete},
 		{errProviderUsage, domain.ModelErrorCodeInvalidStreamUsage, domain.FailureStreamUsage},
 		{errProviderStopReason, domain.ModelErrorCodeInvalidStopReason, domain.FailureStopReason},
-		{errNativeProviderReported, domain.ModelErrorCodeProviderReported, domain.FailureProviderReported},
 		{errUnsupportedProviderChunk, domain.ModelErrorCodeUnsupportedResponse, domain.FailureProviderProtocol},
 		{errRedirectOriginDenied, domain.ModelErrorCodeRedirectDenied, domain.FailureProviderProtocol},
 		{errModelRequestLimitReached, domain.ModelErrorCodeRequestTooLarge, domain.FailureBudget},
@@ -81,15 +80,11 @@ func TestCollectedStreamRejectsEachFinishAndUsageViolationPrecisely(t *testing.T
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			message, err := collectModelMessage(context.Background(), fixtureRequestID, domain.ModelProviderOpenAI, schema.StreamReaderFromArray(test.chunks), &credential, nil)
+			message, err := collectModelMessage(context.Background(), fixtureRequestID, schema.StreamReaderFromArray(test.chunks), &credential, nil)
 			if message != nil || !errors.Is(err, test.want) {
 				t.Fatalf("stream result = %v; want %v", err, test.want)
 			}
 		})
-	}
-	validator := modelStreamValidator{provider: domain.ModelProviderOllama}
-	if err := validator.normalizeNativeChunk(&schema.Message{ResponseMeta: &schema.ResponseMeta{Usage: &schema.TokenUsage{PromptTokens: 1, TotalTokens: 1}}}); !errors.Is(err, errProviderUsage) {
-		t.Fatalf("native early usage = %v", err)
 	}
 }
 

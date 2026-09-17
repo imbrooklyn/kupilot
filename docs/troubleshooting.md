@@ -49,10 +49,9 @@ Check all of the following:
   `models.agent` profile and no
   unknown, duplicate, null, alias, merge, or second-document content.
 - Values use the exact types and bounds in [Configuration](configuration.md).
-- Each supplied `models.<role>.provider_kind`, endpoint, model, and credential
-  policy is valid. A missing Agent endpoint, model identifier, or required
-  OpenAI API key starts the TUI in model-setup mode. Native Ollama requires
-  `credential_ref: none` and no API key.
+- Each profile supplies its own endpoint and model. Missing Agent endpoint,
+  model or API key opens the fixed OpenAI setup flow. Role and credential
+  ownership are derived from the Agent/Reviewer slot.
 
 `config.example.yaml` deliberately contains no real credential. Copy it to the
 fixed Home configuration or select an absolute external file. Do not add a real
@@ -80,9 +79,8 @@ request to retry automatically.
 
 ## The OpenAI model API key is missing or rejected
 
-Use masked TUI setup, optional plaintext `models.agent.api_key`, or exactly one
-of `KUPILOT_AGENT_API_KEY` and the legacy `KUPILOT_MODEL_API_KEY` alias. A
-Reviewer with `credential_ref: approval_reviewer` uses
+Use masked TUI setup, optional plaintext `models.agent.api_key`, or
+`KUPILOT_AGENT_API_KEY`. The independent Reviewer uses
 `models.approval_reviewer.api_key` or
 `KUPILOT_APPROVAL_REVIEWER_API_KEY`. An environment value overrides its role's
 file value. Each effective value must be non-empty, valid UTF-8 without spaces
@@ -99,8 +97,8 @@ for it again. `save` writes disclosed plaintext to
 
 ## The model endpoint is rejected or incompatible
 
-For `provider_kind: openai`, the configured endpoint is a Chat Completions base
-URL. Kupilot sends the model request to:
+The configured endpoint is an OpenAI API base URL. The default Chat
+Completions protocol sends the model request to:
 
 ```text
 {configured-endpoint}/chat/completions
@@ -112,10 +110,11 @@ ambiguous or traversing paths, invalid ports, insecure TLS, method-changing
 redirects, and cross-origin redirects are rejected.
 
 An endpoint described by a provider as "OpenAI-compatible" may still be
-unsupported. Kupilot requires streamed Chat Completions, SSE, one response
-choice, strict structured function Tool calls, indexed argument fragments, and
-the supported finish states. It does not fall back to non-streaming responses,
-prose-parsed Tool calls, the Responses API, another provider, or another origin.
+unsupported. Chat Completions requires SSE, one choice, indexed structured
+function calls and supported finish states. Explicit `api_protocol: responses`
+uses the native non-streaming Responses component and preserves reasoning
+within the current run. Protocol behavior is fixed before the request; there is
+no automatic change, retry or fallback.
 See [Model Compatibility](model-compatibility.md).
 
 For the official OpenAI API, a compatible configuration example is:
@@ -123,28 +122,9 @@ For the official OpenAI API, a compatible configuration example is:
 ```yaml
 models:
   agent:
-    provider_kind: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4o-mini
 ```
-
-For native Ollama, use the loopback server base without `/v1` or `/api/chat`:
-
-```yaml
-runtime:
-  budget_profile: extended
-models:
-  agent:
-    credential_ref: none
-    provider_kind: ollama
-    endpoint: http://127.0.0.1:11434
-    model: gpt-oss:20b
-```
-
-Kupilot uses Eino's native Ollama component and sends `/api/chat` NDJSON with
-no Authorization header. It does not read `OLLAMA_HOST`, start Ollama, pull a
-model, fall back to `/v1`, or retry another protocol. The finite `extended`
-profile is recommended for slow local model loading and generation.
 
 OpenAI documents `gpt-4o-mini` and later models as supporting Structured
 Outputs. A third-party relay must preserve the same streaming function-call and
@@ -387,7 +367,7 @@ failure may allow the current in-memory answer to finish with a
 visible degraded state, but Kupilot does not claim the missing turn is resumable
 and does not start another run until storage is healthy.
 
-## A `v0.5` permission or capability is unavailable
+## A `v0.1.0` permission or capability is unavailable
 
 First confirm that the feature has been implemented; an Accepted ADR is not an
 availability claim. Once implemented, `/status` and `/permissions` must show
@@ -413,7 +393,7 @@ TTY/shell flags, output/time bounds, and RBAC. An OS sandbox does not establish
 remote Pod or Kubernetes safety, and an image allowlist does not establish
 NetworkPolicy enforcement.
 
-## A `v0.5` action outcome is unknown
+## A `v0.1.0` action outcome is unknown
 
 An external timeout, cancellation, transport failure, or cleanup uncertainty
 after the request may have left the operation applied. Kupilot records this as
@@ -427,7 +407,7 @@ verification unavailable are separate states. A successful API response does
 not prove rollout or remediation success, and a failed verification does not
 rewrite an accepted request as unattempted.
 
-## `v0.5` Session compaction is blocked or degraded
+## `v0.1.0` Session compaction is blocked or degraded
 
 Each later AgentRun must receive direct eligible Messages that fit or one safe
 summary plus the complete eligible recent tail. Minimal mode sources that

@@ -1,6 +1,6 @@
 # Development and CI Gates
 
-- Status: Accepted `v0.5` development contract
+- Status: Accepted `v0.1.0` development contract
 - Date: 2026-09-07
 
 The commands below describe the currently implemented repository gates. Named
@@ -103,74 +103,12 @@ make test-integration-model-preferred
 override on the configured preferred endpoint. It performs no discovery or
 fallback; an unsupported model fails that exact run.
 
-The Ollama target performs no discovery, installation, server start, or model
-download. Supply its exact loopback server base and already-available model.
-It exercises Eino's native Ollama `/api/chat` component and asserts that no
-bearer credential is sent.
-
-Request fixtures must assert the presence and value of native temperature,
-including explicit zero, rather than decoding into a value that conflates an
-absent field with zero. Historical campaigns before ADR-0058 omitted the
-configured zero on the wire and cannot establish explicit-zero behavior.
-
-Before evaluating native Tool capability, run the ordinary deterministic
-request-fidelity regression. It runs the full Agent adapter with a scripted
-greeting, retained history, and a Namespace question. Its recording transport
-performs zero endpoint, Tool-handler, or Kubernetes calls and stores no traffic:
-
-```sh
-GOTOOLCHAIN=go1.25.13 go test -count=1 -v ./internal/application \
-  -run '^TestNativeOllamaRequest(FidelityAudit|AuditComparator)$'
-```
-
-This gate checks the complete code-owned schema at the final wire boundary.
-Do not weaken expected schemas to bless a lossy dependency conversion. The
-native guard restores only the bound parameter-schema spans and explicit zero;
-all other bytes remain Eino-owned. See [ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md).
-
-A separate explicitly authorized experiment compares three first-call request
-variants in three interleaved rounds. It is fixed to local Ollama, gpt-oss:20b,
-temperature 0.1, output limit 2048, JSON format, and omitted thinking. It makes
-at most nine independent model calls and executes no Tool or Kubernetes call.
-It does not read Home configuration or perform retries. Run its synthetic
-harness first:
-
-```sh
-GOTOOLCHAIN=go1.25.13 go test -tags=integration -race -count=1 \
-  ./internal/application -run '^TestNativeOllamaSelectionProbeFixture$'
-
-KUPILOT_INTEGRATION_LIVE=authorized \
-KUPILOT_INTEGRATION_MODEL_TARGET=ollama \
-KUPILOT_INTEGRATION_MAX_COST_USD=0 \
-KUPILOT_OLLAMA_SELECTION_PROBE=authorized \
-GOTOOLCHAIN=go1.25.13 go test -tags=integration -count=1 -timeout=28m -v \
-  ./internal/application -run '^TestNativeOllamaSelectionProbeLive$'
-```
-
-The live test reports fixed classifications, bytes, measured usage when
-available, and time. It never records traffic or arguments. It can fail even
-when deterministic request fidelity passes; see the exact observations and
-limits in [Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
-The two reduced variants are experiments, not production prompts or catalogs.
-
-```sh
-KUPILOT_INTEGRATION_LIVE=authorized \
-KUPILOT_INTEGRATION_MAX_COST_USD=0 \
-KUPILOT_INTEGRATION_OLLAMA_ENDPOINT=http://127.0.0.1:11434 \
-KUPILOT_INTEGRATION_OLLAMA_MODEL=gpt-oss:20b \
-GOTOOLCHAIN=go1.25.13 \
-make test-integration-model-ollama
-```
-
-The model API harness permits at most four calls, 8,192 requested output tokens,
-1 MiB of aggregate request payload, and fifteen minutes for the local Ollama
-target. It distinguishes a
-transport/protocol failure from a `MODEL_CAPABILITY_FAIL`; it never relaxes the
-fragmented-Tool, finish-reason, optional-usage, cancellation, timeout,
-authentication, safe-error, or body-close contract based on model quality.
-Choose the least expensive endpoint-supported model suitable for these
-protocol checks. Do not select a high-cost reasoning model when a small model
-such as `gpt-4o-mini` is available on that exact endpoint.
+The model harness bounds calls, bytes, output tokens, wall time and explicitly
+authorized cost. Request fixtures assert omitted sampling separately from an
+explicit zero and prove native Tool schemas, reasoning and history fidelity.
+No live test may relax malformed Tools, Evidence, cancellation, timeout,
+credential or persistence checks based on model quality. Ollama targets and
+its provider-specific probes are removed under ADR-0063.
 
 The live Reviewer evaluation is a separate quality command. It sends eleven
 bounded, Tool-free, non-streaming cases and records false approvals, false
@@ -193,7 +131,7 @@ Kubernetes integration requires one explicitly selected current disposable
 `k3d-` or `kind-` Context, mutation authorization, and a digest-pinned fixture
 image already suitable for `/bin/sh`, `/bin/sleep`, `/bin/echo`, and `/bin/nc`
 under a non-root diagnostic security context. Preflight checks the exact RBAC
-set before creating the fixed `kupilot-integration-v05` Namespace. A Namespace
+set before creating the fixed `kupilot-integration-v01` Namespace. A Namespace
 with that name but without the suite ownership label blocks the run. The suite
 allows at most 224 operational HTTP calls, reserves 32 calls for bounded
 cleanup, permits two Pod Exec attempts, runs for at most eight minutes, and
@@ -246,7 +184,7 @@ Go compatibility, license, request/stream behavior, cancellation, limits,
 errors, and the commands actually run. A failed or unrun spike is never a
 successful compatibility claim.
 
-## `v0.5` evidence levels
+## `v0.1.0` evidence levels
 
 - Deterministic CI is mandatory and network-independent. It uses scripted model
   and Reviewer behavior, request-recording Kubernetes/HTTP fixtures, direct
@@ -258,7 +196,7 @@ successful compatibility claim.
   approval/denial, escalation, latency, token use, and cost. It is not a
   protocol, authority, or deterministic security gate.
 
-The `v0.5` deterministic matrix must cover every permission profile and risk
+The `v0.1.0` deterministic matrix must cover every permission profile and risk
 class, Reviewer failure, Session rules, both generations, safe history and
 current-question-once, summarization coverage, each capability's exact request
 and projection, ActionEnvelope fields, durable pre-operation audit, at-most-one
@@ -350,7 +288,7 @@ The platform policy is defined by
 Security and privacy requirements remain normative in the
 [Security Threat Model](security.md) and [Privacy Overview](privacy-overview.md).
 The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
-a future `v0.5` release requires a fresh review of the actually reachable
+a future `v0.1.0` release requires a fresh review of the actually reachable
 composition; Accepted documentation alone is not release evidence.
 
 The deterministic quality harness uses only synthetic response and
@@ -382,13 +320,12 @@ quality evidence.
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
 
 ## Deterministic response metadata and failure diagnostics
 
 Interaction conformance records statement coverage with go test -coverprofile
 and a separate auditable decision matrix. Go does not measure branch coverage
-natively. Scripted full-composition fixtures, bounded opt-in local Ollama
+natively. Scripted full-composition fixtures, bounded opt-in OpenAI
 conformance with synthetic Tools, and real-model quality evaluation are distinct
 evidence levels. A failed local scenario is recorded once without repair or
 retry.

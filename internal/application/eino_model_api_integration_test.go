@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -32,7 +31,6 @@ const (
 	livePreferredCostUSDCeiling = 3.0
 	liveModelAuthorizationValue = "authorized"
 	liveModelTargetPreferred    = "preferred"
-	liveModelTargetOllama       = "ollama"
 	liveModelCredentialSource   = "file"
 )
 
@@ -73,12 +71,12 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 		t.Skip("BLOCKED model API integration: set KUPILOT_INTEGRATION_LIVE=authorized only after endpoint and cost authorization")
 	}
 	target := os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET")
-	if target != liveModelTargetPreferred && target != liveModelTargetOllama {
-		t.Skip("BLOCKED model API integration: select exactly preferred or ollama with KUPILOT_INTEGRATION_MODEL_TARGET")
+	if target != liveModelTargetPreferred {
+		t.Skip("BLOCKED model API integration: select preferred with KUPILOT_INTEGRATION_MODEL_TARGET")
 	}
 	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
-	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling || target == liveModelTargetPreferred && maximumCost == 0 {
-		t.Skip("BLOCKED model API integration: KUPILOT_INTEGRATION_MAX_COST_USD must be positive for preferred, zero or positive for Ollama, and at most 3")
+	if err != nil || maximumCost <= 0 || maximumCost > livePreferredCostUSDCeiling {
+		t.Skip("BLOCKED model API integration: KUPILOT_INTEGRATION_MAX_COST_USD must be positive and at most 3")
 	}
 
 	configuration, credential, source := loadLiveModelProfile(t, target)
@@ -138,7 +136,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	usage.observe(textMessage)
 
 	toolMessages := []*schema.Message{
-		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 4, outcome as answer, limitations as an empty array, and questions as an empty array."),
+		schema.SystemMessage("This is a bounded protocol test. First call get_resource exactly once with the supplied synthetic arguments. After the Tool result, return only one JSON object with exactly these fields in order: answer_markdown as a non-empty string, evidence_citations as an empty array, proposed_actions as an empty array, response_schema_version as 1, outcome as answer, limitations as an empty array, and questions as an empty array."),
 		schema.UserMessage(`Call get_resource with {"detail":"summary","name":"synthetic-pod","namespace":null,"purpose":"Validate the protocol fixture.","resource_type":"pods"}. Do not answer in prose before the Tool call.`),
 	}
 	toolMessage, failure := client.stream(
@@ -221,156 +219,6 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	)
 }
 
-// TestNativeOllamaFullAgentLive exercises the complete ADK Agent composition,
-// including provisional answer projection, with a credential-free native
-// Ollama client. Any selected Tool is handled by a synthetic in-memory result;
-// the test never contacts Kubernetes or another data source.
-func TestNativeOllamaFullAgentLive(t *testing.T) {
-	if os.Getenv("KUPILOT_INTEGRATION_LIVE") != liveModelAuthorizationValue ||
-		os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET") != liveModelTargetOllama {
-		t.Skip("BLOCKED native Ollama full-Agent integration: explicitly select the authorized ollama target")
-	}
-	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
-	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling {
-		t.Skip("BLOCKED native Ollama full-Agent integration: provide the bounded authorized cost")
-	}
-
-	configuration, credential, _ := loadLiveModelProfile(t, liveModelTargetOllama)
-	if credential != nil {
-		credential.Destroy()
-		t.Fatal("native Ollama unexpectedly returned a credential")
-	}
-	transport := newLiveBudgetTransport(domain.ModelProviderOllama, 2, liveModelRequestByteCeiling)
-	client, modelError := newModelClientForTest(configuration, nil, nil, transport)
-	if modelError != nil {
-		t.Fatalf("FAIL native Ollama full-Agent client preflight: %v", modelError)
-	}
-	clock := newTestClock()
-	tool := &recordingTool{execute: func(_ context.Context, call projectagent.BoundToolCall) domain.ToolResult {
-		return domain.ToolResult{
-			InvocationID: call.InvocationID(), Name: call.Name(), Version: call.Version(),
-			Scope: call.Scope().Snapshot(), ObservedAt: clock.Now(),
-			Status: domain.ToolResultStatusSuccess, DataJSON: `{}`,
-		}
-	}}
-	adapter, err := newEinoRuntime(runtimeConfig{
-		tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: &testIdentifiers{}, now: clock.Now,
-	}, client)
-	if err != nil {
-		client.close()
-		t.Fatalf("FAIL native Ollama full-Agent adapter preflight: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	limits, err := projectagent.RunBudgetLimitsForProfile(projectagent.BudgetProfileExtended)
-	if err != nil {
-		t.Fatalf("FAIL native Ollama full-Agent budget preflight: %v", err)
-	}
-	input, err := projectagent.NewRunInput(
-		testRunID, testSessionID, testMessageID,
-		"Who are you? Return a brief identity answer without inspecting cluster state.",
-		domain.ClusterScope{
-			Context: "test-context", Namespace: "test-namespace",
-			NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now(),
-		},
-		nil,
-		limits,
-	)
-	if err != nil {
-		t.Fatalf("FAIL native Ollama full-Agent input preflight: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), domain.MaxModelRequestTimeout+time.Minute)
-	defer cancel()
-	outcome := adapter.Run(ctx, input, newEventRecorder())
-	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||
-		strings.TrimSpace(outcome.Diagnosis.AnswerMarkdown) == "" {
-		t.Fatalf("MODEL_CAPABILITY_FAIL native Ollama full-Agent outcome: status=%s diagnosis=%t class=%v",
-			outcome.Status, outcome.Diagnosis != nil, outcome.ErrorClass)
-	}
-	if calls := transport.calls.Load(); calls < 1 || calls > 2 {
-		t.Fatalf("FAIL native Ollama full-Agent calls = %d, want 1..2", calls)
-	}
-	t.Logf("PASS native Ollama full Agent: calls=%d tools=%d request_bytes=%d", transport.calls.Load(), len(tool.Calls()), transport.requestBytes.Load())
-}
-
-// TestNativeOllamaEvidenceBackedAgentLive verifies the full Tool-to-final path
-// with synthetic Evidence. It never contacts Kubernetes or another data source.
-func TestNativeOllamaEvidenceBackedAgentLive(t *testing.T) {
-	if os.Getenv("KUPILOT_INTEGRATION_LIVE") != liveModelAuthorizationValue ||
-		os.Getenv("KUPILOT_INTEGRATION_MODEL_TARGET") != liveModelTargetOllama {
-		t.Skip("BLOCKED native Ollama Evidence integration: explicitly select the authorized ollama target")
-	}
-	maximumCost, err := strconv.ParseFloat(os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD"), 64)
-	if err != nil || maximumCost < 0 || maximumCost > livePreferredCostUSDCeiling {
-		t.Skip("BLOCKED native Ollama Evidence integration: provide the bounded authorized cost")
-	}
-
-	configuration, credential, _ := loadLiveModelProfile(t, liveModelTargetOllama)
-	if credential != nil {
-		credential.Destroy()
-		t.Fatal("native Ollama unexpectedly returned a credential")
-	}
-	transport := newLiveBudgetTransport(domain.ModelProviderOllama, 4, liveModelRequestByteCeiling)
-	client, modelError := newModelClientForTest(configuration, nil, nil, transport)
-	if modelError != nil {
-		t.Fatalf("FAIL native Ollama Evidence client preflight: %v", modelError)
-	}
-	clock := newTestClock()
-	var resultIndex int
-	tool := &recordingTool{execute: func(_ context.Context, call projectagent.BoundToolCall) domain.ToolResult {
-		resultIndex++
-		evidenceID := domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012x", 0x9000+resultIndex))
-		return successfulToolResult(t, call, evidenceID, clock.Now(), `{"phase":"Running"}`)
-	}}
-	adapter, err := newEinoRuntime(runtimeConfig{
-		tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: &testIdentifiers{}, now: clock.Now,
-	}, client)
-	if err != nil {
-		client.close()
-		t.Fatalf("FAIL native Ollama Evidence adapter preflight: %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	limits, err := projectagent.RunBudgetLimitsForProfile(projectagent.BudgetProfileExtended)
-	if err != nil {
-		t.Fatalf("FAIL native Ollama Evidence budget preflight: %v", err)
-	}
-	input, err := projectagent.NewRunInput(
-		testRunID, testSessionID, testMessageID,
-		"Call get_resource for sample-pod, then report the observed condition and cite its exact current-run Evidence ID.",
-		domain.ClusterScope{
-			Context: "test-context", Namespace: "test-namespace",
-			NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now(),
-		},
-		nil,
-		limits,
-	)
-	if err != nil {
-		t.Fatalf("FAIL native Ollama Evidence input preflight: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), domain.MaxModelRequestTimeout+time.Minute)
-	defer cancel()
-	outcome := adapter.Run(ctx, input, newEventRecorder())
-	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || len(tool.Calls()) < 1 {
-		t.Fatalf("MODEL_CAPABILITY_FAIL native Ollama Evidence outcome: status=%s diagnosis=%t class=%v tools=%d",
-			outcome.Status, outcome.Diagnosis != nil, outcome.ErrorClass, len(tool.Calls()))
-	}
-	verified := false
-	for _, claim := range outcome.Diagnosis.ClaimCoverage {
-		if claim.TextHash != domain.SHA256Hex(claim.Text) {
-			t.Fatal("FAIL native Ollama Evidence: runtime-derived claim hash was inconsistent")
-		}
-		if claim.Kind == domain.ClaimCurrentObservation && len(claim.EvidenceIDs) > 0 {
-			verified = true
-		}
-	}
-	if !verified {
-		t.Fatal("MODEL_CAPABILITY_FAIL native Ollama Evidence: no verified current observation was returned")
-	}
-	if calls := transport.calls.Load(); calls < 2 || calls > 4 {
-		t.Fatalf("FAIL native Ollama Evidence calls = %d, want 2..4", calls)
-	}
-	t.Logf("PASS native Ollama Evidence-backed Agent: calls=%d tools=%d request_bytes=%d", transport.calls.Load(), len(tool.Calls()), transport.requestBytes.Load())
-}
-
 type liveUsageObservation struct {
 	responses int
 	input     int
@@ -416,9 +264,6 @@ func (transport *liveBudgetTransport) RoundTrip(request *http.Request) (*http.Re
 	if transport.provider == domain.ModelProviderOpenAI && request.Header.Get("Authorization") == "" {
 		return nil, errors.New("live OpenAI integration request has no transport credential")
 	}
-	if transport.provider == domain.ModelProviderOllama && (request.Header.Get("Authorization") != "" || request.URL.Path != "/api/chat") {
-		return nil, errors.New("live native Ollama integration request violated the credential-free route")
-	}
 	return transport.base.RoundTrip(request)
 }
 
@@ -430,36 +275,6 @@ func (transport *liveBudgetTransport) CloseIdleConnections() {
 
 func loadLiveModelProfile(t *testing.T, target string) (domain.ModelConfiguration, *projectconfig.SecretValue, string) {
 	t.Helper()
-	if target == liveModelTargetOllama {
-		endpoint := os.Getenv("KUPILOT_INTEGRATION_OLLAMA_ENDPOINT")
-		model := os.Getenv("KUPILOT_INTEGRATION_OLLAMA_MODEL")
-		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Scheme != "http" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
-			parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1" || model == "" {
-			t.Skip("BLOCKED Ollama integration: provide an explicit loopback KUPILOT_INTEGRATION_OLLAMA_ENDPOINT and KUPILOT_INTEGRATION_OLLAMA_MODEL")
-		}
-		configuration := domain.ModelConfiguration{
-			ProfileName: "ollama-integration", Role: domain.ModelRoleAgent,
-			ProviderKind:        domain.ModelProviderOllama,
-			Endpoint:            strings.TrimRight(endpoint, "/"),
-			Origin:              parsed.Scheme + "://" + parsed.Host,
-			Model:               model,
-			ReasoningEffort:     domain.ModelReasoningEffortOmitted,
-			ResponseFormat:      domain.ModelResponseFormatJSONObject,
-			APIKeySource:        domain.ModelAPIKeySourceNone,
-			Temperature:         testTemperature(0),
-			MaxOutputTokens:     liveModelOutputTokenCeiling,
-			RequestTimeout:      10 * time.Minute,
-			StreamingRequired:   true,
-			ToolCallingRequired: true,
-			TransportPolicy:     domain.ModelTransportPolicyLoopbackHTTPNoRedirect,
-		}
-		if configuration.Validate() != nil {
-			t.Skip("BLOCKED Ollama integration: the explicit profile is not an admitted native loopback configuration")
-		}
-		return configuration, nil, "none"
-	}
-
 	paths, err := projectconfig.SystemPaths()
 	if err != nil {
 		t.Skipf("BLOCKED preferred model integration: default Kupilot paths are unavailable: %v", err)
@@ -556,7 +371,7 @@ func validateLiveStructuredFinal(message *schema.Message) error {
 	if err != nil {
 		return fmt.Errorf("final response did not satisfy the current strict contract: %w", err)
 	}
-	if strings.TrimSpace(draft.AnswerMarkdown) == "" || draft.ResponseSchemaVersion != 3 ||
+	if strings.TrimSpace(draft.AnswerMarkdown) == "" || draft.ResponseSchemaVersion != 1 ||
 		len(draft.ConfirmedFacts) != 0 || len(draft.ClaimCoverage) != 0 || len(draft.RecommendedActions) != 0 ||
 		len(draft.MissingInformation) != 0 || draft.Clarification != nil {
 		return fmt.Errorf(

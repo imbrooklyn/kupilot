@@ -58,17 +58,17 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	}
 	agentEnvironment := &EnvironmentSecretSource{
 		LookupEnv: lookup, Unsetenv: options.Unsetenv,
-		Variables: []string{AgentAPIKeyEnvironmentVariable, ModelAPIKeyEnvironmentVariable},
+		Variable: AgentAPIKeyEnvironmentVariable,
 	}
 	reviewerEnvironment := &EnvironmentSecretSource{
 		LookupEnv: lookup, Unsetenv: options.Unsetenv,
-		Variables: []string{ApprovalReviewerAPIKeyEnvironmentVariable},
+		Variable: ApprovalReviewerAPIKeyEnvironmentVariable,
 	}
 	prometheusEnvironment := &EnvironmentSecretSource{
-		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variables: []string{PrometheusAPIKeyEnvironmentVariable},
+		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variable: PrometheusAPIKeyEnvironmentVariable,
 	}
 	lokiEnvironment := &EnvironmentSecretSource{
-		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variables: []string{LokiAPIKeyEnvironmentVariable},
+		LookupEnv: lookup, Unsetenv: options.Unsetenv, Variable: LokiAPIKeyEnvironmentVariable,
 	}
 	agentEnvironmentCredential, agentEnvironmentFound, agentEnvironmentErr := agentEnvironment.ReadOptional()
 	reviewerEnvironmentCredential, reviewerEnvironmentFound, reviewerEnvironmentErr := reviewerEnvironment.ReadOptional()
@@ -149,23 +149,13 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 
 	agentCredential := fileCredentials.agent
 	agentSource := CredentialSourceNone
-	if config.Models.Agent.ProviderKind == ProviderOllama {
+	if fileCredentials.agentFound {
+		agentSource = CredentialSourceFile
+	}
+	if agentEnvironmentFound {
 		fileCredentials.agent.Destroy()
-		agentEnvironmentCredential.Destroy()
-		if fileCredentials.agentFound || agentEnvironmentFound {
-			fileCredentials.reviewer.Destroy()
-			reviewerEnvironmentCredential.Destroy()
-			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_credential_conflict", "load_configuration", "An ollama model profile must not define an API key.")
-		}
-	} else {
-		if fileCredentials.agentFound {
-			agentSource = CredentialSourceFile
-		}
-		if agentEnvironmentFound {
-			fileCredentials.agent.Destroy()
-			agentCredential = agentEnvironmentCredential
-			agentSource = CredentialSourceEnvironment
-		}
+		agentCredential = agentEnvironmentCredential
+		agentSource = CredentialSourceEnvironment
 	}
 	credentials := ModelCredentials{Agent: ProfileCredential{
 		Role: ModelRoleAgent, Reference: config.Models.Agent.CredentialReference, Source: agentSource, Value: agentCredential,
@@ -183,45 +173,14 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 		reviewerCredential := ProfileCredential{
 			Role: ModelRoleApprovalReviewer, Reference: reviewerProfile.CredentialReference,
 		}
-		switch reviewerProfile.CredentialReference {
-		case ModelCredentialAgent:
+		reviewerCredential.Value = fileCredentials.reviewer
+		if fileCredentials.reviewerFound {
+			reviewerCredential.Source = CredentialSourceFile
+		}
+		if reviewerEnvironmentFound {
 			fileCredentials.reviewer.Destroy()
-			reviewerEnvironmentCredential.Destroy()
-			if fileCredentials.reviewerFound || reviewerEnvironmentFound {
-				credentials.Destroy()
-				return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_reviewer_credential_conflict", "load_configuration", "A reviewer that references the agent credential must not define another reviewer API key.")
-			}
-			if credentials.Agent.Value.IsSet() {
-				clone, cloneErr := credentials.Agent.Value.Clone()
-				if cloneErr != nil {
-					credentials.Destroy()
-					return Loaded{}, cloneErr
-				}
-				reviewerCredential.Value = clone
-				reviewerCredential.Source = CredentialSourceInherited
-			}
-		case ModelCredentialApprovalReviewer:
-			reviewerCredential.Value = fileCredentials.reviewer
-			if fileCredentials.reviewerFound {
-				reviewerCredential.Source = CredentialSourceFile
-			}
-			if reviewerEnvironmentFound {
-				fileCredentials.reviewer.Destroy()
-				reviewerCredential.Value = reviewerEnvironmentCredential
-				reviewerCredential.Source = CredentialSourceEnvironment
-			}
-		case ModelCredentialNone:
-			fileCredentials.reviewer.Destroy()
-			reviewerEnvironmentCredential.Destroy()
-			if fileCredentials.reviewerFound || reviewerEnvironmentFound {
-				credentials.Destroy()
-				return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_credential_conflict", "load_configuration", "An ollama reviewer profile must not define an API key.")
-			}
-		default:
-			credentials.Destroy()
-			fileCredentials.reviewer.Destroy()
-			reviewerEnvironmentCredential.Destroy()
-			return Loaded{}, newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "load_configuration", "The reviewer credential reference is invalid.")
+			reviewerCredential.Value = reviewerEnvironmentCredential
+			reviewerCredential.Source = CredentialSourceEnvironment
 		}
 		credentials.ApprovalReviewer = &reviewerCredential
 	}
@@ -349,21 +308,14 @@ type modelsDocument struct {
 }
 
 type modelProfileDocument struct {
-	Name                  *string                   `yaml:"name"`
-	Role                  *ModelRole                `yaml:"role"`
-	InheritAgent          *bool                     `yaml:"inherit_agent,omitempty"`
-	CredentialReference   *ModelCredentialReference `yaml:"credential_ref"`
-	ProviderKind          *string                   `yaml:"provider_kind,omitempty"`
-	Endpoint              *string                   `yaml:"endpoint,omitempty"`
-	Model                 *string                   `yaml:"model,omitempty"`
-	APIProtocol           *string                   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
-	ReasoningEffort       *string                   `yaml:"reasoning_effort,omitempty"`
-	ResponseFormat        *string                   `yaml:"response_format,omitempty"`
-	Temperature           *float64                  `yaml:"temperature,omitempty"`
-	MaxOutputTokens       *int                      `yaml:"max_output_tokens,omitempty"`
-	RequestTimeoutSeconds *int                      `yaml:"request_timeout_seconds,omitempty"`
-	Streaming             *bool                     `yaml:"streaming,omitempty"`
-	ToolCallingRequired   *bool                     `yaml:"tool_calling_required,omitempty"`
+	Endpoint              *string  `yaml:"endpoint,omitempty"`
+	Model                 *string  `yaml:"model,omitempty"`
+	APIProtocol           *string  `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
+	ReasoningEffort       *string  `yaml:"reasoning_effort,omitempty"`
+	ResponseFormat        *string  `yaml:"response_format,omitempty"`
+	Temperature           *float64 `yaml:"temperature,omitempty"`
+	MaxOutputTokens       *int     `yaml:"max_output_tokens,omitempty"`
+	RequestTimeoutSeconds *int     `yaml:"request_timeout_seconds,omitempty"`
 }
 
 type kubernetesDocument struct {
@@ -388,7 +340,7 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 		return Config{}, err
 	}
 	if document.Version != CurrentVersion || document.Models == nil || document.Models.Agent == nil ||
-		!document.Models.Agent.complete(false) ||
+		!document.Models.Agent.complete() ||
 		(*document.Models.Agent.Endpoint == "") != (*document.Models.Agent.Model == "") {
 		return Config{}, schemaError("Configuration version 1 requires one complete models.agent profile.")
 	}
@@ -398,31 +350,19 @@ func decodeConfigDocument(content []byte, version int) (Config, error) {
 	agentBase.Temperature = nil
 	config.Models.Agent = applyProfileDocument(agentBase, document.Models.Agent)
 	if reviewer := document.Models.ApprovalReviewer; reviewer != nil {
-		if reviewer.Name == nil || reviewer.Role == nil || reviewer.InheritAgent == nil || reviewer.CredentialReference == nil {
-			return Config{}, schemaError("The approval_reviewer profile must explicitly name its role, inheritance choice, and credential reference.")
-		}
-		if !*reviewer.InheritAgent && !reviewer.complete(true) {
-			return Config{}, schemaError("A non-inheriting approval_reviewer profile must provide every model setting.")
+		if !reviewer.complete() {
+			return Config{}, schemaError("The approval_reviewer profile requires its own endpoint and model.")
 		}
 		base := defaultReviewerProfile()
 		base.Temperature = nil
-		if *reviewer.InheritAgent {
-			base = config.Models.Agent
-			base.Role = ModelRoleApprovalReviewer
-			base.Streaming = false
-			base.ToolCallingRequired = false
-		}
 		resolved := applyProfileDocument(base, reviewer)
 		config.Models.ApprovalReviewer = &resolved
 	}
 	return config, nil
 }
 
-func (profile *modelProfileDocument) complete(requireInheritance bool) bool {
-	return profile != nil && profile.Name != nil && profile.Role != nil && profile.CredentialReference != nil &&
-		(!requireInheritance || profile.InheritAgent != nil) && profile.ProviderKind != nil && profile.Endpoint != nil &&
-		profile.Model != nil &&
-		profile.RequestTimeoutSeconds != nil && profile.Streaming != nil && profile.ToolCallingRequired != nil
+func (profile *modelProfileDocument) complete() bool {
+	return profile != nil && profile.Endpoint != nil && profile.Model != nil
 }
 
 func applyRootDocument(config *Config, document configDocument) {
@@ -506,21 +446,6 @@ func applyDataSourceDocument(document *dataSourceDocument) *DataSourceConfig {
 }
 
 func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocument) ModelProfileConfig {
-	if document.Name != nil {
-		profile.Name = *document.Name
-	}
-	if document.Role != nil {
-		profile.Role = *document.Role
-	}
-	if document.InheritAgent != nil {
-		profile.InheritAgent = *document.InheritAgent
-	}
-	if document.CredentialReference != nil {
-		profile.CredentialReference = *document.CredentialReference
-	}
-	if document.ProviderKind != nil {
-		profile.ProviderKind = *document.ProviderKind
-	}
 	if document.Endpoint != nil {
 		profile.Endpoint = *document.Endpoint
 	}
@@ -545,12 +470,8 @@ func applyProfileDocument(profile ModelProfileConfig, document *modelProfileDocu
 	if document.RequestTimeoutSeconds != nil {
 		profile.RequestTimeoutSeconds = *document.RequestTimeoutSeconds
 	}
-	if document.Streaming != nil {
-		profile.Streaming = *document.Streaming
-	}
-	if document.ToolCallingRequired != nil {
-		profile.ToolCallingRequired = *document.ToolCallingRequired
-	}
+	profile.Streaming = profile.Role == ModelRoleAgent && profile.APIProtocol != "responses"
+	profile.ToolCallingRequired = profile.Role == ModelRoleAgent
 	return profile
 }
 
@@ -802,11 +723,7 @@ func validModelsYAML(node *yaml.Node, allowCredential bool) bool {
 func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 	return validYAMLMapping(node, func(key string, value *yaml.Node) bool {
 		switch key {
-		case "name", "role", "credential_ref":
-			return yamlString(value)
-		case "inherit_agent":
-			return yamlScalar(value, "!!bool")
-		case "provider_kind", "endpoint", "model", "reasoning_effort", "api_protocol", "response_format":
+		case "endpoint", "model", "reasoning_effort", "api_protocol", "response_format":
 			return yamlString(value)
 		case "api_key":
 			return allowCredential && yamlString(value)
@@ -814,8 +731,6 @@ func validModelYAML(node *yaml.Node, allowCredential bool) bool {
 			return yamlScalar(value, "!!int", "!!float")
 		case "max_output_tokens", "request_timeout_seconds":
 			return yamlScalar(value, "!!int")
-		case "streaming", "tool_calling_required":
-			return yamlScalar(value, "!!bool")
 		default:
 			return false
 		}
@@ -1169,31 +1084,28 @@ func applyEnvironment(config *Config, lookup func(string) (string, bool)) error 
 		return schemaError("Configuration environment processing is unavailable.")
 	}
 	type field struct {
-		names []string
+		name  string
 		kind  environmentValueKind
 		apply func(any)
 	}
 	fields := []field{
-		{[]string{"KUPILOT_CONTEXT"}, environmentString, func(value any) { config.Context = value.(string) }},
-		{[]string{"KUPILOT_NAMESPACE"}, environmentString, func(value any) { config.Namespace = value.(string) }},
-		{[]string{"KUPILOT_BUDGET_PROFILE"}, environmentString, func(value any) { config.Runtime.BudgetProfile = value.(string) }},
-		{[]string{"KUPILOT_NO_COLOR"}, environmentBool, func(value any) { config.NoColor = value.(bool) }},
-		{[]string{"KUPILOT_AGENT_ENDPOINT", "KUPILOT_MODEL_ENDPOINT"}, environmentString, func(value any) { config.Models.Agent.Endpoint = value.(string) }},
-		{[]string{"KUPILOT_AGENT_MODEL", "KUPILOT_MODEL"}, environmentString, func(value any) { config.Models.Agent.Model = value.(string) }},
-		{[]string{"KUPILOT_AGENT_REASONING_EFFORT", "KUPILOT_MODEL_REASONING_EFFORT"}, environmentString, func(value any) { config.Models.Agent.ReasoningEffort = value.(string) }},
-		{[]string{"KUPILOT_AGENT_TEMPERATURE", "KUPILOT_MODEL_TEMPERATURE"}, environmentFloat, func(value any) { temperature := value.(float64); config.Models.Agent.Temperature = &temperature }},
-		{[]string{"KUPILOT_AGENT_MAX_OUTPUT_TOKENS", "KUPILOT_MODEL_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { config.Models.Agent.MaxOutputTokens = value.(int) }},
-		{[]string{"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS", "KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { config.Models.Agent.RequestTimeoutSeconds = value.(int) }},
-		{[]string{"KUPILOT_EXEC_CREDENTIALS"}, environmentString, func(value any) { config.Kubernetes.ExecCredentials = value.(string) }},
-		{[]string{"KUPILOT_NAMESPACE_ACCESS"}, environmentString, func(value any) { config.Kubernetes.NamespaceAccess = value.(string) }},
-		{[]string{"KUPILOT_LOG_ENABLED"}, environmentBool, func(value any) { config.Logging.Enabled = value.(bool) }},
-		{[]string{"KUPILOT_LOG_LEVEL"}, environmentString, func(value any) { config.Logging.Level = value.(string) }},
+		{"KUPILOT_CONTEXT", environmentString, func(value any) { config.Context = value.(string) }},
+		{"KUPILOT_NAMESPACE", environmentString, func(value any) { config.Namespace = value.(string) }},
+		{"KUPILOT_BUDGET_PROFILE", environmentString, func(value any) { config.Runtime.BudgetProfile = value.(string) }},
+		{"KUPILOT_NO_COLOR", environmentBool, func(value any) { config.NoColor = value.(bool) }},
+		{"KUPILOT_AGENT_ENDPOINT", environmentString, func(value any) { config.Models.Agent.Endpoint = value.(string) }},
+		{"KUPILOT_AGENT_MODEL", environmentString, func(value any) { config.Models.Agent.Model = value.(string) }},
+		{"KUPILOT_AGENT_REASONING_EFFORT", environmentString, func(value any) { config.Models.Agent.ReasoningEffort = value.(string) }},
+		{"KUPILOT_AGENT_TEMPERATURE", environmentFloat, func(value any) { temperature := value.(float64); config.Models.Agent.Temperature = &temperature }},
+		{"KUPILOT_AGENT_MAX_OUTPUT_TOKENS", environmentInt, func(value any) { config.Models.Agent.MaxOutputTokens = value.(int) }},
+		{"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS", environmentInt, func(value any) { config.Models.Agent.RequestTimeoutSeconds = value.(int) }},
+		{"KUPILOT_EXEC_CREDENTIALS", environmentString, func(value any) { config.Kubernetes.ExecCredentials = value.(string) }},
+		{"KUPILOT_NAMESPACE_ACCESS", environmentString, func(value any) { config.Kubernetes.NamespaceAccess = value.(string) }},
+		{"KUPILOT_LOG_ENABLED", environmentBool, func(value any) { config.Logging.Enabled = value.(bool) }},
+		{"KUPILOT_LOG_LEVEL", environmentString, func(value any) { config.Logging.Level = value.(string) }},
 	}
 	for _, candidate := range fields {
-		value, found, err := lookupUniqueEnvironment(lookup, candidate.names)
-		if err != nil {
-			return err
-		}
+		value, found := lookup(candidate.name)
 		if !found {
 			continue
 		}
@@ -1209,18 +1121,15 @@ func applyEnvironment(config *Config, lookup func(string) (string, bool)) error 
 	if config.Models.ApprovalReviewer != nil {
 		reviewer := config.Models.ApprovalReviewer
 		reviewerFields := []field{
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_ENDPOINT"}, environmentString, func(value any) { reviewer.Endpoint = value.(string) }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_MODEL"}, environmentString, func(value any) { reviewer.Model = value.(string) }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_REASONING_EFFORT"}, environmentString, func(value any) { reviewer.ReasoningEffort = value.(string) }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_TEMPERATURE"}, environmentFloat, func(value any) { temperature := value.(float64); reviewer.Temperature = &temperature }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS"}, environmentInt, func(value any) { reviewer.MaxOutputTokens = value.(int) }},
-			{[]string{"KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS"}, environmentInt, func(value any) { reviewer.RequestTimeoutSeconds = value.(int) }},
+			{"KUPILOT_APPROVAL_REVIEWER_ENDPOINT", environmentString, func(value any) { reviewer.Endpoint = value.(string) }},
+			{"KUPILOT_APPROVAL_REVIEWER_MODEL", environmentString, func(value any) { reviewer.Model = value.(string) }},
+			{"KUPILOT_APPROVAL_REVIEWER_REASONING_EFFORT", environmentString, func(value any) { reviewer.ReasoningEffort = value.(string) }},
+			{"KUPILOT_APPROVAL_REVIEWER_TEMPERATURE", environmentFloat, func(value any) { temperature := value.(float64); reviewer.Temperature = &temperature }},
+			{"KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS", environmentInt, func(value any) { reviewer.MaxOutputTokens = value.(int) }},
+			{"KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS", environmentInt, func(value any) { reviewer.RequestTimeoutSeconds = value.(int) }},
 		}
 		for _, candidate := range reviewerFields {
-			value, found, err := lookupUniqueEnvironment(lookup, candidate.names)
-			if err != nil {
-				return err
-			}
+			value, found := lookup(candidate.name)
 			if !found {
 				continue
 			}
@@ -1242,23 +1151,6 @@ func applyEnvironment(config *Config, lookup func(string) (string, bool)) error 
 		}
 	}
 	return nil
-}
-
-func lookupUniqueEnvironment(lookup func(string) (string, bool), names []string) (string, bool, error) {
-	value := ""
-	found := false
-	for _, name := range names {
-		candidate, present := lookup(name)
-		if !present {
-			continue
-		}
-		if found {
-			return "", false, schemaError("Legacy and role-specific aliases for the same setting must not both be set.")
-		}
-		value = candidate
-		found = true
-	}
-	return value, found, nil
 }
 
 func parseEnvironmentValue(value string, kind environmentValueKind) (any, error) {

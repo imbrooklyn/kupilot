@@ -100,7 +100,7 @@ func TestActionEnvelopeCanonicalDigestBindsEveryField(t *testing.T) {
 func TestActionEnvelopeCanonicalDigestFixedVector(t *testing.T) {
 	t.Parallel()
 
-	const want ActionDigest = "97c240d562d2aa92f7c070be441b4e3fcf9a7403c60a353ea8883ca274ac99f6"
+	const want ActionDigest = "c999f1ff2cefa1d76e5b68cc45ec2c22e2e57de917d7c154a75e19d05acf4892"
 	envelope := testActionEnvelope(t)
 	canonical, err := CanonicalAction(envelope)
 	if err != nil {

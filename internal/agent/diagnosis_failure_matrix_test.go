@@ -86,9 +86,9 @@ func TestDiagnosisFailureMatrixKeepsDistinctBoundaryReasons(t *testing.T) {
 }
 
 func TestPlanWireDerivesOrdinalsAndRejectsStructuralAlternatives(t *testing.T) {
-	const valid = `{"schema_version":2,"title":"Plan","steps":[{"description":"Inspect one resource."}],"limitations":[],"evidence_citations":[]}`
+	const valid = `{"schema_version":1,"title":"Plan","steps":[{"description":"Inspect one resource."}],"limitations":[],"evidence_citations":[]}`
 	draft, err := DecodePlanResponse(valid)
-	if err != nil || draft.Plan == nil || draft.Plan.SchemaVersion != 1 || draft.Plan.Steps[0].Sequence != 1 || draft.ResponseSchemaVersion != 4 {
+	if err != nil || draft.Plan == nil || draft.Plan.SchemaVersion != 1 || draft.Plan.Steps[0].Sequence != 1 || draft.ResponseSchemaVersion != 1 {
 		t.Fatalf("plan = %#v, %v", draft, err)
 	}
 	for _, test := range []struct {
@@ -96,7 +96,7 @@ func TestPlanWireDerivesOrdinalsAndRejectsStructuralAlternatives(t *testing.T) {
 		reason  domain.InteractionFailure
 	}{
 		{`{`, domain.FailureFinalJSON},
-		{strings.Replace(valid, `"schema_version":2`, `"schema_version":1`, 1), domain.FailureFinalSchema},
+		{strings.Replace(valid, `"schema_version":1`, `"schema_version":2`, 1), domain.FailureFinalSchema},
 		{strings.Replace(valid, `"title":"Plan"`, `"title":12`, 1), domain.FailurePlan},
 		{strings.Replace(valid, `"title":"Plan"`, `"title":""`, 1), domain.FailurePlan},
 		{strings.Replace(valid, `"steps":[{"description":"Inspect one resource."}]`, `"steps":[]`, 1), domain.FailurePlan},
@@ -125,7 +125,7 @@ func TestPlanWireDerivesOrdinalsAndRejectsStructuralAlternatives(t *testing.T) {
 }
 
 func TestFinalAlternativeAndInternalGrammarFailuresRemainTyped(t *testing.T) {
-	const final = `{"answer_markdown":"Safe answer.","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
+	const final = `{"answer_markdown":"Safe answer.","evidence_citations":[],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`
 	for _, test := range []struct {
 		name, wire string
 		reason     domain.InteractionFailure

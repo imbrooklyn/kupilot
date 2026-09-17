@@ -1,6 +1,6 @@
 # Kupilot Security Threat Model
 
-- Status: Accepted target for Kupilot `v0.5`
+- Status: Accepted target for Kupilot `v0.1.0`
 - Last updated: 2026-09-07
 
 The checked-in implementation now includes named model roles, role-scoped
@@ -26,7 +26,7 @@ the typed reads, controlled diagnostics, and supervised actions in
 [Scope](scope.md). It is not a sandbox for arbitrary commands and does not
 claim that model or Reviewer output is trusted.
 
-The `v0.5` posture deliberately admits daily operational capabilities rather
+The `v0.1.0` posture deliberately admits daily operational capabilities rather
 than relying on an artificially small feature catalog. Security rests on
 explicit code-owned authority, source projection, scope and policy generations,
 role-bound consent, finite budgets, permission routing, durable pre-operation
@@ -81,11 +81,9 @@ or protection from a fully compromised local account.
 - any credential-shaped value found in an otherwise eligible Event, log, field,
   or provider error.
 
-Native Ollama is a credential-free explicit loopback transport. Its profile
-must use `credential_ref: none`; file or environment model keys conflict with
-that profile. The guarded transport rejects Authorization, query-bearing
-ambient authentication, non-loopback targets, redirects, and any path other
-than `/api/chat` before network I/O.
+OpenAI credentials are independently owned by the fixed Agent and Reviewer
+roles. Runtime derives these bindings from the configuration slots. Removed
+provider and inheritance fields are rejected; they cannot broaden authority.
 
 ### Operationally sensitive data
 
@@ -464,7 +462,7 @@ complete or causes a blind retry.
 
 **Controls.** Application performs a content-free invocation preflight before
 model entry and derives the terminal reason from accepted lifecycle, policy,
-budget, storage, and coverage state. Strict response schema 4 separates answers
+budget, storage, and coverage state. Strict response schema 1 separates answers
 from typed clarification, checks same-run/generation Evidence and exact typed
 freshness/conflict/source coverage, and carries no action authority. A fixed
 recovery matrix authorizes zero automatic model, Tool, or action retries.
@@ -662,7 +660,7 @@ barriers, and temporary databases. Required proof includes:
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 

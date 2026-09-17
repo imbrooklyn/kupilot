@@ -1,6 +1,6 @@
 # Supporting Observation Details
 
-This interaction remains normative for the Accepted `v0.5` target. The checked-
+This interaction remains normative for the Accepted `v0.1.0` target. The checked-
 in binary exposes built-in and exact-CRD reads, Events, logs, metrics, optional
 data sources, and bounded remote-diagnostic Evidence projections. Local-process
 and mutation results remain action state rather than raw persisted Evidence;

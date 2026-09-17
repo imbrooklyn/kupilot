@@ -1,7 +1,7 @@
 # Contributing to Kupilot
 
 Thank you for helping improve Kupilot. Contributions must preserve its
-Agent-first `v0.4` product contract and the typed authority, Evidence,
+Agent-first `v0.1.0` product contract and the typed authority, Evidence,
 projection, approval, and data-safety properties that make the broader
 operational boundary reviewable.
 
@@ -21,14 +21,19 @@ The root [AGENTS.md](AGENTS.md) contains repository-wide implementation and
 review constraints. Accepted public decisions remain authoritative until an
 explicit documentation and ADR change replaces them.
 
-The current boundary admits the built-in typed read catalog, `current` and
-`all` namespace policies, and one supervised `restart_deployment` action. Do
-not introduce shell or kubectl execution, Secret reads, a generic Kubernetes
-gateway, dynamic Tools, plugins, a web service, telemetry, or autonomous
-remediation as an ordinary implementation change. A new source or action must
+The current boundary admits only the versioned catalog and supervised actions
+in the [Version Scope](docs/scope.md), under `current` or `all` namespace policy.
+Do not introduce a generic Kubernetes gateway, dynamic Tools, plugins, a web
+service, telemetry, or autonomous remediation. Default-off capabilities remain
+subject to their exact policy and authority gates. A new source or action must
 name an operational need and document its exact API, authority, projection,
 privacy, budget, Evidence or action-state mapping, RBAC impact, and zero-call
 denial tests before implementation.
+
+Until the first publication, the product remains `v0.1.0` and project-owned
+formats remain at version `1`. Correct the initial baseline in place; do not
+add development tags, migration chains, provider extension points, or legacy
+configuration aliases. See [ADR-0063](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 ## Report security issues privately
 
@@ -77,9 +82,9 @@ failure into a skip.
   the required contract review.
 - Keep every I/O and blocking operation Context-aware. Every goroutine needs an
   owner, cancellation path, and bounded termination path.
-- Use project-owned concrete types across boundaries. Keep Eino, client-go,
-  Bubble Tea, SQL, sqlx, and SQLite driver values inside their documented
-  adapters.
+- Use project-owned concrete types across delivery and infrastructure boundaries.
+  Application directly owns the native Eino Agent and Runner. Keep client-go,
+  Bubble Tea, SQL, sqlx, and SQLite driver values inside their documented adapters.
 - Preserve useful internal causes while translating external failures to stable,
   bounded, non-sensitive errors before they reach a user or sink.
 - Use Go formatting and the repository import tool. Do not perform unrelated

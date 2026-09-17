@@ -18,7 +18,7 @@ Application separately owns active-run input identity, queue state,
 generations, persistence intent, and commit decisions; Eino does not own the
 product follow-up queue.
 
-This document distinguishes the accepted `v0.5` target from current
+This document distinguishes the accepted `v0.1.0` target from current
 reachability. The checked-in runtime now uses the stable Eino ADK path, named
 model profiles, role-bound consent, safe Session context and summarization,
 separate Agent, Agent-summary, and Reviewer budgets, broad policy-bound
@@ -36,8 +36,8 @@ decision performs no content or external-source read.
 
 The currently implemented protocol versions are:
 
-- System prompt: `kupilot-agent-policy-v18`
-- Capability catalog: `kupilot-operational-tools-v5`
+- System prompt: `kupilot-agent-policy-v1`
+- Capability catalog: `kupilot-operational-tools-v1`
 
 The native Eino request guard carries the validated Tool catalog only through
 the current call context and restores its parameter-schema spans before I/O
@@ -108,9 +108,8 @@ never reactivated after restart.
    content-free preflight event before endpoint entry. A failed barrier or
    preflight delegates no call.
 5. `ChatModelAgent` and `Runner` own the in-run conversation and ReAct
-   iteration. The Eino boundary drains one bounded OpenAI SSE or native Ollama
-   NDJSON model stream and asks Eino
-   to assemble exactly one assistant message. After each Eino-decoded content
+   iteration. Chat Completions drains one bounded SSE stream and asks Eino to
+   assemble one assistant message; Responses uses native Generate. After each Eino-decoded content
    chunk passes
    stream validation, a passive projector may decode the first top-level
    `answer_markdown` string and publish only its normalized, sensitive-filtered,
@@ -143,7 +142,7 @@ retry. Active-run disagreement resynchronizes delivery to the exact current run;
 scope or resource disagreement uses the existing picker or a later explicit
 resubmit as projected by Application.
 
-A schema-4 final chooses exactly one `answer` or `needs_user_input` outcome.
+A schema-1 final chooses exactly one `answer` or `needs_user_input` outcome.
 Clarification carries one to three bounded typed questions, creates no Tool,
 Evidence, ActionEnvelope, approval, Reviewer call, or execution, and suppresses
 queue drain. A user's response starts a new explicit run. For answers,
@@ -198,7 +197,7 @@ preemption does not establish Application Message commitment.
 
 ## Capability binding
 
-The current `kupilot-operational-tools-v5` catalog contains fourteen fixed
+The current `kupilot-operational-tools-v1` catalog contains fourteen fixed
 diagnostic Tools. Resource get/list now select only a local `resource_type` ID
 from the frozen built-in and exact configured CRD catalog. They support exact
 get, bounded list/count/table projections, normalized describe detail, typed
@@ -259,7 +258,7 @@ also binds the canonical source-origin hash, normalized series identity, and
 query window. Continuation tokens, generated PromQL/LogQL, and raw Kubernetes
 or data-source objects never enter Evidence.
 
-The final strict response schema 4 wire object emits `answer_markdown` first so
+The final strict response schema 1 wire object emits `answer_markdown` first so
 it can be projected without treating the rest of the envelope as visible text,
 then contains the remaining typed members:
 
@@ -446,7 +445,7 @@ At the Eino boundary, each retained final assistant answer is reconstructed in
 the complete current strict final-response JSON envelope. Only its locally
 validated visible Markdown is placed in `answer_markdown`;
 `evidence_citations`, `proposed_actions`, `limitations`, and `questions` are
-empty, while the remaining schema 4 outcome members retain the current grammar.
+empty, while the remaining schema 1 outcome members retain the current grammar.
 The durable Message remains the safe Markdown answer, not raw model traffic.
 This role-preserving representation prevents a prior visible answer from
 becoming a plain-text or retired-schema response example and cannot restore
@@ -583,8 +582,7 @@ input disposition, queue-drain denial, next action, and zero automatic model,
 Tool, or action retries. Optional delivery failure never changes an Agent
 result; unknown authority or side effects never become success.
 
-**Protocol continuation unavailable.** Neither the pinned Chat Completions
-adapter nor the native Ollama `/api/chat` adapter has a stable replay identity,
+**Protocol continuation unavailable.** The pinned OpenAI protocols expose no admitted stable replay identity,
 offset, or same-response reattach operation. A stream disconnect remains
 unknown/recovered; Kupilot adds no retry, polling, checkpoint, persisted event,
 or second request.
@@ -609,11 +607,11 @@ or second request.
 - [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 
-Schema 4 derives claim/question/choice ordering, structural coverage, and final
+Schema 1 derives claim/question/choice ordering, structural coverage, and final
 stop reasons locally. The model supplies intent and exact references. Required
 arrays remain non-null. Clarification answer_markdown may be empty or a bounded
 safe candidate; runtime renders typed questions after sensitivity checks. Object

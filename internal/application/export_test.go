@@ -152,7 +152,7 @@ func TestExportSummaryEscapesMarkdownAndMarksExpiredEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderExportSummary() error = %v", err)
 	}
-	for _, want := range []string{"Schema: `kupilot.export-summary.v4`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
+	for _, want := range []string{"Schema: `kupilot.export-summary.v1`", "State: expired", `\# forged heading`, `\<script\>`, `\# forged answer`} {
 		if !bytes.Contains(content, []byte(want)) {
 			t.Fatalf("export missing %q:\n%s", want, content)
 		}
@@ -397,7 +397,7 @@ func TestExportSummaryMarksEvidencePartialWhenExportFieldIsTruncated(t *testing.
 
 func TestExportCompletenessPreservesSchemaAndRevalidatesProjectionTruncation(t *testing.T) {
 	manifest := domain.AnswerCompletenessManifest{
-		SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 3,
+		SchemaVersion: domain.AnswerCompletenessSchemaVersion, ResponseSchemaVersion: 1,
 		Sources: []domain.AnswerSourceCoverage{{
 			Sequence: 1, SourceHash: domain.SHA256Hex("not-checked"), SubjectHash: domain.SHA256Hex("not-checked"),
 			State: domain.SourceNotChecked, Freshness: domain.EvidenceFreshnessUnknown, Conflict: domain.EvidenceConflictNone,
@@ -411,7 +411,7 @@ func TestExportCompletenessPreservesSchemaAndRevalidatesProjectionTruncation(t *
 	if err != nil {
 		t.Fatalf("projectExportCompleteness() error = %v", err)
 	}
-	if projected.ResponseSchemaVersion != 3 || projected.StopReason != domain.RunTerminalPartialResult ||
+	if projected.ResponseSchemaVersion != 1 || projected.StopReason != domain.RunTerminalPartialResult ||
 		projected.StopReasonBasis != domain.RunTerminalReasonFromCoverage ||
 		!hasExportMissingInformation(projected.Limitations, domain.MissingInformationTruncated) || projected.Validate() != nil {
 		t.Fatalf("projected completeness = %#v", projected)

@@ -114,7 +114,6 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "namespace uppercase", mutate: func(c *Config) { c.Namespace = "Default" }, code: "config_namespace_invalid"},
 		{name: "namespace all", mutate: func(c *Config) { c.Namespace = "*" }, code: "config_namespace_invalid"},
 		{name: "budget profile", mutate: func(c *Config) { c.Runtime.BudgetProfile = "unlimited" }, code: "config_budget_profile_invalid"},
-		{name: "provider kind", mutate: func(c *Config) { c.Models.Agent.ProviderKind = "another_provider" }, code: "config_provider_invalid"},
 		{name: "reasoning effort", mutate: func(c *Config) { c.Models.Agent.ReasoningEffort = "unknown" }, code: "config_reasoning_effort_invalid"},
 		{name: "response format", mutate: func(c *Config) { c.Models.Agent.ResponseFormat = "automatic" }, code: "config_response_format_invalid"},
 		{name: "temperature below zero", mutate: func(c *Config) { c.Models.Agent.Temperature = testTemperature(-0.01) }, code: "config_temperature_invalid"},
@@ -122,8 +121,6 @@ func TestValidateConfigurationFields(t *testing.T) {
 		{name: "output tokens negative", mutate: func(c *Config) { c.Models.Agent.MaxOutputTokens = -1 }, code: "config_output_limit_invalid"},
 		{name: "request timeout zero", mutate: func(c *Config) { c.Models.Agent.RequestTimeoutSeconds = 0 }, code: "config_model_timeout_invalid"},
 		{name: "request timeout above maximum", mutate: func(c *Config) { c.Models.Agent.RequestTimeoutSeconds = MaxModelRequestTimeoutSeconds + 1 }, code: "config_model_timeout_invalid"},
-		{name: "streaming disabled", mutate: func(c *Config) { c.Models.Agent.Streaming = false }, code: "config_model_capability_invalid"},
-		{name: "tool calling disabled", mutate: func(c *Config) { c.Models.Agent.ToolCallingRequired = false }, code: "config_model_capability_invalid"},
 		{name: "unknown exec policy", mutate: func(c *Config) { c.Kubernetes.ExecCredentials = "prompt" }, code: "config_exec_credentials_invalid"},
 		{name: "debug logging", mutate: func(c *Config) { c.Logging.Level = "debug" }, code: "config_log_level_invalid"},
 	}
@@ -136,45 +133,6 @@ func TestValidateConfigurationFields(t *testing.T) {
 			tt.mutate(&config)
 			err := Validate(&config)
 			assertSafeError(t, err, ClassConfigurationInvalid, tt.code)
-		})
-	}
-}
-
-func TestValidateNativeOllamaProviderPolicy(t *testing.T) {
-	t.Parallel()
-
-	valid := Defaults()
-	valid.Models.Agent.ProviderKind = ProviderOllama
-	valid.Models.Agent.CredentialReference = ModelCredentialNone
-	valid.Models.Agent.Endpoint = "http://127.0.0.1:11434"
-	valid.Models.Agent.Model = "fixture-model"
-	if err := Validate(&valid); err != nil {
-		t.Fatalf("Validate(native Ollama) error = %v", err)
-	}
-	if valid.Models.Agent.Origin != "http://127.0.0.1:11434" {
-		t.Fatalf("native Ollama origin = %q", valid.Models.Agent.Origin)
-	}
-
-	for _, test := range []struct {
-		name       string
-		provider   string
-		credential ModelCredentialReference
-		endpoint   string
-		code       string
-	}{
-		{name: "retired provider", provider: "openai_compatible", credential: ModelCredentialAgent, endpoint: "https://model.example.test/v1", code: "config_provider_invalid"},
-		{name: "credential", provider: ProviderOllama, credential: ModelCredentialAgent, endpoint: "http://127.0.0.1:11434", code: "config_model_profile_invalid"},
-		{name: "non-loopback", provider: ProviderOllama, credential: ModelCredentialNone, endpoint: "http://model.example.test:11434", code: "config_model_endpoint_invalid"},
-		{name: "https", provider: ProviderOllama, credential: ModelCredentialNone, endpoint: "https://127.0.0.1:11434", code: "config_model_endpoint_invalid"},
-		{name: "path", provider: ProviderOllama, credential: ModelCredentialNone, endpoint: "http://127.0.0.1:11434/api", code: "config_model_endpoint_invalid"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := Defaults()
-			candidate.Models.Agent.ProviderKind = test.provider
-			candidate.Models.Agent.CredentialReference = test.credential
-			candidate.Models.Agent.Endpoint = test.endpoint
-			candidate.Models.Agent.Model = "fixture-model"
-			assertSafeError(t, Validate(&candidate), ClassConfigurationInvalid, test.code)
 		})
 	}
 }
@@ -312,7 +270,7 @@ func TestLoadInvalidEnvironmentDoesNotEchoValue(t *testing.T) {
 	_, err := Load(context.Background(), LoadOptions{
 		Paths: testPaths(t.TempDir()),
 		LookupEnv: lookupMap(map[string]string{
-			"KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS": canary,
+			"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS": canary,
 		}),
 	})
 	assertSafeError(t, err, ClassConfigurationInvalid, "config_schema_invalid")

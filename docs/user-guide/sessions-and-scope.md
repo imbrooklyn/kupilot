@@ -1,7 +1,7 @@
 # Sessions and Scope
 
 This page defines the implemented Session-memory and explicit-resume semantics
-within the Accepted `v0.5` contract. The checked-in binary now uses eligible
+within the Accepted `v0.1.0` contract. The checked-in binary now uses eligible
 persisted history as model context and directly uses Eino ADK summarization
 with project-owned safe coverage metadata.
 

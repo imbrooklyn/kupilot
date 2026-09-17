@@ -1,4 +1,4 @@
-# Optional v0.5 diagnostic-Pod fixture. Use a dedicated identity and Namespace.
+# Optional v0.1.0 diagnostic-Pod fixture. Use a dedicated identity and Namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

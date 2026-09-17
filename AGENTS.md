@@ -39,7 +39,7 @@ documentation and ADR process before dependent implementation, and only when
 that documentation work is in scope. Tracked files MUST NOT depend on ignored
 or local-only documents.
 
-The Accepted `v0.5` documents are an implementation target, not proof that a
+The Accepted `v0.1.0` documents are an implementation target, not proof that a
 capability is already reachable, tested, compatible, or release-ready. MUST NOT
 claim implementation, test, migration, dependency, RBAC, live integration, or
 model-evaluation success without running and observing the relevant evidence.
@@ -69,7 +69,7 @@ model-evaluation success without running and observing the relevant evidence.
 
 ## Admitted P0 capability categories
 
-The `v0.5` implementation MAY admit only code-owned versioned entries in these
+The `v0.1.0` implementation MAY admit only code-owned versioned entries in these
 categories, subject to all policy, privacy, budget, RBAC, and test gates:
 
 - typed reviewed built-in and exact policy-admitted CRD `get`, `list`,
@@ -330,14 +330,14 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
 
 ## Models, credentials, consent, and Evidence
 
-- MUST support exactly two explicit provider kinds, `openai` and native
-  loopback-only `ollama`, with a required named `agent` profile and optional
-  `approval_reviewer`. Profiles MAY bind
-  several explicit canonical origins. MUST NOT add auto-detection, fallback,
+- MUST support only OpenAI through the existing native Chat Completions and
+  Responses components, with a required `agent` profile and optional
+  `approval_reviewer`. Each role binds one explicit canonical origin.
+  MUST NOT add auto-detection, fallback,
   provider routing, load balancing, cross-origin retry, or prompt-parsed Tools.
-- Each profile MUST explicitly bind consumer role, canonical origin, model,
-  non-secret settings, finite limits, and opaque credential reference. Ollama
-  MAY be an OpenAI-compatible integration target, not another provider kind.
+- Each profile MUST bind its role from the fixed configuration slot, canonical
+  origin, model, non-secret settings, finite limits, and its own opaque
+  credential. MUST NOT add redundant role/provider/credential selectors.
 - HTTPS with normal verification MUST be the default; plain HTTP MUST be
   loopback-only. Userinfo, query, insecure TLS, and cross-origin Authorization
   forwarding MUST be rejected.
@@ -394,7 +394,12 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   mappings, foreign keys, and short transactions. MUST NOT use `SELECT *`,
   `Unsafe()`, `Must*`, unbounded `Select`, generic maps, or value-bearing SQL
   debug output.
-- Migrations MUST be forward-only, versioned, and checksummed. Released
+- Before the first `v0.1.0` release, project-owned schemas, policies, prompts,
+  catalogs and exports MUST remain at initial version 1; the SQLite schema is
+  corrected in place as one initial checksummed migration under ADR-0063.
+  MUST NOT add compatibility paths or bump versions or tags for local development
+  state. Runtime generations and concurrency counters are not format versions.
+- After publication, migrations MUST be forward-only, versioned, and checksummed. Released
   migrations MUST NOT be edited. Unknown/corrupt/incompatible storage MUST NOT
   be silently deleted, overwritten, or recreated.
 - Credentials, kubeconfig, raw objects/Events/logs/metrics/files/process output,

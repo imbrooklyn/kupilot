@@ -1,5 +1,14 @@
 # Kupilot Product Contract
 
+## Unreleased baseline
+
+[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md) establishes
+`v0.1.0` as the first, still-unreleased product version with the current full
+operational scope. OpenAI is the only supported provider. Project-owned schema,
+policy, prompt, catalog and export formats remain at their initial version until
+that release. Earlier milestone labels are development history, not supported
+releases or compatibility obligations.
+
 ## Native Eino ownership
 
 [ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
@@ -9,7 +18,7 @@ explicitly select `chat_completions` or `responses`; omission keeps the existing
 Chat Completions behavior. There is one Agent/Runner per run, no automatic
 protocol selection, retry, fallback, or additional conversation store.
 
-- Status: Accepted `v0.5` target
+- Status: Accepted `v0.1.0` target
 - Date: 2026-09-07
 
 The checked-in implementation now includes the named-model, Eino ADK runtime,
@@ -23,7 +32,7 @@ uncordon/drain actions, and default-off exact local argv and separate shell
 paths are composed through the shared Application action lifecycle. The broad
 read/observability and default-off remote-diagnostic slices are also present.
 This is deterministic implementation evidence, not a live integration or
-`v0.5` release-artifact claim.
+`v0.1.0` release-artifact claim.
 
 ## Product definition
 
@@ -124,7 +133,7 @@ dashboard, command palette, YAML editor, action menu, or shell console.
 
 ## P0 operational capability contract
 
-The `v0.5` P0 catalog covers these code-owned categories:
+The `v0.1.0` P0 catalog covers these code-owned categories:
 
 - typed built-in and exact policy-admitted CRD `get`, `list`, conversational
   `describe`, and bounded query/count/table projections;
@@ -211,21 +220,16 @@ separate bounded read phase and cannot rewrite the attempt outcome.
 
 ## Model and Session context contract
 
-Kupilot supports exactly two provider kinds: `openai` through Eino's OpenAI
-Chat Completions component and `ollama` through Eino's native loopback Ollama
-component. The required `agent` and optional `approval_reviewer` roles select
-exactly one profile, kind, and origin each. There is no provider
-auto-detection, router, fallback, load balancing, or cross-origin retry.
-OpenAI requires its fixed role credential; native Ollama requires
-`credential_ref: none` and sends no Authorization header.
-Summarization reuses `agent` with an independent reserved budget; there is no
-prebuilt `context_compactor` role.
+Kupilot supports OpenAI through Eino's native Chat Completions and Responses
+components. The required `agent` and optional `approval_reviewer` profiles
+bind independent endpoints, models, opaque credentials and consent. Runtime
+derives role and capability behavior; no provider selector, inheritance or
+speculative extension fields are admitted. Summarization reuses `agent` with
+an independent reserved budget. No provider routing, fallback or retry exists.
 
-Native request correctness and model capability are separate requirements.
-The runtime preserves explicitly configured temperature and bound Tool schemas
-before I/O, but unsupported or malformed model output still fails closed.
-The exact local capability limitations are recorded in
-[Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
+Request fidelity and model capability are separate. Explicit reasoning and
+sampling are preserved; malformed or unsupported output fails closed. See
+[Model Compatibility](model-compatibility.md).
 
 Inside `internal/application`, stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware own the framework conversation
@@ -332,7 +336,7 @@ Transcript search uses `Alt+S` or `/find`; failure navigation uses
 safe termination at empty and whitespace-only input boundaries. Selection
 replacement respects the existing byte limit and creates no clipboard authority.
 
-Strict response schema 4 supports either an answer or one to three typed
+Strict response schema 1 supports either an answer or one to three typed
 clarification questions. Runtime binds it to a bounded completeness manifest with
 authoritative stop reason, source coverage, freshness, exact typed conflict or
 supersession, limitations, and claim/Evidence provenance. Claim hashes are
@@ -376,11 +380,11 @@ needed for daily operations.
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 
-Final response schema 4 leaves intent, claim types, exact Evidence references,
+Final response schema 1 leaves intent, claim types, exact Evidence references,
 and action proposals with the model. Runtime supplies ordering, structural
 coverage, stop reasons, and typed clarification rendering. Content-free failure
 stage/reason codes distinguish malformed responses, invalid bindings, and commit

@@ -96,26 +96,6 @@ func fixtureConfiguration(endpoint string, timeout time.Duration) domain.ModelCo
 	}
 }
 
-func fixtureOllamaConfiguration(endpoint string, timeout time.Duration) domain.ModelConfiguration {
-	parsed, _ := url.Parse(endpoint)
-	return domain.ModelConfiguration{
-		ProfileName: "agent", Role: domain.ModelRoleAgent,
-		ProviderKind:        domain.ModelProviderOllama,
-		Endpoint:            endpoint,
-		Origin:              parsed.Scheme + "://" + parsed.Host,
-		Model:               "fixture-model",
-		ReasoningEffort:     domain.ModelReasoningEffortNone,
-		ResponseFormat:      domain.ModelResponseFormatJSONObject,
-		APIKeySource:        domain.ModelAPIKeySourceNone,
-		Temperature:         testTemperature(0.1),
-		MaxOutputTokens:     2048,
-		RequestTimeout:      timeout,
-		StreamingRequired:   true,
-		ToolCallingRequired: true,
-		TransportPolicy:     domain.ModelTransportPolicyLoopbackHTTPNoRedirect,
-	}
-}
-
 func fixtureLogger(buffer *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
@@ -190,343 +170,12 @@ func newFixtureModelClientWithTransport(
 	return client, bound
 }
 
-func newFixtureOllamaClientWithTransport(
-	t *testing.T,
-	configuration domain.ModelConfiguration,
-	logger *slog.Logger,
-	transport http.RoundTripper,
-) (*modelClient, einomodel.ToolCallingChatModel) {
-	t.Helper()
-	client, modelError := newModelClientForTest(configuration, nil, logger, transport)
-	if modelError != nil {
-		t.Fatalf("newModelClientForTest() error = %v", modelError)
-	}
-	t.Cleanup(client.close)
-	bound, err := client.withTools(fixtureToolInfos(t))
-	if err != nil {
-		t.Fatalf("withTools() error = %v", err)
-	}
-	return client, bound
-}
-
 func streamFixture(
 	client *modelClient,
 	model einomodel.ToolCallingChatModel,
 	ctx context.Context,
 ) (*schema.Message, *domain.ModelError) {
 	return client.stream(ctx, fixtureRequestID, model, fixtureMessages(), nil)
-}
-
-func TestNativeOllamaUsesExactCredentialFreeEinoRequestAndNDJSONStream(t *testing.T) {
-	t.Parallel()
-
-	var captured struct {
-		method        string
-		path          string
-		authorization string
-		accept        string
-		body          []byte
-	}
-	client, model := newFixtureOllamaClientWithTransport(
-		t,
-		fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
-		fixtureLogger(&bytes.Buffer{}),
-		roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			captured.method = request.Method
-			captured.path = request.URL.Path
-			captured.authorization = request.Header.Get("Authorization")
-			captured.accept = request.Header.Get("Accept")
-			captured.body, _ = io.ReadAll(request.Body)
-			body := strings.Join([]string{
-				`{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"Pod "},"done":false}`,
-				`{"model":"fixture-model","created_at":"2026-09-15T00:00:01Z","message":{"role":"assistant","content":"is healthy."},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}`,
-			}, "\n") + "\n"
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/x-ndjson"}},
-				Body:       io.NopCloser(strings.NewReader(body)),
-			}, nil
-		}),
-	)
-	message, modelError := streamFixture(client, model, context.Background())
-	if modelError != nil || message == nil || message.Content != "Pod is healthy." ||
-		message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "stop" ||
-		message.ResponseMeta.Usage == nil || message.ResponseMeta.Usage.TotalTokens != 28 {
-		t.Fatalf("native Ollama message/error = %#v / %#v", message, modelError)
-	}
-	if captured.method != http.MethodPost || captured.path != "/api/chat" || captured.authorization != "" ||
-		captured.accept != "application/x-ndjson" {
-		t.Fatalf("native Ollama request = %s %s auth=%q accept=%q", captured.method, captured.path, captured.authorization, captured.accept)
-	}
-	var payload struct {
-		Model   string            `json:"model"`
-		Stream  *bool             `json:"stream"`
-		Format  string            `json:"format"`
-		Think   *bool             `json:"think"`
-		Tools   []json.RawMessage `json:"tools"`
-		Options struct {
-			NumPredict  int     `json:"num_predict"`
-			Temperature float64 `json:"temperature"`
-		} `json:"options"`
-		Messages []json.RawMessage `json:"messages"`
-	}
-	if err := json.Unmarshal(captured.body, &payload); err != nil {
-		t.Fatalf("decode native Ollama request: %v", err)
-	}
-	if payload.Model != "fixture-model" || payload.Stream == nil || !*payload.Stream || payload.Format != "json" ||
-		payload.Think == nil || *payload.Think || len(payload.Tools) != len(agent.ToolSpecifications()) ||
-		len(payload.Messages) != len(fixtureMessages()) || payload.Options.NumPredict != 2048 ||
-		payload.Options.Temperature != 0.1 {
-		t.Fatalf("native Ollama payload = %#v", payload)
-	}
-}
-
-func TestNativeOllamaRunsFullAgentComposition(t *testing.T) {
-	t.Parallel()
-
-	clock := newTestClock()
-	var requests atomic.Int32
-	var logBuffer bytes.Buffer
-	diagnosis := strictTestDiagnosis(`{"answer_markdown":"I am Kupilot.","evidence_citations":[],"proposed_actions":[]}`)
-	content, err := json.Marshal(diagnosis)
-	if err != nil {
-		t.Fatalf("marshal diagnosis: %v", err)
-	}
-	configuration := fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second)
-	configuration.Temperature = testTemperature(0)
-	client, modelError := newModelClientForTest(
-		configuration,
-		nil,
-		fixtureLogger(&logBuffer),
-		roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			requests.Add(1)
-			assertNativeWireTemperature(t, request, 0)
-			body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":` + string(content) + `},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}` + "\n"
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/x-ndjson"}},
-				Body:       io.NopCloser(strings.NewReader(body)),
-			}, nil
-		}),
-	)
-	if modelError != nil {
-		t.Fatalf("newModelClientForTest() error = %v", modelError)
-	}
-	adapter, err := newEinoRuntime(runtimeConfig{
-		tools:       fixedHandlers(new(recordingTool)),
-		scopeGuard:  newTestScopeGuard(),
-		identifiers: &testIdentifiers{},
-		now:         clock.Now,
-	}, client)
-	if err != nil {
-		client.close()
-		t.Fatalf("newEinoRuntime() error = %v", err)
-	}
-	t.Cleanup(adapter.Close)
-	limits, err := agent.RunBudgetLimitsForProfile(agent.BudgetProfileExtended)
-	if err != nil {
-		t.Fatalf("RunBudgetLimitsForProfile() error = %v", err)
-	}
-	input := testInput(t, clock, limits)
-	recorder := newEventRecorder()
-	outcome := adapter.Run(context.Background(), input, recorder)
-	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil ||
-		outcome.Diagnosis.AnswerMarkdown != "I am Kupilot." || requests.Load() != 1 {
-		t.Fatalf("native Ollama extended full Agent outcome/requests/events/log = %#v/%d/%#v/%s", outcome, requests.Load(), recorder.Events(), logBuffer.String())
-	}
-}
-
-func TestNativeOllamaOmitsThinkingWhenReasoningEffortIsOmitted(t *testing.T) {
-	t.Parallel()
-
-	configuration := fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second)
-	configuration.ReasoningEffort = domain.ModelReasoningEffortOmitted
-	var captured []byte
-	client, model := newFixtureOllamaClientWithTransport(
-		t,
-		configuration,
-		fixtureLogger(&bytes.Buffer{}),
-		roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			captured, _ = io.ReadAll(request.Body)
-			body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"available"},"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}` + "\n"
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/x-ndjson"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
-		}),
-	)
-	message, modelError := streamFixture(client, model, context.Background())
-	if modelError != nil || message == nil || message.Content != "available" {
-		t.Fatalf("native omitted-thinking message/error = %#v / %#v", message, modelError)
-	}
-	var payload struct {
-		Think json.RawMessage `json:"think"`
-	}
-	if err := json.Unmarshal(captured, &payload); err != nil {
-		t.Fatalf("decode native omitted-thinking request: %v", err)
-	}
-	if len(payload.Think) != 0 {
-		t.Fatalf("native omitted-thinking request carried think = %s", payload.Think)
-	}
-}
-
-func TestNativeOllamaNormalizesToolCallIdentityWithoutRetry(t *testing.T) {
-	t.Parallel()
-
-	var requests atomic.Int32
-	client, model := newFixtureOllamaClientWithTransport(
-		t,
-		fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
-		fixtureLogger(&bytes.Buffer{}),
-		roundTripFunc(func(*http.Request) (*http.Response, error) {
-			requests.Add(1)
-			body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_cluster_overview","arguments":{"purpose":"Inspect the cluster overview."}}}]},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}` + "\n"
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/x-ndjson"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
-		}),
-	)
-	message, modelError := streamFixture(client, model, context.Background())
-	wantID := nativeOllamaToolCallID(fixtureRequestID, 0)
-	if modelError != nil || message == nil || requests.Load() != 1 || len(message.ToolCalls) != 1 ||
-		message.ResponseMeta == nil || message.ResponseMeta.FinishReason != "tool_calls" ||
-		message.ToolCalls[0].ID != wantID || message.ToolCalls[0].Index == nil || *message.ToolCalls[0].Index != 0 {
-		t.Fatalf("native Ollama Tool call = message %#v error %#v requests %d", message, modelError, requests.Load())
-	}
-}
-
-func TestNativeOllamaRejectsCredentialAndOpenAIRequiresOne(t *testing.T) {
-	t.Parallel()
-
-	credential, err := config.NewSecretValue("generated-provider-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer credential.Destroy()
-	if client, failure := newModelClientForTest(
-		fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second), &credential,
-		fixtureLogger(&bytes.Buffer{}), roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, nil }),
-	); client != nil || failure == nil {
-		t.Fatalf("credential-bearing Ollama client = %#v / %#v", client, failure)
-	}
-	if client, failure := newModelClientForTest(
-		fixtureConfiguration("https://model.example.test/v1", time.Second), nil,
-		fixtureLogger(&bytes.Buffer{}), roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, nil }),
-	); client != nil || failure == nil {
-		t.Fatalf("credential-free OpenAI client = %#v / %#v", client, failure)
-	}
-}
-
-func TestNativeOllamaNDJSONBoundsExactAndOneOver(t *testing.T) {
-	t.Parallel()
-
-	read := func(content string) error {
-		body := &boundedNDJSONBody{
-			ReadCloser: io.NopCloser(strings.NewReader(content)), maximumBytes: domain.MaxModelStreamBytes,
-		}
-		_, err := io.ReadAll(body)
-		_ = body.Close()
-		return err
-	}
-	if err := read(strings.Repeat("x", domain.MaxModelStreamChunkBytes) + "\n"); err != nil {
-		t.Fatalf("exact native record limit error = %v", err)
-	}
-	if err := read(strings.Repeat("x", domain.MaxModelStreamChunkBytes+1) + "\n"); !errors.Is(err, errModelResponseLimitReached) {
-		t.Fatalf("native record one-over error = %v", err)
-	}
-	if err := read(strings.Repeat("{}\n", domain.MaxModelStreamChunks)); err != nil {
-		t.Fatalf("exact native record-count limit error = %v", err)
-	}
-	if err := read(strings.Repeat("{}\n", domain.MaxModelStreamChunks+1)); !errors.Is(err, errModelResponseLimitReached) {
-		t.Fatalf("native record-count one-over error = %v", err)
-	}
-}
-
-func TestNativeOllamaMalformedMediaDuplicateAndDisconnectFailClosedOnce(t *testing.T) {
-	t.Parallel()
-
-	duplicate := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","tool_calls":[{"function":{"name":"get_cluster_overview","arguments":{"purpose":"Inspect."}}},{"function":{"name":"get_cluster_overview","arguments":{"purpose":"Inspect."}}}]},"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}` + "\n"
-	for _, test := range []struct {
-		name        string
-		contentType string
-		body        io.ReadCloser
-	}{
-		{name: "malformed", contentType: "application/x-ndjson", body: io.NopCloser(strings.NewReader("{not-json}\n"))},
-		{name: "wrong media", contentType: "text/event-stream", body: io.NopCloser(strings.NewReader("{}\n"))},
-		{name: "duplicate Tool", contentType: "application/x-ndjson", body: io.NopCloser(strings.NewReader(duplicate))},
-		{name: "disconnect", contentType: "application/x-ndjson", body: &trackingBody{Reader: &disconnectingReader{
-			content: []byte(`{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"partial"},"done":false}` + "\n"),
-			err:     errors.New("synthetic native disconnect"),
-		}}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var requests atomic.Int32
-			client, model := newFixtureOllamaClientWithTransport(
-				t,
-				fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
-				fixtureLogger(&bytes.Buffer{}),
-				roundTripFunc(func(request *http.Request) (*http.Response, error) {
-					requests.Add(1)
-					if request.Header.Get("Authorization") != "" {
-						t.Fatal("native failure request carried Authorization")
-					}
-					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{test.contentType}}, Body: test.body}, nil
-				}),
-			)
-			message, failure := streamFixture(client, model, context.Background())
-			if message != nil || failure == nil || requests.Load() != 1 {
-				t.Fatalf("native %s result = message %#v failure %#v requests %d", test.name, message, failure, requests.Load())
-			}
-		})
-	}
-}
-
-func TestNativeOllamaCancellationTimeoutAndRedirectNeverRetry(t *testing.T) {
-	t.Parallel()
-
-	for _, test := range []struct {
-		name     string
-		deadline bool
-		wantCode domain.ModelErrorCode
-	}{
-		{name: "cancel", wantCode: domain.ModelErrorCodeCancelled},
-		{name: "timeout", deadline: true, wantCode: domain.ModelErrorCodeTimeout},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var requests atomic.Int32
-			started := make(chan struct{})
-			client, model := newFixtureOllamaClientWithTransport(
-				t,
-				fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second),
-				fixtureLogger(&bytes.Buffer{}),
-				roundTripFunc(func(request *http.Request) (*http.Response, error) {
-					requests.Add(1)
-					close(started)
-					<-request.Context().Done()
-					return nil, request.Context().Err()
-				}),
-			)
-			ctx, cancel := context.WithCancel(context.Background())
-			if test.deadline {
-				ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
-			}
-			result := make(chan *domain.ModelError, 1)
-			go func() {
-				_, failure := streamFixture(client, model, ctx)
-				result <- failure
-			}()
-			<-started
-			if !test.deadline {
-				cancel()
-			}
-			failure := <-result
-			cancel()
-			if failure == nil || failure.Code() != test.wantCode || requests.Load() != 1 {
-				t.Fatalf("native %s failure/requests = %#v/%d", test.name, failure, requests.Load())
-			}
-		})
-	}
-
-	origin, _ := url.Parse("http://127.0.0.1:11434")
-	request, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:11434/api/chat", nil)
-	if err := redirectPolicy(origin, domain.ModelProviderOllama)(request, []*http.Request{{URL: origin}}); !errors.Is(err, errRedirectUnsupported) {
-		t.Fatalf("native redirect error = %v", err)
-	}
 }
 
 func TestModelClientObservesEachValidatedSSEContentFragmentBeforeAssembly(t *testing.T) {
@@ -688,8 +337,6 @@ func TestProtocolContinuationDecisionPinsTheInspectedStableStack(t *testing.T) {
 	}{
 		{"github.com/cloudwego/eino", "v0.9.19", "h1:i71YUBK3nwY4L53dkzRgZpAcPSZ4v4eRponN7W9sDtk="},
 		{"github.com/cloudwego/eino-ext/components/model/openai", "v0.1.13", "h1:5XHRTiTD5bt9KQrMHcfvuWNklEC3tpm3XHejdozt9vM="},
-		{"github.com/cloudwego/eino-ext/components/model/ollama", "v0.1.9", "h1:+eZbquy5lF3WHvK9+T7UUqI0CTRqDEniP7fzL85lJuk="},
-		{"github.com/eino-contrib/ollama", "v0.1.0", "h1:z1NaMdKW6X1ftP8g5xGGR5zDRPUtuTKFq35vBQgxsN4="},
 		{"github.com/cloudwego/eino-ext/libs/acl/openai", "v0.1.18-0.20260527084435-846f52bd97c6", "h1:ES/xufN5eqJ3h+9tw/tq6F8kkgnAxBAHVUB6nqKsIDU="},
 		{"github.com/meguminnnnnnnnn/go-openai", "v0.1.2", "h1:iXombGGjqjBrmE9WaSidUhhi3YQhf42QTHvHLMkgvCA="},
 	}
@@ -1585,7 +1232,7 @@ func TestCollectModelMessageBlocksSplitCredential(t *testing.T) {
 		{Role: schema.Assistant, Content: "split-credential-"},
 		{Role: schema.Assistant, Content: "canary", ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"}},
 	})
-	message, err := collectModelMessage(context.Background(), fixtureRequestID, domain.ModelProviderOpenAI, stream, &credential, nil)
+	message, err := collectModelMessage(context.Background(), fixtureRequestID, stream, &credential, nil)
 	if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 		t.Fatalf("credential stream message/error = %#v / %v", message, err)
 	}
@@ -1677,7 +1324,7 @@ func TestCollectModelMessageRejectsInvalidUTF8(t *testing.T) {
 		Content:      string([]byte{0xff}),
 		ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"},
 	}})
-	message, err := collectModelMessage(context.Background(), fixtureRequestID, domain.ModelProviderOpenAI, stream, &credential, nil)
+	message, err := collectModelMessage(context.Background(), fixtureRequestID, stream, &credential, nil)
 	if message != nil || !errors.Is(err, errMalformedProviderChunk) {
 		t.Fatalf("invalid UTF-8 message/error = %#v / %v", message, err)
 	}
@@ -1703,7 +1350,7 @@ func TestCollectModelMessageRejectsMissingToolIndex(t *testing.T) {
 		}},
 		ResponseMeta: &schema.ResponseMeta{FinishReason: "tool_calls"},
 	}})
-	message, err := collectModelMessage(context.Background(), fixtureRequestID, domain.ModelProviderOpenAI, stream, &credential, nil)
+	message, err := collectModelMessage(context.Background(), fixtureRequestID, stream, &credential, nil)
 	if message != nil || !errors.Is(err, errUnsupportedProviderChunk) {
 		t.Fatalf("missing-index message/error = %#v / %v", message, err)
 	}
@@ -1746,7 +1393,6 @@ func TestCollectModelMessageRequiresOneUsageChunkAfterFinish(t *testing.T) {
 			message, err := collectModelMessage(
 				context.Background(),
 				fixtureRequestID,
-				domain.ModelProviderOpenAI,
 				schema.StreamReaderFromArray(current.chunks),
 				&credential,
 				nil,
@@ -1770,7 +1416,6 @@ func TestCollectModelMessageDoesNotObserveStreamLevelInvalidChunk(t *testing.T) 
 	message, err := collectModelMessage(
 		context.Background(),
 		fixtureRequestID,
-		domain.ModelProviderOpenAI,
 		schema.StreamReaderFromArray([]*schema.Message{{
 			Role:    schema.Assistant,
 			Content: "This chunk has invalid stream-level ordering.",

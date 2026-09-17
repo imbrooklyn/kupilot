@@ -13,9 +13,6 @@ import (
 )
 
 const (
-	// ModelAPIKeyEnvironmentVariable is the version 1 Agent alias retained for
-	// deterministic compatibility. New files and setup copy use the role name.
-	ModelAPIKeyEnvironmentVariable            = "KUPILOT_MODEL_API_KEY"
 	AgentAPIKeyEnvironmentVariable            = "KUPILOT_AGENT_API_KEY"
 	ApprovalReviewerAPIKeyEnvironmentVariable = "KUPILOT_APPROVAL_REVIEWER_API_KEY"
 	PrometheusAPIKeyEnvironmentVariable       = "KUPILOT_PROMETHEUS_API_KEY"
@@ -29,12 +26,12 @@ var _ fmt.Stringer = SecretValue{}
 var _ fmt.GoStringer = SecretValue{}
 var _ encoding.TextMarshaler = SecretValue{}
 
-// EnvironmentSecretSource reads one fixed role's admitted environment
-// aliases. Every present alias is removed before validation completes.
+// EnvironmentSecretSource consumes one role's environment credential and
+// removes it before validation completes.
 type EnvironmentSecretSource struct {
 	LookupEnv func(string) (string, bool)
 	Unsetenv  func(string) error
-	Variables []string
+	Variable  string
 
 	mu       sync.Mutex
 	consumed bool
@@ -73,46 +70,19 @@ func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error)
 	if unset == nil {
 		unset = os.Unsetenv
 	}
-	variables := append([]string(nil), source.Variables...)
-	if len(variables) == 0 {
-		variables = []string{ModelAPIKeyEnvironmentVariable}
+	variable := source.Variable
+	if variable == "" {
+		variable = AgentAPIKeyEnvironmentVariable
 	}
-	seen := make(map[string]struct{}, len(variables))
-	values := make([]string, 0, 1)
-	presentCount := 0
-	unsetFailed := false
-	for _, variable := range variables {
-		if variable == "" {
-			return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_source_invalid", "read_model_api_key", "The model API key source is invalid.")
-		}
-		if _, duplicate := seen[variable]; duplicate {
-			return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_source_invalid", "read_model_api_key", "The model API key source is invalid.")
-		}
-		seen[variable] = struct{}{}
-		value, found := lookup(variable)
-		if !found {
-			continue
-		}
-		presentCount++
-		if err := unset(variable); err != nil {
-			unsetFailed = true
-		}
-		values = append(values, value)
-	}
-	if unsetFailed {
-		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "Kupilot could not remove a model API key from its process environment; startup was stopped.")
-	}
-	if presentCount == 0 {
+	value, found := lookup(variable)
+	if !found {
 		return SecretValue{}, false, nil
 	}
-	if presentCount != 1 || len(values) != 1 {
-		for index := range values {
-			values[index] = ""
-		}
-		return SecretValue{}, false, newSafeError(ClassConfigurationInvalid, "model_api_key_ambiguous", "read_model_api_key", "Only one API key environment alias may be set for a model role.")
+	if err := unset(variable); err != nil {
+		return SecretValue{}, false, newSafeError(ClassInternal, "model_api_key_unset_failed", "read_model_api_key", "Kupilot could not remove a model API key from its process environment; startup was stopped.")
 	}
-	secret, err := NewSecretValue(values[0])
-	values[0] = ""
+	secret, err := NewSecretValue(value)
+	value = ""
 	if err != nil {
 		return SecretValue{}, false, err
 	}
@@ -120,7 +90,7 @@ func (source *EnvironmentSecretSource) ReadOptional() (SecretValue, bool, error)
 }
 
 func missingAPIKeyError() *SafeError {
-	return newSafeError(ClassConfigurationInvalid, "model_api_key_missing", "read_model_api_key", "Model API key is required; set KUPILOT_MODEL_API_KEY before starting Kupilot.")
+	return newSafeError(ClassConfigurationInvalid, "model_api_key_missing", "read_model_api_key", "Model API key is required; configure the role's API key before starting Kupilot.")
 }
 
 func validSecret(value string) bool {
@@ -216,7 +186,7 @@ func (SecretValue) MarshalYAML() (any, error) {
 func FilterChildEnvironment(environment []string) []string {
 	filtered := make([]string, 0, len(environment))
 	prefixes := [...]string{
-		ModelAPIKeyEnvironmentVariable + "=",
+		"KUPILOT_MODEL_API_KEY=",
 		AgentAPIKeyEnvironmentVariable + "=",
 		ApprovalReviewerAPIKeyEnvironmentVariable + "=",
 		PrometheusAPIKeyEnvironmentVariable + "=",

@@ -230,7 +230,7 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 
 	for _, name := range []string{
 		config.AgentAPIKeyEnvironmentVariable,
-		config.ModelAPIKeyEnvironmentVariable,
+		config.AgentAPIKeyEnvironmentVariable,
 		config.ApprovalReviewerAPIKeyEnvironmentVariable,
 		config.PrometheusAPIKeyEnvironmentVariable,
 		config.LokiAPIKeyEnvironmentVariable,
@@ -337,7 +337,7 @@ func TestCLIDoctorPreparesMissingStateDirectoryBeforeProcessLock(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode doctor JSON: %v", err)
 	}
-	if envelope.Doctor.ConfigurationSchema != "v1" || envelope.Doctor.Storage.SchemaRevision != 17 {
+	if envelope.Doctor.ConfigurationSchema != "v1" || envelope.Doctor.Storage.SchemaRevision != 1 {
 		t.Fatalf("doctor startup projection = %#v", envelope.Doctor)
 	}
 	if info, err := os.Lstat(paths.StateDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {

@@ -431,11 +431,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}
 	var initialRuntime application.ModelRuntime
 	if modelProfileReady(loaded.Models.Agent, &loaded.Credentials.Agent) {
-		var setupSecret *application.ModelSetupSecret
-		var secretErr error
-		if loaded.Models.Agent.ProviderKind == config.ProviderOpenAI {
-			setupSecret, secretErr = applicationSecret(&loaded.Credentials.Agent.Value)
-		}
+		setupSecret, secretErr := applicationSecret(&loaded.Credentials.Agent.Value)
 		loaded.Credentials.Agent.Value.Destroy()
 		if secretErr == nil {
 			request := application.ModelSetupRequest{
@@ -1129,32 +1125,17 @@ func (factory *compositionModelFactory) BuildModelRuntime(
 		return nil, application.ErrModelSetupInvalid
 	}
 	settings := factory.base
-	settings.Models.Agent.ProviderKind = string(request.ProviderKind)
-	settings.Models.Agent.CredentialReference = config.ModelCredentialAgent
-	if request.ProviderKind == domain.ModelProviderOllama {
-		settings.Models.Agent.CredentialReference = config.ModelCredentialNone
-		settings.Models.Agent.ReasoningEffort = ""
-		settings.Models.Agent.APIProtocol = ""
-		settings.Models.Agent.Streaming = true
-		if settings.Models.Agent.Temperature == nil {
-			temperature := 0.1
-			settings.Models.Agent.Temperature = &temperature
-		}
-	}
 	settings.Models.Agent.Endpoint = request.Endpoint
 	settings.Models.Agent.Origin = ""
 	settings.Models.Agent.Model = request.Model
 	if err := config.Validate(&settings); err != nil {
 		return nil, err
 	}
-	var credential *config.SecretValue
-	if request.ProviderKind == domain.ModelProviderOpenAI {
-		value, err := configurationSecret(request.Secret)
-		if err != nil {
-			return nil, err
-		}
-		credential = &value
+	value, err := configurationSecret(request.Secret)
+	if err != nil {
+		return nil, err
 	}
+	credential := &value
 	agentAdapter, err := application.NewEinoRuntime(application.EinoConfig{
 		ModelConfiguration: modelConfiguration(settings.Models.Agent),
 		Credential:         credential,
@@ -1189,19 +1170,14 @@ func (writer *compositionModelProfileWriter) SaveModelProfile(
 	if writer == nil || request.Validate() != nil {
 		return application.ErrModelSetupInvalid
 	}
-	var credential *config.SecretValue
-	if request.ProviderKind == domain.ModelProviderOpenAI {
-		value, err := configurationSecret(request.Secret)
-		if err != nil {
-			return err
-		}
-		credential = &value
+	value, err := configurationSecret(request.Secret)
+	if err != nil {
+		return err
 	}
-	if credential != nil {
-		defer credential.Destroy()
-	}
+	credential := &value
+	defer credential.Destroy()
 	return config.SaveModelProfilesWithDataSources(ctx, writer.paths, writer.base, config.ModelProfile{
-		ProviderKind: string(request.ProviderKind), Endpoint: request.Endpoint, Model: request.Model,
+		Endpoint: request.Endpoint, Model: request.Model,
 	}, credential, writer.reviewerFileCredential, writer.prometheusFileCredential, writer.lokiFileCredential)
 }
 
@@ -1376,10 +1352,6 @@ func (observer slogRunObserver) ObserveRun(ctx context.Context, observation appl
 func modelConfiguration(value config.ModelProfileConfig) domain.ModelConfiguration {
 	apiKeySource := domain.ModelAPIKeySourceRuntime
 	transportPolicy := domain.ModelTransportPolicyVerifiedHTTPSOrLoopbackHTTP
-	if value.ProviderKind == config.ProviderOllama {
-		apiKeySource = domain.ModelAPIKeySourceNone
-		transportPolicy = domain.ModelTransportPolicyLoopbackHTTPNoRedirect
-	}
 	return domain.ModelConfiguration{
 		ProfileName: value.Name, Role: domain.ModelRole(value.Role),
 		ProviderKind: domain.ModelProviderKind(value.ProviderKind),
@@ -1397,9 +1369,6 @@ func modelConfiguration(value config.ModelProfileConfig) domain.ModelConfigurati
 func modelProfileReady(profile config.ModelProfileConfig, credential *config.ProfileCredential) bool {
 	if profile.Endpoint == "" || profile.Model == "" {
 		return false
-	}
-	if profile.ProviderKind == config.ProviderOllama {
-		return profile.CredentialReference == config.ModelCredentialNone
 	}
 	return profile.ProviderKind == config.ProviderOpenAI && credential != nil && credential.Value.IsSet()
 }

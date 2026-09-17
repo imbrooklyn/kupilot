@@ -1,6 +1,30 @@
 # Kupilot Configuration
 
-- Status: Accepted `v0.5` contract with named-model, read, observability,
+## Initial OpenAI-only schema
+
+[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md) replaces
+the earlier development model layout while keeping configuration version `1`.
+`models.agent` and optional `models.approval_reviewer` each accept `endpoint`,
+`model`, optional `api_key`, `api_protocol`, `reasoning_effort`,
+`response_format`, `temperature`, `max_output_tokens`, and
+`request_timeout_seconds`. The containing slot determines role, identity and
+credential ownership. Reviewer settings and credentials are independent.
+Provider, role, name, credential-reference, inheritance, streaming and
+Tool-required switches are removed. Removed and unknown fields are rejected.
+
+OpenAI is fixed. `api_protocol` defaults to `chat_completions`; `responses`
+selects the existing native non-streaming Responses component. Reasoning and
+temperature omission preserve endpoint defaults. Agent calls have Tools;
+Reviewer and summary calls are non-streaming and Tool-free. First-start setup
+collects endpoint, model, save choice and a masked API key.
+
+Use `KUPILOT_AGENT_API_KEY` or `models.agent.api_key` for the Agent, and
+`KUPILOT_APPROVAL_REVIEWER_API_KEY` or
+`models.approval_reviewer.api_key` for the Reviewer. Environment values take
+precedence and are removed after one-shot loading. Retired `KUPILOT_MODEL_*`
+aliases are not supported. Loading does not migrate or rewrite old local files.
+
+- Status: Accepted `v0.1.0` contract with named-model, read, observability,
   remote-diagnostic, and local-execution policy configuration implemented
 - Date: 2026-09-07
 
@@ -36,21 +60,13 @@ outside Home.
 ## Current first start and interactive model setup
 
 A bare `kupilot` starts the TUI without requiring a configuration file, model
-endpoint, model identifier, or OpenAI API key. When any selected-provider
+endpoint, model identifier, or OpenAI API key. When any required model
 requirement is missing, the sole composer opens a fixed setup flow:
 
-1. Select the fixed `openai` or `ollama` provider kind.
-2. Enter its endpoint.
-3. Enter the model identifier.
-4. Choose `save` or `session`. Empty input selects `save`.
-5. For `openai` only, enter the API key in masked mode. Ollama configuration
-   carries no credential.
-
-Switching interactively to Ollama leaves native `think` omitted so the exact
-model keeps its own default. A manually authored `reasoning_effort: none`
-remains an explicit request for native `think: false`; Kupilot never changes
-that authored value or retries when the selected model rejects or mishandles
-it.
+1. Enter the OpenAI endpoint.
+2. Enter the model identifier.
+3. Choose `save` or `session`. Empty input selects `save`.
+4. Enter the API key in masked mode.
 
 Each step keeps a field label directly above the composer after typing replaces
 the placeholder. `Ctrl+C` or `Esc` cancels an editable step. During in-flight
@@ -65,33 +81,27 @@ optional-source key implicitly. `session` keeps the new Agent key only in the
 current Kupilot process. `/model` repeats Agent setup.
 Reconfiguration cancels and joins an active AgentRun, constructs one
 replacement runtime, invalidates Agent consent if the canonical model origin
-or provider kind changed, and closes the prior runtime after the swap. A
-provider-kind change durably revokes old same-origin consent so restart cannot
-restore it.
+changed.
 
 Adapter construction is local and network-free. The endpoint's complete stream
 and structured Tool compatibility is checked by the first consented model
 request; Kupilot does not probe, auto-detect, route, or fall back to another
 provider.
 
-For OpenAI, `models.agent.api_key` is the file credential field and
-`credential_ref: agent` binds it to the Agent. The transport sends it only as a
+`models.agent.api_key` is the Agent's file credential field. The transport sends it only as a
 Bearer Authorization header. An HTTP 400 or 422 is a request rejection, not proof
 that this field name or the credential is wrong. Check the endpoint's supported
 combination of model, protocol, reasoning, sampling, response format, and
 function calling. For native Responses reasoning, select `api_protocol:
-responses` with `streaming: false`. Omit temperature when the endpoint requires
+responses`. Omit temperature when the endpoint requires
 its sampling default. Explicit settings are never silently removed after an
 error, and reasoning is never disabled automatically.
 
 The loaded configuration always contains one named `agent` profile and may
-contain one `approval_reviewer` profile. Each profile explicitly binds one
-`openai` Chat Completions/Responses or native loopback `ollama` model identifier,
-canonical origin, exact credential policy, finite limits, and exactly one
-consumer role. A Reviewer may inherit
-the Agent origin and selected settings, use the same origin with another model,
-or provide another explicit origin. It remains a distinct role and consent
-tuple in every case. Summarization reuses `agent` with a separate budget and
+contain one `approval_reviewer` profile. Each profile binds its own OpenAI model, canonical origin, credential and
+finite limits. The enclosing slot determines its consumer role. The optional
+Reviewer has independent settings and credentials even when its origin matches
+the Agent; its consent is always separate. Summarization reuses `agent` with a separate budget and
 does not create a `context_compactor` profile.
 
 ## Precedence and file selection
@@ -103,13 +113,9 @@ Non-sensitive settings use this precedence, highest first:
 3. The selected YAML file.
 4. Code-defined defaults.
 
-The Agent credential uses exactly one of `KUPILOT_AGENT_API_KEY` or the legacy
-`KUPILOT_MODEL_API_KEY` alias over an optional `models.agent.api_key` file
-value. Setting both aliases is an error. A Reviewer bound to its own credential
-uses `KUPILOT_APPROVAL_REVIEWER_API_KEY` over
-`models.approval_reviewer.api_key`; a Reviewer with `credential_ref: agent`
-receives an independently owned opaque clone of the Agent credential. There is
-no credential-valued CLI option.
+The Agent uses `KUPILOT_AGENT_API_KEY` over `models.agent.api_key`. The
+Reviewer independently uses `KUPILOT_APPROVAL_REVIEWER_API_KEY` over
+`models.approval_reviewer.api_key`. No credential-valued CLI option exists.
 
 `--config PATH` selects an explicit file. `KUPILOT_CONFIG_FILE` is used when
 the CLI option is absent. Both must be absolute, normalized paths. Otherwise
@@ -127,7 +133,7 @@ documents, nulls, aliases, and merges are rejected. A selected file must be a
 regular non-symlink file. Wider existing Unix permissions are accepted; Kupilot
 does not chmod or chown the file and warns that it may contain a plaintext key.
 
-## Implemented and remaining `v0.5` configuration semantics
+## Implemented and remaining `v0.1.0` configuration semantics
 
 Version 1 implements these project-owned concepts without generic maps or
 extension payloads:
@@ -150,7 +156,7 @@ extension payloads:
   identity, and finite limits.
 
 Public permission-profile configuration and generic remediation settings are
-not accepted by the version 2 parser. Optional data-source, remote-diagnostic,
+not accepted by the version 1 parser. Optional data-source, remote-diagnostic,
 or local-execution configuration constructs only a bounded policy; it cannot
 bypass consent, permission, ActionEnvelope, RBAC or path/target revalidation,
 audit, or sink gates.
@@ -193,9 +199,10 @@ command, or per-run budget selector.
 ## Native protocol selection
 
 Under [ADR-0061](adr/0061-use-eino-directly-in-application.md), OpenAI profiles
-may set `api_protocol: responses` with `streaming: false` to use the native
+may set `api_protocol: responses` to use the native
 Eino Responses component.
-Omission retains `chat_completions`. Native Ollama does not accept this setting.
+Omission selects `chat_completions`. Streaming behavior is derived from the
+protocol: Chat Completions streams, Responses uses native Generate.
 Reasoning effort remains explicit and is never disabled as a fallback.
 
 ## Implemented version 1 fields
@@ -214,23 +221,17 @@ an actual key so it remains safe to copy and inspect.
 | `no_color` | `false`; `--no-color` overrides it, while the presence of `NO_COLOR` supplies `true` at environment priority. |
 | `terminal_status_titles` | `true`; when enabled on a directly attached, conservatively recognized title-capable terminal, only the fixed `Kupilot`, `Working`, `Approval needed`, `Complete`, and `Failed` titles are emitted through terminal-native control and the prior title slot is restored on teardown. Multiplexers and unknown terminals receive no title sequence. |
 | `runtime.budget_profile` | `balanced`; accepted values are `compact`, `balanced`, and `extended`. The profile is frozen into each run and cannot be expanded by model output. |
-| `models.agent.name` | Required unique profile name; lowercase letters and digits with internal hyphens, at most 128 bytes. |
-| `models.agent.role` | Required fixed value `agent`. |
-| `models.agent.credential_ref` | Required `agent` for `openai`; required `none` for `ollama`. |
-| `models.agent.provider_kind` | Required fixed value `openai` or `ollama`. The retired unreleased value `openai_compatible` is rejected. |
-| `models.agent.endpoint` | Required key and may be empty until interactive setup. `openai` requires HTTPS except for explicit loopback HTTP. Native `ollama` requires explicit loopback HTTP and uses the configured server base without `/v1` or `/api/chat`. |
+| `models.agent.endpoint` | Required key; may be empty until interactive setup. HTTPS uses normal verification; plain HTTP is loopback-only. |
 | `models.agent.model` | Required key and may be empty until interactive setup; non-empty values are 1–128 admitted ASCII bytes. Endpoint and model must be either both empty or both non-empty. |
-| `models.agent.api_key` | Optional plaintext OpenAI credential extracted before ordinary typed configuration decode. It is forbidden for `ollama`. |
-| `models.agent.api_protocol` | OpenAI: omitted or `chat_completions` preserves the existing API; `responses` selects native Responses. Ollama requires omission. No automatic negotiation. |
-| `models.agent.reasoning_effort` | Omitted preserves the provider default. OpenAI accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` as explicit settings; the endpoint must support the selection. Ollama accepts omitted, `none`, `low`, `medium`, or `high`. `none` disables thinking; other levels remain native. |
+| `models.agent.api_key` | Optional plaintext credential extracted into an opaque wrapper before ordinary configuration decode. |
+| `models.agent.api_protocol` | Omitted or `chat_completions` selects Chat Completions; `responses` selects native Responses. No automatic negotiation. |
+| `models.agent.reasoning_effort` | Omitted preserves the endpoint default. Explicit `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` requires endpoint support. `none` explicitly disables reasoning; it is never selected automatically. |
 | `models.agent.response_format` | Effective fixed value `prompt` or `json_object`; omission resolves to `prompt`. `json_object` selects the provider's fixed JSON-object response constraint only when the exact endpoint has proved support. It never enables probing, fallback, or retry. |
-| `models.agent.temperature` | OpenAI: optional; omit to preserve provider sampling defaults. Explicit values from 0 through 0.2 are sent unchanged, including zero. Ollama requires an explicit value. Null is rejected. |
+| `models.agent.temperature` | Optional; omission preserves endpoint defaults. Explicit values from 0 through 0.2 are sent unchanged, including zero. Null is rejected. |
 | `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
-| `models.agent.request_timeout_seconds` | Required; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
-| `models.agent.streaming` | `true` for Chat Completions and Ollama; explicit `false` for Responses while the pinned native streaming converter loses encrypted reasoning. |
-| `models.agent.tool_calling_required` | Required fixed value `true`. |
-| `models.approval_reviewer` | Optional typed profile. `name`, `role: approval_reviewer`, `inherit_agent`, and `credential_ref` are always explicit. A non-inheriting profile supplies every non-secret model field. The resolved Reviewer is fixed non-streaming and Tool-free. Its `response_format` has the same explicit `prompt` or `json_object` contract. |
-| `models.approval_reviewer.api_key` | Optional plaintext key only when `credential_ref: approval_reviewer`; it conflicts with `credential_ref: agent`. |
+| `models.agent.request_timeout_seconds` | Optional; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
+| `models.approval_reviewer` | Optional independent profile. Requires endpoint and model; uses the same optional fields with a 30-second default timeout. Runtime fixes this role to non-streaming and Tool-free. No Agent setting or credential is inherited. |
+| `models.approval_reviewer.api_key` | Optional plaintext Reviewer credential; extracted separately from the Agent credential. |
 | `kubernetes.exec_credentials` | `allow`; may be set to `deny`. It never selects or supplies a command. |
 | `kubernetes.namespace_access` | `all`; may be tightened to `current`. `all` permits explicit cross-Namespace and all-Namespace reads in the same Context only when RBAC also permits them. |
 | `kubernetes.resource_policies` | Empty by default. Optional exact CRD entries are combined with, but cannot replace, the code-owned built-in catalog. At most 47 configured entries fit beneath the complete 64-entry hard cap. No environment or CLI override exists. |
@@ -269,8 +270,7 @@ The exact profile time envelopes and their no-retry semantics are defined by
 
 Each supplied endpoint or model identifier is validated independently. If the
 effective endpoint, model identifier, or required OpenAI API key is absent,
-Kupilot opens the interactive model setup flow to complete the profile. An
-Ollama profile is configured without a credential.
+Kupilot opens the interactive model setup flow to complete the profile.
 
 The admitted environment variables are:
 
@@ -280,12 +280,7 @@ The admitted environment variables are:
 - Agent model settings: role-named `KUPILOT_AGENT_ENDPOINT`,
   `KUPILOT_AGENT_MODEL`, `KUPILOT_AGENT_REASONING_EFFORT`,
   `KUPILOT_AGENT_TEMPERATURE`, `KUPILOT_AGENT_MAX_OUTPUT_TOKENS`, and
-  `KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS`. Their respective legacy aliases are
-  `KUPILOT_MODEL_ENDPOINT`, `KUPILOT_MODEL`,
-  `KUPILOT_MODEL_REASONING_EFFORT`, `KUPILOT_MODEL_TEMPERATURE`,
-  `KUPILOT_MODEL_MAX_OUTPUT_TOKENS`, and
-  `KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS`; setting both names for one field is
-  an error.
+  `KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS`.
 - Reviewer model settings, admitted only when the file declares the optional
   profile: `KUPILOT_APPROVAL_REVIEWER_ENDPOINT`,
   `KUPILOT_APPROVAL_REVIEWER_MODEL`,
@@ -293,8 +288,8 @@ The admitted environment variables are:
   `KUPILOT_APPROVAL_REVIEWER_TEMPERATURE`,
   `KUPILOT_APPROVAL_REVIEWER_MAX_OUTPUT_TOKENS`, and
   `KUPILOT_APPROVAL_REVIEWER_REQUEST_TIMEOUT_SECONDS`.
-- Model credentials: `KUPILOT_AGENT_API_KEY`, legacy Agent alias
-  `KUPILOT_MODEL_API_KEY`, and `KUPILOT_APPROVAL_REVIEWER_API_KEY`.
+- Model credentials: `KUPILOT_AGENT_API_KEY` and
+  `KUPILOT_APPROVAL_REVIEWER_API_KEY`.
 - Kubernetes: `KUPILOT_EXEC_CREDENTIALS` and
   `KUPILOT_NAMESPACE_ACCESS`. Remote-diagnostic policy has no environment
   override. Local-execution policy likewise has no environment or CLI override;
@@ -345,8 +340,7 @@ pre-release configuration-schema migration.
 ## Credential boundary
 
 An OpenAI Agent API key may come from masked TUI input,
-`models.agent.api_key` in the selected file, or exactly one of
-`KUPILOT_AGENT_API_KEY` and its legacy `KUPILOT_MODEL_API_KEY` alias. An
+`models.agent.api_key` in the selected file, or `KUPILOT_AGENT_API_KEY`. An
 independent OpenAI Reviewer key may come from
 `models.approval_reviewer.api_key` or
 `KUPILOT_APPROVAL_REVIEWER_API_KEY`. An enabled optional source with its fixed
@@ -439,7 +433,7 @@ sink. This is independent from the container-output category in `/privacy`.
 
 ## Deterministic response metadata and failure diagnostics
 
-Response schema 4 is code-owned, not a configurable compatibility relaxation.
+Response schema 1 is code-owned, not a configurable compatibility relaxation.
 There is no legacy-schema, repair, retry, or permissive-decoding option.
 Existing fixed provider selection, consent, budgets, and explicit
 structured-output settings continue to apply.

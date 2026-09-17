@@ -1,13 +1,12 @@
 # Installing a Release Archive
 
 > [!NOTE]
-> This page documents the historical `0.3.0` archive shape. There is no
-> documented `v0.5` archive in this repository; build the current unreleased
-> implementation from reviewed source unless a separately verified release is
-> published.
+> No public version has been released. This page describes the planned v0.1.0
+> archive shape for a future authorized publication. Build the current code
+> from reviewed source; these instructions are not evidence of a published archive.
 
 Kupilot release archives target macOS and Linux on `amd64` and `arm64`.
-Windows is experimental and has no `v0.3` release archive.
+Windows is experimental and has no `v0.1.0` release archive.
 
 Release archives are CGO-free and contain exactly two files:
 
@@ -31,8 +30,8 @@ Use the operating-system and machine mapping below:
 | `Linux` | `x86_64` | `linux_amd64.tar.gz` |
 | `Linux` | `aarch64` or `arm64` | `linux_arm64.tar.gz` |
 
-For version `0.3.0`, the complete filename starts with `kupilot_0.3.0_`.
-Download that archive, `kupilot_0.3.0_checksums.txt`, and the archive's sibling
+For version `0.1.0`, the complete filename starts with `kupilot_0.1.0_`.
+Download that archive, `kupilot_0.1.0_checksums.txt`, and the archive's sibling
 `.spdx.json` SBOM from the same official release.
 
 ## Verify before extraction
@@ -41,16 +40,16 @@ Work in a new directory containing the downloaded files. Set `archive` to the
 exact filename you selected. On macOS:
 
 ```sh
-archive=kupilot_0.3.0_darwin_arm64.tar.gz
-awk -v name="$archive" '$2 == name { print }' kupilot_0.3.0_checksums.txt |
+archive=kupilot_0.1.0_darwin_arm64.tar.gz
+awk -v name="$archive" '$2 == name { print }' kupilot_0.1.0_checksums.txt |
   shasum -a 256 --check -
 ```
 
 On Linux:
 
 ```sh
-archive=kupilot_0.3.0_linux_amd64.tar.gz
-awk -v name="$archive" '$2 == name { print }' kupilot_0.3.0_checksums.txt |
+archive=kupilot_0.1.0_linux_amd64.tar.gz
+awk -v name="$archive" '$2 == name { print }' kupilot_0.1.0_checksums.txt |
   sha256sum -c -
 ```
 

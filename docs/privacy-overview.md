@@ -6,7 +6,7 @@ uses explicitly configured named model profiles and optional data sources.
 bounded content is sent only to the destination bound to its fixed consumer
 role after informed consent and local safety processing.
 
-This document defines the accepted `v0.5` privacy target and distinguishes it
+This document defines the accepted `v0.1.0` privacy target and distinguishes it
 from current reachability. The checked-in implementation now has typed named
 Agent and optional Reviewer profiles, role/origin/category consent, safe Session
 context and summarization, and deterministic permission/Reviewer routing for the
@@ -53,11 +53,10 @@ Loki results, and remote diagnostic output use separate categories as
 applicable and remain disabled until their exact capability and policy enable
 them. The three current remote diagnostics share the existing
 `redacted_container_output` transfer category while their ActionEnvelopes keep
-container and file data effects distinct. This expanded meaning and the newly
-distinct provider protocol advance the privacy policy to `2026-09-15.v5`, so a
-consent created under the preceding meaning cannot authorize any transfer. A
-same-origin provider switch durably revokes the old Agent consent before
-runtime replacement. Local process output has no model-
+container and file data effects distinct. The initial privacy policy is
+`kupilot.privacy-policy/v1`; consent must bind this meaning and the exact role,
+origin and categories. A consent from an incompatible development baseline
+cannot authorize transfer. Local process output has no model-
 transfer category in the current implementation: even bounded sanitized output
 is terminal-only and cannot become model content or Evidence. Changing a
 category returns the affected consent to pending and cancels old work before
@@ -175,7 +174,7 @@ an action phrase is authority.
 Model output may still be incomplete or wrong. Evidence is a time-bounded
 projection and not a guarantee that cluster state is unchanged.
 
-Strict response schema 4 records only bounded declared claims, limitations,
+Strict response schema 1 records only bounded declared claims, limitations,
 source coverage, freshness/conflict state, Evidence identifiers, stop reason,
 or one to three typed clarification questions. Application checks provenance,
 derives normalized claim hashes locally, and derives the authoritative stop
@@ -206,12 +205,10 @@ or action authority.
 Final-answer content may be shown provisionally after Eino decodes and validates
 each content chunk. Only the first top-level `answer_markdown` string is
 eligible. Before a fragment reaches Application or the TUI, Kupilot checks the
-exact model credential across chunk boundaries when one exists, normalizes split terminal
+exact model credential across chunk boundaries, normalizes split terminal
 controls, applies the fixed sensitive-value policy, enforces byte and event
 ceilings, and verifies current scope. Raw SSE, envelope syntax, Evidence
 citations, proposed actions, reasoning and provider metadata remain excluded.
-Native Ollama uses the same content checks but is restricted to explicit
-loopback HTTP and has no credential or Authorization header.
 The complete decoded Diagnosis is checked again and only its final validated
 answer may be persisted or committed to terminal scrollback.
 
@@ -367,7 +364,7 @@ swap, or storage media.
 ## Redacted summary export
 
 A current standard Session may be exported only through `/privacy` as
-`kupilot.export-summary.v4`, with an
+`kupilot.export-summary.v1`, with an
 explicit absolute Markdown destination and second confirmation. The versioned
 allowlist contains safe Session display metadata, bounded processed committed
 user and assistant text, the bounded safe Session-context summary and its
@@ -450,7 +447,7 @@ outside Kupilot's full control and is separately disclosed and gated.
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 

@@ -1,6 +1,6 @@
 # Performance Baseline and Budgets
 
-- Status: Accepted `v0.5` target with implemented deterministic harnesses
+- Status: Accepted `v0.1.0` target with implemented deterministic harnesses
 - Date: 2026-09-03
 
 ## Scope
@@ -12,7 +12,7 @@ binary size. These measurements protect admitted behavior from regression.
 They are not cross-machine service-level agreements, capacity claims, or a
 reason to add product complexity.
 
-The `v0.5` target keeps selectable immutable finite profiles but makes their
+The `v0.1.0` target keeps selectable immutable finite profiles but makes their
 reservations role- and capability-aware. Agent, Reviewer, Agent-summary,
 Kubernetes, optional data-source, remote-exec, local-process, byte, item, line,
 sample, stream, retention, traversal, timeout, idle, and estimated/known cost
@@ -25,10 +25,10 @@ Exact model context windows, input/output tokens, request and stream ceilings,
 summary triggers, latency, concurrency, and cost values are accepted only from
 the exact pinned Eino/OpenAI source and tests plus selected-endpoint evidence.
 The historical global `8192` output value and middleware example defaults are
-not universal `v0.5` performance contracts; configuration schema version 1
+not universal `v0.1.0` performance contracts; configuration schema version 1
 omits an output-token parameter until selected-endpoint evidence supports one.
 
-## Evidence levels for `v0.5`
+## Evidence levels for `v0.1.0`
 
 Performance and compatibility evidence are reported separately:
 

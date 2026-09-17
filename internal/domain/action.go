@@ -17,7 +17,7 @@ const (
 	// ActionDigestVersion identifies the fixed-order length-prefixed encoding.
 	ActionDigestVersion = "kupilot.action-digest/v1"
 	// ActionPolicyVersion identifies the currently implemented action policy.
-	ActionPolicyVersion = "kupilot.action-policy/2026-09-04"
+	ActionPolicyVersion = "kupilot.action-policy/v1"
 	// ActionApprovalTTL is the exact half-open approve-once lifetime.
 	ActionApprovalTTL = 60 * time.Second
 

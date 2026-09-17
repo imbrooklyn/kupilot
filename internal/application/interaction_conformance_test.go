@@ -24,7 +24,7 @@ import (
 	sessioncontract "github.com/imbrooklyn/kupilot/internal/session"
 )
 
-const interactionGreeting = `{"answer_markdown":"Hello from the fixture.","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
+const interactionGreeting = `{"answer_markdown":"Hello from the fixture.","evidence_citations":[],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`
 
 type interactionStep struct {
 	tool     domain.ToolName
@@ -452,14 +452,14 @@ func TestInteractionCompositionScenarioMatrix(t *testing.T) {
 		{name: "two Evidence two claims", steps: []interactionStep{list, inspect, {final: interactionFinal(interactionClaim(0, "The listed Namespace is Active.") + "," + interactionClaim(1, "The inspected Namespace is Active."))}}, wantTools: 2, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
 		{name: "retained history and reported path", steps: []interactionStep{{final: interactionGreeting}, list, inspect, {final: interactionFinal(interactionClaim(1, "The inspected Namespace is Active."))}}, history: true, wantTools: 2, wantReason: domain.RunTerminalCompleted, wantMessages: 4},
 		{name: "typed clarification", steps: []interactionStep{{final: clarification}}, wantReason: domain.RunTerminalNeedsUserInput, wantMessages: 2},
-		{name: "plan only", steps: []interactionStep{{final: `{"schema_version":2,"title":"Bounded plan","steps":[{"description":"Inspect one admitted resource."}],"limitations":[],"evidence_citations":[]}`}}, plan: true, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
+		{name: "plan only", steps: []interactionStep{{final: `{"schema_version":1,"title":"Bounded plan","steps":[{"description":"Inspect one admitted resource."}],"limitations":[],"evidence_citations":[]}`}}, plan: true, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
 		{name: "Tool timeout", steps: []interactionStep{list}, toolMode: "timeout", wantTools: 1, wantReason: domain.RunTerminalTimedOut, wantFailure: domain.FailureToolTimeout, wantMessages: 1},
 		{name: "Tool result malformed", steps: []interactionStep{list}, toolMode: "invalid", wantTools: 1, wantReason: domain.RunTerminalFailed, wantFailure: domain.FailureToolResult, wantMessages: 1},
 		{name: "malformed provider", steps: []interactionStep{{provider: "malformed"}}, wantReason: domain.RunTerminalFailed, wantFailure: domain.FailureStreamMalformed, wantMessages: 1},
 		{name: "duplicate provider finish", steps: []interactionStep{{final: interactionGreeting, provider: "duplicate_finish"}}, wantReason: domain.RunTerminalFailed, wantFailure: domain.FailureStreamDuplicate, wantMessages: 1},
 		{name: "out of order provider event", steps: []interactionStep{{final: interactionGreeting, provider: "after_finish"}}, wantReason: domain.RunTerminalFailed, wantFailure: domain.FailureStreamAfterFinish, wantMessages: 1},
 		{name: "invalid Evidence reference", steps: []interactionStep{list, {final: interactionFinal(interactionClaim(99, "An unsupported current observation."))}}, wantTools: 1, wantReason: domain.RunTerminalFailed, wantFailure: domain.FailureEvidenceUnknown, wantMessages: 1},
-		{name: "presentation order", steps: []interactionStep{{final: `{"questions":[],"limitations":[],"outcome":"answer","response_schema_version":4,"proposed_actions":[],"evidence_citations":[],"answer_markdown":"Hello from the fixture."}`}}, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
+		{name: "presentation order", steps: []interactionStep{{final: `{"questions":[],"limitations":[],"outcome":"answer","response_schema_version":1,"proposed_actions":[],"evidence_citations":[],"answer_markdown":"Hello from the fixture."}`}}, wantReason: domain.RunTerminalCompleted, wantMessages: 2},
 		{name: "commit failure", steps: []interactionStep{{final: interactionGreeting}}, failComplete: true, wantReason: domain.RunTerminalPersistenceDegraded, wantFailure: domain.FailurePersistence, wantMessages: 1},
 	}
 	for _, native := range []bool{false, true} {

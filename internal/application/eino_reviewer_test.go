@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
@@ -59,37 +60,6 @@ func TestReviewerUsesOneStrictNonStreamingToolFreeRequest(t *testing.T) {
 		!strings.Contains(payload.Messages[1].Content, request.NormalizedAction) ||
 		bytes.Contains(captured, []byte(credentialCanary)) {
 		t.Fatalf("reviewer request body violated the fixed projection: %s", captured)
-	}
-}
-
-func TestNativeOllamaReviewerUsesOneCredentialFreeStructuredRequest(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int64
-	configuration := fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second)
-	configuration.ProfileName = "approval-reviewer"
-	configuration.Role = domain.ModelRoleApprovalReviewer
-	configuration.Temperature = testTemperature(0)
-	configuration.MaxOutputTokens = 0
-	configuration.StreamingRequired = false
-	configuration.ToolCallingRequired = false
-	client, modelErr := newModelClientForTest(configuration, nil, nil, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		calls.Add(1)
-		if request.URL.Path != "/api/chat" || request.Header.Get("Authorization") != "" {
-			return nil, errors.New("native reviewer violated the fixed route")
-		}
-		body := `{"model":"fixture-model","created_at":"2026-09-15T00:00:00Z","message":{"role":"assistant","content":"{\"decision\":\"approve\",\"risk\":\"review\",\"rationale\":\"The bounded policy facts support review.\"}"},"done":true,"done_reason":"stop","prompt_eval_count":20,"eval_count":8}`
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}))
-	if modelErr != nil {
-		t.Fatalf("newModelClientForTest(native reviewer) error = %v", modelErr)
-	}
-	reviewer := &Reviewer{client: client}
-	t.Cleanup(reviewer.Close)
-	result, err := reviewer.Review(context.Background(), validReviewerRequest(), reviewerReservation(time.Second))
-	if err != nil || calls.Load() != 1 || result.Decision != agent.ReviewerDecisionApprove ||
-		result.Risk != domain.RiskReview {
-		t.Fatalf("native Review() = %#v/%v, calls %d", result, err, calls.Load())
 	}
 }
 
@@ -166,17 +136,21 @@ func TestReviewerCancellationAndTimeoutAreStableAndSingleAttempt(t *testing.T) {
 	})
 
 	t.Run("timeout", func(t *testing.T) {
-		var calls atomic.Int64
-		reviewer := newReviewerForTest(t, strings.Repeat("d", 43)+"-reviewer", roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			calls.Add(1)
-			<-request.Context().Done()
-			return nil, request.Context().Err()
-		}))
-		_, err := reviewer.Review(context.Background(), validReviewerRequest(), reviewerReservation(time.Millisecond))
-		var modelErr *domain.ModelError
-		if !errors.As(err, &modelErr) || modelErr.Code() != domain.ModelErrorCodeTimeout || calls.Load() != 1 {
-			t.Fatalf("timed-out Review() error/calls = %v/%d", err, calls.Load())
-		}
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int64
+			reviewer := newReviewerForTest(t, strings.Repeat("d", 43)+"-reviewer", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				<-request.Context().Done()
+				return nil, request.Context().Err()
+			}))
+			started := time.Now()
+			result, err := reviewer.Review(context.Background(), validReviewerRequest(), reviewerReservation(time.Millisecond))
+			var modelErr *domain.ModelError
+			if result != (agent.ReviewerResult{}) || !errors.As(err, &modelErr) ||
+				modelErr.Code() != domain.ModelErrorCodeTimeout || calls.Load() != 1 || time.Since(started) != time.Millisecond {
+				t.Fatalf("timed-out Review() error/calls/elapsed = %v/%d/%s", err, calls.Load(), time.Since(started))
+			}
+		})
 	})
 }
 

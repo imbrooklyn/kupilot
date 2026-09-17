@@ -501,7 +501,7 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 
 	childEnvironment := config.FilterChildEnvironment([]string{
 		"PATH=/usr/bin:/bin",
-		config.ModelAPIKeyEnvironmentVariable + "=" + boundary.canaries[0],
+		config.AgentAPIKeyEnvironmentVariable + "=" + boundary.canaries[0],
 	})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

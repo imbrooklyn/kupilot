@@ -1,4 +1,4 @@
-# Example v0.5 exact CRD fixture matching config.example.yaml.
+# Example v0.1.0 exact CRD fixture matching config.example.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

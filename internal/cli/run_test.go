@@ -238,7 +238,7 @@ func TestRunPrintsOnlyApprovedSafeStartupErrors(t *testing.T) {
 		&stderr,
 		testBuildInfo(),
 		func(context.Context, StartIntent) error {
-			return safeStartupError{message: "Model API key is required; set KUPILOT_MODEL_API_KEY before starting Kupilot. (model_api_key_missing)"}
+			return safeStartupError{message: "Model API key is required; set KUPILOT_AGENT_API_KEY before starting Kupilot. (model_api_key_missing)"}
 		},
 	)
 	if code != ExitFailure {
@@ -247,7 +247,7 @@ func TestRunPrintsOnlyApprovedSafeStartupErrors(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	want := "Error: Model API key is required; set KUPILOT_MODEL_API_KEY before starting Kupilot. (model_api_key_missing)\n"
+	want := "Error: Model API key is required; set KUPILOT_AGENT_API_KEY before starting Kupilot. (model_api_key_missing)\n"
 	if stderr.String() != want {
 		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}

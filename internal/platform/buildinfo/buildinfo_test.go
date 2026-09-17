@@ -37,6 +37,9 @@ func TestReadDoesNotIncludeEnvironmentValues(t *testing.T) {
 	t.Setenv("KUPILOT_BUILDINFO_TEST_VALUE", canary)
 
 	got := Read().Line()
+	if Read().Version != "v0.1.0" {
+		t.Fatal("The unreleased product version changed")
+	}
 	if strings.Contains(got, canary) {
 		t.Fatal("build information contains an environment value")
 	}
@@ -44,6 +47,17 @@ func TestReadDoesNotIncludeEnvironmentValues(t *testing.T) {
 		if !strings.Contains(got, required) {
 			t.Errorf("build information does not contain %q", required)
 		}
+	}
+}
+
+func TestUnreleasedVersionRejectsDevelopmentBumps(t *testing.T) {
+	for _, version := range []string{"", "dev", "v0.2.0", "v0.5.0", "v0.1.1", "v0.1.0-alpha.1"} {
+		if validVersion(version) {
+			t.Fatalf("Unexpected development version admitted: %q", version)
+		}
+	}
+	if !validVersion("v0.1.0") {
+		t.Fatal("Initial version rejected")
 	}
 }
 

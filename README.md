@@ -6,8 +6,9 @@ observations and controlled actions, keeps deterministic Evidence separate from
 model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
-> The checked-in source implements the deterministic `v0.5` contract described
-> by ADR-0044 through ADR-0055 and the canonical docs. It is unreleased. Passing
+> The checked-in source implements the deterministic `v0.1.0` contract described
+> by the canonical docs and ADR-0063. All project-owned schema versions start at
+> 1 and remain fixed until the first v0.1.0 publication. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
 
@@ -16,7 +17,7 @@ kubectl wrapper, a shell console, an IDE, a controller, or a generic API client.
 There is no primary resource tree, YAML editor, action dashboard, dynamic
 plugin, background reconciliation loop, or autonomous remediation.
 
-## Implemented `v0.5` boundary
+## Implemented `v0.1.0` boundary
 
 The P0 capability catalog covers:
 
@@ -74,30 +75,19 @@ automatically.
 
 ## Models and Session context
 
-Kupilot supports two fixed provider kinds: `openai` for Eino's native Chat
-Completions or Responses component and `ollama` for Eino's native loopback
-Ollama component.
+Kupilot supports OpenAI through Eino's native Chat Completions and Responses
+components. `api_protocol: responses` preserves native reasoning and uses
+non-streaming Generate; streaming is derived by runtime. Reasoning and sampling
+remain at endpoint defaults when omitted and are never disabled after errors.
 
-Native Ollama preserves the bound Tool schemas and explicitly configured
-temperature zero at the request boundary. The tested Ollama 0.34.0 /
-gpt-oss:20b combination still fails some strict Tool selections; request fidelity
-does not establish reliable model capability. Historical
-local conformance recorded before this request-fidelity fix omitted that field;
-it does not prove explicit-zero behavior or stable model Tool capability. See
-[Model Compatibility](docs/model-compatibility.md) for the measured limitations.
+The required `agent` and optional `approval_reviewer` profiles each bind their
+own endpoint, model, credential, consent and finite budgets. Role, provider,
+credential-reference, inheritance and capability switches are not configuration
+fields. Summarization reuses `agent` with its independent budget.
+See [Configuration](docs/configuration.md) and
+[ADR-0063](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
-Select `api_protocol: responses` and `streaming: false` explicitly for native
-Responses reasoning and local Tools. The pinned Eino Responses streaming
-converter loses encrypted reasoning items, so that streaming configuration is
-rejected. Kupilot does not disable reasoning or repair provider events. See
-[ADR-0061](docs/adr/0061-use-eino-directly-in-application.md).
-
-Each required `agent` or optional `approval_reviewer` profile selects exactly
-one kind, origin, credential policy, consent tuple, and finite budget. There is
-no provider auto-detection, router, fallback, load balancing, or cross-origin
-retry. Summarization reuses `agent`; no `context_compactor` role is prebuilt.
-
-The `v0.5` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
+The `v0.1.0` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware directly inside Application. Kupilot
 does not build another conversation loop, memory manager, summary engine,
 checkpoint store, or framework facade. Until a stable Eino runner-managed
@@ -235,7 +225,7 @@ Typed terminal reasons and next actions, bidirectional claim/Evidence
 navigation, provenance, content-free egress preflight and budget state, fixed
 Slash availability, a conservative terminal profile, `Ctrl+R` committed-input
 search, semantic transcript jumps, bounded `Alt+Z`/`Alt+Y` undo/redo, and local
-`/doctor` remain inside the same low-chrome screen. Strict response schema 4
+`/doctor` remain inside the same low-chrome screen. Strict response schema 1
 also admits one to three typed clarification questions. `NO_COLOR`, ANSI-16,
 reduced-motion, narrow-resize, IME/Unicode, and restored-scrollback behavior
 retain textual safety meaning.

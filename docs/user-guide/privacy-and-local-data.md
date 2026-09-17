@@ -1,6 +1,6 @@
 # Privacy and Local Data
 
-This page distinguishes current behavior from the Accepted `v0.5` privacy
+This page distinguishes current behavior from the Accepted `v0.1.0` privacy
 target. The checked-in source now exposes named model roles, role-scoped
 consent, safe Session context and summarization, bounded data-source and remote-
 diagnostic pipelines, and default-off local execution. Human and Reviewer

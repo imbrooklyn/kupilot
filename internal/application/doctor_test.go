@@ -82,18 +82,3 @@ func TestDoctorRejectsUnsafeOriginAndInvalidStorageProjection(t *testing.T) {
 		t.Fatalf("invalid storage error = %v", err)
 	}
 }
-
-func TestDoctorProjectsNativeOllamaBoundary(t *testing.T) {
-	result, err := NewDoctorResult("dev", "v1", domain.ModelProviderOllama, domain.SHA256Hex("origin"), true, false,
-		SessionStorageHealth{SchemaRevision: 17})
-	if err != nil {
-		t.Fatalf("NewDoctorResult() error = %v", err)
-	}
-	if result.ProviderKind != "ollama" || result.ModelCompatibility.Adapter != DoctorOllamaAdapterName ||
-		result.ModelCompatibility.AdapterVersion != DoctorOllamaAdapterVersion || result.ModelCompatibility.Protocol != DoctorOllamaProtocol {
-		t.Fatalf("ollama compatibility = %#v", result)
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-}

@@ -12,7 +12,7 @@ func TestEnvironmentSecretSourceReadsOnceAndUnsets(t *testing.T) {
 	t.Parallel()
 
 	canary := strings.Repeat("k", 43) + "-generated"
-	environment := map[string]string{ModelAPIKeyEnvironmentVariable: canary}
+	environment := map[string]string{AgentAPIKeyEnvironmentVariable: canary}
 	unsetCalls := 0
 	source := EnvironmentSecretSource{
 		LookupEnv: lookupMap(environment),
@@ -94,30 +94,6 @@ func TestEnvironmentSecretSourceRejectsSafelyAndAlwaysUnsetsPresentValues(t *tes
 	}
 }
 
-func TestEnvironmentSecretSourceRejectsMultipleAliasesEvenWhenOneIsEmpty(t *testing.T) {
-	t.Parallel()
-
-	environment := map[string]string{
-		AgentAPIKeyEnvironmentVariable: "agent-key-generated",
-		ModelAPIKeyEnvironmentVariable: "",
-	}
-	unsetCalls := 0
-	source := EnvironmentSecretSource{
-		LookupEnv: lookupMap(environment),
-		Unsetenv: func(key string) error {
-			unsetCalls++
-			delete(environment, key)
-			return nil
-		},
-		Variables: []string{AgentAPIKeyEnvironmentVariable, ModelAPIKeyEnvironmentVariable},
-	}
-	_, _, err := source.ReadOptional()
-	assertSafeError(t, err, ClassConfigurationInvalid, "model_api_key_ambiguous")
-	if unsetCalls != 2 || len(environment) != 0 {
-		t.Fatalf("alias cleanup = %d calls, environment %#v", unsetCalls, environment)
-	}
-}
-
 func TestEnvironmentSecretSourceFailsClosedWhenUnsetFails(t *testing.T) {
 	t.Parallel()
 
@@ -182,15 +158,15 @@ func TestFilterChildEnvironmentRemovesEveryModelAPIKeyEntry(t *testing.T) {
 	canary := strings.Repeat("e", 43) + "-generated"
 	environment := []string{
 		"PATH=/usr/bin",
-		ModelAPIKeyEnvironmentVariable + "=" + canary,
+		"KUPILOT_MODEL_API_KEY=" + canary,
 		AgentAPIKeyEnvironmentVariable + "=" + canary + "-agent",
 		ApprovalReviewerAPIKeyEnvironmentVariable + "=" + canary + "-reviewer",
 		"KUPILOT_CONTEXT=development",
-		ModelAPIKeyEnvironmentVariable + "=" + canary + "-duplicate",
+		AgentAPIKeyEnvironmentVariable + "=" + canary + "-duplicate",
 	}
 	got := FilterChildEnvironment(environment)
 	joined := strings.Join(got, "\x00")
-	if strings.Contains(joined, ModelAPIKeyEnvironmentVariable) ||
+	if strings.Contains(joined, "KUPILOT_MODEL_API_KEY") ||
 		strings.Contains(joined, AgentAPIKeyEnvironmentVariable) ||
 		strings.Contains(joined, ApprovalReviewerAPIKeyEnvironmentVariable) || strings.Contains(joined, canary) {
 		t.Fatal("filtered child environment contains the model API key")

@@ -16,7 +16,7 @@ import (
 
 const (
 	// ExportSummarySchemaVersion identifies the only admitted local export projection.
-	ExportSummarySchemaVersion = "kupilot.export-summary.v4"
+	ExportSummarySchemaVersion = "kupilot.export-summary.v1"
 	// MaxExportSummaryBytes is the complete post-redaction Markdown ceiling.
 	MaxExportSummaryBytes = 2 * 1024 * 1024
 	// MaxExportMessages bounds committed conversation records in one export.

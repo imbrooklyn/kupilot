@@ -161,7 +161,7 @@ func strictCoverageFixture(t testing.TB, raw json.RawMessage) json.RawMessage {
 		Questions             []domain.ClarificationQuestion `json:"questions"`
 	}{
 		AnswerMarkdown: source.AnswerMarkdown, ProposedActions: source.ProposedActions,
-		ResponseSchemaVersion: 4, Outcome: "answer",
+		ResponseSchemaVersion: 1, Outcome: "answer",
 		Limitations: []domain.MissingInformation{}, Questions: []domain.ClarificationQuestion{},
 	}
 	result.EvidenceCitations = make([]citation, len(source.EvidenceCitations))

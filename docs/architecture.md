@@ -9,7 +9,7 @@ explicitly select `chat_completions` or `responses`; omission keeps the existing
 Chat Completions behavior. There is one Agent/Runner per run, no automatic
 protocol selection, retry, fallback, or additional conversation store.
 
-Status: Accepted architecture target for Kupilot `v0.5`.
+Status: Accepted architecture target for Kupilot `v0.1.0`.
 
 The checked-in implementation now includes the named-model, stable Eino ADK,
 role-scoped consent, safe Session-memory/summarization, deterministic
@@ -364,7 +364,7 @@ operation affected by both dimensions must pass both generations at all gates.
 
 The catalog is code-owned and versioned per run. It may evolve across releases
 but never through runtime registration, model discovery, or a generic API or
-process handle. The `v0.5` P0 categories are defined in [Scope](scope.md):
+process handle. The `v0.1.0` P0 categories are defined in [Scope](scope.md):
 typed built-in and exact policy-admitted CRD reads and bounded queries, Events,
 all bounded log modes and local search, Pod/Node metrics, explicit optional
 Prometheus/Loki sources, container-file read, Pod diagnostics, diagnostic Pods,
@@ -468,9 +468,8 @@ immutable Tool request, log, result, aggregate, call, and run deadlines.
 
 All budgets remain finite. Exact context windows, input/output tokens, request
 and stream limits, summary thresholds, latency, concurrency, and cost ceilings
-require evidence for the exact pinned Eino core, selected OpenAI or native
-Ollama component, and selected
-endpoint. The earlier `v0.4` global limits are not universal `v0.5` values.
+require evidence for the exact pinned Eino core, selected OpenAI component and endpoint. Values from another endpoint are
+not universal limits.
 Absent exact token evidence, conservative byte, call, time, and cost ceilings
 still fail closed.
 
@@ -489,7 +488,7 @@ Reviewer, attempt, ambiguity, and verification state for composed actions.
 
 ## 8. Free-form answer and Evidence model
 
-The strict response schema 4 envelope contains bounded
+The strict response schema 1 envelope contains bounded
 `response_schema_version`, `outcome`, `answer_markdown`,
 `evidence_citations`, `proposed_actions`, `limitations`, and
 `questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
@@ -503,22 +502,12 @@ serializes that setting for structured Agent or Reviewer output; Agent summaries
 remain plain text. Prompt-only mode remains available, and neither mode permits
 capability probing, fallback, or a second request.
 
-The model boundary contains fixed native component constructions: `openai` selects native Chat Completions or Responses explicitly and `ollama` uses
-Eino native Ollama `/api/chat` at an explicit loopback origin. Application
-freezes one selected kind per role. The guarded transport enforces the selected
-path, media type, credential policy, body limits, and redirect policy before
-network I/O. Native Tool calls receive only a request-bound deterministic ID
-and ordinal inside the adapter because the Ollama protocol carries neither;
-this restores local Eino pairing syntax without creating authority.
-
-The same transport restores an SDK-omitted native temperature when the frozen
-configuration explicitly selects zero (ADR-0058), and restores each bound Tool's
-parameters from its validated code-owned schema (ADR-0059). Exact Tool count,
-order, identity, and description must match the call's immutable binding. All
-other bytes remain Eino-owned. Final byte ceilings and cancellation still
-apply; invalid requests fail before I/O. This does not repair provider output
-or emulate missing model capabilities. See
-[ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md).
+The model boundary directly constructs the selected native Eino OpenAI
+component: Chat Completions or Responses. Application freezes the protocol,
+role, origin, settings and budgets. The guarded transport enforces origin,
+media, credential, byte and redirect limits. Eino owns request serialization
+and Tool-message pairing. No native-provider request repair or synthesized
+Tool identity remains. See [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 - Markdown is the visible answer and receives no mandatory local headings.
 - An Evidence citation binds a bounded claim to one or more accepted current-run
@@ -747,12 +736,11 @@ already independently verified in the current process, Application may use
 that current authority; unavailable or conflicting candidates enter the
 picker without silent fallback.
 
-Migration 15 adds `last_activity_at_ms`, initialized conservatively from the
-prior metadata time. Every admitted lifecycle write advances it monotonically;
-list, view, resume, status, doctor, export, maintenance, preview, and failed
-deletion do not. Migration 16 adds bounded strict completeness-manifest and
-clarification JSON columns to Diagnosis. Existing released migrations remain
-unchanged, and legacy rows remain readable without acquiring authority.
+The initial schema includes `last_activity_at_ms`, advanced monotonically only
+by admitted lifecycle writes. Read-only operations do not change it. Diagnosis
+contains bounded completeness and clarification metadata. There is one initial
+migration and no historical development table-rebuild path; incompatible local
+state fails closed until explicitly backed up and reset.
 
 ## 13. Security and conformance requirements
 
@@ -820,7 +808,7 @@ Before each actual endpoint entry, a run-local bridge verifies the exact
 Session/Run, initial input and steer sequence, generations, profile/origin,
 consent, context coverage, Tool catalog, storage health, budget, sink, run mode,
 and recovery state. Its content-free event precedes model I/O. Strict response
-schema 4 then produces either a bounded answer manifest or typed clarification.
+schema 1 then produces either a bounded answer manifest or typed clarification.
 The Agent declares claim text, type, and exact Evidence IDs. Runtime derives
 sequence, structural coverage, and the normalized claim hash before binding the
 durable manifest.
@@ -860,12 +848,12 @@ freshness/conflict, and checked/not-checked source state.
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 
-Response schema 4 removes model-supplied sequence, coverage state, and stop
-reason fields. Plan wire schema 2 removes step sequences; the durable Plan
+Response schema 1 removes model-supplied sequence, coverage state, and stop
+reason fields. Plan wire schema 1 removes step sequences; the durable Plan
 remains schema 1. Runtime normalizes unique validated Evidence references to
 acceptance order and renders typed questions. Project-owned failure stage/reason
 values cross the Agent, Application, and delivery boundaries without raw errors

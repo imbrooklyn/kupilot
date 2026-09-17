@@ -1,4 +1,4 @@
-# Current v0.5 cluster-scoped built-in read fixture.
+# Current v0.1.0 cluster-scoped built-in read fixture.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

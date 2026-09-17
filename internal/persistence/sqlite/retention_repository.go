@@ -100,22 +100,6 @@ const (
 			LIMIT ?
 		)
 	`
-	deleteExpiredLegacyTerminalApprovalsSQL = `
-		DELETE FROM legacy_restart_approvals
-		WHERE id IN (
-			SELECT p.id
-			FROM legacy_restart_approvals AS p
-			WHERE p.status IN ('rejected', 'expired', 'cancelled', 'invalidated', 'consumed')
-				AND p.state_changed_at_ms <= ?
-				AND NOT EXISTS (
-					SELECT 1
-					FROM audit_events AS a
-					WHERE a.correlation_id = p.id
-				)
-			ORDER BY p.state_changed_at_ms, p.id
-			LIMIT ?
-		)
-	`
 	deleteEmptyMinimalSessionsSQL = `
 		DELETE FROM sessions
 		WHERE id IN (
@@ -133,14 +117,6 @@ const (
 				AND NOT EXISTS (
 					SELECT 1
 					FROM approvals AS p
-					WHERE p.session_id = s.id
-						OR p.run_id IN (
-							SELECT r.id FROM agent_runs AS r WHERE r.session_id = s.id
-						)
-				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM legacy_restart_approvals AS p
 					WHERE p.session_id = s.id
 						OR p.run_id IN (
 							SELECT r.id FROM agent_runs AS r WHERE r.session_id = s.id
@@ -231,25 +207,12 @@ func (repository *RetentionRepository) Cleanup(ctx context.Context, request audi
 		}
 		committed.ApprovalRecords, err = retentionDeleteResult(tx.ExecContext(
 			ctx,
-			deleteExpiredLegacyTerminalApprovalsSQL,
+			deleteExpiredTerminalApprovalsSQL,
 			request.WriteAuditCutoff().UnixMilli(),
 			request.BatchSize,
 		))
 		if err != nil {
 			return err
-		}
-		remainingApprovalRecords := int64(request.BatchSize) - committed.ApprovalRecords
-		if remainingApprovalRecords > 0 {
-			currentApprovalRecords, deleteErr := retentionDeleteResult(tx.ExecContext(
-				ctx,
-				deleteExpiredTerminalApprovalsSQL,
-				request.WriteAuditCutoff().UnixMilli(),
-				remainingApprovalRecords,
-			))
-			if deleteErr != nil {
-				return deleteErr
-			}
-			committed.ApprovalRecords += currentApprovalRecords
 		}
 		committed.MinimalSessions, err = retentionDeleteResult(tx.ExecContext(
 			ctx,

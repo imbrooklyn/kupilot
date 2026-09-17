@@ -175,12 +175,12 @@ func TestLoadParsesAdmittedTypedEnvironmentValues(t *testing.T) {
 	got, err := Load(context.Background(), LoadOptions{
 		Paths: testPaths(t.TempDir()),
 		LookupEnv: lookupMap(map[string]string{
-			"KUPILOT_MODEL_ENDPOINT":                "https://model.example.test/v1",
-			"KUPILOT_MODEL":                         "diagnostic-model",
-			"KUPILOT_MODEL_REASONING_EFFORT":        "none",
-			"KUPILOT_MODEL_TEMPERATURE":             "0.2",
-			"KUPILOT_MODEL_MAX_OUTPUT_TOKENS":       "1024",
-			"KUPILOT_MODEL_REQUEST_TIMEOUT_SECONDS": "30",
+			"KUPILOT_AGENT_ENDPOINT":                "https://model.example.test/v1",
+			"KUPILOT_AGENT_MODEL":                   "diagnostic-model",
+			"KUPILOT_AGENT_REASONING_EFFORT":        "none",
+			"KUPILOT_AGENT_TEMPERATURE":             "0.2",
+			"KUPILOT_AGENT_MAX_OUTPUT_TOKENS":       "1024",
+			"KUPILOT_AGENT_REQUEST_TIMEOUT_SECONDS": "30",
 			"KUPILOT_LOG_ENABLED":                   "false",
 		}),
 	})
@@ -211,48 +211,6 @@ func TestLoadAcceptsZeroModelTemperature(t *testing.T) {
 	}
 	if *got.Models.Agent.Temperature != 0 {
 		t.Fatalf("Temperature = %v, want 0", got.Models.Agent.Temperature)
-	}
-}
-
-func TestLoadNativeOllamaRequiresNoCredentialAndRejectsCredentialSources(t *testing.T) {
-	t.Parallel()
-
-	nativeDocument := strings.NewReplacer(
-		"credential_ref: agent", "credential_ref: none",
-		"provider_kind: openai", "provider_kind: ollama",
-		"endpoint: https://agent.example.test/v1", "endpoint: http://127.0.0.1:11434",
-	).Replace(version1Config("", ""))
-	t.Run("credential free", func(t *testing.T) {
-		paths := testPaths(t.TempDir())
-		writePrivateFile(t, paths.ConfigFile, []byte(nativeDocument))
-		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
-		if err != nil {
-			t.Fatalf("Load(native Ollama) error = %v", err)
-		}
-		defer loaded.Credentials.Destroy()
-		if loaded.Models.Agent.ProviderKind != ProviderOllama || loaded.Models.Agent.Origin != "http://127.0.0.1:11434" ||
-			loaded.Credentials.Agent.Reference != ModelCredentialNone || loaded.Credentials.Agent.Source != CredentialSourceNone ||
-			loaded.Credentials.Agent.Value.IsSet() {
-			t.Fatalf("native Ollama load = profile %#v credential %#v", loaded.Models.Agent, loaded.Credentials.Agent)
-		}
-	})
-	for _, test := range []struct {
-		name        string
-		document    string
-		environment map[string]string
-	}{
-		{name: "file", document: strings.Replace(nativeDocument, "    temperature: 0.1", "    api_key: generated-native-key\n    temperature: 0.1", 1)},
-		{name: "environment", document: nativeDocument, environment: map[string]string{ModelAPIKeyEnvironmentVariable: "generated-native-key"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			paths := testPaths(t.TempDir())
-			writePrivateFile(t, paths.ConfigFile, []byte(test.document))
-			_, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(test.environment)})
-			assertSafeError(t, err, ClassConfigurationInvalid, "config_model_credential_conflict")
-			if strings.Contains(err.Error(), "generated-native-key") {
-				t.Fatal("credential entered native Ollama load error")
-			}
-		})
 	}
 }
 
@@ -436,11 +394,11 @@ func TestConfigSerializationNeverContainsEnvironmentAPIKey(t *testing.T) {
 	canary := strings.Repeat("s", 41) + "-generated"
 	root := t.TempDir()
 	apiKeyLookedUp := false
-	environment := lookupMap(map[string]string{ModelAPIKeyEnvironmentVariable: canary})
+	environment := lookupMap(map[string]string{AgentAPIKeyEnvironmentVariable: canary})
 	got, err := Load(context.Background(), LoadOptions{
 		Paths: testPaths(root),
 		LookupEnv: func(key string) (string, bool) {
-			if key == ModelAPIKeyEnvironmentVariable {
+			if key == AgentAPIKeyEnvironmentVariable {
 				apiKeyLookedUp = true
 			}
 			return environment(key)
@@ -494,62 +452,17 @@ func TestExampleConfigurationMatchesStrictSchema(t *testing.T) {
 func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
 	t.Parallel()
 
-	t.Run("reviewer inherits agent origin model settings and credential buffer", func(t *testing.T) {
-		root := t.TempDir()
-		paths := testPaths(root)
-		canary := "agent-inherited-key-generated"
-		writePrivateFile(t, paths.ConfigFile, []byte(version1Config(`
-    response_format: json_object
-    api_key: `+canary, `
-  approval_reviewer:
-    name: reviewer
-    role: approval_reviewer
-    inherit_agent: true
-    credential_ref: agent
-    model: reviewer-model`)))
-		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		defer loaded.Credentials.Destroy()
-		if loaded.SourceVersion != CurrentVersion || loaded.Models.ApprovalReviewer == nil {
-			t.Fatalf("loaded named profiles = %#v source version=%d", loaded.Models, loaded.SourceVersion)
-		}
-		reviewer := loaded.Models.ApprovalReviewer
-		if reviewer.Origin != loaded.Models.Agent.Origin || reviewer.Model != "reviewer-model" ||
-			reviewer.ResponseFormat != ModelResponseFormatJSONObject ||
-			reviewer.Streaming || reviewer.ToolCallingRequired || reviewer.Role != ModelRoleApprovalReviewer {
-			t.Fatalf("resolved reviewer profile = %#v", reviewer)
-		}
-		if loaded.Credentials.ApprovalReviewer == nil ||
-			loaded.Credentials.ApprovalReviewer.Source != CredentialSourceInherited {
-			t.Fatalf("reviewer credential metadata = %#v", loaded.Credentials.ApprovalReviewer)
-		}
-		loaded.Credentials.Agent.Value.Destroy()
-		matched := false
-		if err := loaded.Credentials.ApprovalReviewer.Value.Use(func(value string) { matched = value == canary }); err != nil || !matched {
-			t.Fatalf("reviewer did not own an independent inherited credential: %v", err)
-		}
-	})
-
 	t.Run("reviewer uses a distinct origin model and environment credential", func(t *testing.T) {
 		root := t.TempDir()
 		paths := testPaths(root)
 		writePrivateFile(t, paths.ConfigFile, []byte(version1Config(`
     api_key: file-agent-key-generated`, `
   approval_reviewer:
-    name: reviewer
-    role: approval_reviewer
-    inherit_agent: false
-    credential_ref: approval_reviewer
-    provider_kind: openai
     endpoint: https://reviewer.example.test/v1
     model: reviewer-model
     temperature: 0
     max_output_tokens: 256
     request_timeout_seconds: 20
-    streaming: false
-    tool_calling_required: false
     api_key: file-reviewer-key-generated`)))
 		environment := map[string]string{ApprovalReviewerAPIKeyEnvironmentVariable: "environment-reviewer-key-generated"}
 		unset := 0
@@ -572,18 +485,12 @@ func TestLoadVersion1NamedProfilesAndIndependentCredentials(t *testing.T) {
 		paths := testPaths(root)
 		writePrivateFile(t, paths.ConfigFile, []byte(version1Config("", `
   approval_reviewer:
-    name: reviewer
-    role: approval_reviewer
-    inherit_agent: false
-    credential_ref: approval_reviewer
-    provider_kind: openai
     endpoint: https://reviewer.example.test/v1
     model: reviewer-model
     temperature: 0
     max_output_tokens: 256
     request_timeout_seconds: 20
-    streaming: false
-    tool_calling_required: false`)))
+`)))
 		loaded, err := Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
@@ -629,8 +536,8 @@ func TestLoadVersion1StrictSchemaAndRejectsPreReleaseLayouts(t *testing.T) {
 		{name: "missing agent profile", content: "version: 1\nmodels: {}\n"},
 		{name: "partial agent profile", content: "version: 1\nmodels:\n  agent:\n    name: agent\n    role: agent\n"},
 		{name: "wrong reviewer type", content: version1Config("", "\n  approval_reviewer: enabled")},
-		{name: "duplicate profile field", content: strings.Replace(version1Config("", ""), "    name: agent", "    name: agent\n    name: duplicate", 1)},
-		{name: "unknown profile field", content: strings.Replace(version1Config("", ""), "    role: agent", "    role: agent\n    route: fallback", 1)},
+		{name: "duplicate profile field", content: version1Config("\n    model: duplicate", "")},
+		{name: "unknown profile field", content: version1Config("\n    route: fallback", "")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -696,23 +603,6 @@ func TestLoadRejectsMalformedResourcePolicyYAMLBeforeUse(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsAmbiguousAgentCredentialAliasesAfterUnsettingBoth(t *testing.T) {
-	t.Parallel()
-	environment := map[string]string{
-		AgentAPIKeyEnvironmentVariable: "new-agent-key-generated",
-		ModelAPIKeyEnvironmentVariable: "legacy-agent-key-generated",
-	}
-	unset := 0
-	_, err := Load(context.Background(), LoadOptions{
-		Paths: testPaths(t.TempDir()), LookupEnv: lookupMap(environment),
-		Unsetenv: func(name string) error { unset++; delete(environment, name); return nil },
-	})
-	assertSafeError(t, err, ClassConfigurationInvalid, "model_api_key_ambiguous")
-	if unset != 2 || len(environment) != 0 {
-		t.Fatalf("credential aliases were not both removed: unset=%d remaining=%v", unset, environment)
-	}
-}
-
 func TestLoadUnsetsEveryRoleCredentialBeforeOtherConfigurationFailures(t *testing.T) {
 	t.Parallel()
 
@@ -765,18 +655,11 @@ func version1Config(agentExtra, reviewer string) string {
 	return `version: 1
 models:
   agent:
-    name: agent
-    role: agent
-    credential_ref: agent
-    provider_kind: openai
     endpoint: https://agent.example.test/v1
     model: agent-model
     temperature: 0.1
     max_output_tokens: 2048
-    request_timeout_seconds: 60
-    streaming: true
-    tool_calling_required: true` + agentExtra + reviewer + `
-`
+    request_timeout_seconds: 60` + agentExtra + reviewer + "\n"
 }
 
 func validResourcePolicyYAMLFixture() string {

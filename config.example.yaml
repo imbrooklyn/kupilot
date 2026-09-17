@@ -16,37 +16,27 @@ runtime:
 
 models:
   agent:
-    name: agent
-    role: agent
-    credential_ref: agent
-    provider_kind: openai
-    # Optional: responses requires streaming: false with the pinned Eino component.
+    # Optional: responses preserves native reasoning; streaming is runtime-owned.
     api_protocol: chat_completions
     endpoint: https://model.example.invalid/v1
     model: diagnostic-model
-    # reasoning_effort: none
+    # reasoning_effort: medium # omit to preserve the endpoint default
     # prompt keeps prompt-only JSON guidance. json_object may be selected only
     # after the exact endpoint is known to support that Chat Completions field.
     response_format: prompt
     # Omit temperature for OpenAI endpoints that require native sampling defaults.
-    temperature: 0.1
+    # temperature: 0.1
     # max_output_tokens is omitted until the selected endpoint has exact
     # evidence. Byte, call, time, stream, and cost-unit limits still apply.
     request_timeout_seconds: 900
-    streaming: true
-    tool_calling_required: true
 
-  # The optional Reviewer is non-streaming and Tool-free. This shorthand
-  # inherits the Agent origin and unspecified non-secret model settings while
-  # retaining a distinct role and consent tuple.
+  # The optional Reviewer has independent settings and credentials. Runtime
+  # fixes its calls to non-streaming and Tool-free; consent is separate.
   # approval_reviewer:
-  #   name: approval-reviewer
-  #   role: approval_reviewer
-  #   inherit_agent: true
-  #   credential_ref: agent
+  #   endpoint: https://model.example.invalid/v1
   #   model: reviewer-model
   #   response_format: prompt
-  #   temperature: 0
+  #   # api_key: supply a Reviewer key here or through its role environment
   #   # max_output_tokens: 512 # only with endpoint evidence
   #   request_timeout_seconds: 30
 

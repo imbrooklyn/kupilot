@@ -914,20 +914,19 @@ func (manager *execCredentialManager) close() {
 }
 
 func buildExecEnvironment(base []string, configured []clientcmdapi.ExecEnvVar, execInfo string) []string {
-	environment := config.FilterChildEnvironment(base)
-	filtered := make([]string, 0, len(environment)+len(configured)+1)
-	for _, entry := range environment {
+	filtered := make([]string, 0, len(base)+len(configured)+1)
+	for _, entry := range base {
 		if !strings.HasPrefix(entry, execInfoEnv+"=") {
 			filtered = append(filtered, entry)
 		}
 	}
 	for _, entry := range configured {
-		if entry.Name == config.ModelAPIKeyEnvironmentVariable || entry.Name == execInfoEnv {
+		if entry.Name == execInfoEnv {
 			continue
 		}
 		filtered = append(filtered, entry.Name+"="+entry.Value)
 	}
-	return append(filtered, execInfoEnv+"="+execInfo)
+	return config.FilterChildEnvironment(append(filtered, execInfoEnv+"="+execInfo))
 }
 
 func classifyContextError(err error, operation string) *SafeError {

@@ -9,7 +9,6 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/cloudwego/eino v0.9.19
 	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2
-	github.com/cloudwego/eino-ext/components/model/ollama v0.1.9
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/openai/openai-go/v3 v3.35.0
@@ -47,7 +46,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
-	github.com/eino-contrib/ollama v0.1.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect

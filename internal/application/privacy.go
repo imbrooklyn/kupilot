@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	// PrivacyPolicyVersion changes whenever an eligible category or its meaning changes.
-	PrivacyPolicyVersion       = "2026-09-15.v5"
-	PrivacyRecordSchemaVersion = 3
+	// PrivacyPolicyVersion identifies the initial eligible categories and their meaning.
+	PrivacyPolicyVersion       = "kupilot.privacy-policy/v1"
+	PrivacyRecordSchemaVersion = 1
 	maxPrivacyPolicyBytes      = 64
 )
 

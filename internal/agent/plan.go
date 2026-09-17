@@ -34,7 +34,7 @@ func DecodePlanResponse(content string) (DiagnosisDraft, error) {
 	if err := decoder.Decode(&wire); err != nil {
 		return DiagnosisDraft{}, responseError(domain.FailurePlan, err)
 	}
-	if *wire.SchemaVersion != 2 {
+	if *wire.SchemaVersion != 1 {
 		return DiagnosisDraft{}, responseError(domain.FailureFinalSchema, nil)
 	}
 	steps := make([]domain.PlanStep, len(*wire.Steps))

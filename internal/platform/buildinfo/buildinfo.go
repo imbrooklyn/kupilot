@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
-	"strings"
 	"time"
 )
 
-const unknown = "unknown"
+const (
+	unknown = "unknown"
+	// Version remains fixed throughout development of the first public release.
+	Version = "v0.1.0"
+)
 
 // These values are set only by the release build's linker flags. Keeping the
 // defaults empty preserves honest development-build output.
@@ -31,7 +34,7 @@ type Info struct {
 // Read returns metadata embedded by the Go toolchain and safe runtime facts.
 func Read() Info {
 	info := Info{
-		Version:   "dev",
+		Version:   Version,
 		Commit:    unknown,
 		BuildTime: unknown,
 		GoVersion: runtime.Version(),
@@ -42,9 +45,6 @@ func Read() Info {
 	build, ok := debug.ReadBuildInfo()
 	if !ok {
 		return applyReleaseMetadata(info, releaseVersion, releaseCommit, releaseDate)
-	}
-	if build.Main.Version != "" && build.Main.Version != "(devel)" {
-		info.Version = build.Main.Version
 	}
 	if build.GoVersion != "" {
 		info.GoVersion = build.GoVersion
@@ -93,19 +93,7 @@ func applyReleaseMetadata(info Info, version, commit, date string) Info {
 }
 
 func validVersion(version string) bool {
-	if len(version) < 2 || len(version) > 64 || version[0] != 'v' {
-		return false
-	}
-	for _, char := range version[1:] {
-		if (char >= 'a' && char <= 'z') ||
-			(char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') ||
-			strings.ContainsRune(".-+", char) {
-			continue
-		}
-		return false
-	}
-	return true
+	return version == Version
 }
 
 func validCommit(commit string) bool {

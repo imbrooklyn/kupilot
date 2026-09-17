@@ -41,9 +41,6 @@ func Validate(config *Config) error {
 		if err := validateModelProfile(reviewer, ModelRoleApprovalReviewer, false); err != nil {
 			return err
 		}
-		if reviewer.Name == config.Models.Agent.Name {
-			return newSafeError(ClassConfigurationInvalid, "config_model_profile_name_duplicate", "validate_configuration", "Model profile names must be unique.")
-		}
 	}
 	if config.Kubernetes.ExecCredentials != ExecCredentialsAllow && config.Kubernetes.ExecCredentials != ExecCredentialsDeny {
 		return newSafeError(ClassConfigurationInvalid, "config_exec_credentials_invalid", "validate_configuration", "kubernetes.exec_credentials must be allow or deny.")
@@ -160,38 +157,23 @@ func validateResourcePolicies(configured []KubernetesResourcePolicyConfig) error
 }
 
 func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, allowUnconfigured bool) error {
-	if profile == nil || profile.Role != expectedRole || !profile.Role.valid() ||
-		!validModelProfileName(profile.Name) || !profile.CredentialReference.valid() ||
-		expectedRole == ModelRoleAgent && profile.InheritAgent {
-		return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "Each model profile must have one unique name, its fixed role, and an admitted role-bound credential reference.")
+	if profile == nil || !expectedRole.valid() {
+		return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "A model profile requires a fixed consumer slot.")
 	}
-	switch profile.ProviderKind {
-	case ProviderOpenAI:
-		if expectedRole == ModelRoleAgent && profile.CredentialReference != ModelCredentialAgent ||
-			expectedRole == ModelRoleApprovalReviewer && profile.CredentialReference != ModelCredentialAgent &&
-				profile.CredentialReference != ModelCredentialApprovalReviewer {
-			return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "An openai profile requires its admitted role-bound credential reference.")
-		}
-	case ProviderOllama:
-		if profile.CredentialReference != ModelCredentialNone {
-			return newSafeError(ClassConfigurationInvalid, "config_model_profile_invalid", "validate_configuration", "An ollama profile requires credential_ref none.")
-		}
-	default:
-		return newSafeError(ClassConfigurationInvalid, "config_provider_invalid", "validate_configuration", "Each models profile provider_kind must be openai or ollama.")
-	}
+	profile.Role = expectedRole
+	profile.Name = string(expectedRole)
+	profile.ProviderKind = ProviderOpenAI
+	profile.CredentialReference = ModelCredentialReference(expectedRole)
 	if !domain.ModelReasoningEffort(profile.ReasoningEffort).Valid() {
 		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Model profile reasoning_effort is unsupported.")
 	}
-	if !domain.ModelAPIProtocol(profile.APIProtocol).Valid(domain.ModelProviderKind(profile.ProviderKind)) {
-		return newSafeError(ClassConfigurationInvalid, "config_api_protocol_invalid", "validate_configuration", "OpenAI api_protocol must be chat_completions or responses; Ollama uses its native protocol.")
-	}
-	if profile.ProviderKind == ProviderOllama && profile.ReasoningEffort != "" && profile.ReasoningEffort != "none" && profile.ReasoningEffort != "low" && profile.ReasoningEffort != "medium" && profile.ReasoningEffort != "high" {
-		return newSafeError(ClassConfigurationInvalid, "config_reasoning_effort_invalid", "validate_configuration", "Native Ollama reasoning_effort must be omitted, none, low, medium, or high.")
+	if !domain.ModelAPIProtocol(profile.APIProtocol).Valid() {
+		return newSafeError(ClassConfigurationInvalid, "config_api_protocol_invalid", "validate_configuration", "OpenAI api_protocol must be chat_completions or responses.")
 	}
 	if profile.ResponseFormat != ModelResponseFormatPrompt && profile.ResponseFormat != ModelResponseFormatJSONObject {
 		return newSafeError(ClassConfigurationInvalid, "config_response_format_invalid", "validate_configuration", "Model profile response_format must be prompt or json_object.")
 	}
-	if profile.Temperature == nil && profile.ProviderKind == ProviderOllama || profile.Temperature != nil && (math.IsNaN(*profile.Temperature) || math.IsInf(*profile.Temperature, 0) || *profile.Temperature < 0 || *profile.Temperature > 0.2) {
+	if profile.Temperature != nil && (math.IsNaN(*profile.Temperature) || math.IsInf(*profile.Temperature, 0) || *profile.Temperature < 0 || *profile.Temperature > 0.2) {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "Model profile temperature must be between 0 and 0.2.")
 	}
 	if profile.MaxOutputTokens < 0 {
@@ -200,17 +182,12 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 	if profile.RequestTimeoutSeconds < 1 || profile.RequestTimeoutSeconds > MaxModelRequestTimeoutSeconds {
 		return newSafeError(ClassConfigurationInvalid, "config_model_timeout_invalid", "validate_configuration", "Model profile request_timeout_seconds must be between 1 and 900.")
 	}
-	if expectedRole == ModelRoleAgent && ((!profile.Streaming && profile.APIProtocol != "responses") || (profile.Streaming && profile.APIProtocol == "responses") || !profile.ToolCallingRequired) ||
-		expectedRole == ModelRoleApprovalReviewer && (profile.Streaming || profile.ToolCallingRequired) {
-		return newSafeError(ClassConfigurationInvalid, "config_model_capability_invalid", "validate_configuration", "The agent requires Tools and streaming except native Responses, which requires streaming false; approval_reviewer is non-streaming and Tool-free.")
-	}
+	profile.Streaming = expectedRole == ModelRoleAgent && profile.APIProtocol != "responses"
+	profile.ToolCallingRequired = expectedRole == ModelRoleAgent
 	if profile.Endpoint != "" {
 		endpoint, origin, ok := canonicalEndpoint(profile.Endpoint)
 		if !ok {
 			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "Model endpoint must use HTTPS, or HTTP only with an explicit loopback host; user information, query, fragments, and ambiguous paths are not allowed.")
-		}
-		if profile.ProviderKind == ProviderOllama && (endpoint != origin || !strings.HasPrefix(origin, "http://") || !isExplicitLoopback(strings.ToLower(mustEndpointHostname(origin)))) {
-			return newSafeError(ClassConfigurationInvalid, "config_model_endpoint_invalid", "validate_configuration", "An ollama endpoint must be one explicit loopback HTTP origin without a path.")
 		}
 		profile.Endpoint = endpoint
 		profile.Origin = origin
@@ -224,27 +201,6 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 		return modelProfileRequiredError(expectedRole)
 	}
 	return nil
-}
-
-func mustEndpointHostname(value string) string {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-}
-
-func validModelProfileName(value string) bool {
-	if value == "" || len(value) > MaxModelProfileNameBytes {
-		return false
-	}
-	for index, current := range []byte(value) {
-		if current >= 'a' && current <= 'z' || current >= '0' && current <= '9' || current == '-' && index > 0 {
-			continue
-		}
-		return false
-	}
-	return value[len(value)-1] != '-'
 }
 
 // RedirectAllowed reports whether a redirect target remains on the exact

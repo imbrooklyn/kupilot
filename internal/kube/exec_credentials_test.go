@@ -118,10 +118,15 @@ func TestExecCredentialsAllowDirectLaunchAndRemoveModelKey(t *testing.T) {
 	defer server.Close()
 
 	auth := testExecAuth(os.Args[0], execHelperModeCredential, token, "client.authentication.k8s.io/v1")
-	auth.Exec.Env = append(auth.Exec.Env, clientcmdapi.ExecEnvVar{
-		Name:  config.ModelAPIKeyEnvironmentVariable,
-		Value: modelKey + "-from-kubeconfig",
-	})
+	for _, name := range []string{
+		"KUPILOT_MODEL_API_KEY", config.AgentAPIKeyEnvironmentVariable,
+		config.ApprovalReviewerAPIKeyEnvironmentVariable,
+		config.PrometheusAPIKeyEnvironmentVariable, config.LokiAPIKeyEnvironmentVariable,
+	} {
+		auth.Exec.Env = append(auth.Exec.Env, clientcmdapi.ExecEnvVar{
+			Name: name, Value: modelKey + "-from-kubeconfig",
+		})
+	}
 	path := writeSingleContextKubeconfig(t, server.URL, testServerCAData(server), auth)
 	factory, err := NewClientFactory(newConfigLoaderForPaths([]string{path}), ExecCredentialsAllow)
 	if err != nil {
@@ -130,7 +135,7 @@ func TestExecCredentialsAllowDirectLaunchAndRemoveModelKey(t *testing.T) {
 	factory.environment = func() []string {
 		return []string{
 			"PATH=/usr/bin:/bin",
-			config.ModelAPIKeyEnvironmentVariable + "=" + modelKey,
+			config.AgentAPIKeyEnvironmentVariable + "=" + modelKey,
 		}
 	}
 	bundle, err := factory.Create(context.Background(), "selected")
@@ -413,8 +418,14 @@ func TestExecCredentialHelperProcess(t *testing.T) {
 	if mode == "" {
 		return
 	}
-	if _, present := os.LookupEnv(config.ModelAPIKeyEnvironmentVariable); present {
-		os.Exit(41)
+	for _, name := range []string{
+		"KUPILOT_MODEL_API_KEY", config.AgentAPIKeyEnvironmentVariable,
+		config.ApprovalReviewerAPIKeyEnvironmentVariable,
+		config.PrometheusAPIKeyEnvironmentVariable, config.LokiAPIKeyEnvironmentVariable,
+	} {
+		if _, present := os.LookupEnv(name); present {
+			os.Exit(41)
+		}
 	}
 
 	switch mode {

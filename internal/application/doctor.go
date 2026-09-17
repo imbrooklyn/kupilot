@@ -15,9 +15,6 @@ const (
 	DoctorOpenAIAdapterName       = "eino_openai"
 	DoctorOpenAIAdapterVersion    = "v0.1.13"
 	DoctorOpenAIProtocol          = "openai_chat_completions"
-	DoctorOllamaAdapterName       = "eino_ollama"
-	DoctorOllamaAdapterVersion    = "v0.1.9"
-	DoctorOllamaProtocol          = "ollama_native_chat"
 	DoctorLiveConformanceEvidence = "not_run"
 )
 
@@ -123,8 +120,6 @@ func doctorModelBoundary(provider domain.ModelProviderKind) (adapter, version, p
 	switch provider {
 	case domain.ModelProviderOpenAI:
 		return DoctorOpenAIAdapterName, DoctorOpenAIAdapterVersion, DoctorOpenAIProtocol, true
-	case domain.ModelProviderOllama:
-		return DoctorOllamaAdapterName, DoctorOllamaAdapterVersion, DoctorOllamaProtocol, true
 	default:
 		return "", "", "", false
 	}

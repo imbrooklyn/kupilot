@@ -9,7 +9,7 @@ import (
 const (
 	// ObservabilityPolicyVersion identifies the code-owned source/query policy
 	// frozen into every AgentRun.
-	ObservabilityPolicyVersion = "kupilot.observability-policy/2026-09-05.v1"
+	ObservabilityPolicyVersion = "kupilot.observability-policy/v1"
 
 	MaxObservabilityQueryTemplates = 8
 	MaxObservabilityLogContainers  = 16

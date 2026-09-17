@@ -1,315 +1,51 @@
 # Changelog
 
-This file records notable user-visible changes to Kupilot.
+No public version has been released. Earlier development labels are superseded
+by the initial v0.1.0 baseline; Git history and historical ADRs retain their
+original decisions and evidence.
 
-## Unreleased (`v0.5` development)
-
-### Changed
-
-- Application directly composes Eino ADK and native model components. Remove
-  the isolated Agent adapter, neutral Agent port, redundant model wrapper,
-  and composition forwarding object.
-- Add explicitly configured native Responses with reasoning and Tool state
-  retained by Eino within each run. The pinned component requires explicit
-  non-streaming mode because its stream conversion loses encrypted reasoning.
-- OpenAI temperature may be omitted; explicit values remain unchanged. Admit
-  native reasoning levels without model-name inference or automatic downgrade.
-
-### Security
-
-- Upgrade `golang.org/x/net` to v0.55.0 and `golang.org/x/text` to v0.39.0
-  for the reachable GO-2026-5026 and GO-2026-5970 findings. Both retain the
-  repository's Go 1.25 minimum; no vulnerability check is suppressed.
-
-### Fixed
-
-- Keep composer line navigation focused when committed answers have supporting
-  observations. Move observation inspection to `Alt+E`, preserve `Ctrl+E` for
-  line end, and accept directly delivered Command+Left/Right in the editor.
-- Preserve `Alt+B/F` word movement and `Ctrl+B/F` character movement. Move
-  transcript search to `Alt+S` and failure navigation to `Alt+I`/`Alt+Shift+I`.
-  Upgrade Bubbles to v2.2.1 for native Ctrl-word navigation, bounded word-left
-  termination, and selection; selection replacement respects composer limits.
-- Distinguish HTTP 400/422 model request rejection from unsupported response
-  protocols. Safe diagnostics identify the request boundary and ask the user to
-  check the configured profile; no automatic setting change or retry is added.
-
-- Preserve complete bound native Ollama Tool parameter schemas lost by the
-  pinned SDK. The existing guard checks the immutable catalog and final byte
-  ceiling before I/O; all unrelated request bytes remain unchanged. Add a
-  full-Agent deterministic request regression and an opt-in nine-call local
-  comparison. The tested Ollama/model combination still fails strict Tool
-  selection; no output repair, retry, or reduced-catalog fallback is added.
-- Preserve explicitly configured native Ollama temperature zero on the wire.
-  The pinned SDK previously omitted it, allowing a server/model default.
-  The guarded transport restores only this scalar and checks the final byte
-  ceiling; invalid options still make zero external calls. Historical local
-  conformance results are qualified because they did not transmit zero.
-  Malformed provider Tool output remains rejected without repair or retry.
-
-### Added
-
-- Added explicit `openai` and native loopback `ollama` provider kinds. Ollama
-  uses Eino's stable native `/api/chat` component without a bearer credential;
-  provider selection remains fixed with no detection, routing, fallback, or
-  retry.
-- Added the fixed fourteen-Tool read, observability, and remote-diagnostic
-  catalog; exact optional Prometheus and Loki sources; and typed restart,
-  scale, rollback, owned-Pod delete, cordon, uncordon, and drain actions.
-- Added named `agent` and optional `approval_reviewer` profiles, role- and
-  origin-bound consent, Eino ADK Session context and summarization, and strict
-  fail-closed Reviewer decisions.
-- Added `read-only`, `ask`, `auto-review`, `full-access`, and `custom`
-  permission profiles, `/permissions`, detailed local `/status`, inline
-  approval/reviewer state, narrow Session rules, and one-attempt action
-  supervision.
-- Added strict version 1 named-profile configuration, forward-only SQLite
-  migrations through migration 17, split least-privilege RBAC fixtures, and
-  opt-in tagged model, Reviewer, Session, and disposable-cluster integration
-  harnesses.
-- Added active-run `Enter` steering at the next model boundary, a bounded
-  process-local FIFO follow-up queue on active-run `Tab`, and empty-composer
-  `Alt+Up` edit-last for queued or recovered ordinary input.
-- Added exact cancellation and confirmed clear for editable follow-ups,
-  committed-answer-only terminal clipboard copy, and bounded local committed
-  transcript search.
-- Added content-free context pressure, explicit compaction through the existing
-  Eino summarization handler, optional fixed terminal status titles, and a
-  one-shot plan-only AgentRun with no action authority.
-- Added strict typed claim/Evidence coverage and deterministic synthetic
-  quality metrics. These are structural validator tests, not live model
-  quality evidence.
-- Added authoritative Last active, bounded `/sessions` and CLI Session listing,
-  `/delete`, exact historical deletion, and digest-bound transactional inactive-
-  Session batch deletion with conservative active/unknown protection.
-- Added typed run terminal reasons and next actions, bidirectional claim/Evidence
-  navigation and provenance, content-free model-egress preflight and detailed
-  budget state, fixed Slash availability, a run-local terminal capability
-  profile, submitted-input reverse search, semantic scrollback navigation,
-  bounded composer undo/redo, redacted `/doctor`/`kupilot doctor`, reduced
-  motion, and textual non-color accessibility.
-- Added strict answer-or-clarification response schema 3, completeness/source-
-  coverage manifests, Evidence freshness/conflict/supersession, narrow same-run
-  safe-read reuse, deterministic endpoint conformance and prompt-injection
-  fixtures, and a unified zero-auto-retry recovery matrix.
+## Unreleased — v0.1.0
 
 ### Changed
 
-- Rank available Slash commands first and skip unavailable commands during
-  completion, including after command availability changes.
-- Advance new model output to response schema 4 and plan wire schema 2. Derive
-  ordinals, structural coverage, stop reasons, and clarification rendering in
-  runtime code. Normalize unique validated Evidence references into acceptance
-  order while retaining strict ownership, generation, and authority checks.
-- Classify interaction failures with content-free stage/reason diagnostics
-  across the Agent, Application, and TUI boundaries.
+- Support OpenAI only through native Eino Chat Completions and Responses.
+  Remove Ollama dependencies, transport, request repair, setup selection and
+  provider-specific integration probes.
+- Simplify model configuration to fixed Agent and optional Reviewer slots.
+  Derive role, identity, credential ownership, streaming and Tool behavior.
+  Remove provider/name/role/credential-reference/inheritance switches and old
+  model environment aliases. Reviewer settings and credentials are independent.
+- Preserve native reasoning and explicit sampling. Responses uses Generate;
+  no error-triggered protocol change, reasoning disablement, retry or fallback.
+- Fix the product version at v0.1.0 and all project-owned format, prompt,
+  catalog and policy versions at 1 until first publication. Scope/policy
+  generations and Session concurrency revisions remain independent counters.
+- Consolidate development migrations into one initial SQLite schema. Remove
+  historical restart-only archive tables and development migration paths.
+  Incompatible local state fails closed and requires an explicit backed-up reset.
+- Keep one Application-owned Eino Agent/Runner, one conversation loop and one
+  safe SQLite conversation store.
+- Apply the existing credential environment filter after merging kubeconfig
+  exec settings, so neither current role keys nor retired aliases reach a child.
 
-- Derive claim SHA-256 metadata in deterministic runtime code after bounded
-  normalization instead of requiring the Agent model to calculate it. Strict
-  response schema 3 keeps all same-run/generation Evidence checks while
-  reducing false invalid-response failures after successful Tool calls.
-- Aligned model-egress preflight validation with the code-owned 900-second
-  model-request ceiling so the `extended` budget profile reaches the configured
-  provider instead of failing before transport.
-- Fixed native Ollama AgentRuns failing before transport because the
-  provisional-answer credential guard incorrectly required a credential from
-  credential-free providers. The streaming redaction and strict response
-  gates remain active, and a full-Agent native Ollama integration fixture now
-  covers this boundary.
-- Renamed the unreleased `openai_compatible` configuration value to `openai`
-  and added a forward-only migration that translates historical model-request
-  metadata without restoring transport authority. Native Ollama examples and
-  live tests use the finite `extended` budget for slower local generation.
-- Keep the complete strict response schema consistent across retained
-  assistant history and later model turns. Profiles may explicitly request an
-  endpoint-proved JSON-object response constraint; Agent summaries remain plain
-  text, and unsupported endpoints receive no probe, downgrade, fallback, or
-  retry.
-- Fixed first startup and local Session diagnostics to prepare the private
-  SQLite state directory before acquiring its process lock.
-- Scaled the immutable runtime time profiles for slower local models. The
-  default `balanced` profile now permits a 30-minute AgentRun, a 600-second
-  model request, and a 120-second Tool request; `compact` and `extended`
-  remain finite lower and upper tiers, and no timeout creates retry authority.
-- Reused Eino ADK `ChatModelAgent`, `Runner`, Tool-message pairing, message
-  state, and summarization middleware inside the single model boundary while
-  retaining safe SQLite Messages as the sole durable Session source.
-- Upgraded the Eino core dependency to v0.9.19 and added an Application-owned
-  pending/committing/committed/rejected/unknown/recovered input bridge without
-  adopting Eino `TurnLoop`, another Agent loop, or another conversation store.
-- Extended completed-run Session context to one initial user Message, ordered
-  committed steer Messages, and one final assistant Message. Only clean
-  durably completed turns auto-start one queued successor; every unsafe or
-  unknown outcome requires explicit recovery.
-- Reconstruct retained final assistant answers in the strict response envelope
-  during Session replay so follow-up turns keep the structured protocol while
-  historic Evidence and action proposals remain non-authoritative.
-- Invalid, stale, duplicate, cross-run, out-of-order, or internally
-  hash-inconsistent claim coverage now fails the final response instead of
-  silently deleting citations. The pinned Chat Completions stack has no
-  provable same-response continuation, so disconnects retain unknown/recovered
-  handling and receive no automatic retry.
-- Advanced new redacted Session exports to `kupilot.export-summary.v4` so the
-  bounded structural claim/Evidence coverage manifest accompanies the
-  validated answer or typed clarification without adding raw Evidence or
-  authority.
-- Give each new Session the configured default Context/Namespace candidate and
-  verify it through normal scope activation. Resume reuses an exact independently
-  verified current scope, while unavailable or conflicting historic candidates
-  enter the ordinary scope picker without restoring historic authority.
-- Generalized the restart-only action path into immutable digest-bound
-  ActionEnvelopes with deterministic risk, policy and scope generations,
-  durable pre-operation audit, at most one external attempt, and separate
-  verification.
-- Routed review-class Pod logs and optional Prometheus/Loki reads through the
-  same exact-target, permission, approval/Reviewer, revalidation, durable-audit,
-  and bounded-outcome lifecycle before source content or external-source I/O.
-- Completed the low-chrome conversational TUI permission picker, approval
-  surface, Reviewer states, input-routing precedence, Markdown/table and
-  no-color behavior, explicit resume history, and terminal restoration flow.
-- Replaced the generic question-start transfer failure with Application-owned
-  typed reasons and safe recovery actions. Ordinary submit now binds the exact
-  Session, both process-local authority generations, and selected-resource
-  state; denied input is restored once and is never automatically sent,
-  retargeted, queued, or retried. Compatible restart and migration preserve
-  eligible history without restoring historic authority.
+### Included capabilities
 
-### Security
+- Bounded typed Kubernetes observations, exact CRD policies, Events, logs,
+  metrics and optional policy-bound Prometheus/Loki sources.
+- Permission profiles, human or optional Reviewer decisions, immutable
+  ActionEnvelopes, durable pre-operation audit and at most one execution attempt.
+- Controlled remediation, exact remote diagnostics and default-off local
+  execution with independent authority and privacy gates.
+- Evidence-backed answers, typed clarification and plan-only output;
+  deterministic claim hashes, ordering, coverage and terminal classifications.
+- Explicit Session resume, safe retained history, Eino summarization, queue and
+  steer handling, local search/export and a single conversational composer.
+- Native macOS cursor navigation, bounded command completion and safe terminal
+  projection.
 
-- Updated the native Ollama dependency graph to the fixed `x/crypto` v0.52.0
-  line after the vulnerability gate found GO-2026-5018 reachable through an
-  imported client helper; the final production call graph has no known called
-  vulnerability.
-- Kept model and Reviewer text non-authoritative; hard denials, credentials,
-  Secret values, raw objects, raw process output, generic writes, arbitrary
-  commands, and cross-Context operations remain outside every permission
-  profile.
-- Added deterministic zero-call denial, stale-generation, cancellation,
-  timeout, sensitive-canary, audit-failure, cleanup, and ambiguous-outcome
-  coverage. Live integration and model evaluation remain separate opt-in
-  evidence and do not establish release readiness.
+### Evidence and limitations
 
-## Unreleased development history (`v0.4` candidate)
-
-### Changed
-
-- Reframed Kupilot as a conversational Kubernetes operations Agent while
-  retaining a local, single-process, single-user architecture and explicit
-  rejection of shell, kubectl, dashboard, generic API, and autonomous-control
-  behavior.
-- Expanded the typed operational catalog to seven structured Tools and stable
-  projections for Namespace, Node, common workloads and controllers, storage,
-  Ingress, autoscaling, and Pod disruption budgets.
-- Added immutable `current` and `all` namespace-access policies. The working
-  Namespace remains visible and the model cannot broaden the selected policy.
-- Replaced the fixed four-section Diagnosis renderer with bounded free-form
-  Markdown, independently validated Evidence citations, and typed proposed
-  actions.
-- Added `compact`, `balanced`, and `extended` immutable runtime budget profiles;
-  `balanced` is the default and `/status` exposes live usage.
-- Reworked the TUI toward the public Codex CLI interaction style: terminal
-  foreground for primary text, higher contrast, a borderless `›` composer,
-  compact inline activity, a minimal scope footer, and detailed local status
-  behind `/status`.
-- Added inert, width-aware GitHub-Flavored Markdown rendering. Tables use a
-  readable grid on wider terminals, fall back to key/value records on narrow
-  terminals, and conservatively repair an unambiguous compact one-line form.
-- Improved compatible model streaming by treating bounded empty deltas as
-  no-ops and allowing fragments for distinct bounded Tool indexes to
-  interleave while retaining per-index assembly and all completion gates.
-- Made the existing exact Deployment restart approval path reachable from a
-  typed model suggestion only after a fresh trusted Deployment read derives
-  all digest-bound identity and concurrency data locally.
-- Advanced explicit redacted Markdown export to
-  `kupilot.export-summary.v2` so it preserves escaped final answer Markdown and
-  descriptive proposed-action metadata without approval authority.
-
-### Security
-
-- Secret objects and data, ConfigMap values, environment values, kubeconfig
-  content, credentials, raw Kubernetes objects, arbitrary discovered APIs, and
-  unbounded logs remain prohibited even under the broader catalog.
-- Cross-Namespace calls require the frozen `all` policy and matching Kubernetes
-  RBAC. Every request still uses exact typed clients, bounded projection, scope
-  generation checks, and deterministic zero-call denial tests.
-- A model recommendation cannot supply a Deployment UID, resource version,
-  template fingerprint, generation, nonce, digest, patch, or timestamp. Proposal
-  preparation performs no Kubernetes write; execution still requires explicit
-  local approval, durable pre-write audit, revalidation, and one non-retried
-  PATCH attempt.
-
-## 0.3.0 - 2026-08-16
-
-### Added
-
-- A local, single-process, single-user Kubernetes TUI centered on supervised,
-  evidence-first diagnosis.
-- A fixed read-only catalog of six structured Tools for Pod, Deployment,
-  ReplicaSet, Job, and Service diagnosis within one verified Namespace.
-- Diagnostic guidance and deterministic evaluation for CrashLoopBackOff,
-  OOMKilled, ImagePullBackOff, Pod Pending, readiness probe failure, unavailable
-  Deployment, failed Job, and Service without a ready Endpoint.
-- Explicit Session starts and resume by picker, exact UUIDv7 Session identifier,
-  or `--last`, without cwd-based or automatic history selection.
-- Strict version 1 YAML configuration, one OpenAI-compatible streaming model
-  runtime, masked interactive setup with explicit plaintext-local or
-  process-only credential storage, environment overrides, and explicit
-  model-transfer consent.
-- One fixed user-managed Home for configuration, SQLite state, cache, and
-  bounded logs, plus a short-circuiting `kupilot cache clear` command.
-- Local SQLite Session history with bounded operational-detail retention,
-  private creation modes, respect for wider existing user-managed modes,
-  forward checksummed migrations, and interruption recovery.
-- Bounded allowlisted local operational logging with rotation and a disable
-  setting.
-- Source-build, user, configuration, privacy, security, troubleshooting,
-  diagnostic-capability, and least-privilege RBAC documentation.
-- The isolated `v0.2` `restart_deployment` workflow with a default-reject,
-  digest-bound, 60-second, single-use local approval for one exact Deployment.
-- Bounded post-PATCH Deployment observation with distinct accepted, progress,
-  success, failure, timeout, unavailable, and unknown outcomes in the Approval
-  Dialog and structured audit history.
-- Bounded Evidence details that preserve run and scope provenance while
-  excluding raw Tool results, raw objects, and raw container output.
-- Standard and minimal Session modes, one-way operational-detail retention,
-  transactional per-Session and clear-history deletion, exact-path local
-  database deletion, bounded safe Session discovery, and a versioned redacted
-  Markdown summary export in the existing TUI surfaces.
-- Deterministic diagnosis provenance and assertion rubrics across all eight
-  supported diagnostic categories.
-- A released-schema migration matrix covering `v0.1` through `v0.3`, plus
-  reproducible offline performance and release-artifact gates.
-
-### Security
-
-- The current read-only composition contains no Kubernetes mutation port,
-  mutation adapter, write Tool, approval coordinator, shell, kubectl runner, or
-  generic Kubernetes request surface.
-- Kubernetes credentials, Secret data, raw objects, raw container output, raw
-  model traffic, and raw Tool results are excluded from model content and
-  durable storage by source, projection, and sink contracts. A model key is
-  durable only after the explicit plaintext-local choice and only in the fixed
-  Home configuration; it remains excluded from SQLite, logs, audit, Session
-  content, and model content.
-- Context and Namespace generation checks reject stale work before external I/O,
-  after return, and again at Application event acceptance.
-- The `v0.2` executor has one code-generated merge-patch entry point and one
-  approval-service caller. Target change, replay, expiry, pre-write audit
-  failure, and stale scope produce zero writes; an approved attempt is never
-  retried automatically.
-- Rollout observation is limited to exact Deployment reads for at most 90
-  seconds and 45 observations at a minimum two-second interval. Post-attempt
-  audit uses at most three idempotent attempts and fails visibly without
-  repeating the Kubernetes write.
-- Synthetic credential-source and safe-error matrices cover nested, wrapped,
-  joined, and formatted failures across model, Tool, TUI, log, audit, SQLite,
-  child-process, CLI, and error sinks with exact external-action counts.
-
-### Known limitations
-
-- There is no published binary or package-manager installation recorded here;
-  the verified installation path is a source build.
-- Diagnosis is limited to the documented eight categories and may end with
-  missing information rather than a root cause.
-- Windows is experimental and is not part of the supported `v0.3` runtime or CI
-  release gate.
+Deterministic fixtures use synthetic Tools, loopback recording transports and
+temporary SQLite. They do not establish real-cluster behavior, semantic model
+quality or release readiness. Live integrations, model evaluations and release
+publication require their own explicit authorization and fresh evidence.

@@ -1,4 +1,4 @@
-# Current v0.5 built-in namespaced-read and core observability fixture for explicit all-Namespace binding.
+# Current v0.1.0 built-in namespaced-read and core observability fixture for explicit all-Namespace binding.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

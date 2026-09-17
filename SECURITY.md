@@ -2,14 +2,14 @@
 
 ## Supported boundary
 
-Security reports are accepted for the current `v0.4` source candidate. Kupilot
-is a local, single-process, single-user Kubernetes operations Agent with a
-typed, bounded read catalog and one supervised Deployment-restart action. The
-restart path is composed, but remains behind fresh target preparation,
-digest-bound local approval, revalidation, durable pre-write audit, one PATCH
-attempt, and separate rollout verification. No published `v0.4` release is
-recorded in the [Changelog](CHANGELOG.md). This policy covers the current source
-boundary, not an unverified distribution artifact.
+Security reports are accepted for the unreleased `v0.1.0` source baseline.
+Kupilot is a local, single-process, single-user Kubernetes operations Agent
+with a typed, bounded catalog and supervised actions governed by the
+[Version Scope](docs/scope.md). Actions require current scope and policy,
+digest-bound local authority, revalidation, durable pre-operation audit,
+at most one execution attempt, and separate verification. No published release
+is recorded in the [Changelog](CHANGELOG.md). This policy covers the current
+source boundary, not an unverified distribution artifact.
 
 The normative controls and residual risks are documented in the
 [Security Threat Model](docs/security.md). The
@@ -60,8 +60,9 @@ tests that prevent regression.
 
 - Use the [least-privilege RBAC](docs/rbac/README.md); do not grant Kupilot
   `cluster-admin`.
-- Keep configuration, state, database sidecars, and local logs owner-only. Do
-  not put the model API key in YAML, argv, history, or a project file.
+- Keep configuration, state, database sidecars, and local logs owner-only. A
+  disclosed plaintext credential save is permitted only in Kupilot Home; never
+  put a model API key in argv, history, or a project file.
 - Review the exact model destination and enabled categories before accepting
   consent. Container output is disabled by default.
 - Set `kubernetes.exec_credentials: deny` when the selected kubeconfig must not

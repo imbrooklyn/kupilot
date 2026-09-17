@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	// SessionContextSummarySchemaVersion changes when durable summary fields change.
-	SessionContextSummarySchemaVersion = "session-context-summary/v2"
-	// SafeConversationContextPolicyVersion changes when eligible context meaning changes.
-	SafeConversationContextPolicyVersion = "safe-conversation-context/2026-09-06.v2"
+	// SessionContextSummarySchemaVersion identifies the initial durable summary shape.
+	SessionContextSummarySchemaVersion = "session-context-summary/v1"
+	// SafeConversationContextPolicyVersion identifies the initial eligible context policy.
+	SafeConversationContextPolicyVersion = "safe-conversation-context/v1"
 	// MaxCommittedSteerInputs bounds additional user inputs committed to one run.
 	MaxCommittedSteerInputs = 8
 	// MaxRunConversationSequence is the final assistant sequence after the

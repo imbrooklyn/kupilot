@@ -11,9 +11,8 @@ import (
 
 // ModelProfile is the non-sensitive portion accepted by interactive setup.
 type ModelProfile struct {
-	ProviderKind string
-	Endpoint     string
-	Model        string
+	Endpoint string
+	Model    string
 }
 
 type writableConfig struct {
@@ -50,26 +49,19 @@ type writableModelProfiles struct {
 }
 
 type writableModelProfile struct {
-	Name                  string                   `yaml:"name"`
-	Role                  ModelRole                `yaml:"role"`
-	InheritAgent          bool                     `yaml:"inherit_agent"`
-	CredentialReference   ModelCredentialReference `yaml:"credential_ref"`
-	ProviderKind          string                   `yaml:"provider_kind"`
-	Endpoint              string                   `yaml:"endpoint"`
-	Model                 string                   `yaml:"model"`
-	APIProtocol           string                   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
-	ReasoningEffort       string                   `yaml:"reasoning_effort,omitempty"`
-	ResponseFormat        string                   `yaml:"response_format"`
-	APIKey                string                   `yaml:"api_key,omitempty"`
-	Temperature           *float64                 `yaml:"temperature,omitempty"`
-	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty"`
-	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds"`
-	Streaming             bool                     `yaml:"streaming"`
-	ToolCallingRequired   bool                     `yaml:"tool_calling_required"`
+	Endpoint              string   `yaml:"endpoint"`
+	Model                 string   `yaml:"model"`
+	APIProtocol           string   `yaml:"api_protocol,omitempty" json:"api_protocol,omitempty"`
+	ReasoningEffort       string   `yaml:"reasoning_effort,omitempty"`
+	ResponseFormat        string   `yaml:"response_format"`
+	APIKey                string   `yaml:"api_key,omitempty"`
+	Temperature           *float64 `yaml:"temperature,omitempty"`
+	MaxOutputTokens       int      `yaml:"max_output_tokens,omitempty"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds"`
 }
 
 // SaveModelProfile atomically publishes the current typed settings and the
-// selected provider's credential policy to the fixed Home configuration file.
+// Agent credential to the fixed Home configuration file.
 func SaveModelProfile(ctx context.Context, paths Paths, base Config, profile ModelProfile, secret *SecretValue) error {
 	return SaveModelProfiles(ctx, paths, base, profile, secret, nil)
 }
@@ -105,47 +97,14 @@ func SaveModelProfilesWithDataSources(
 	if ctx == nil || ctx.Err() != nil {
 		return newSafeError(ClassCancelled, "config_write_cancelled", "write_configuration", "Configuration writing was cancelled.")
 	}
-	credentialRequired := profile.ProviderKind == ProviderOpenAI
-	credentialForbidden := profile.ProviderKind == ProviderOllama
 	if pathsForHome(paths.HomeDir).ConfigFile != paths.ConfigFile || !validHomePath(paths.HomeDir) ||
-		credentialRequired && (agentSecret == nil || !agentSecret.IsSet()) ||
-		credentialForbidden && agentSecret != nil && agentSecret.IsSet() {
+		agentSecret == nil || !agentSecret.IsSet() {
 		return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not prepare the local configuration update.")
 	}
 	base.Version = CurrentVersion
-	base.Models.Agent.ProviderKind = profile.ProviderKind
-	base.Models.Agent.CredentialReference = ModelCredentialAgent
-	if profile.ProviderKind == ProviderOllama {
-		base.Models.Agent.CredentialReference = ModelCredentialNone
-		// Provider setup has no separate reasoning prompt. Preserve Ollama's
-		// model-owned default instead of carrying an OpenAI-specific explicit
-		// disable value across provider kinds.
-		base.Models.Agent.ReasoningEffort = ""
-		base.Models.Agent.APIProtocol = ""
-		base.Models.Agent.Streaming = true
-		if base.Models.Agent.Temperature == nil {
-			temperature := 0.1
-			base.Models.Agent.Temperature = &temperature
-		}
-	}
 	base.Models.Agent.Endpoint = profile.Endpoint
 	base.Models.Agent.Origin = ""
 	base.Models.Agent.Model = profile.Model
-	if reviewer := base.Models.ApprovalReviewer; reviewer != nil && reviewer.InheritAgent {
-		reviewer.ProviderKind = base.Models.Agent.ProviderKind
-		reviewer.CredentialReference = base.Models.Agent.CredentialReference
-		reviewer.Endpoint = base.Models.Agent.Endpoint
-		reviewer.Origin = ""
-		reviewer.Model = base.Models.Agent.Model
-		reviewer.APIProtocol = base.Models.Agent.APIProtocol
-		reviewer.ReasoningEffort = base.Models.Agent.ReasoningEffort
-		reviewer.ResponseFormat = base.Models.Agent.ResponseFormat
-		reviewer.Temperature = base.Models.Agent.Temperature
-		reviewer.MaxOutputTokens = base.Models.Agent.MaxOutputTokens
-		reviewer.RequestTimeoutSeconds = base.Models.Agent.RequestTimeoutSeconds
-		reviewer.Streaming = false
-		reviewer.ToolCallingRequired = false
-	}
 	if err := Validate(&base); err != nil {
 		return err
 	}
@@ -165,19 +124,11 @@ func SaveModelProfilesWithDataSources(
 		reviewer := writableProfile(*base.Models.ApprovalReviewer)
 		document.Models.ApprovalReviewer = &reviewer
 	}
-	if credentialRequired {
-		if err := agentSecret.Use(func(value string) { document.Models.Agent.APIKey = value }); err != nil {
-			return err
-		}
+	if err := agentSecret.Use(func(value string) { document.Models.Agent.APIKey = value }); err != nil {
+		return err
 	}
 	if reviewerFileSecret != nil && reviewerFileSecret.IsSet() {
-		if document.Models.ApprovalReviewer != nil &&
-			document.Models.ApprovalReviewer.CredentialReference == ModelCredentialNone {
-			// An inherited reviewer switched to native Ollama with the Agent.
-			// The old file credential is intentionally not copied into the new
-			// credential-free profile.
-		} else if document.Models.ApprovalReviewer == nil ||
-			document.Models.ApprovalReviewer.CredentialReference != ModelCredentialApprovalReviewer {
+		if document.Models.ApprovalReviewer == nil {
 			document.Models.Agent.APIKey = ""
 			return newSafeError(ClassInternal, "config_write_invalid", "write_configuration", "Kupilot could not bind the reviewer credential to the local configuration update.")
 		} else if err := reviewerFileSecret.Use(func(value string) { document.Models.ApprovalReviewer.APIKey = value }); err != nil {
@@ -253,12 +204,9 @@ func clearWritableSecrets(document *writableConfig) {
 
 func writableProfile(profile ModelProfileConfig) writableModelProfile {
 	return writableModelProfile{
-		Name: profile.Name, Role: profile.Role, InheritAgent: profile.InheritAgent,
-		CredentialReference: profile.CredentialReference,
-		ProviderKind:        profile.ProviderKind, Endpoint: profile.Endpoint, Model: profile.Model,
+		Endpoint: profile.Endpoint, Model: profile.Model,
 		APIProtocol: profile.APIProtocol, ReasoningEffort: profile.ReasoningEffort, ResponseFormat: profile.ResponseFormat, Temperature: profile.Temperature,
 		MaxOutputTokens: profile.MaxOutputTokens, RequestTimeoutSeconds: profile.RequestTimeoutSeconds,
-		Streaming: profile.Streaming, ToolCallingRequired: profile.ToolCallingRequired,
 	}
 }
 

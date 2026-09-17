@@ -582,7 +582,7 @@ func TestAnswerCompletenessDistinguishesNegativeAndUnavailableSourceCoverage(t *
 				t.Fatalf("AcceptToolResult() error = %v", err)
 			}
 			diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-				AnswerMarkdown: "The bounded source state is reported without inferring omitted objects.", ResponseSchemaVersion: 3,
+				AnswerMarkdown: "The bounded source state is reported without inferring omitted objects.", ResponseSchemaVersion: 1,
 				SuggestedStopReason: domain.RunTerminalCompleted,
 			}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
 			if err != nil || len(diagnosis.Completeness.Sources) != 1 {
@@ -623,7 +623,7 @@ func TestAnswerCompletenessMarksExactOlderEvidenceSuperseded(t *testing.T) {
 	}
 	claim := "The Pod is not Ready."
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: claim, ResponseSchemaVersion: 3,
+		AnswerMarkdown: claim, ResponseSchemaVersion: 1,
 		ConfirmedFacts:      []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{testEvidenceID}}},
 		ClaimCoverage:       []ClaimCoverageDraft{validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, testEvidenceID)},
 		SuggestedStopReason: domain.RunTerminalCompleted,
@@ -654,7 +654,7 @@ func TestTypedClarificationHasNoEvidenceActionOrLimitationAuthority(t *testing.T
 		t.Fatalf("RenderClarificationMarkdown() error = %v", err)
 	}
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: answer, ResponseSchemaVersion: 3, SuggestedStopReason: domain.RunTerminalNeedsUserInput,
+		AnswerMarkdown: answer, ResponseSchemaVersion: 1, SuggestedStopReason: domain.RunTerminalNeedsUserInput,
 		Clarification: &request,
 	}, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: input.Scope().ActivatedAt, PolicyGeneration: input.PolicyGeneration()}, registry)
 	if err != nil || diagnosis.Clarification == nil || diagnosis.Completeness.StopReason != domain.RunTerminalNeedsUserInput ||
@@ -668,7 +668,7 @@ func TestModelSuggestedStopReasonCannotOverrideAcceptedCoverage(t *testing.T) {
 	registry, input, evidenceID, _ := claimCoverageRegistry(t)
 	claim := "The Pod is not Ready."
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: claim, ResponseSchemaVersion: 3,
+		AnswerMarkdown: claim, ResponseSchemaVersion: 1,
 		ConfirmedFacts: []domain.ConfirmedFact{{Statement: claim, EvidenceIDs: []domain.EvidenceID{evidenceID}}},
 		ClaimCoverage: []ClaimCoverageDraft{
 			validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, evidenceID),

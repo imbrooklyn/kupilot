@@ -10,7 +10,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
-const conformanceAnswer = `{"answer_markdown":"Hello.","evidence_citations":[],"proposed_actions":[],"response_schema_version":4,"outcome":"answer","limitations":[],"questions":[]}`
+const conformanceAnswer = `{"answer_markdown":"Hello.","evidence_citations":[],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`
 
 func TestResponseTextLimitsAndClarificationPresentation(t *testing.T) {
 	if text, err := sanitizeDiagnosisText(strings.Repeat("x", maxDiagnosisDraftTextBytes)); err != nil || len(text) != maxDiagnosisDraftTextBytes {
@@ -60,7 +60,7 @@ func assertResponseFailure(t *testing.T, content string, want domain.Interaction
 func TestResponseConformanceRequiredFields(t *testing.T) {
 	fields := []struct{ name, value string }{
 		{"answer_markdown", `"Hello."`}, {"evidence_citations", `[]`}, {"proposed_actions", `[]`},
-		{"response_schema_version", `4`}, {"outcome", `"answer"`}, {"limitations", `[]`}, {"questions", `[]`},
+		{"response_schema_version", `1`}, {"outcome", `"answer"`}, {"limitations", `[]`}, {"questions", `[]`},
 	}
 	for _, field := range fields {
 		t.Run(field.name, func(t *testing.T) {
@@ -88,8 +88,8 @@ func TestResponseConformanceMalformedAndRetiredFields(t *testing.T) {
 		{"top null", "null", domain.FailureFinalNullField},
 		{"top array", "[]", domain.FailureFinalShape},
 		{"unknown", strings.TrimSuffix(conformanceAnswer, "}") + `,"authority":true}`, domain.FailureFinalUnknownField},
-		{"legacy", strings.Replace(conformanceAnswer, `"response_schema_version":4`, `"response_schema_version":3`, 1), domain.FailureFinalSchema},
-		{"schema type", strings.Replace(conformanceAnswer, `"response_schema_version":4`, `"response_schema_version":"4"`, 1), domain.FailureFinalShape},
+		{"legacy", strings.Replace(conformanceAnswer, `"response_schema_version":1`, `"response_schema_version":3`, 1), domain.FailureFinalSchema},
+		{"schema type", strings.Replace(conformanceAnswer, `"response_schema_version":1`, `"response_schema_version":"4"`, 1), domain.FailureFinalShape},
 		{"unknown outcome", strings.Replace(conformanceAnswer, `"outcome":"answer"`, `"outcome":"execute"`, 1), domain.FailureFinalShape},
 		{"stop suggestion", strings.TrimSuffix(conformanceAnswer, "}") + `,"stop_reason":"completed"}`, domain.FailureFinalUnknownField},
 		{"array object", strings.Replace(conformanceAnswer, `"evidence_citations":[]`, `"evidence_citations":{}`, 1), domain.FailureFinalShape},
@@ -193,7 +193,7 @@ func TestResponseConformanceExactLimitsAndRepresentation(t *testing.T) {
 	for _, content := range []string{
 		" \n" + conformanceAnswer + "\t ",
 		strings.Replace(conformanceAnswer, `"Hello."`, `"\u0048ello."`, 1),
-		`{"questions":[],"limitations":[],"outcome":"answer","response_schema_version":4,"proposed_actions":[],"evidence_citations":[],"answer_markdown":"Hello."}`,
+		`{"questions":[],"limitations":[],"outcome":"answer","response_schema_version":1,"proposed_actions":[],"evidence_citations":[],"answer_markdown":"Hello."}`,
 	} {
 		draft, err := DecodeDiagnosticResponse(content)
 		if err != nil || draft.AnswerMarkdown != base.AnswerMarkdown {

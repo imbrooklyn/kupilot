@@ -129,8 +129,7 @@ type ModelSetupRequest struct {
 // adapter remains responsible for endpoint canonicalization and capabilities.
 func (request ModelSetupRequest) Validate() error {
 	if request.RequestID == 0 || !request.ProviderKind.Valid() ||
-		request.ProviderKind == domain.ModelProviderOpenAI && (request.Secret == nil || !request.Secret.IsSet()) ||
-		request.ProviderKind == domain.ModelProviderOllama && request.Secret != nil && request.Secret.IsSet() ||
+		request.Secret == nil || !request.Secret.IsSet() ||
 		!validModelSetupText(request.Endpoint, MaxModelSetupEndpointBytes) ||
 		!validModelSetupText(request.Model, MaxModelSetupNameBytes) {
 		return ErrModelSetupInvalid

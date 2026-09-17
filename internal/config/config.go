@@ -10,7 +10,6 @@ import (
 const (
 	CurrentVersion                    = 1
 	ProviderOpenAI                    = "openai"
-	ProviderOllama                    = "ollama"
 	ModelReasoningEffortNone          = "none"
 	ModelResponseFormatPrompt         = "prompt"
 	ModelResponseFormatJSONObject     = "json_object"
@@ -23,7 +22,6 @@ const (
 	DefaultNamespaceAccess            = NamespaceAccessAll
 	ExecCredentialsAllow              = "allow"
 	ExecCredentialsDeny               = "deny"
-	DefaultModelTemperature           = 0.1
 	DefaultModelRequestTimeoutSeconds = 900
 	DefaultReviewerTimeoutSeconds     = 30
 	MaxModelRequestTimeoutSeconds     = 900
@@ -31,7 +29,6 @@ const (
 	MaxNamespaceBytes                 = 63
 	DefaultNamespace                  = "default"
 	MaxModelIdentifierBytes           = 128
-	MaxModelProfileNameBytes          = 128
 	MaxPathBytes                      = 4096
 	DefaultDataSourceTimeoutSeconds   = 15
 	MaxDataSourceTimeoutSeconds       = 60
@@ -55,14 +52,9 @@ func (role ModelRole) valid() bool {
 type ModelCredentialReference string
 
 const (
-	ModelCredentialNone             ModelCredentialReference = "none"
 	ModelCredentialAgent            ModelCredentialReference = "agent"
 	ModelCredentialApprovalReviewer ModelCredentialReference = "approval_reviewer"
 )
-
-func (reference ModelCredentialReference) valid() bool {
-	return reference == ModelCredentialNone || reference == ModelCredentialAgent || reference == ModelCredentialApprovalReviewer
-}
 
 // Config is the complete serializable, non-sensitive startup configuration.
 // Paths and transport credentials are intentionally absent.
@@ -156,15 +148,13 @@ type ModelProfilesConfig struct {
 	ApprovalReviewer *ModelProfileConfig `yaml:"approval_reviewer,omitempty" json:"approval_reviewer,omitempty"`
 }
 
-// ModelProfileConfig contains one resolved, explicitly named and role-bound
-// profile. InheritAgent records only the user's schema shorthand; all runtime
-// settings below are complete after loading.
+// ModelProfileConfig contains one resolved OpenAI profile. Identity, credential
+// binding and capabilities are derived from its fixed slot and API protocol.
 type ModelProfileConfig struct {
-	Name                  string                   `yaml:"name" json:"name"`
-	Role                  ModelRole                `yaml:"role" json:"role"`
-	InheritAgent          bool                     `yaml:"inherit_agent,omitempty" json:"inherit_agent,omitempty"`
-	CredentialReference   ModelCredentialReference `yaml:"credential_ref" json:"credential_ref"`
-	ProviderKind          string                   `yaml:"provider_kind" json:"provider_kind"`
+	Name                  string                   `yaml:"-" json:"-"`
+	Role                  ModelRole                `yaml:"-" json:"-"`
+	CredentialReference   ModelCredentialReference `yaml:"-" json:"-"`
+	ProviderKind          string                   `yaml:"-" json:"-"`
 	Endpoint              string                   `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	Origin                string                   `yaml:"-" json:"origin,omitempty"`
 	Model                 string                   `yaml:"model,omitempty" json:"model,omitempty"`
@@ -174,8 +164,8 @@ type ModelProfileConfig struct {
 	Temperature           *float64                 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
 	MaxOutputTokens       int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	RequestTimeoutSeconds int                      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
-	Streaming             bool                     `yaml:"streaming" json:"streaming"`
-	ToolCallingRequired   bool                     `yaml:"tool_calling_required" json:"tool_calling_required"`
+	Streaming             bool                     `yaml:"-" json:"-"`
+	ToolCallingRequired   bool                     `yaml:"-" json:"-"`
 }
 
 // CredentialSource identifies the selected sensitive source without exposing
@@ -186,7 +176,6 @@ const (
 	CredentialSourceNone        CredentialSource = ""
 	CredentialSourceFile        CredentialSource = "file"
 	CredentialSourceEnvironment CredentialSource = "environment"
-	CredentialSourceInherited   CredentialSource = "inherited"
 )
 
 // ProfileCredential keeps one role's independently owned opaque wrapper and
@@ -584,10 +573,9 @@ type Overrides struct {
 }
 
 func defaultAgentProfile() ModelProfileConfig {
-	temperature := DefaultModelTemperature
 	return ModelProfileConfig{
 		Name: "agent", Role: ModelRoleAgent, CredentialReference: ModelCredentialAgent,
-		ProviderKind: ProviderOpenAI, Temperature: &temperature,
+		ProviderKind:          ProviderOpenAI,
 		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultModelRequestTimeoutSeconds,
 		Streaming:             true, ToolCallingRequired: true,
@@ -595,11 +583,10 @@ func defaultAgentProfile() ModelProfileConfig {
 }
 
 func defaultReviewerProfile() ModelProfileConfig {
-	temperature := 0.0
 	return ModelProfileConfig{
 		Name: "approval-reviewer", Role: ModelRoleApprovalReviewer,
-		CredentialReference: ModelCredentialApprovalReviewer,
-		ProviderKind:        ProviderOpenAI, Temperature: &temperature,
+		CredentialReference:   ModelCredentialApprovalReviewer,
+		ProviderKind:          ProviderOpenAI,
 		ResponseFormat:        ModelResponseFormatPrompt,
 		RequestTimeoutSeconds: DefaultReviewerTimeoutSeconds,
 		Streaming:             false, ToolCallingRequired: false,
@@ -655,6 +642,6 @@ func modelProfileRequiredError(role ModelRole) error {
 		ClassConfigurationInvalid,
 		"config_model_profile_required",
 		"validate_model_configuration",
-		"The "+name+" model profile requires a provider, endpoint, model identifier, and its fixed credential policy.",
+		"The "+name+" model profile requires an endpoint and model identifier.",
 	)
 }

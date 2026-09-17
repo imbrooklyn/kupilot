@@ -70,119 +70,30 @@ journal and recovery behavior. The busy timeout is bounded and does not replace
 caller-owned Context cancellation. `secure_delete=FAST` is a page-management
 setting and is never described as secure erasure.
 
-## Migrations
+## Initial schema and future migrations
 
-Migration SQL is embedded, forward-only, and named with a six-digit monotonic
-version such as `000001_initial.sql`. Each applied migration records its version,
-name, SHA-256 checksum, UTC Unix-millisecond application time, and application
-version in `schema_migrations`.
+The unreleased v0.1.0 baseline contains only `000001_initial.sql`. It creates
+all current safe tables, constraints and indexes directly; it contains no old
+restart archive, provider translation or table-rebuild compatibility path.
+The migration ledger records version 1, filename, SHA-256 checksum, application
+version and application time. Reopening the exact baseline changes no data.
 
-Startup accepts an empty database or a recognized migration history. It applies
-each pending migration in a short transaction, validates every recorded name and
-checksum, and rejects gaps, changed migration content, and a schema version newer
-than the running binary. A released migration is immutable; corrections use a
-new forward migration.
+Until v0.1.0 is published, correct the initial schema in place and keep every
+project-owned schema at version 1. Runtime Session revisions and scope/policy
+generations still advance independently. After publication, released migrations
+are immutable and changes require a forward migration.
 
-The `v0.4` migration rebuilds the referenced `agent_runs` and `messages` tables
-on one dedicated connection with foreign-key enforcement temporarily disabled,
-then verifies the complete foreign-key graph before commit and restores
-enforcement before connection reuse. It admits the code-defined runtime hard
-ceilings and 128 KiB final assistant Messages while preserving the 64 KiB user
-and system-notice limit. Any copy, graph, commit, or restoration failure leaves
-the prior schema and migration ledger intact.
+An unknown, corrupt, modified-checksum or newer database fails closed. Startup
+never deletes or resets it. Developers must stop its owner and preserve a
+consistent owner-protected backup before explicitly resetting incompatible local
+state. This development procedure is not an application migration or a promise
+of compatibility with past development binaries.
 
-Migration 6 replaces the single-origin consent row with fixed `agent` and
-`approval_reviewer` role keys, adds profile/role/invocation/cost metadata to
-model requests, and adds the bounded `session_context_summaries` table. Legacy
-consent and model-request rows receive conservative Agent-role metadata; loading
-still applies the current policy/category checks before any transfer. The
-migration stores no framework message, assembled prompt, Tool transcript,
-credential, or generic payload.
-
-Migration 7 makes every legacy pending or approved restart request terminal,
-archives the legacy restart tables, and creates the generalized approval,
-decision, and Reviewer-metadata tables. An approval stores explicit bounded
-ActionEnvelope metadata plus a typed-parameter kind and SHA-256 digest; it does
-not store raw parameters, executable, argv, command, environment, output, or a
-generic payload. A Reviewer record stores only bounded safe disposition or
-failure metadata. Startup recovery restores no authority from either table.
-Terminal rows in the legacy archive participate in the same bounded 180-day
-approval cleanup as generalized approvals.
-
-Migration 8 extends accepted Evidence with nullable exact resource-type
-identity, resource-policy version and generation, and explicit partial state.
-It preserves legacy Evidence as the narrower historic form and adds no raw
-object, discovery response, selector, continuation token, or generic payload.
-
-Migration 9 extends accepted Evidence with the observability-policy version,
-canonical source-origin hash, normalized series identity, and observation
-window. It also binds optional Prometheus and Loki origin hashes into the
-role-scoped consent row and returns migrated consent to pending. It stores no
-raw Event, log, metric, PromQL/LogQL, response body, credential, or continuation
-token.
-
-Migration 10 rebuilds the ToolInvocation table to admit the complete fixed
-14-entry Tool catalog and rebuilds the Evidence table to admit the one exact
-`kupilot.remote-diagnostics-policy/v1` provenance value. It also rebuilds the
-closed approval tables so the already-admitted remote-Pod network-effect bit
-requires and accepts its destination hash. It preserves all prior rows and
-other constraints. ToolInvocation retains only its existing bounded canonical
-argument projection; action, approval, and audit rows receive only command
-identity and parameter digests. No raw remote-command chunk, archive, container
-file, diagnostic-Pod body or log, credential, or generic payload is stored.
-
-Migration 11 rebuilds only the closed approval operation and parameter-kind
-constraints to admit typed remediation, exact local direct argv, and the
-separate shell operation. It adds no payload column. Executable/working-
-directory identity, argv, shell command, environment, external origin, process
-output, mutation bodies, and Kubernetes response bytes remain represented only
-by bounded identities or digests where eligible and never by raw content.
-
-Migration 12 rebuilds the same approval/decision/Reviewer foreign-key graph to
-add only the closed `observation` parameter kind used by supervised Pod-log and
-optional Prometheus/Loki actions. It adds no payload column. Search text,
-query/window parameters, source responses, raw logs, and credentials are not
-stored; the approval row retains only the existing parameter and origin
-digests. All prior rows and constraints are preserved.
-
-Migration 13 adds the bounded `run_sequence` column to committed Message rows.
-It distinguishes the initial user question, committed in-run steers, and the
-terminal assistant answer without persisting pending, queued, rejected, or
-recovered drafts. Legacy rows retain their established ordering and remain
-readable as historic conversation content without restoring active-run
-authority.
-
-Migration 14 adds bounded purpose-specific `claim_coverage_json` and
-`plan_json` columns to Diagnosis rows. New writes decode these columns only
-through the fixed claim/Evidence and plan DTOs; legacy `NULL` values remain
-readable. Claim hashes stored in the coverage DTO are derived locally from
-normalized claim text and checked again when read. The columns contain no
-Evidence payload, model response object,
-queue state, executable input, ActionEnvelope, approval, or resumable plan
-authority.
-
-Migration 15 adds the required `sessions.last_activity_at_ms` column and
-descending activity/ID index. Existing rows initialize conservatively from
-their previous `updated_at_ms`; production creates and admitted lifecycle
-writes supply or monotonically advance the dedicated value. Migration 16 adds
-bounded `answer_manifest_json` and `clarification_json` Diagnosis columns.
-Both accept only the strict project-owned schemas; they add no raw response,
-Evidence payload, prompt, generic object, or resumable authority.
-
-The initial schema contains `sessions`, `messages`, `agent_runs`,
-`model_requests`, `tool_invocations`, `evidence_items`, `diagnoses`, `approvals`,
-`approval_decisions`, `action_reviews`, `audit_events`, and `settings`. The
-common approval schema remains bound to fixed typed state rather than a generic
-payload or write command. Restart, typed remediation, and default-off local
-process actions use its shared dispatcher. Remote-diagnostic handlers use the
-same envelope schema and inline Application supervision; their Tool call stays
-blocked until the exact approval is consumed or safely closed.
-
-The `settings` table admits only code-owned typed records. In addition to the
-retention setting, `scope.last_context` schema version 1 stores one strict,
-bounded JSON object containing only the last successfully verified Kubernetes
-Context display name. It contains no Namespace, kubeconfig, endpoint,
-credential, live client, generation, or Session reference.
+The initial schema retains role-bound consent; ordered safe Messages; summary
+coverage; Last active; bounded claim, plan, completeness and clarification
+metadata; all 14 Tool names; exact Evidence provenance; and the current
+ActionEnvelope/approval/Reviewer graph. No raw provider, reasoning, Tool or
+execution payload is admitted. See the [Data Retention Contract](data-retention.md).
 
 ## Data boundary
 
@@ -191,7 +102,7 @@ text identities and UTC Unix-millisecond timestamps. SQL uses fixed statements,
 explicit columns, Context-aware calls, and bound values. sqlx handles, rows,
 transactions, tags, and driver values stay inside `internal/persistence/sqlite`.
 
-The schema records only the bounded `openai` or `ollama` provider identity for
+The schema records only the fixed `openai` provider identity for
 model requests. It has no field for OpenAI model API keys, kubeconfig content, authentication
 tokens, certificates, private keys, raw container logs, assembled prompts, raw
 model traffic, raw Tool results, arbitrary patches, or framework objects.
@@ -254,7 +165,7 @@ bounded the source data:
 | --- | --- |
 | Model request | Lifecycle metadata, named profile, fixed role and invocation, reserved cost units, token counts when evidenced, latency, model identifier, origin hash, and prompt or response fingerprints only. No prompt, response body, header, stream, or provider object is accepted. Model, profile, and prompt-version text are at most 128 bytes, and a provider request identifier is at most 256 bytes. |
 | Session context summary | One bounded safe summary with its hash, schema/policy versions, covered first/last Message IDs, ordered count/byte count/digest, generation time, Agent profile/origin hash, and degraded/truncation markers. Text is at most 16 KiB; coverage is at most 4,096 Messages and 4 MiB. Recent-tail text remains in Message rows. |
-| Action approval | Explicit bounded ActionEnvelope identity, scope and policy generations, target facts, effect bitsets, limits, typed-parameter kind and digest, nonce hash, lifecycle state, and decision metadata. No raw typed parameter, executable, argv, command, environment, external output, or generic payload is accepted. Legacy unexecuted restart authority is made terminal by migration 7. |
+| Action approval | Explicit bounded ActionEnvelope identity, scope and policy generations, target facts, effect bitsets, limits, typed-parameter kind and digest, nonce hash, lifecycle state, and decision metadata. No raw typed parameter, executable, argv, command, environment, external output, or generic payload is accepted. |
 | Reviewer recommendation | Approval and model-request identity, profile, origin hash, policy generation, disposition and time, plus either one bounded validated safe rationale or one stable error class. No prompt, response bytes, Tool call, credential, or authority payload is accepted. |
 | ToolInvocation | One of the 14 admitted Tool names, version, safe purpose, canonical arguments projection and digest, lifecycle metadata, safe summary or safe error, byte count, and truncation state. Arguments are at most 8 KiB; purpose is at most 1 KiB; safe summary and safe error are each at most 4 KiB. Context, endpoint, credential, deadline, and hard-limit authority cannot be supplied through arguments; any Namespace field remains policy-validated. |
 | Evidence | A project-owned ResourceRef projection, optional exact API identity and resource-, observability-, or remote-diagnostics-policy version/generation, category, concise fact, source path, severity, partial/redaction/truncation state, fingerprint, and observation time. A fact is at most 2 KiB, a source path at most 1 KiB, and one ToolInvocation may own at most 100 Evidence items. Raw remote output and remote-output excerpts are never stored; those facts contain only safe target metadata, counts, and a fingerprint. |
@@ -361,10 +272,10 @@ operation and prevents resume results from being treated as available.
 
 ## Deterministic response metadata and failure diagnostics
 
-No migration is required for response schema 4. The existing safe completeness
-JSON admits the new response version; durable Plan schema 1 remains unchanged.
-Released migrations are unchanged. Runtime failure diagnostics do not introduce
-a table, raw payload column, or second conversation store.
+The initial schema stores validated response completeness and durable Plan
+metadata at version 1. It is corrected in place until first publication.
+Runtime failure diagnostics introduce no table, raw payload column, or second
+conversation store.
 
 See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract

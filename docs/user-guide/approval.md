@@ -1,6 +1,6 @@
 # Permissions and Controlled Actions
 
-This page defines the Accepted `v0.5` interaction and its current deterministic
+This page defines the Accepted `v0.1.0` interaction and its current deterministic
 implementation. The checked-in composition dispatches supervised restart,
 scale, rollback, controller-owned Pod delete, cordon, uncordon, drain, exact
 local direct argv, the separate shell operation, and the default-off remote-
@@ -120,7 +120,7 @@ denied.
 
 ## RBAC and local policy
 
-RBAC is an independent Kubernetes authorization layer. The `v0.5` target splits
+RBAC is an independent Kubernetes authorization layer. The `v0.1.0` target splits
 read, metrics, Pod log, Pod Exec, diagnostic Pod, scale, eviction, Node patch,
 and other optional permissions. Do not grant `cluster-admin` or wildcard
 resources/verbs. RBAC cannot enforce Kupilot's field projection, exact command,

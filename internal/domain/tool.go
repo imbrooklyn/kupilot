@@ -405,12 +405,11 @@ type ModelProviderKind string
 
 const (
 	ModelProviderOpenAI ModelProviderKind = "openai"
-	ModelProviderOllama ModelProviderKind = "ollama"
 )
 
 // Valid reports whether the kind is one explicitly admitted provider.
 func (kind ModelProviderKind) Valid() bool {
-	return kind == ModelProviderOpenAI || kind == ModelProviderOllama
+	return kind == ModelProviderOpenAI
 }
 
 // ModelRequestStatus is one safe request lifecycle state.

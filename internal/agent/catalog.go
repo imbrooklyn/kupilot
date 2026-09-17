@@ -15,7 +15,7 @@ import (
 
 const (
 	// ToolCatalogVersion versions the complete built-in model-visible catalog.
-	ToolCatalogVersion = "kupilot-operational-tools-v5"
+	ToolCatalogVersion = "kupilot-operational-tools-v1"
 
 	maxToolPurposeBytes = 1024
 	maxRequestedEvents  = 50

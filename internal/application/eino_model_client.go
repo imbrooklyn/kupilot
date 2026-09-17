@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strings"
 
-	einoollama "github.com/cloudwego/eino-ext/components/model/ollama"
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	einocallbacks "github.com/cloudwego/eino/callbacks"
@@ -127,8 +126,7 @@ func newModelClientWithTransport(
 	if configuration.Validate() != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInvalidRequest, "model-configuration")
 	}
-	if configuration.ProviderKind == domain.ModelProviderOpenAI && (credential == nil || !credential.IsSet()) ||
-		configuration.ProviderKind == domain.ModelProviderOllama && credential != nil && credential.IsSet() {
+	if credential == nil || !credential.IsSet() {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-credential")
 	}
 	if credentialAppearsInStrings(credential, configuration.Endpoint, configuration.Origin, configuration.Model) {
@@ -148,16 +146,9 @@ func newModelClientWithTransport(
 			base:       transport,
 			origin:     origin,
 			credential: credential,
-			provider:   configuration.ProviderKind,
 			protocol:   configuration.APIProtocol,
-			temperature: func() float64 {
-				if configuration.Temperature != nil {
-					return *configuration.Temperature
-				}
-				return 0
-			}(),
 		},
-		CheckRedirect: redirectPolicy(origin, configuration.ProviderKind),
+		CheckRedirect: redirectPolicy(origin),
 	}
 	if configuration.APIProtocol == domain.ModelAPIProtocolResponses {
 		if logger == nil {
@@ -195,47 +186,15 @@ func newModelClientWithTransport(
 			ReasoningEffort: einoopenai.ReasoningEffortLevel(configuration.ReasoningEffort),
 		})
 	}
-	newOllamaComponent := func(structured bool) (einomodel.ToolCallingChatModel, error) {
-		options := &einoollama.Options{Temperature: float32(*configuration.Temperature)}
-		if configuration.MaxOutputTokens > 0 {
-			options.NumPredict = configuration.MaxOutputTokens
-		}
-		var format json.RawMessage
-		if structured {
-			format = json.RawMessage(`"json"`)
-		}
-		var thinking *einoollama.ThinkValue
-		if configuration.ReasoningEffort == domain.ModelReasoningEffortNone {
-			thinking = &einoollama.ThinkValue{Value: false}
-		} else if configuration.ReasoningEffort != "" {
-			thinking = &einoollama.ThinkValue{Value: string(configuration.ReasoningEffort)}
-		}
-		return einoollama.NewChatModel(context.Background(), &einoollama.ChatModelConfig{
-			BaseURL: strings.TrimRight(configuration.Endpoint, "/"), HTTPClient: client,
-			Model: configuration.Model, Format: format, Options: options, Thinking: thinking,
-		})
-	}
-	var (
-		chatModel    einomodel.ToolCallingChatModel
-		componentErr error
-	)
-	if configuration.ProviderKind == domain.ModelProviderOllama {
-		chatModel, componentErr = newOllamaComponent(false)
-	} else {
-		chatModel, componentErr = newOpenAIComponent(nil)
-	}
+	chatModel, componentErr := newOpenAIComponent(nil)
 	if componentErr != nil {
 		return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
 	}
 	structuredModel := chatModel
 	if configuration.ResponseFormat == domain.ModelResponseFormatJSONObject {
-		if configuration.ProviderKind == domain.ModelProviderOllama {
-			structuredModel, componentErr = newOllamaComponent(true)
-		} else {
-			structuredModel, componentErr = newOpenAIComponent(&einoopenai.ChatCompletionResponseFormat{
-				Type: einoopenai.ChatCompletionResponseFormatTypeJSONObject,
-			})
-		}
+		structuredModel, componentErr = newOpenAIComponent(&einoopenai.ChatCompletionResponseFormat{
+			Type: einoopenai.ChatCompletionResponseFormatTypeJSONObject,
+		})
 		if componentErr != nil {
 			return nil, capabilityError(domain.ModelErrorCodeInternal, "model-component")
 		}
@@ -282,11 +241,8 @@ func prepareTransport(base http.RoundTripper) (http.RoundTripper, bool) {
 	return clone, true
 }
 
-func redirectPolicy(origin *url.URL, provider domain.ModelProviderKind) func(*http.Request, []*http.Request) error {
+func redirectPolicy(origin *url.URL) func(*http.Request, []*http.Request) error {
 	return func(request *http.Request, via []*http.Request) error {
-		if provider == domain.ModelProviderOllama {
-			return errRedirectUnsupported
-		}
 		if request.URL.Scheme != origin.Scheme || request.URL.Host != origin.Host {
 			request.Header.Del("Authorization")
 			return errRedirectOriginDenied
@@ -324,13 +280,7 @@ func (client *modelClient) withTools(tools []*schema.ToolInfo) (einomodel.ToolCa
 	if model == nil || validateAnyBoundToolInfos(tools) != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	var bound einomodel.ToolCallingChatModel
-	var err error
-	if client.configuration.ProviderKind == domain.ModelProviderOllama {
-		bound, err = bindNativeCatalog(model, tools)
-	} else {
-		bound, err = model.WithTools(tools)
-	}
+	bound, err := model.WithTools(tools)
 	if err != nil {
 		return nil, failedRuntime(domain.SafeErrorClassUnsupported, "The configured model cannot accept the fixed Tool catalog.", err)
 	}
@@ -348,8 +298,7 @@ func (client *modelClient) structuredOutputModel() einomodel.ToolCallingChatMode
 }
 
 // stream sends one Eino-generated request and returns one assembled Eino
-// assistant message. Only the bounded native request corrections in ADR-0059
-// may replace code-owned metadata before transport.
+// assistant message. The guarded transport never replaces the request body.
 func (client *modelClient) stream(
 	ctx context.Context,
 	requestID domain.ModelRequestID,
@@ -400,12 +349,9 @@ func (client *modelClient) streamBounded(
 		"phase", "started",
 		"request_id", string(requestID),
 	)
-	options := make([]einomodel.Option, 0, 2)
-	if client.configuration.ProviderKind == domain.ModelProviderOpenAI {
-		options = append(options,
-			einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
-			einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
-		)
+	options := []einomodel.Option{
+		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
+		einoopenai.WithResponseChunkMessageModifier(validateResponseChunk),
 	}
 	options = append(nativeOptions, options...)
 	stream, err := model.Stream(requestContext, messages, options...)
@@ -437,7 +383,7 @@ func (client *modelClient) streamBounded(
 		})
 	}
 	defer state.closeResponseBody()
-	message, err := collectModelMessage(requestContext, requestID, client.configuration.ProviderKind, stream, client.credential, observeContent)
+	message, err := collectModelMessage(requestContext, requestID, stream, client.credential, observeContent)
 	if protocolErr := state.responseProtocolFailure(); protocolErr != nil {
 		err = protocolErr
 	}
@@ -501,12 +447,9 @@ func (client *modelClient) generateNonStreaming(
 	if invocation == domain.ModelInvocationReview {
 		model = client.structuredOutputModel()
 	}
-	options := make([]einomodel.Option, 0, 2)
-	if client.configuration.ProviderKind == domain.ModelProviderOpenAI {
-		options = append(options,
-			einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
-			einoopenai.WithResponseMessageModifier(validateResponseMessage),
-		)
+	options := []einomodel.Option{
+		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
+		einoopenai.WithResponseMessageModifier(validateResponseMessage),
 	}
 	var message *schema.Message
 	var err error
@@ -519,7 +462,7 @@ func (client *modelClient) generateNonStreaming(
 	if err != nil {
 		return nil, client.finishWithError(requestID, mapModelRequestError(requestContext, err, state), domain.ModelOperationRequest, err, state)
 	}
-	if err := admitAndClearNonStreamingMetadata(message, client.credential, client.configuration.ProviderKind); err != nil {
+	if err := admitAndClearNonStreamingMetadata(message, client.credential); err != nil {
 		return nil, client.finishWithError(
 			requestID,
 			mapModelRequestError(requestContext, err, state),
@@ -639,8 +582,6 @@ func mapModelRequestError(ctx context.Context, cause error, state *transportRequ
 	switch {
 	case errors.Is(cause, errProviderFinishDuplicate):
 		return modelFailure{code: domain.ModelErrorCodeDuplicateFinish, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
-	case errors.Is(cause, errNativeProviderReported):
-		return modelFailure{code: domain.ModelErrorCodeProviderReported, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
 	case errors.Is(cause, errProviderAfterFinish):
 		return modelFailure{code: domain.ModelErrorCodeAfterFinish, cause: modelFailureStreamProtocol, httpStatus: observedHTTPStatus(state)}
 	case errors.Is(cause, errProviderFinishMissing):

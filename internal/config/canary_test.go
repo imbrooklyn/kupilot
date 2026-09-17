@@ -20,7 +20,7 @@ func TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink(t *testing.T) {
 	t.Parallel()
 
 	canary := strings.Repeat("c", 53) + "-generated"
-	environment := map[string]string{ModelAPIKeyEnvironmentVariable: canary}
+	environment := map[string]string{AgentAPIKeyEnvironmentVariable: canary}
 	loaded, err := Load(context.Background(), LoadOptions{
 		Paths:     testPaths(t.TempDir()),
 		LookupEnv: lookupMap(environment),
@@ -35,7 +35,7 @@ func TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink(t *testing.T) {
 
 	secret := &loaded.Credentials.Agent.Value
 	defer loaded.Credentials.Destroy()
-	if _, found := environment[ModelAPIKeyEnvironmentVariable]; found {
+	if _, found := environment[AgentAPIKeyEnvironmentVariable]; found {
 		t.Fatal("model API key remains in the source environment")
 	}
 
@@ -78,7 +78,7 @@ func TestModelAPIKeyCanaryIsAbsentFromEveryStartupSink(t *testing.T) {
 	}
 	childEnvironment := FilterChildEnvironment([]string{
 		"PATH=/usr/bin",
-		ModelAPIKeyEnvironmentVariable + "=" + canary,
+		AgentAPIKeyEnvironmentVariable + "=" + canary,
 	})
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

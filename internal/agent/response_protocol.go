@@ -16,7 +16,7 @@ const (
 	// DiagnosticResponseAnswerField is the first top-level field projected for
 	// provisional display before the complete response is validated.
 	DiagnosticResponseAnswerField   = "answer_markdown"
-	diagnosticResponseSchemaVersion = 4
+	diagnosticResponseSchemaVersion = 1
 	maxDiagnosticResponseJSONDepth  = 8
 )
 

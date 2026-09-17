@@ -41,7 +41,7 @@ package-manager installation is supported.
 
 No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
-the provider, endpoint, model identifier, or required OpenAI API key is absent.
+the endpoint, model identifier, or required OpenAI API key is absent.
 
 If you prefer a file, Kupilot reads and writes strict schema version 1. No
 released predecessor schema exists, so pre-release single-profile layouts and
@@ -58,17 +58,10 @@ runtime:
 
 models:
   agent:
-    name: agent
-    role: agent
-    credential_ref: agent
-    provider_kind: openai
     endpoint: https://model.example.invalid/v1
     model: example-model
     response_format: prompt
-    temperature: 0.1
     request_timeout_seconds: 900
-    streaming: true
-    tool_calling_required: true
 
 kubernetes:
   namespace_access: all
@@ -95,8 +88,7 @@ documents, and files larger than 64 KiB are rejected. Existing user-managed
 file permissions are respected; new Kupilot-created Home directories use
 `0700` and new files use `0600` on supported Unix platforms.
 
-The Agent key can instead come from exactly one of
-`KUPILOT_AGENT_API_KEY` and the legacy `KUPILOT_MODEL_API_KEY` alias. A distinct
+The Agent key can instead come from `KUPILOT_AGENT_API_KEY`. A distinct
 Reviewer key uses `KUPILOT_APPROVAL_REVIEWER_API_KEY`. Present role variables
 are read once and removed from the Kupilot process environment. The Agent key
 is also accepted through masked TUI setup. Choose `save` only after reviewing
@@ -120,7 +112,7 @@ Kupilot also enforces its own Kind, Namespace, relationship, projection, and
 budget allowlists. RBAC remains an independent defense if another defect or
 local configuration grants a broader identity.
 
-The current `v0.5` fixtures split exact built-in/CRD reads, metrics, logs, Pod
+The current `v0.1.0` fixtures split exact built-in/CRD reads, metrics, logs, Pod
 Exec, diagnostic Pods, scale, rollback, Pod delete, eviction, and Node patch.
 Each remains disabled until explicitly configured and bound. Local execution
 uses an exact host policy and existing external identity, not a Kubernetes RBAC

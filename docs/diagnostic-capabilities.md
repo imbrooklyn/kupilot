@@ -1,6 +1,6 @@
 # Operational and Diagnostic Capabilities
 
-- Status: Accepted `v0.5` target; read, observability, remote-diagnostic,
+- Status: Accepted `v0.1.0` target; read, observability, remote-diagnostic,
   local-execution, and typed-remediation slices implemented
 - Date: 2026-09-05
 

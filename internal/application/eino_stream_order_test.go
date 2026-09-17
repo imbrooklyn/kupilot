@@ -1,16 +1,10 @@
 package application
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"io"
-	"net/http"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
 const orderContent = `{"choices":[{"index":0,"delta":{"content":"safe"},"finish_reason":null}]}`
@@ -67,37 +61,6 @@ func TestProviderOrderDecisionMatrix(t *testing.T) {
 				t.Fatalf("order result = %v; want %v", err, scenario.want)
 			}
 		})
-	}
-}
-
-func TestNativeProviderErrorIsTypedBeforePinnedClientLosesItsShape(t *testing.T) {
-	for _, ending := range []string{"", "\n"} {
-		t.Run(map[bool]string{true: "EOF", false: "newline"}[ending == ""], func(t *testing.T) {
-			calls := 0
-			var logs bytes.Buffer
-			client, model := newFixtureOllamaClientWithTransport(t, fixtureOllamaConfiguration("http://127.0.0.1:11434", time.Second), fixtureLogger(&logs), roundTripFunc(func(*http.Request) (*http.Response, error) {
-				calls++
-				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/x-ndjson"}}, Body: io.NopCloser(strings.NewReader(`{"error":"provider-private-canary"}` + ending))}, nil
-			}))
-			message, modelError := streamFixture(client, model, context.Background())
-			if message != nil || modelError == nil || modelError.Code() != domain.ModelErrorCodeProviderReported || calls != 1 || strings.Contains(logs.String(), "provider-private-canary") || strings.Contains(modelError.Error(), "provider-private-canary") {
-				t.Fatalf("native error projection = %v, calls %d", modelError, calls)
-			}
-			if failure := runtimeFailureFromModel(modelError); runtimeDiagnostic(failure) != domain.FailureProviderReported {
-				t.Fatalf("runtime projection = %v", failure)
-			}
-		})
-	}
-	for _, content := range []string{`{"error":""}`, `{"error":null}`, `{"error":12}`, `{"message":{"content":"safe"}}`, `{`} {
-		body := &boundedNDJSONBody{ReadCloser: io.NopCloser(strings.NewReader(content + "\n")), validateEvents: true}
-		observed, err := io.ReadAll(body)
-		if err != nil || string(observed) != content+"\n" {
-			t.Fatalf("non-error record was changed: %v", err)
-		}
-		state := &transportRequestState{responseBody: body}
-		if state.responseProtocolFailure() != nil || len(body.payload) != 0 {
-			t.Fatal("observer retained content or invented an error")
-		}
 	}
 }
 

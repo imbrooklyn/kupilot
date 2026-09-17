@@ -26,13 +26,13 @@ import (
 
 const (
 	kubeIntegrationAuthorization       = "authorized"
-	kubeIntegrationNamespace           = "kupilot-integration-v05"
+	kubeIntegrationNamespace           = "kupilot-integration-v01"
 	kubeIntegrationManagedByLabelKey   = "app.kubernetes.io/managed-by"
-	kubeIntegrationManagedByLabelValue = "kupilot-integration-v05"
+	kubeIntegrationManagedByLabelValue = "kupilot-integration-v01"
 	kubeIntegrationAppPod              = "kupilot-integration-app"
 	kubeIntegrationService             = "kupilot-integration-service"
 	kubeIntegrationDeployment          = "kupilot-integration-scale"
-	kubeIntegrationDiagnosticPod       = "kupilot-diagnostic-v05"
+	kubeIntegrationDiagnosticPod       = "kupilot-diagnostic-v01"
 	kubeIntegrationPolicyGeneration    = domain.PolicyGeneration(1)
 	kubeIntegrationOperationalCalls    = 224
 	kubeIntegrationTotalCalls          = 256

@@ -89,9 +89,8 @@ failure. Tool/Evidence metadata already accepted cannot authorize an answer.
 | Application event acceptance | `application_event_rejected` | Reject wrong identity, sequence, pairing or terminal state; no second terminal event | prefix | input |
 | Internal invariant | `internal_invariant_failed` | Reject invalid local IDs, clocks, generated state or an adapter returning without an accepted terminal; inspect doctor | prefix | input |
 
-For native Ollama, `provider_reported_failure` recognizes the typed non-empty
-NDJSON `error` field. Native Responses uses the decoded `failed` or `cancelled`
-response status. Neither path inspects error wording. Unknown errors remain
+Native Responses uses the decoded `failed` or `cancelled` response status.
+This handling inspects error wording. Unknown errors remain
 fail-closed and are not retrospectively attributed without evidence. The original fixed `ModelErrorCode` and `SafeErrorClass`
 continue to distinguish transport authentication, rate limit, timeout, redirect,
 media, budget and protocol results inside the adapter.
@@ -219,80 +218,13 @@ external branch.
 
 ## Evidence levels
 
-### Native request temperature decisions
-
-ADR-0058 corrects request fidelity independently of model capability. The
-following deterministic tests use no model or Kubernetes endpoint:
-
-| Decision outcomes | Tests |
-| --- | --- |
-| Explicit zero, default 0.1, upper bound 0.2; streaming, summary, review | `TestNativeOllamaTemperatureFieldIsAlwaysExplicit` |
-| Empty/nonempty options; present zero/nonzero; whitespace, escaped keys, nested unrelated fields; exact byte preservation | `TestNativeOllamaRequestPreservesAllOtherBytes` |
-| Missing/null/array/duplicate options; missing nonzero/null/string/duplicate/mismatched temperature and nonzero underflow; malformed key/value/end and trailing input; zero external calls | `TestNativeOllamaRequestDenialsMakeZeroExternalCalls` |
-| Corrected request exactly at the byte ceiling vs one-over with zero calls | `TestNativeOllamaCorrectedRequestByteCeiling` |
-| Read failure with wrapped cause; cancellation before/during read; timeout; declared-length mismatch; actual one-over; body closure and zero calls | `TestNativeOllamaRequestReadAndLifecycleDenials` |
-| Full Agent completion with one request carrying explicit zero | `TestNativeOllamaRunsFullAgentComposition` |
-
-These checks establish the wire setting, not a model's ability to produce valid
-Tool arguments. Provider failures remain failures without automatic retries.
-
-For this correction, Go 1.25.13 statement coverage was measured before changes
-at `d11c634c6635440c5784b2fca898b074beac2e1c` and after the correction using
-temporary profiles. `internal/application` increased from 81.6% to 82.2%;
-both functions in `ollama_request.go` reached 100% statement coverage. The
-other measured packages stayed at 78.4% (`agent`), 71.9% (`application`), and
-76.8% (`tui`). This is statement coverage; the decision table above is a
-separate manually auditable record, not a measured branch percentage.
-
-### Native bound Tool schema decisions
-
-ADR-0059 extends the existing native request guard, without changing model
-output validation. These tests are deterministic and perform no real model,
-Tool, or Kubernetes I/O:
-
-| Decision outcomes | Tests |
-| --- | --- |
-| Full and plan-only bindings; complete and lossy input schemas; exact replacement and unrelated-byte preservation; body closure, ContentLength, GetBody | `TestNativeCatalogPreservesOtherBytesAndHTTPFraming` |
-| Missing/null/object/empty/duplicate Tool arrays; missing/one-over/reordered/unbound catalogs; unknown names, changed descriptions/types, unknown Tool/function fields; duplicate type/function/name/description/parameters; missing/null/array/string/malformed parameters; exact error and zero network calls | `TestNativeCatalogEnvelopeDenialsHaveZeroExternalCalls` |
-| Final request exactly at its byte ceiling vs one-over; exact framing and zero-call denial | `TestNativeCatalogExactLimitAndOneOver` |
-| Full/plan-only binding and rebinding, Stream delegation, invalid rebinding | `TestNativeCatalogBoundViewsDelegateAndFreezeCatalog` |
-| Wrapped SDK binding cause; Generate delegation; later caller mutation cannot change the frozen catalog | `TestNativeCatalogBindingPreservesCauseAndGenerateDelegates` |
-| Tool-free absent/empty catalog vs malformed JSON | `TestNativeCatalogToolFreeAndMalformedHelpers` |
-| Cancellation after restoration and before acceptance; no corrected request escapes | `TestNativeCatalogCancellationBeforeCorrectedBodyAcceptance` |
-| Cancellation before/during read, timeout, read failure, length mismatch and actual one-over; closed body and zero calls | `TestNativeOllamaRequestReadAndLifecycleDenials` |
-| Full Agent greeting followed by retained Namespace question; exact settings, current-question uniqueness, all 14 schema comparisons; safe provider rejection, two fixture model calls, zero Tool/Kubernetes calls | `TestNativeOllamaRequestFidelityAudit`, `TestNativeOllamaRequestAuditComparator` |
-| Three test-only request variants preserve history, authority instructions and intended catalog; valid strict Tool binding, exactly one fixture call each, fixed parser-error observation | Tagged `TestNativeOllamaSelectionProbeFixture` (also race checked) |
-
-The request boundary keeps existing typed reasons: an unsupported native
-request envelope uses `model_invocation/provider_protocol_unsupported` (the
-existing transport-validation class, before actual I/O); corrected-byte excess uses
-`runtime_budget_exhausted`, and lifecycle failures use `run_cancelled` or
-`run_timed_out`. No request denial adds model/Tool/Kubernetes calls. Successful
-restoration grants no authority and schedules no additional call. Failure
-persistence and queue rules are unchanged from the matrix above.
-
-Fresh Go 1.25.13 statement coverage for this schema correction increased
-`internal/application` from **82.2% to 82.8%**. Together with ADR-0058 the
-change from the clean base is **81.6% to 82.8%**. Both new production files,
-`ollama_request.go` and `ollama_catalog.go`, have **100% statement coverage**,
-including every explicit error-return statement. `agent` remains **78.4%**,
-`application` **71.9%**, and `tui` **76.8%**. Profiles are temporary artifacts.
-Go does not measure branch coverage: the table is the manual decision record,
-not a branch percentage or a claim that every legacy branch is covered.
-
-The bounded local comparison is separate evidence: full requests passed 0/3,
-single-Tool requests 3/3, and requests without final protocol text 2/3. It
-executed no Tool or Kubernetes call and is not an end-to-end Agent success.
-Exact versions, failures, usage and timings are in
-[Model Compatibility](model-compatibility.md#bounded-native-first-call-comparison).
-
 ### Interpretation
 
 Go `-coverprofile` is statement coverage, not native branch coverage. A decision
 matrix must name tests for both outcomes of changed decisions and explicit
 error returns. Deterministic full-composition tests use recording transports,
 synthetic Tools/Evidence, and temporary SQLite; they do not prove real-cluster
-integration or semantic answer quality. Opt-in bounded local Ollama conformance
+integration or semantic answer quality. Opt-in bounded OpenAI conformance
 records only version/model/scenario, call and byte/usage counts, wall time, and
 typed structural outcomes. Release evidence and real-model quality evaluation
 are separate and cannot be inferred from either fixture class.
@@ -306,8 +238,8 @@ No second loop is used to recover a failed request.
 
 | Decision | Allow / deny evidence |
 | --- | --- |
-| Protocol and sampling admission | `TestNativeModelProtocolAndOptionalTemperatureConfiguration`: existing Chat defaults, Responses non-streaming, omitted OpenAI temperature; streaming mismatch, unknown/duplicate/null protocol and null temperature denied |
-| Configuration persistence and provider switch | `TestSaveNativeResponsesProfilePreservesOmissionAndReasoning`: native fields and omitted sampling round trip; explicit Ollama setup restores its required native fields |
+| Protocol and sampling admission | `TestNativeModelProtocolAndOptionalTemperatureConfiguration`: existing Chat defaults, Responses non-streaming, omitted OpenAI temperature; removed streaming switches, unknown/duplicate/null protocol and null temperature denied |
+| Configuration persistence | `TestSaveNativeResponsesProfilePreservesOmissionAndReasoning`: native fields and omitted sampling round trip |
 | Reasoning and Tool state | `TestNativeResponsesAgentToolAndFinal`: exactly two native model calls, one synthetic Tool, encrypted reasoning and correlated Tool output retained in the second request |
 | Pinned upstream streaming loss | `TestNativeResponsesPinnedStreamingReasoningLimitation`: demonstrate missing encrypted content and reject streaming Responses configuration before a model call |
 | Provider terminal admission | `TestNativeResponsesRejectsUnsafeTerminalBeforeTools`: missing/unknown status, reported failure, unspecified/content-filter incomplete state, contradictory completion, and duplicate calls terminate with exact typed reasons and zero Tool calls |
@@ -320,8 +252,7 @@ No second loop is used to recover a failed request.
 
 The composition suite has 56 protocol/scenario combinations. Native Responses
 uses JSON generation, so the two SSE-only event-order cases apply only to Chat
-Completions. Existing native Ollama request, Tool-schema and stream-order
-regressions remain in the merged Application package. These are deterministic
+Completions. Ollama-specific regressions were removed with that provider. These are deterministic
 structural tests with synthetic Tools and zero real Kubernetes access.
 
 Statement coverage measured from the pre-change HEAD archive and the refactored

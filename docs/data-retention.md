@@ -1,42 +1,14 @@
 # Kupilot Data Retention Contract
 
-- Status: Accepted target for `v0.5`
+- Status: Accepted target for `v0.1.0`
 - Date: 2026-09-07
 
-The checked-in SQLite schema is now at forward-only migration 17. It implements
-the safe Session-summary/coverage record, role-scoped consent, named
-model-request metadata, and minimal generalized ActionEnvelope, approval, and
-Reviewer-decision metadata described here. Migration 8 adds bounded exact API
-identity, resource-policy version/generation, and partial state to accepted
-resource Evidence. Migration 9 adds the observability-policy version,
-source-origin hash, normalized series identity, observation window, and exact
-source-consent origin hashes; it adds no raw Kubernetes/data-source payload,
-query, credential, or continuation token. Migration 10 expands the fixed
-ToolInvocation-name constraint to the complete 14-entry catalog and admits
-only the exact remote-diagnostics policy version for sanitized accepted
-Evidence. It also corrects the existing closed ActionEnvelope constraint so a
-remote-Pod network destination hash is required and can be stored. Existing
-bounded canonical Tool arguments remain eligible operational detail; raw exec
-streams, archives, file content, Pod bodies, logs, credentials, and action-audit
-command bodies remain prohibited.
-Migration 11 expands only the closed operation and parameter-kind constraints
-for typed remediation, exact local argv, and shell identities; it adds no
-payload column. Migration 12 adds only the `observation` parameter-kind value
-to the same closed approval table and adds no column. Pod-log search text,
-data-source query parameters, raw source responses, and container output remain
-represented only by an eligible digest or excluded entirely. Supervised reads,
-remote diagnostics, typed remediation, and default-off local-process actions
-use the shared action lifecycle. No raw argv, shell command, executable or
-working-directory path, child environment, credential value, Kubernetes
-response, or process output is eligible for SQLite, audit, logs, or export.
-Migration 13 records committed user-message sequence, migration 14 stores the
-bounded claim/plan projection, migration 15 adds authoritative Session Last
-active initialized conservatively from prior metadata time, and migration 16
-adds bounded answer-completeness and clarification projections. Migration 17
-rebuilds only the model-request metadata constraint and translates the retired
-unreleased provider-kind name to `openai`; it adds no content column or
-resumable transport state. None creates a queue, search, terminal, retry, raw
-model-response, or second history store.
+The unreleased v0.1.0 baseline has one initial SQLite migration. It retains the
+current safe Session, Message, run, Evidence, summary, consent, Diagnosis,
+ActionEnvelope and audit projections. All project-owned format versions start
+at 1. Historical development migrations and restart-only archive tables are
+removed; existing incompatible state is rejected without deletion or rewrite.
+See [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -48,8 +20,7 @@ Kupilot uses a local SQLite database. It does not claim that the database is
 encrypted, tamper-resistant, a credential store, or capable of forensic
 erasure. A separate fixed Home configuration may contain an OpenAI model API
 key only after the user chooses disclosed plaintext storage; that exception
-never makes the key eligible for SQLite. A native Ollama profile contains no
-model credential. Local controls are source exclusion, projection, create-only
+never makes the key eligible for SQLite. Local controls are source exclusion, projection, create-only
 owner modes on supported platforms, bounded detail retention, user deletion,
 and visible failure. Existing user-managed modes, operating-system
 disk encryption, and backup lifecycle remain the user's controls.
@@ -109,7 +80,7 @@ disk encryption, and backup lifecycle remain the user's controls.
 | Sanitized ToolInvocation detail, accepted Evidence, and model-request metadata | 30 days | Measured from the owning invocation, observation, or request completion time. The public control may only shorten the current value, including to 0 days, which keeps detail only in process memory. |
 | Ordinary read and lifecycle AuditEvents | 90 days | Measured from `occurred_at`; user Session deletion may remove them earlier through cascade. |
 | Terminal permission and decision records, and ActionEnvelope, pre-operation intent, execution-attempt, cleanup, and verification AuditEvents | 180 days | Measured from the relevant state or event time; user Session deletion or clear-all may remove them earlier because Kupilot is not a compliance ledger. Pending authority is first made terminal by its owning lifecycle, never by retention cleanup. |
-| Explicit `kupilot.export-summary.v4` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
+| Explicit `kupilot.export-summary.v1` Markdown file | Until the user removes the separately published file | This user-controlled copy is outside SQLite retention. Later Session deletion does not remove it. |
 | Optional plaintext model profile in `KUPILOT_HOME/config.yaml` | Until the user overwrites or removes the local configuration | This user-selected credential copy is outside SQLite and Session retention. Process-only setup and environment loading do not create it. |
 | Model-transfer consent | Until revoked, local state is cleared, or its exact tuple is invalidated | The stored record contains policy version, model role, decision state and time, endpoint-origin hash, and the exact eligible-category set. Any profile, role, origin, category, or policy-version change requires confirmation again. |
 | Schema version, migration checksum, and maintenance metadata | Lifetime of the database | These records contain no user, model, or cluster content and disappear with delete-all local state. |
@@ -202,7 +173,7 @@ Eligible run data is limited to:
   reason, timestamps, safe working-scope snapshot, optional ResourceRef,
   counters, truncation flags, prompt and capability-catalog versions, and
   `persistence_degraded` state.
-- Model-request identity, sequence, fixed `openai` or `ollama` provider kind, named profile and
+- Model-request identity, sequence, fixed `openai` provider kind, named profile and
   consumer role, model identifier, endpoint-origin hash, status, stable error
   class, bounded validated provider request identifier, prompt and response
   fingerprints, optional evidence-based token/cost counts, and timing metadata.
@@ -302,16 +273,11 @@ event is linked to the exact approval ID and ActionEnvelope digest. This is
 bounded target identity metadata, not reusable cross-Namespace authority.
 A failed result-audit write never authorizes an automatic external retry.
 
-Migration 7 first makes every legacy pending or approved restart request
-terminal with the `process_restarted` reason, then archives the legacy tables
-for historic context and creates the generalized approval and Reviewer tables.
-The new approval row stores an exact typed-parameter kind and digest, never raw
-argv, executable, command, environment, typed parameter body, or framework
-payload. Reviewer rows contain only request identity, profile and origin hash,
-policy generation, safe disposition, and either a bounded validated rationale
-or stable error class. Neither table restores authority after process restart.
-Terminal rows in the legacy archive remain subject to the same bounded
-180-day approval cleanup as generalized approval rows.
+Approval rows store exact typed-parameter kind and digest, never raw argv,
+executable, command, environment, typed parameter body or framework payload.
+Reviewer rows contain request identity, profile and origin hash, policy
+generation, safe disposition and a bounded validated rationale or error class.
+Neither table restores authority after process restart.
 
 ## 4. Minimal-persistence
 
@@ -426,7 +392,7 @@ generic payload.
 The current implementation uses 64 KiB for one user or system-notice Message,
 128 KiB for one final assistant Message or complete Diagnosis, 16 KiB for one
 safe Session-context summary, 2 KiB for one Evidence fact, and 2 MiB for one
-`kupilot.export-summary.v4` document. Safe model-context selection is capped at
+`kupilot.export-summary.v1` document. Safe model-context selection is capped at
 4,096 eligible Messages and 4 MiB. The Eino compaction working-set resource
 trigger counts UTF-8 content bytes against 128 KiB; it is deliberately not a
 token estimate or a model context-window claim.
@@ -680,7 +646,7 @@ answer-completeness manifest and optional typed clarification follow Diagnosis
 retention in standard mode and are absent in minimal mode. Source freshness,
 conflict, supersession, negative-coverage, and reuse fields store only bounded
 project-owned enums, identifiers, hashes, and timestamps; no raw source or
-model payload becomes eligible. Export schema 4 can represent these safe fields
+model payload becomes eligible. Export schema 1 can represent these safe fields
 without restoring Evidence or action authority.
 
 ## 12. Revisit triggers
@@ -721,13 +687,13 @@ before:
 - [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
 - [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 - [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0055: Use Explicit OpenAI and Native Ollama Provider Kinds](adr/0055-use-explicit-openai-and-native-ollama-provider-kinds.md)
+- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Deterministic response metadata and failure diagnostics
 
-Response schema 4 changes the model wire grammar, not the durable conversation
-source. Older safe Messages and manifests remain readable; replay reconstructs
-the current grammar without historic authority. Interaction failure stage/reason
+Response schema 1 uses the existing durable safe conversation source. Retained
+Messages from this initial baseline are reconstructed in the current grammar
+without historic authority. Interaction failure stage/reason
 metadata is current-process diagnostic state. No raw response or copied
 conversation log is added to SQLite or exports.
 

@@ -180,7 +180,7 @@ func TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection(t *testing.T) {
 		}
 	}
 	if strings.Contains(prompt, "request shell or kubectl execution") {
-		t.Fatal("System Prompt retained a pre-v0.5 prohibition that conflicts with exact policy-ID action proposals")
+		t.Fatal("System Prompt retained a retired prohibition that conflicts with exact policy-ID action proposals")
 	}
 	if got := input.Question(); got != question {
 		t.Fatalf("user message = %q", got)

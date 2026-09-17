@@ -25,7 +25,7 @@ var (
 )
 
 // ActionObservationKind is the closed parameter family for supervised
-// sensitive and network observations. Ollama or model/provider names never
+// sensitive and network observations. Model names never
 // enter this value.
 type ActionObservationKind string
 

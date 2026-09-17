@@ -1,9 +1,9 @@
 # Kubernetes Compatibility
 
-- Status: Accepted `v0.5` target with current dependency evidence
+- Status: Accepted `v0.1.0` target with current dependency evidence
 - Date: 2026-09-05
 
-The checked-in runtime implements the `v0.5` read and observability slices:
+The checked-in runtime implements the `v0.1.0` read and observability slices:
 reviewed built-ins, safe Secret metadata, exact policy-admitted CRD reads,
 typed queries, runtime-owned pagination, normalized Events, bounded Pod logs,
 and typed Pod/Node Metrics API snapshots. Optional Prometheus and Loki clients
@@ -37,7 +37,7 @@ Older and newer minors are outside the supported matrix. Discovery never
 expands the surface, and this matrix is not a claim that every client-go API is
 supported.
 
-## Accepted `v0.5` Kubernetes surface
+## Accepted `v0.1.0` Kubernetes surface
 
 The accepted catalog adds reviewed stable built-ins and exact policy-admitted
 CRDs, conversational `describe`, bounded query/count/table, Events, current/
@@ -124,7 +124,7 @@ For run reads:
 - Kubernetes RBAC remains mandatory for every request.
 - Cluster-scoped references contain no Namespace.
 
-## Implemented `v0.5` broad resource reads
+## Implemented `v0.1.0` broad resource reads
 
 <!-- markdownlint-disable MD013 -->
 
@@ -225,7 +225,7 @@ version, template fingerprint, generation, or concurrency precondition. No
 automatic write retry is allowed. Rollout verification performs bounded exact
 Deployment GETs and never changes the prior write outcome.
 
-## Implemented `v0.5` remote diagnostics
+## Implemented `v0.1.0` remote diagnostics
 
 Remote command transport is confined to `internal/kube` and uses the pinned
 client-go v0.35.7 `remotecommand.NewSPDYExecutorRejectRedirects` API. The exact
@@ -289,7 +289,7 @@ a content fingerprint. Scope, policy generation, and category consent are
 checked again after safe projection and after the durable outcome audit before
 the prepared result is returned to the Agent.
 
-## Implemented typed `v0.5` remediation
+## Implemented typed `v0.1.0` remediation
 
 - Scale uses the exact Deployment or StatefulSet `scale` subresource and sends
   the prepared resource version with one replica target. Rollback selects one
@@ -325,7 +325,7 @@ process. Its program and arguments come only from the selected kubeconfig,
 execute directly without a shell, receive a filtered environment without model
 or Kubernetes credentials unrelated to authentication, have bounded output,
 and terminate with the owning request or bundle. `deny` rejects an exec-bearing
-Context before launch. The separate `v0.5` restricted local argv and shell
+Context before launch. The separate `v0.1.0` restricted local argv and shell
 capabilities never reuse credential-plugin output or authority. Kupilot does
 not validate or control an external program's own network behavior.
 

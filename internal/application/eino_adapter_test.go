@@ -277,7 +277,7 @@ func TestAdapterPassesOrderedSessionContextAndCurrentQuestionExactlyOnce(t *test
 			t.Fatalf("historic final answer = %#v, error = %v", historic, historyErr)
 		}
 		historicalDraft, historyErr := agent.DecodeDiagnosticResponse(request.Messages[2].Content)
-		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 4 ||
+		if historyErr != nil || historicalDraft.ResponseSchemaVersion != 1 ||
 			len(historicalDraft.ConfirmedFacts) != 0 || len(historicalDraft.RecommendedActions) != 0 ||
 			len(historicalDraft.ClaimCoverage) != 0 || len(historicalDraft.MissingInformation) != 0 ||
 			historicalDraft.Clarification != nil {
