@@ -307,8 +307,6 @@ quality evidence.
 
 ## References
 
-- [Manual Test Plan](quality/manual-testing.md): environment preparation,
-  executable scenarios, evidence requirements, and result recording.
 - [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
 - [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
 - [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
