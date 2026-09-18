@@ -119,7 +119,7 @@ type UICommand struct {
 	PrivacyRevision          string
 	LogsEnabled              *bool
 	ApprovalID               domain.ApprovalID
-	ApprovalDigest           domain.ApprovalDigest
+	ActionDigest             domain.ActionDigest
 	ApprovalNonce            domain.ApprovalNonce
 	ApprovalSequence         int64
 	ExpectedPolicyGeneration domain.PolicyGeneration
@@ -328,7 +328,7 @@ func (command UICommand) Validate() error {
 		UICommandCreateSessionRule:
 		if command.RequestID == 0 || !command.RunID.Valid() || command.Text != "" || command.ExpectedScopeGeneration < 1 ||
 			command.Scope != nil || command.Resource != nil || command.hasPrivacyPayload() ||
-			!command.ApprovalID.Valid() || !command.ApprovalDigest.Valid() || !command.ApprovalNonce.Valid() ||
+			!command.ApprovalID.Valid() || !command.ActionDigest.Valid() || !command.ApprovalNonce.Valid() ||
 			command.ApprovalSequence < 1 || command.ApprovalSequence > 4096 ||
 			!command.ExpectedPolicyGeneration.Valid() || command.PermissionProfile != "" || command.HighRiskAcknowledged {
 			return ErrInvalidUICommand
@@ -344,7 +344,7 @@ func (command UICommand) hasPrivacyPayload() bool {
 }
 
 func (command UICommand) hasApprovalPayload() bool {
-	return command.ApprovalID != "" || command.ApprovalDigest != "" || command.ApprovalNonce.Valid() || command.ApprovalSequence != 0
+	return command.ApprovalID != "" || command.ActionDigest != "" || command.ApprovalNonce.Valid() || command.ApprovalSequence != 0
 }
 
 func (command UICommand) hasPermissionPayload() bool {

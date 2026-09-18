@@ -1,4 +1,4 @@
-# ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes
+# ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes
 
 - Status: Accepted
 
@@ -27,7 +27,7 @@ Application derives terminal reasons, safe next actions and content-free
 preflight projections from actual lifecycle state. Preserve useful internal error
 causes but expose only safe project-owned classes and failure stages/reasons.
 Raw endpoint strings do not drive policy. Failures are handled at their real
-boundaries; an unused parallel recovery table is not verification.
+boundaries, with tests of the actual recovery path.
 
 ## Consequences and validation
 The model retains flexible expression while code owns provenance and authority.

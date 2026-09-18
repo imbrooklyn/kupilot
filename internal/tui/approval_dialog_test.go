@@ -45,7 +45,7 @@ func TestApprovalDialogDefaultsDenyAndEmitsOneBoundDecision(t *testing.T) {
 	if decision.Kind != application.UICommandRejectAction || decision.RequestID == 0 ||
 		decision.RunID != request.RunID || decision.ExpectedScopeGeneration != request.Scope.Generation ||
 		decision.ExpectedPolicyGeneration != request.PolicyGeneration ||
-		decision.ApprovalID != request.RequestID || decision.ApprovalDigest != request.Digest ||
+		decision.ApprovalID != request.RequestID || decision.ActionDigest != request.Digest ||
 		!decision.ApprovalNonce.Equal(request.Nonce) || decision.ApprovalSequence != request.Sequence {
 		t.Fatalf("reject command = %#v", decision)
 	}
@@ -130,7 +130,7 @@ func TestApprovalDialogEmitsOnlyTheSelectedAdmittedOption(t *testing.T) {
 			decision := applicationCommandFromCmd(t, command)
 			if decision.Kind != test.want || decision.ExpectedPolicyGeneration != request.PolicyGeneration ||
 				decision.ExpectedScopeGeneration != request.Scope.Generation ||
-				decision.ApprovalID != request.RequestID || !decision.ApprovalDigest.Equal(request.Digest) {
+				decision.ApprovalID != request.RequestID || !decision.ActionDigest.Equal(request.Digest) {
 				t.Fatalf("selected approval option = %#v", decision)
 			}
 			if test.permission != (model.pendingPermissionID == decision.RequestID) ||
@@ -492,7 +492,7 @@ func testUIApprovalRequest(t *testing.T, requestedAt time.Time, sequence int64) 
 	if err != nil {
 		t.Fatalf("NewApprovalNonce() error = %v", err)
 	}
-	intent := domain.OperationIntent{
+	intent := domain.ActionIntent{
 		Operation:              domain.ActionOperationRestartDeployment,
 		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
 		PolicyVersion:          domain.ActionPolicyVersion,
@@ -527,7 +527,7 @@ func testUIApprovalRequest(t *testing.T, requestedAt time.Time, sequence int64) 
 		ID: "00000000-0000-7000-8000-000000008401", RunID: testRunID,
 		SessionID: "00000000-0000-7000-8000-000000008402", Intent: intent,
 		Nonce: nonce, State: domain.ApprovalStatePending, RequestedAt: requestedAt,
-		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ActionApprovalTTL), StateChangedAt: requestedAt,
 	}
 	domainRequest.Digest, err = approval.OperationDigest(domainRequest)
 	if err != nil {
@@ -580,7 +580,7 @@ func testUIObservationApprovalRequest(t *testing.T, requestedAt time.Time, seque
 	domainRequest := domain.ApprovalRequest{
 		ID: "00000000-0000-7000-8000-000000008403", RunID: plan.RunID, SessionID: plan.SessionID,
 		Intent: intent, Nonce: nonce, State: domain.ApprovalStatePending, RequestedAt: requestedAt,
-		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ActionApprovalTTL), StateChangedAt: requestedAt,
 	}
 	domainRequest.Digest, err = approval.OperationDigest(domainRequest)
 	if err != nil {

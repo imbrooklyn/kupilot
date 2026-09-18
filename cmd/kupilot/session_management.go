@@ -126,7 +126,7 @@ func runLocalSessionCommand(
 	defer processLock.Close()
 	version := info.Version
 	if version == "" {
-		version = "dev"
+		version = buildinfo.Version
 	}
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
 		StateDir: paths.StateDir, ApplicationVersion: version, CorrelationID: "session-management",
@@ -329,10 +329,10 @@ func runCLIDoctor(ctx context.Context, manager *application.SessionManager, opti
 	}
 	version := info.Version
 	if version == "" {
-		version = "dev"
+		version = buildinfo.Version
 	}
 	digest := sha256.Sum256([]byte(loaded.Models.Agent.Origin))
-	doctor, err := application.NewDoctorResult(version, fmt.Sprintf("v%d", config.CurrentVersion), domain.ModelProviderKind(loaded.Models.Agent.ProviderKind), hex.EncodeToString(digest[:]),
+	doctor, err := application.NewDoctorResult(version, fmt.Sprintf("v%d", config.CurrentVersion), domain.ModelProviderKind(loaded.Models.Agent.ProviderKind), domain.ModelAPIProtocol(loaded.Models.Agent.APIProtocol), hex.EncodeToString(digest[:]),
 		loaded.Models.Agent.Model != "", false, health)
 	if err != nil {
 		return err

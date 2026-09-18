@@ -76,7 +76,7 @@ func TestResponseConformanceRequiredFields(t *testing.T) {
 	}
 }
 
-func TestResponseConformanceMalformedAndRetiredFields(t *testing.T) {
+func TestResponseConformanceMalformedAndUnknownFields(t *testing.T) {
 	tests := []struct {
 		name, content string
 		reason        domain.InteractionFailure
@@ -88,7 +88,7 @@ func TestResponseConformanceMalformedAndRetiredFields(t *testing.T) {
 		{"top null", "null", domain.FailureFinalNullField},
 		{"top array", "[]", domain.FailureFinalShape},
 		{"unknown", strings.TrimSuffix(conformanceAnswer, "}") + `,"authority":true}`, domain.FailureFinalUnknownField},
-		{"legacy", strings.Replace(conformanceAnswer, `"response_schema_version":1`, `"response_schema_version":3`, 1), domain.FailureFinalSchema},
+		{"unsupported version", strings.Replace(conformanceAnswer, `"response_schema_version":1`, `"response_schema_version":3`, 1), domain.FailureFinalSchema},
 		{"schema type", strings.Replace(conformanceAnswer, `"response_schema_version":1`, `"response_schema_version":"4"`, 1), domain.FailureFinalShape},
 		{"unknown outcome", strings.Replace(conformanceAnswer, `"outcome":"answer"`, `"outcome":"execute"`, 1), domain.FailureFinalShape},
 		{"stop suggestion", strings.TrimSuffix(conformanceAnswer, "}") + `,"stop_reason":"completed"}`, domain.FailureFinalUnknownField},
@@ -138,8 +138,8 @@ func TestResponseConformanceClaimIntentAndDerivation(t *testing.T) {
 			}
 		})
 	}
-	for _, retired := range []string{`"sequence":1`, `"claim_hash":"untrusted-response-canary"`, `"coverage_state":"verified"`} {
-		assertResponseFailure(t, responseWithClaims(`{"claim":"Claim.","claim_type":"inference","evidence_ids":[],`+retired+`}`), domain.FailureFinalUnknownField)
+	for _, runtimeField := range []string{`"sequence":1`, `"claim_hash":"untrusted-response-canary"`, `"coverage_state":"verified"`} {
+		assertResponseFailure(t, responseWithClaims(`{"claim":"Claim.","claim_type":"inference","evidence_ids":[],`+runtimeField+`}`), domain.FailureFinalUnknownField)
 	}
 }
 

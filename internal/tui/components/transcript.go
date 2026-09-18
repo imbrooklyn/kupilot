@@ -414,7 +414,7 @@ func (transcript *Transcript) EndEvidenceSelection() {
 func (transcript Transcript) EvidenceSelecting() bool { return transcript.selecting }
 
 // MoveEvidence moves through the exact citations for the selected claim, or
-// through the selected final's citations when legacy metadata has no claims.
+// through a local result's supporting observations when it has no claims.
 func (transcript *Transcript) MoveEvidence(delta int) {
 	indexes := transcript.selectedEvidenceIndexes()
 	if !transcript.selecting || len(indexes) == 0 {

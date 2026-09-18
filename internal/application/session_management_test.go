@@ -159,7 +159,7 @@ func TestSessionListUsesStableLastActivityCursorAndProtectsUnsafeTimestamps(t *t
 		testSessionMetadata(1, now.Add(-time.Hour)), testSessionMetadata(2, now.Add(-time.Hour)),
 		testSessionMetadata(3, now.Add(time.Hour)),
 	}
-	store := &sessionManagementStoreFake{records: rows, schema: 15}
+	store := &sessionManagementStoreFake{records: rows, schema: 1}
 	manager, _ := NewSessionManager(store, func() time.Time { return now })
 	first, err := manager.List(context.Background(), SessionListRequest{Limit: 2, FrozenNow: now})
 	if err != nil || len(first.Sessions) != 2 || first.NextCursor == "" || !first.Sessions[0].Protected || first.Sessions[0].ProtectionReason != SessionProtectionFutureActivity {
@@ -178,7 +178,7 @@ func TestCorruptLastActivityRemainsVisibleButProtected(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	record := testSessionMetadata(1, now.Add(-time.Hour))
 	record.LastActiveUnixMillis = -1
-	store := &sessionManagementStoreFake{records: []SessionMetadataRecord{record}, schema: 16}
+	store := &sessionManagementStoreFake{records: []SessionMetadataRecord{record}, schema: 1}
 	manager, _ := NewSessionManager(store, func() time.Time { return now })
 	page, err := manager.List(context.Background(), SessionListRequest{Limit: 1, FrozenNow: now})
 	if err != nil || len(page.Sessions) != 1 || !page.Sessions[0].Protected ||
@@ -206,7 +206,7 @@ func TestDeletionDigestBindsOrderedSnapshotAndBatchIsolation(t *testing.T) {
 	store := &sessionManagementStoreFake{records: []SessionMetadataRecord{
 		testSessionMetadata(1, now.Add(-72*time.Hour)), testSessionMetadata(2, now.Add(-48*time.Hour)),
 		testSessionMetadata(3, now.Add(-time.Hour)),
-	}, schema: 15}
+	}, schema: 1}
 	isolation := new(deletionIsolationFake)
 	manager, _ := NewIsolatedSessionManager(store, func() time.Time { return now }, isolation)
 	plan, err := manager.PreviewDeletion(context.Background(), SessionDeletionSelectionRequest{
@@ -274,7 +274,7 @@ func TestDeletionDigestBindsOrderedSnapshotAndBatchIsolation(t *testing.T) {
 func TestDeletionFailureAndStaleSelectionWriteNothing(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	row := testSessionMetadata(1, now.Add(-time.Hour))
-	store := &sessionManagementStoreFake{records: []SessionMetadataRecord{row}, schema: 15}
+	store := &sessionManagementStoreFake{records: []SessionMetadataRecord{row}, schema: 1}
 	manager, _ := NewSessionManager(store, func() time.Time { return now })
 	plan, err := manager.PreviewDeletion(context.Background(), SessionDeletionSelectionRequest{
 		Kind: SessionDeletionExact, SessionID: row.ID, FrozenNow: now, Limit: 1, CurrentSessionID: row.ID,

@@ -33,7 +33,7 @@ denial tests before implementation.
 Until the first publication, the product remains `v0.1.0` and project-owned
 formats remain at version `1`. Correct the initial baseline in place; do not
 add development tags, migration chains, provider extension points, or legacy
-configuration aliases. See [ADR-0063: Keep One Unreleased Version-One Baseline](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
+configuration aliases. See [ADR-0016: Keep One Unreleased Version-One Baseline](docs/adr/0016-unreleased-version-baseline.md).
 
 ## Report security issues privately
 

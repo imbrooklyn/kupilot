@@ -4,7 +4,7 @@
   local-execution, and typed-remediation slices implemented
 - Date: 2026-09-05
 
-The checked-in implementation now includes the broad built-in/CRD resource
+The checked-in implementation includes the broad built-in/CRD resource
 read and query slice and the deterministic Events, logs, Metrics API,
 Prometheus, and Loki adapters. It also includes the default-off exact Pod Exec,
 container-file, and diagnostic-Pod capabilities described below, plus exact
@@ -58,7 +58,7 @@ field or label mappings; the same predicates are evaluated again over the
 allowlisted projection. CRD discovery validates one exact configured API and
 cannot grant another one.
 
-Events now support exact target, Namespace, time, reason, and type filters with
+Events support exact target, Namespace, time, reason, and type filters with
 runtime-owned pagination, deduplication, series/count normalization, and
 explicit partial state. Current and previous Pod logs support one or all
 explicit containers, including separately selected init and ephemeral
@@ -271,6 +271,6 @@ to an untested version.
 - [Scope](scope.md)
 - [Kubernetes Compatibility](kubernetes-compatibility.md)
 - [Least-Privilege RBAC](rbac/README.md)
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)

@@ -62,7 +62,7 @@ type proposedActionTargetWire struct {
 }
 
 type proposedActionWire struct {
-	Operation     domain.ApprovalOperation `json:"operation"`
+	Operation     domain.ActionOperation   `json:"operation"`
 	Reason        string                   `json:"reason"`
 	Risk          string                   `json:"risk"`
 	Prerequisites []string                 `json:"prerequisites"`

@@ -58,7 +58,7 @@ func TestGetResourceReturnsSafeDiagnosticDTOAndDeterministicEvidence(t *testing.
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"diagnostic","purpose":"Inspect the Pod state.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect the Pod state.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess {
 		t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
@@ -122,7 +122,7 @@ func TestGetResourceOmitsSensitiveIdentityFromDataAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect safe identity.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect safe identity.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != fieldLimitReason ||
 		strings.Contains(result.DataJSON, canary) || len(result.Evidence) == 0 {
@@ -150,7 +150,7 @@ func TestGetResourceSummaryDetailExcludesDiagnosticCollections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"summary","purpose":"Inspect a summary.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"summary","name":"sample-pod","namespace":null,"purpose":"Inspect a summary.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 1 ||
 		!strings.Contains(result.DataJSON, `"conditions":[]`) || !strings.Contains(result.DataJSON, `"containers":[]`) ||
@@ -169,7 +169,7 @@ func TestGetResourceNormalizesObservedTimeToUTCUnixMilliseconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.ObservedAt != testObservedAt {
 		t.Fatalf("Execute() observed_at = %s, validation = %v", result.ObservedAt, result.Validate())
@@ -193,7 +193,7 @@ func TestGetResourceBoundsAggregateEvidenceFactsBeforeEvidenceCreation(t *testin
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect bounded Evidence.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect bounded Evidence.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != fieldLimitReason ||
 		len(result.Evidence) != 2 || len(result.Evidence[1].Fact) > maxEvidenceFactBytes || !result.Evidence[1].Truncated {
@@ -214,7 +214,7 @@ func TestGetResourceCreatesBoundedServicePortEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect Service ports.","resource":{"kind":"Service","name":"sample-service"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-service","namespace":null,"purpose":"Inspect Service ports.","resource_type":"services"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 2 ||
 		result.Evidence[1].SourcePath == nil || *result.Evidence[1].SourcePath != "projected.spec.ports" ||
@@ -241,7 +241,7 @@ func TestGetResourceEvidenceMappingIsDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewGetResourceTool() error = %v", err)
 		}
-		call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect rollout status.","resource":{"kind":"Deployment","name":"sample-deployment"}}`)
+		call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-deployment","namespace":null,"purpose":"Inspect rollout status.","resource_type":"deployments"}`)
 		return tool.Execute(context.Background(), call)
 	}
 	left := makeResult(observation)
@@ -280,7 +280,7 @@ func TestGetResourceMapsNotFoundAndForbiddenWithoutRawErrorOrEvidence(t *testing
 			if err != nil {
 				t.Fatalf("NewGetResourceTool() error = %v", err)
 			}
-			call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"missing-pod"}}`)
+			call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"missing-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 			result := tool.Execute(context.Background(), call)
 			if result.Validate() != nil || result.Status != domain.ToolResultStatusError || result.Error == nil ||
 				result.Error.Class != test.class || len(result.Evidence) != 0 || strings.Contains(fmt.Sprintf("%#v", result), canary) {
@@ -345,7 +345,7 @@ func TestGetResourceStaleAndCancelledPathsDoNotEscapeTheirActionBoundary(t *test
 			if err != nil {
 				t.Fatalf("NewGetResourceTool() error = %v", err)
 			}
-			call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+			call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 			result := tool.Execute(test.context(), call)
 			if result.Validate() != nil || result.Error == nil || result.Error.Class != test.wantClass || len(result.Evidence) != 0 {
 				t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())
@@ -382,7 +382,7 @@ func TestGetResourceOversizeAndSensitiveBlockBecomeBoundedPartialResults(t *test
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 4096), `{"purpose":"Inspect bounded Pod conditions.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 4096), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect bounded Pod conditions.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || !result.Truncation.Truncated ||
 		result.Truncation.Reason != "output_limit" || strings.Contains(result.DataJSON, privateKey) {

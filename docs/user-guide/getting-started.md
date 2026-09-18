@@ -3,7 +3,7 @@
 This guide distinguishes deterministic implementation evidence from live
 integration and release readiness. Named model profiles, safe Session context/
 summarization, expanded reads and diagnostics, permission routing, typed
-remediation, and default-off exact local execution are now composed. No real
+remediation, and default-off exact local execution are composed. No real
 cluster or host-tool compatibility is implied.
 
 ## Requirements
@@ -43,10 +43,9 @@ No configuration file is required to open Kupilot. A bare start uses one fixed
 Home at `${KUPILOT_HOME:-$HOME/.kupilot}` and opens interactive model setup when
 the endpoint, model identifier, or required OpenAI API key is absent.
 
-If you prefer a file, Kupilot reads and writes strict schema version 1. No
-released predecessor schema exists, so pre-release single-profile layouts and
-pre-release `version: 2` files are rejected instead of migrated implicitly. A
-minimal explicit Agent profile looks like:
+If you prefer a file, Kupilot reads and writes strict schema version 1. Other
+versions and unknown keys are rejected. A minimal explicit Agent profile looks
+like:
 
 ```yaml
 version: 1

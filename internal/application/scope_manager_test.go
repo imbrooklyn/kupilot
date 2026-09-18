@@ -325,7 +325,7 @@ func TestScopeManagerNamespaceSwitchVerifiesBeforeCommit(t *testing.T) {
 func TestScopeManagerExactActivationVerifiesOnlyRequestedNamespace(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeScopeClient{context: ContextCandidate{Name: "selected", DefaultNamespace: "legacy"}}
+	client := &fakeScopeClient{context: ContextCandidate{Name: "selected", DefaultNamespace: "context-default"}}
 	var contextCalls atomic.Int64
 	var createCalls atomic.Int64
 	factory := &fakeScopeFactory{

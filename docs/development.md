@@ -6,7 +6,7 @@
 The commands below describe the currently implemented repository gates. Named
 model profiles, the stable Eino ADK Session-context/summarization slice, the
 deterministic permission matrix, and the common ActionEnvelope/approval
-foundation now have deterministic tests. Restart, scale, rollback, one
+foundation have deterministic tests. Restart, scale, rollback, one
 controller-owned Pod delete, cordon, uncordon, drain, exact local direct argv,
 and the separate shell operation are composed through one Application-owned
 dispatcher. Pod Exec, container-file, and diagnostic-Pod handlers retain their
@@ -174,7 +174,7 @@ Do not add another conversation/ReAct loop, `MemoryManager`, summary engine,
 generic checkpoint/event store, raw framework transcript, or framework-neutral
 Agent/memory facade. Runner-managed durable Session support may replace the
 thin existing-SQLite-message bridge only after a non-prerelease tag passes all
-adoption criteria in ADR-0047. A discussion, main branch, marketing page, or
+adoption criteria in ADR-0013. A discussion, main branch, marketing page, or
 prerelease API is not sufficient dependency evidence.
 
 Every dependency or endpoint spike must record exact version, source/tests,
@@ -282,7 +282,7 @@ finding introduced or made reachable by the current work remains a blocking
 failure for that work item and cannot use this separation.
 
 The platform policy is defined by
-[ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-use-go.md).
+[ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-go-toolchain-and-platforms.md).
 Security and privacy requirements remain normative in the
 [Security Threat Model](security.md) and [Privacy Overview](privacy-overview.md).
 A v0.1.0 release requires a fresh review of the actually reachable composition;
@@ -307,14 +307,14 @@ quality evidence.
 
 ## References
 
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
 
 ## Native Responses conformance
 

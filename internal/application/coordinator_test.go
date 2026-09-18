@@ -1107,7 +1107,7 @@ func (persistence *memoryCoordinatorPersistence) ListSessionMetadata(_ context.C
 func (persistence *memoryCoordinatorPersistence) PreviewSessionDeletion(_ context.Context, request SessionDeletionSelectionRequest) (SessionDeletionSnapshot, error) {
 	persistence.mu.Lock()
 	defer persistence.mu.Unlock()
-	snapshot := SessionDeletionSnapshot{Request: request, SchemaRevision: 15, Remaining: len(persistence.sessions)}
+	snapshot := SessionDeletionSnapshot{Request: request, SchemaRevision: 1, Remaining: len(persistence.sessions)}
 	for _, session := range persistence.sessions {
 		row := memorySessionMetadata(session)
 		matched := request.Kind == SessionDeletionExact && session.ID == request.SessionID ||
@@ -1151,7 +1151,7 @@ func (persistence *memoryCoordinatorPersistence) CommitSessionDeletion(ctx conte
 func (persistence *memoryCoordinatorPersistence) SessionStorageHealth(_ context.Context, now time.Time) (SessionStorageHealth, error) {
 	persistence.mu.Lock()
 	defer persistence.mu.Unlock()
-	health := SessionStorageHealth{SchemaRevision: 15, SessionCount: len(persistence.sessions)}
+	health := SessionStorageHealth{SchemaRevision: 1, SessionCount: len(persistence.sessions)}
 	for _, session := range persistence.sessions {
 		if session.LastActivityAt.After(now) {
 			health.ProtectedActivity++

@@ -84,16 +84,22 @@
         "claim": "Kubernetes reported OOMKilled with exit code 137 for the previous container instance.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001201"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The Pod has a projected ReplicaSet owner relationship.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001203"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

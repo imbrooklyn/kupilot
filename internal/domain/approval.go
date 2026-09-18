@@ -11,17 +11,11 @@ import (
 )
 
 const (
-	// ApprovalExecutionTTL is retained as the approval-lifecycle spelling of
-	// the ActionEnvelope lifetime.
-	ApprovalExecutionTTL = ActionApprovalTTL
 	// ApprovalNonceBytes is the exact entropy-bearing nonce size.
 	ApprovalNonceBytes = 32
 	// MaxApprovalReasonSummaryBytes bounds the canonical user-visible reason.
 	MaxApprovalReasonSummaryBytes = 512
 
-	// RestartDeploymentApprovalPolicyVersion is the operation-specific spelling
-	// of the single current action policy version.
-	RestartDeploymentApprovalPolicyVersion = ActionPolicyVersion
 	// RestartDeploymentTargetAPIVersion is implicit and cannot be supplied by a model.
 	RestartDeploymentTargetAPIVersion = "apps/v1"
 	// RestartDeploymentTargetKind is implicit and cannot be supplied by a model.
@@ -49,23 +43,12 @@ func (id ApprovalID) Valid() bool {
 	return validUUIDv7(string(id))
 }
 
-// ApprovalOperation and OperationIntent are compatibility spellings for the
-// one generalized action catalog and intent. They do not define a second enum
-// or an approval-specific payload.
-type ApprovalOperation = ActionOperation
-type OperationIntent = ActionIntent
-
-const ApprovalOperationRestartDeployment = ActionOperationRestartDeployment
-
 // ValidApprovalReasonSummary reports whether model-visible proposal text is
 // safe and bounded for the local approval contract.
 func ValidApprovalReasonSummary(value string) bool {
 	return value != "" && len(value) <= MaxApprovalReasonSummaryBytes &&
 		strings.TrimSpace(value) == value && validSafeOptionalText(value, MaxApprovalReasonSummaryBytes)
 }
-
-// ApprovalDigest is the lifecycle spelling of the canonical ActionDigest.
-type ApprovalDigest = ActionDigest
 
 // ApprovalNonceHash is the durable-safe lowercase SHA-256 hash of a nonce.
 type ApprovalNonceHash string
@@ -298,8 +281,8 @@ type ApprovalRequest struct {
 	ID             ApprovalID
 	RunID          AgentRunID
 	SessionID      SessionID
-	Intent         OperationIntent
-	Digest         ApprovalDigest
+	Intent         ActionIntent
+	Digest         ActionDigest
 	Nonce          ApprovalNonce
 	State          ApprovalState
 	StateReason    ApprovalStateReason
@@ -315,7 +298,7 @@ func (request ApprovalRequest) Validate() error {
 		!request.State.Valid() || !request.StateReason.validForState(request.State) ||
 		!validPersistenceTime(request.RequestedAt) || !validPersistenceTime(request.ExpiresAt) ||
 		!validPersistenceTime(request.StateChangedAt) ||
-		!request.ExpiresAt.Equal(request.RequestedAt.Add(ApprovalExecutionTTL)) ||
+		!request.ExpiresAt.Equal(request.RequestedAt.Add(ActionApprovalTTL)) ||
 		request.StateChangedAt.Before(request.RequestedAt) ||
 		request.State == ApprovalStatePending && !request.StateChangedAt.Equal(request.RequestedAt) {
 		return ErrInvalidApprovalRequest
@@ -350,7 +333,7 @@ func (request ApprovalRequest) ActionEnvelope() ActionEnvelope {
 }
 
 // ShownDigest returns the complete digest that a decision must return.
-func (request ApprovalRequest) ShownDigest() ApprovalDigest {
+func (request ApprovalRequest) ShownDigest() ActionDigest {
 	return request.Digest
 }
 
@@ -393,7 +376,7 @@ const (
 type ApprovalDecision struct {
 	RequestID          ApprovalID
 	Choice             ApprovalDecisionChoice
-	ShownDigest        ApprovalDigest
+	ShownDigest        ActionDigest
 	Nonce              ApprovalNonce
 	Actor              ApprovalActor
 	Disposition        ReviewDisposition

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The checked-in source now implements strict version 1 named model profiles,
+The checked-in source implements strict version 1 named model profiles,
 safe Session context/summarization, the five permission profiles, optional
 data sources, default-off Pod Exec/diagnostic Pod/local argv/shell policies,
 and the typed remediation catalog. These capabilities remain bounded by their
@@ -69,6 +69,10 @@ Both use the same versioned, content-free health vocabulary. The CLI opens only
 the fixed Home configuration and SQLite store; it does not construct a model,
 Kubernetes client, Tool, Reviewer, approval, child process, or executor. Use
 `kupilot doctor --json` for the bounded `kupilot.cli-doctor/v1` projection.
+
+Doctor reports the configured native Chat Completions or Responses adapter and
+its pinned version without probing the endpoint. Live conformance remains
+`not_run`; a local health query is not an integration test.
 
 Doctor intentionally omits endpoint text, credentials, managed absolute paths,
 Session titles, Messages, Evidence payloads, raw SQL/driver errors, and arbitrary

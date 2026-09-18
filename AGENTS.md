@@ -174,7 +174,7 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   Application commands, queries, DTOs, and events. They MUST NOT call model,
   Eino, Kubernetes, Tool, persistence, Reviewer, or executor implementations.
 - `internal/application` MUST directly compose Eino ADK and native model
-  components under ADR-0013. Eino/provider types MUST NOT enter Domain,
+  components under ADR-0003. Eino/provider types MUST NOT enter Domain,
   delivery, Tools, Kubernetes, or persistence. MUST NOT recreate an Agent
   facade or another Eino adapter package.
 - `internal/tools` MUST own strict capability handlers and the narrow ports
@@ -202,13 +202,13 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   framework-neutral Agent/memory/provider facade for hypothetical replacement.
 - For every AgentRun after the first question in an exact Session, when prior
   eligible Messages exist, Application MUST select one ordered, bounded
-  representation of all retained eligible prior turns. The adapter MUST
+  representation of all retained eligible prior turns. Application MUST
   translate it once, and the current question MUST appear exactly once in the
   final Eino input. Omitting eligible history or falling back to a current-
   question-only model call MUST fail closed with zero model calls.
 - The existing SQLite safe Messages MUST remain the durable source through a
   thin selection/ordering/coverage/DTO bridge until runner-managed Session
-  support exists in a non-prerelease Eino tag and passes ADR-0047's full
+  support exists in a non-prerelease Eino tag and passes ADR-0013's full
   storage, authority, consent, retention, deletion, migration, cancellation,
   Tool-pairing, and test gate.
 - A discussion, main branch, example, marketing page, or prerelease API MUST NOT
@@ -386,7 +386,7 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   debug output.
 - Before the first `v0.1.0` release, project-owned schemas, policies, prompts,
   catalogs and exports MUST remain at initial version 1; the SQLite schema is
-  corrected in place as one initial checksummed migration under ADR-0063.
+  corrected in place as one initial checksummed migration under ADR-0016.
   MUST NOT add compatibility paths or bump versions or tags for local development
   state. Runtime generations and concurrency counters are not format versions.
 - After publication, migrations MUST be forward-only, versioned, and checksummed. Released
@@ -442,11 +442,11 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   delete-emptydir, or ignore-daemonset escape hatch. Its fixed ordered plan is
   one envelope execution; every pre-bound mutation has at most one attempt and
   durable outcome, and any retry requires a fresh envelope.
-- Existing restart safety primitives MAY be generalized, but restart-only
-  enums, schemas, digest fields, ports, SQLite constraints, UI copy, and
-  verification DTOs MUST be replaced or split. Before the first `v0.1.0`
+- All operations MUST use the shared ActionEnvelope, policy, digest, approval,
+  and audit contracts. Operation-specific ports and verification DTOs MUST
+  retain their exact target and execution constraints. Before the first `v0.1.0`
   release, storage changes MUST correct the single initial checksummed schema
-  in place under ADR-0063. After publication, storage changes MUST use
+  in place under ADR-0016. After publication, storage changes MUST use
   forward-only, versioned, checksummed migrations.
 
 ## TUI and CLI
@@ -557,8 +557,8 @@ Reviewers MUST reject a change that:
    execution, or a fallback route;
 6. lacks strict schemas, exact request recording, finite budgets, partial/error
    behavior, provenance, or zero-call denials;
-7. edits a released migration, adds a generic payload, or cannot upgrade old
-   fixtures and fail safely;
+7. edits a released migration, adds a generic payload, or fails to reject
+   corrupt or incompatible storage safely;
 8. has an ActionEnvelope bypass, mutable parameters, replay, stale target,
    missing durable pre-audit, automatic retry, or conflated attempt and
    verification state;

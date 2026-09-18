@@ -1,4 +1,4 @@
-# ADR-0047: Use Eino for Session Context and Summarization
+# ADR-0013: Use Eino for Session Context and Summarization
 
 - Status: Accepted
 

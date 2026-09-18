@@ -87,7 +87,7 @@ func (coordinator *ApprovalCoordinator) ConsumeApprovedRestart(
 		currentScope = current.Snapshot()
 	}
 	claim, claimErr := coordinator.service.Claim(ctx, approval.ConsumeCommand{
-		RequestID: command.ApprovalID, ShownDigest: command.ApprovalDigest,
+		RequestID: command.ApprovalID, ShownDigest: command.ActionDigest,
 		Nonce: command.ApprovalNonce, CurrentScope: currentScope,
 	})
 	if claimErr != nil {
@@ -466,7 +466,7 @@ func (coordinator *ApprovalCoordinator) SubmitRestartDeploymentProposal(
 	runID domain.AgentRunID,
 	sessionID domain.SessionID,
 	sequence int64,
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 ) (domain.ApprovalRequest, error) {
 	if coordinator == nil || ctx == nil || !runID.Valid() || !sessionID.Valid() ||
 		sequence < 1 || sequence > 4096 || intent.ValidateRestartDeployment() != nil {
@@ -607,7 +607,7 @@ func (coordinator *ApprovalCoordinator) Decide(ctx context.Context, command UICo
 	}
 	updated, decision, decideErr := coordinator.service.Decide(ctx, approval.DecisionCommand{
 		RequestID: command.ApprovalID, Choice: choice,
-		ShownDigest: command.ApprovalDigest, Nonce: command.ApprovalNonce, CurrentScope: currentScope,
+		ShownDigest: command.ActionDigest, Nonce: command.ApprovalNonce, CurrentScope: currentScope,
 		Actor: domain.ApprovalActorLocalUser, Disposition: domain.ReviewDispositionHuman,
 	})
 	if decideErr != nil {
@@ -681,7 +681,7 @@ func (coordinator *ApprovalCoordinator) CancelAction(ctx context.Context, comman
 		tracked.request.Intent.Scope.Generation != command.ExpectedScopeGeneration ||
 		tracked.request.Intent.PolicyGeneration != command.ExpectedPolicyGeneration ||
 		tracked.route.Disposition != domain.ReviewDispositionHuman ||
-		!tracked.request.Digest.Equal(command.ApprovalDigest) || !tracked.request.Nonce.Equal(command.ApprovalNonce) {
+		!tracked.request.Digest.Equal(command.ActionDigest) || !tracked.request.Nonce.Equal(command.ApprovalNonce) {
 		return UIApprovalResult{}, ErrApprovalUnavailable
 	}
 	updated, err := coordinator.service.Cancel(ctx, command.ApprovalID, domain.ApprovalReasonUserCancelled)
@@ -752,7 +752,7 @@ func (coordinator *ApprovalCoordinator) CreateSessionRule(ctx context.Context, c
 		tracked.request.Intent.Scope.Generation == command.ExpectedScopeGeneration &&
 		tracked.request.Intent.PolicyGeneration == command.ExpectedPolicyGeneration &&
 		tracked.route.Disposition == domain.ReviewDispositionHuman &&
-		tracked.request.Digest.Equal(command.ApprovalDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
+		tracked.request.Digest.Equal(command.ActionDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
 	if valid {
 		tracked.consuming = true
 		coordinator.active[command.ApprovalID] = tracked
@@ -835,7 +835,7 @@ func (coordinator *ApprovalCoordinator) ExpireCommand(ctx context.Context, comma
 	valid := ok && tracked.request.RunID == command.RunID && tracked.sequence == command.ApprovalSequence &&
 		tracked.request.Intent.Scope.Generation == command.ExpectedScopeGeneration &&
 		tracked.request.Intent.PolicyGeneration == command.ExpectedPolicyGeneration &&
-		tracked.request.Digest.Equal(command.ApprovalDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
+		tracked.request.Digest.Equal(command.ActionDigest) && tracked.request.Nonce.Equal(command.ApprovalNonce)
 	coordinator.mu.Unlock()
 	if !valid {
 		return UIApprovalResult{}, ErrApprovalUnavailable

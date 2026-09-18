@@ -15,7 +15,7 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/application"
 )
 
-func TestDomainDoesNotReintroduceNeutralModelProtocolDTOs(t *testing.T) {
+func TestDomainExcludesNeutralModelProtocolDTOs(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller() did not return the test path")
@@ -43,7 +43,7 @@ func TestDomainDoesNotReintroduceNeutralModelProtocolDTOs(t *testing.T) {
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			specification, ok := node.(*ast.TypeSpec)
 			if ok && forbidden[specification.Name.Name] {
-				t.Errorf("%s reintroduces neutral model protocol DTO %s", path, specification.Name.Name)
+				t.Errorf("%s contains a neutral model protocol DTO %s", path, specification.Name.Name)
 			}
 			return true
 		})
@@ -54,7 +54,7 @@ func TestDomainDoesNotReintroduceNeutralModelProtocolDTOs(t *testing.T) {
 	}
 }
 
-func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
+func TestEinoImportsRemainInApplication(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller() did not return the test path")
@@ -85,9 +85,6 @@ func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 			if strings.HasPrefix(importPath, "github.com/cloudwego/eino") && !inApplication {
 				t.Errorf("%s imports Eino outside Application: %s", relative, importPath)
 			}
-			if importPath == "github.com/imbrooklyn/kupilot/internal/llm/openaicompat" {
-				t.Errorf("%s imports the removed parallel model adapter: %s", relative, importPath)
-			}
 		}
 		return nil
 	})
@@ -96,7 +93,7 @@ func TestEinoImportsRemainInTheSoleTranslationBoundary(t *testing.T) {
 	}
 }
 
-func TestExportedAgentAdapterBoundaryContainsNoEinoTypes(t *testing.T) {
+func TestApplicationEinoBoundaryContainsNoVendorTypes(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(application.EinoConfig{}),
 		reflect.TypeOf(application.NewEinoRuntime),
@@ -140,7 +137,7 @@ func TestProductionUsesOneADKRuntimeAndNoParallelMemoryFramework(t *testing.T) {
 		}
 		text := string(content)
 		if strings.Contains(text, "github.com/cloudwego/eino/flow/agent/react") {
-			t.Errorf("%s imports the retired flow/agent/react runtime", path)
+			t.Errorf("%s imports a non-ADK ReAct runtime", path)
 		}
 		if strings.Contains(text, "TurnLoop") {
 			t.Errorf("%s references the prohibited Eino outer TurnLoop", path)

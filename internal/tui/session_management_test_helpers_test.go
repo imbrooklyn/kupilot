@@ -32,7 +32,7 @@ func (store tuiSessionManagementStore) PreviewSessionDeletion(_ context.Context,
 	protected := matched - len(selected)
 	return application.SessionDeletionSnapshot{
 		Request: request, Matched: matched, Eligible: len(selected), Protected: protected,
-		Remaining: 1 - len(selected), SchemaRevision: 16, Selected: selected,
+		Remaining: 1 - len(selected), SchemaRevision: 1, Selected: selected,
 	}, nil
 }
 
@@ -41,7 +41,7 @@ func (tuiSessionManagementStore) CommitSessionDeletion(context.Context, applicat
 }
 
 func (tuiSessionManagementStore) SessionStorageHealth(context.Context, time.Time) (application.SessionStorageHealth, error) {
-	return application.SessionStorageHealth{SchemaRevision: 16, SessionCount: 1}, nil
+	return application.SessionStorageHealth{SchemaRevision: 1, SessionCount: 1}, nil
 }
 
 func testSessionDeletionReview(t *testing.T, id domain.SessionID, title string, current bool) application.SessionDeletionReview {

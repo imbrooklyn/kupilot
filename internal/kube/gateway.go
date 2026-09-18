@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Gateway adapts one S09 client factory to Application-owned scope and Picker
+// Gateway adapts one client factory to Application-owned scope and Picker
 // ports without exposing client-go values.
 type Gateway struct {
 	factory *ClientFactory

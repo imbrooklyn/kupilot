@@ -6,7 +6,7 @@ resources and existing Events/logs/relationships. Supervised mutations remain
 in separate capability-specific fixtures. Secret metadata, Pod/Node metrics,
 one example exact CRD, Pod Exec/container-file reads, and diagnostic Pods use
 separate opt-in fixtures. Scale, rollback, one owned-Pod delete, Node
-scheduling, and drain now have separate opt-in fixtures as well. No fixture
+scheduling, and drain have separate opt-in fixtures as well. No fixture
 grants optional non-Kubernetes data sources or local execution; those use their
 explicitly selected
 local process and existing external identity rather than Kubernetes client-go.

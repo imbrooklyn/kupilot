@@ -13,7 +13,7 @@ import (
 // ThemeMode selects one local semantic palette without enabling theme plugins.
 type ThemeMode uint8
 
-// Bubble Tea v2.0.8 does not expose DECSCUSR 0 (the terminal's configured
+// Bubble Tea v2.0.9 does not expose DECSCUSR 0 (the terminal's configured
 // cursor shape). Its pinned renderer encodes shape -1 with Blink false as 0.
 // Runtime coverage guards this compatibility shim so a dependency update
 // cannot silently start forcing a different cursor, color, or blink policy.

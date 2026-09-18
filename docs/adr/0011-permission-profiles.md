@@ -1,4 +1,4 @@
-# ADR-0044: Route Deterministic Risk Through Permission Profiles
+# ADR-0011: Route Deterministic Risk Through Permission Profiles
 
 - Status: Accepted
 

@@ -177,7 +177,7 @@ func TestResourceToolResultSupportsCanonicalInvocationAuditContract(t *testing.T
 	if err != nil {
 		t.Fatalf("NewGetResourceTool() error = %v", err)
 	}
-	call := boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil {
 		t.Fatalf("Execute() result validation = %v", result.Validate())
@@ -211,11 +211,11 @@ func TestResourceToolBindingCanonicalizesDefaultsWithPolicyBoundNamespace(t *tes
 	t.Parallel()
 
 	input := testRunInput(t, 0)
-	getCall := boundGetCall(t, input, `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+	getCall := boundGetCall(t, input, `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 	if got := getCall.ArgumentsJSON(); got != `{"detail":"describe","name":"sample-pod","namespace":"team-a","purpose":"Inspect one Pod.","resource_type":"pods"}` {
 		t.Fatalf("canonical get_resource arguments = %s", got)
 	}
-	listCall := boundListCall(t, input, `{"kind":"Pod","purpose":"Find abnormal Pods."}`)
+	listCall := boundListCall(t, input, `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find abnormal Pods.","resource_type":"pods"}`)
 	if got := listCall.ArgumentsJSON(); got != `{"filters":[],"format":"list","limit":20,"namespace":"team-a","purpose":"Find abnormal Pods.","resource_type":"pods"}` {
 		t.Fatalf("canonical list_resources arguments = %s", got)
 	}

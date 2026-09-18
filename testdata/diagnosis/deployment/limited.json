@@ -86,16 +86,22 @@
         "claim": "The projected Deployment has zero available replicas out of three desired replicas.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001611"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The projected Available condition is False.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001612"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

@@ -520,13 +520,13 @@ func restartTestDeployment(resourceVersion string) *appsv1.Deployment {
 	}
 }
 
-func restartTestIntent(t *testing.T, deployment *appsv1.Deployment) domain.OperationIntent {
+func restartTestIntent(t *testing.T, deployment *appsv1.Deployment) domain.ActionIntent {
 	t.Helper()
 	fingerprint, err := deploymentTemplateFingerprint(deployment.Spec.Template)
 	if err != nil {
 		t.Fatalf("deploymentTemplateFingerprint() error = %v", err)
 	}
-	return domain.OperationIntent{
+	return domain.ActionIntent{
 		Operation:              domain.ActionOperationRestartDeployment,
 		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
 		PolicyVersion:          domain.ActionPolicyVersion, PermissionProfile: domain.PermissionProfileAsk,

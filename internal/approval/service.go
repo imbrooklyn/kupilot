@@ -44,14 +44,14 @@ type RequestCommand struct {
 	ID        domain.ApprovalID
 	RunID     domain.AgentRunID
 	SessionID domain.SessionID
-	Intent    domain.OperationIntent
+	Intent    domain.ActionIntent
 }
 
 // DecisionCommand carries exactly the proof returned by one visible dialog.
 type DecisionCommand struct {
 	RequestID          domain.ApprovalID
 	Choice             domain.ApprovalDecisionChoice
-	ShownDigest        domain.ApprovalDigest
+	ShownDigest        domain.ActionDigest
 	Nonce              domain.ApprovalNonce
 	CurrentScope       domain.ScopeSnapshot
 	Actor              domain.ApprovalActor
@@ -65,7 +65,7 @@ type DecisionCommand struct {
 // ConsumeCommand carries the same proof plus the current immutable scope.
 type ConsumeCommand struct {
 	RequestID    domain.ApprovalID
-	ShownDigest  domain.ApprovalDigest
+	ShownDigest  domain.ActionDigest
 	Nonce        domain.ApprovalNonce
 	CurrentScope domain.ScopeSnapshot
 }
@@ -545,7 +545,7 @@ func (service *Service) Snapshot(requestID domain.ApprovalID) (domain.ApprovalRe
 
 func verifyProof(
 	request domain.ApprovalRequest,
-	shownDigest domain.ApprovalDigest,
+	shownDigest domain.ActionDigest,
 	nonce domain.ApprovalNonce,
 	currentScope domain.ScopeSnapshot,
 ) (domain.ApprovalErrorCode, domain.ApprovalStateReason) {

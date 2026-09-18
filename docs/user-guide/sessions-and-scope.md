@@ -1,7 +1,7 @@
 # Sessions and Scope
 
 This page defines the implemented Session-memory and explicit-resume semantics
-within the Accepted `v0.1.0` contract. The checked-in binary now uses eligible
+within the Accepted `v0.1.0` contract. The checked-in binary uses eligible
 persisted history as model context and directly uses Eino ADK summarization
 with project-owned safe coverage metadata.
 
@@ -237,7 +237,7 @@ Summarization reuses the `agent` model profile with an independent finite
 non-streaming no-Tool budget. If coverage is corrupt or required compaction
 fails, Kupilot preserves the last committed state and sends no oversized or
 silently truncated request. Runner-managed durable Session support is not used
-until a stable non-prerelease Eino tag passes ADR-0047's adoption gate.
+until a stable non-prerelease Eino tag passes ADR-0013's adoption gate.
 
 `/compact` invokes that same summarization path explicitly. It preserves the
 old committed summary and Messages on every failure and does not submit a

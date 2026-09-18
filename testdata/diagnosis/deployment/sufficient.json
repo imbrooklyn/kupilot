@@ -130,41 +130,51 @@
         "claim": "The projected Deployment has zero available replicas out of three desired replicas.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001601"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The projected Available condition is False.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001602"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The bounded relationship result includes a ReplicaSet with zero ready replicas.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001603"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The bounded relationship result includes a Pending Pod with zero ready containers.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001604"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The fixed owner graph connects the Deployment to the ReplicaSet and the ReplicaSet to the Pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001605",
           "00000000-0000-7000-8000-000000001606"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent Deployment Event reported that rollout progress exceeded its deadline.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001607"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

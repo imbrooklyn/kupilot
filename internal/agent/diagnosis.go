@@ -270,6 +270,9 @@ const (
 // Markdown only after local safety processing. Markdown is required and
 // invalid claim or Evidence coverage rejects the terminal answer.
 func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registry *EvidenceRegistry) (domain.Diagnosis, error) {
+	if draft.ResponseSchemaVersion != diagnosticResponseSchemaVersion {
+		return domain.Diagnosis{}, interactionError(domain.FailureFinalSchema, ErrInvalidDiagnosisDraft)
+	}
 	if !metadata.ID.Valid() || metadata.CreatedAt.IsZero() || metadata.CreatedAt.Location() != time.UTC ||
 		metadata.CreatedAt.Nanosecond()%int(time.Millisecond) != 0 {
 		return domain.Diagnosis{}, interactionError(domain.FailureInternal, ErrInvalidDiagnosisDraft)
@@ -373,12 +376,8 @@ func ValidateDiagnosis(draft DiagnosisDraft, metadata DiagnosisMetadata, registr
 		return domain.Diagnosis{}, interactionError(domain.FailureInternal, ErrInvalidDiagnosisDraft)
 	}
 
-	responseSchemaVersion := draft.ResponseSchemaVersion
-	if responseSchemaVersion == 0 {
-		responseSchemaVersion = 1
-	}
 	manifest := buildAnswerCompleteness(coverage, missing, snapshot, draft.SuggestedStopReason, draft.Clarification != nil,
-		responseSchemaVersion, metadata.AuthoritativeStopReason)
+		draft.ResponseSchemaVersion, metadata.AuthoritativeStopReason)
 	if manifest.Validate() != nil {
 		return domain.Diagnosis{}, interactionError(domain.FailureClaimBinding, ErrInvalidDiagnosisDraft)
 	}

@@ -1,4 +1,4 @@
-# ADR-0026: Bind Model Roles, Credentials and Consent
+# ADR-0007: Bind Model Roles, Credentials and Consent
 
 - Status: Accepted
 

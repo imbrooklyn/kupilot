@@ -8,7 +8,7 @@ allowed and forbidden semantic assertions, and unexecuted recommendations. It
 does not score prose style, compare complete natural-language answers, use a
 live model, or delegate judgment to another model.
 
-The Product Contract and ADR-0052 remain authoritative. A successful fixture
+The Product Contract and ADR-0015 remain authoritative. A successful fixture
 means the runtime honored the Evidence and Diagnosis contract for a bounded
 synthetic conversation; it does not establish a universal root-cause accuracy
 rate.

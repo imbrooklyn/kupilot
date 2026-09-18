@@ -34,7 +34,7 @@ func TestListResourcesSummarizesSortsAndCreatesDeterministicEvidence(t *testing.
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"abnormal","kind":"Pod","purpose":"Find abnormal Pods."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find abnormal Pods.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 3 ||
 		len(result.ResourceSummaries) != 3 {
@@ -155,7 +155,7 @@ func TestListResourcesEmptyIsSuccessfulAndPerformsOneBoundedRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"any","kind":"Service","limit":7,"purpose":"Find Service candidates."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":7,"namespace":null,"purpose":"Find Service candidates.","resource_type":"services"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || len(result.Evidence) != 0 ||
 		!strings.Contains(result.DataJSON, `"items":[]`) || !strings.Contains(result.DataJSON, `"returned_count":0`) {
@@ -176,7 +176,7 @@ func TestListResourcesMarksKubernetesContinuationAsItemLimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"any","kind":"Pod","purpose":"Find bounded Pod candidates."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find bounded Pod candidates.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial ||
 		result.Truncation.Reason != itemLimitReason || result.Truncation.ReturnedCount != 1 || len(result.Evidence) != 1 {
@@ -196,7 +196,7 @@ func TestListResourcesOmitsSensitiveIdentityFromDataAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"any","kind":"Pod","purpose":"Find one safe Pod summary."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find one safe Pod summary.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || result.Truncation.Reason != fieldLimitReason ||
 		strings.Contains(result.DataJSON, canary) || len(result.Evidence) != 1 || result.Evidence[0].Resource.UID != "" ||
@@ -216,7 +216,7 @@ func TestListResourcesMapsForbiddenWithoutLeakingRawError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"kind":"Pod","purpose":"Find abnormal Pods."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find abnormal Pods.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusError || result.Error == nil ||
 		result.Error.Class != domain.SafeErrorClassPermissionDenied || len(result.Evidence) != 0 ||
@@ -241,7 +241,7 @@ func TestListResourcesRejectsDuplicateExternalIdentitiesAfterOneRead(t *testing.
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"any","kind":"Pod","purpose":"Find Pods."}`)
+	call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find Pods.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusError || result.Error == nil ||
 		result.Error.Class != domain.SafeErrorClassInvalidExternalResponse || len(result.Evidence) != 0 {
@@ -273,7 +273,7 @@ func TestListResourcesEnforcesRequestedAndHardItemLimitsWithPartialMetadata(t *t
 	if err != nil {
 		t.Fatalf("NewListResourcesTool() error = %v", err)
 	}
-	call := boundListCall(t, testRunInput(t, 8192), `{"health_filter":"abnormal","kind":"Pod","limit":50,"purpose":"Find bounded Pod candidates."}`)
+	call := boundListCall(t, testRunInput(t, 8192), `{"filters":[],"format":"list","limit":50,"namespace":null,"purpose":"Find bounded Pod candidates.","resource_type":"pods"}`)
 	result := tool.Execute(context.Background(), call)
 	if result.Validate() != nil || result.Status != domain.ToolResultStatusPartial || !result.Truncation.Truncated ||
 		result.Truncation.Reason != "output_limit" || result.Truncation.ReturnedCount > domain.MaxResourceSummaries ||
@@ -340,7 +340,7 @@ func TestListResourcesStaleAndCancelledPathsUseZeroOrOneReaderAction(t *testing.
 			if err != nil {
 				t.Fatalf("NewListResourcesTool() error = %v", err)
 			}
-			call := boundListCall(t, testRunInput(t, 0), `{"health_filter":"any","kind":"Pod","purpose":"Find Pods."}`)
+			call := boundListCall(t, testRunInput(t, 0), `{"filters":[],"format":"list","limit":null,"namespace":null,"purpose":"Find Pods.","resource_type":"pods"}`)
 			result := tool.Execute(test.context(), call)
 			if result.Validate() != nil || result.Error == nil || result.Error.Class != test.wantClass || len(result.Evidence) != 0 {
 				t.Fatalf("Execute() result = %#v, validation = %v", result, result.Validate())

@@ -160,7 +160,7 @@ func TestConversationEditNeverOverwritesComposerOrLocalInteraction(t *testing.T)
 	reviewer := base
 	reviewer.actionPresentation = &actionPresentation{
 		RequestID: "00000000-0000-7000-8000-000000008101",
-		Digest:    domain.ApprovalDigest(strings.Repeat("a", 64)), Sequence: 2,
+		Digest:    domain.ActionDigest(strings.Repeat("a", 64)), Sequence: 2,
 	}
 	reviewer, command = updateModel(t, reviewer, tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt})
 	if command != nil || reviewer.composer.Value() != "" {

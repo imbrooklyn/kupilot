@@ -551,7 +551,7 @@ func (row approvalRequestRow) storedRequest() (approvalcontract.StoredRequest, e
 				MaximumBytes: row.MaximumBytes, MaximumOutput: row.MaximumOutput},
 			VerificationPlanID: row.VerificationPlanID, ReasonSummary: row.ReasonSummary, RiskSummary: row.RiskSummary,
 		},
-		Digest: domain.ApprovalDigest(row.OperationDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
+		Digest: domain.ActionDigest(row.OperationDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
 		State: domain.ApprovalState(row.Status), StateReason: domain.ApprovalStateReason(row.StateReason),
 		RequestedAt: time.UnixMilli(row.RequestedAtMS).UTC(), ExpiresAt: time.UnixMilli(row.ExpiresAtMS).UTC(),
 		StateChangedAt: time.UnixMilli(row.StateChangedAtMS).UTC(),
@@ -571,7 +571,7 @@ func (row approvalDecisionRow) storedDecision() (approvalcontract.StoredDecision
 	}
 	decision := approvalcontract.StoredDecision{
 		RequestID: domain.ApprovalID(row.ApprovalID), Choice: choice,
-		ShownDigest: domain.ApprovalDigest(row.ShownDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
+		ShownDigest: domain.ActionDigest(row.ShownDigest), NonceHash: domain.ApprovalNonceHash(row.NonceHash),
 		Actor: domain.ApprovalActor(row.Actor), Disposition: domain.ReviewDisposition(row.Disposition),
 		RuleID: domain.PermissionRuleID(row.PermissionRuleID.String), ReviewerProfile: row.ReviewerProfile.String,
 		ReviewerOriginHash: row.ReviewerOriginHash.String, RationaleSummary: row.RationaleSummary.String,

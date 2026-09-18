@@ -27,7 +27,7 @@ func TestInteractionBoundaryPresentationCannotSelectAuthorityOrExposeUnknownText
 }
 
 func TestDoctorDialogUsesFixedInteractionReason(t *testing.T) {
-	result, err := application.NewDoctorResult("dev", "current", domain.ModelProviderOpenAI, domain.SHA256Hex("origin"), true, false, application.SessionStorageHealth{SchemaRevision: 1})
+	result, err := application.NewDoctorResult("v0.1.0", "v1", domain.ModelProviderOpenAI, domain.ModelAPIProtocolChatCompletions, domain.SHA256Hex("origin"), true, false, application.SessionStorageHealth{SchemaRevision: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

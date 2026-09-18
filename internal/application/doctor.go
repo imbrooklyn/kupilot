@@ -15,6 +15,9 @@ const (
 	DoctorOpenAIAdapterName       = "eino_openai"
 	DoctorOpenAIAdapterVersion    = "v0.1.13"
 	DoctorOpenAIProtocol          = "openai_chat_completions"
+	DoctorResponsesAdapterName    = "eino_openai_responses"
+	DoctorResponsesAdapterVersion = "v0.2.2"
+	DoctorResponsesProtocol       = "openai_responses"
 	DoctorLiveConformanceEvidence = "not_run"
 )
 
@@ -65,8 +68,8 @@ type UIDoctorResult struct {
 
 // NewDoctorResult constructs the same typed local projection for the CLI
 // short-circuit, which deliberately does not construct a Coordinator.
-func NewDoctorResult(version, configSchema string, provider domain.ModelProviderKind, originHash string, configured, degraded bool, health SessionStorageHealth) (UIDoctorResult, error) {
-	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider)
+func NewDoctorResult(version, configSchema string, provider domain.ModelProviderKind, apiProtocol domain.ModelAPIProtocol, originHash string, configured, degraded bool, health SessionStorageHealth) (UIDoctorResult, error) {
+	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider, apiProtocol)
 	if !ok {
 		return UIDoctorResult{}, ErrDoctorUnavailable
 	}
@@ -96,7 +99,16 @@ func NewDoctorResult(version, configSchema string, provider domain.ModelProvider
 
 func (result UIDoctorResult) Validate() error {
 	provider := domain.ModelProviderKind(result.ProviderKind)
-	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider)
+	var apiProtocol domain.ModelAPIProtocol
+	switch result.ModelCompatibility.Protocol {
+	case DoctorOpenAIProtocol:
+		apiProtocol = domain.ModelAPIProtocolChatCompletions
+	case DoctorResponsesProtocol:
+		apiProtocol = domain.ModelAPIProtocolResponses
+	default:
+		return ErrInvalidUIEvent
+	}
+	adapter, adapterVersion, protocol, ok := doctorModelBoundary(provider, apiProtocol)
 	if result.LastInteractionFailure != "" && !result.LastInteractionFailure.Valid() || result.SchemaVersion != DoctorSchemaVersion || !validDoctorToken(result.ApplicationVersion, 128) ||
 		!validDoctorToken(result.ConfigurationSchema, 64) || !ok ||
 		!validPrivacyDigest(result.AgentOriginHash) || !result.Storage.valid() ||
@@ -116,10 +128,15 @@ func (result UIDoctorResult) Validate() error {
 	return nil
 }
 
-func doctorModelBoundary(provider domain.ModelProviderKind) (adapter, version, protocol string, ok bool) {
-	switch provider {
-	case domain.ModelProviderOpenAI:
+func doctorModelBoundary(provider domain.ModelProviderKind, apiProtocol domain.ModelAPIProtocol) (adapter, version, protocol string, ok bool) {
+	if provider != domain.ModelProviderOpenAI {
+		return "", "", "", false
+	}
+	switch apiProtocol {
+	case "", domain.ModelAPIProtocolChatCompletions:
 		return DoctorOpenAIAdapterName, DoctorOpenAIAdapterVersion, DoctorOpenAIProtocol, true
+	case domain.ModelAPIProtocolResponses:
+		return DoctorResponsesAdapterName, DoctorResponsesAdapterVersion, DoctorResponsesProtocol, true
 	default:
 		return "", "", "", false
 	}
@@ -145,6 +162,7 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	version := coordinator.applicationVersion
 	configSchema := coordinator.configurationSchema
 	provider := coordinator.modelProvider
+	apiProtocol := coordinator.modelAPIProtocol
 	configured := coordinator.modelRuntime != nil
 	degraded := coordinator.persistenceDegraded
 	var diagnostic domain.InteractionFailure
@@ -159,7 +177,7 @@ func (coordinator *Coordinator) Doctor(ctx context.Context) (UIDoctorResult, err
 	if err != nil {
 		return UIDoctorResult{}, ErrDoctorUnavailable
 	}
-	result, err := NewDoctorResult(version, configSchema, provider, coordinator.privacy.OriginHash(), configured, degraded, health)
+	result, err := NewDoctorResult(version, configSchema, provider, apiProtocol, coordinator.privacy.OriginHash(), configured, degraded, health)
 	if err != nil {
 		return UIDoctorResult{}, err
 	}

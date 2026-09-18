@@ -9,14 +9,14 @@ func TestInfoLine(t *testing.T) {
 	t.Parallel()
 
 	info := Info{
-		Version:   "v0.0.0-test",
+		Version:   "v0.1.0",
 		Commit:    "0123456789ab",
 		BuildTime: "2026-08-08T00:00:00Z",
 		GoVersion: "go1.27.0",
 		GOOS:      "linux",
 		GOARCH:    "arm64",
 	}
-	const want = "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.27.0 platform=linux/arm64"
+	const want = "kupilot version=v0.1.0 commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.27.0 platform=linux/arm64"
 
 	if got := info.Line(); got != want {
 		t.Fatalf("Info.Line() = %q, want %q", got, want)
@@ -65,7 +65,7 @@ func TestApplyReleaseMetadata(t *testing.T) {
 	t.Parallel()
 
 	base := Info{
-		Version:   "dev",
+		Version:   "v0.1.0",
 		Commit:    unknown,
 		BuildTime: unknown,
 	}
@@ -91,7 +91,7 @@ func TestApplyReleaseMetadataRejectsUnsafeValues(t *testing.T) {
 	t.Parallel()
 
 	base := Info{
-		Version:   "dev",
+		Version:   "v0.1.0",
 		Commit:    unknown,
 		BuildTime: unknown,
 	}

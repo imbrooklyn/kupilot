@@ -6,7 +6,7 @@
 /bin/
 /dist/
 
-# Legacy root-level build outputs remain ignored.
+# Root-level outputs from direct Go builds.
 /kupilot
 /kupilot.exe
 *.exe

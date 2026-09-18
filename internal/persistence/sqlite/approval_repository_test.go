@@ -129,7 +129,7 @@ func TestApprovalRepositoryStoresOnlyDigestsForLocalArgvShellAndOutput(t *testin
 		ExecutableID: domain.ActionDigest(strings.Repeat("a", 64)), WorkingDirectoryID: domain.ActionDigest(strings.Repeat("b", 64)),
 	}
 	namespace := domain.ResourceRef{APIVersion: "v1", Kind: "Namespace", Name: scope.Namespace, UID: "namespace-uid", ResourceVersion: "42"}
-	argvCanary := "raw-argv-canary-s04"
+	argvCanary := "raw-argv-canary"
 	arguments, err := domain.NewActionArguments([]string{argvCanary})
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestApprovalRepositoryStoresOnlyDigestsForLocalArgvShellAndOutput(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	shellCanary := "raw-shell-canary-s04"
+	shellCanary := "raw-shell-canary"
 	shellPolicy := domain.LocalShellPolicy{
 		ID: "safe-shell", Executable: "/bin/sh", Command: "printf " + shellCanary,
 		WorkingDirectory: "/var/empty", Environment: environment, Network: domain.LocalShellNetworkNone,
@@ -183,7 +183,7 @@ func TestApprovalRepositoryStoresOnlyDigestsForLocalArgvShellAndOutput(t *testin
 		}
 	}
 
-	outputCanary := "raw-output-canary-s04"
+	outputCanary := "raw-output-canary"
 	result := domain.LocalCommandResult{
 		State: domain.LocalProcessExited, SafeOutput: outputCanary, OutputDigest: domain.LocalSafeOutputDigest(outputCanary),
 		ExitCode: 0, Started: true, LineCount: 1, ByteCount: len(outputCanary),
@@ -225,7 +225,7 @@ func TestApprovalRepositoryStoresOnlyObservationParameterDigest(t *testing.T) {
 		Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent,
 		Generation: run.Scope.Generation, ActivatedAt: requestedAt.Add(-time.Millisecond),
 	}
-	filterCanary := "raw-observation-filter-canary-s05"
+	filterCanary := "raw-observation-filter-canary"
 	parameters := domain.ActionParameters{Kind: domain.ActionParametersObservation, Observation: domain.ActionObservationParameters{
 		Kind: domain.ActionObservationLoki, QueryID: domain.QueryLokiPodLogs, Search: filterCanary,
 		WindowSeconds: 300, LineLimit: 20,
@@ -762,7 +762,7 @@ func testApprovalRequest(
 	}
 	request := domain.ApprovalRequest{
 		ID: id, RunID: run.ID, SessionID: run.SessionID,
-		Intent: domain.OperationIntent{
+		Intent: domain.ActionIntent{
 			Operation:              domain.ActionOperationRestartDeployment,
 			OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
 			PolicyVersion:          domain.ActionPolicyVersion, PermissionProfile: domain.PermissionProfileAsk,
@@ -785,7 +785,7 @@ func testApprovalRequest(
 			ReasonSummary:      "Restart after the bounded diagnosis.", RiskSummary: domain.RestartDeploymentRiskSummary,
 		},
 		Nonce: nonce, State: domain.ApprovalStatePending,
-		RequestedAt: requestedAt, ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL),
+		RequestedAt: requestedAt, ExpiresAt: requestedAt.Add(domain.ActionApprovalTTL),
 		StateChangedAt: requestedAt,
 	}
 	request.Digest, err = approval.OperationDigest(request)
@@ -811,7 +811,7 @@ func pendingRequestForIntent(
 	request := domain.ApprovalRequest{
 		ID: id, RunID: run.ID, SessionID: run.SessionID, Intent: intent, Nonce: nonce,
 		State: domain.ApprovalStatePending, RequestedAt: requestedAt,
-		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ActionApprovalTTL), StateChangedAt: requestedAt,
 	}
 	request.Digest, err = approval.OperationDigest(request)
 	if err != nil || request.Validate() != nil {

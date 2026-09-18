@@ -57,7 +57,7 @@ func (source *sequenceNonceSource) NewNonce(ctx context.Context) (domain.Approva
 type fakeRestartExecutor struct {
 	mu           sync.Mutex
 	calls        int
-	intents      []domain.OperationIntent
+	intents      []domain.ActionIntent
 	executions   []RestartDeploymentExecution
 	auditCommits int
 	err          error
@@ -102,7 +102,7 @@ func (executor *fakeRestartExecutor) CurrentScope() (domain.ClusterScope, bool) 
 
 func (executor *fakeRestartExecutor) RevalidateApprovedRestart(
 	ctx context.Context,
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 ) (RestartDeploymentObservation, error) {
 	if err := ctx.Err(); err != nil {
 		return RestartDeploymentObservation{}, err
@@ -153,10 +153,10 @@ func (executor *fakeRestartExecutor) WriteCount() int {
 	return executor.calls
 }
 
-func (executor *fakeRestartExecutor) Intents() []domain.OperationIntent {
+func (executor *fakeRestartExecutor) Intents() []domain.ActionIntent {
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
-	return append([]domain.OperationIntent(nil), executor.intents...)
+	return append([]domain.ActionIntent(nil), executor.intents...)
 }
 
 func testNonce(t *testing.T, marker byte) domain.ApprovalNonce {
@@ -172,8 +172,8 @@ func testNonce(t *testing.T, marker byte) domain.ApprovalNonce {
 	return nonce
 }
 
-func testIntent() domain.OperationIntent {
-	return domain.OperationIntent{
+func testIntent() domain.ActionIntent {
+	return domain.ActionIntent{
 		Operation:              domain.ActionOperationRestartDeployment,
 		OperationSchemaVersion: domain.ActionOperationRestartDeployment.SchemaVersion(),
 		PolicyVersion:          domain.ActionPolicyVersion, PermissionProfile: domain.PermissionProfileAsk,

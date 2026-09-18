@@ -1,4 +1,4 @@
-# ADR-0013: Compose Native Eino Directly in Application
+# ADR-0003: Compose Native Eino Directly in Application
 
 - Status: Accepted
 

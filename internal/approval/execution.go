@@ -40,7 +40,7 @@ func (observation RestartDeploymentObservation) Validate() error {
 	if observation.Scope.Validate() != nil || !domain.ValidContextName(observation.Scope.Context) ||
 		!domain.ValidNamespaceName(observation.Scope.Namespace) || observation.Scope.Generation < 1 ||
 		reference.Validate() != nil ||
-		!domain.ApprovalDigest(observation.TemplateFingerprint).Valid() || observation.DeploymentGeneration < 1 {
+		!domain.ActionDigest(observation.TemplateFingerprint).Valid() || observation.DeploymentGeneration < 1 {
 		return ErrInvalidRestartDeploymentExecution
 	}
 	return nil
@@ -55,7 +55,7 @@ type RestartDeploymentExecution struct {
 // NewRestartDeploymentExecution binds a fresh observation to the approved
 // canonical intent, including its exact resource version.
 func NewRestartDeploymentExecution(
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 	observation RestartDeploymentObservation,
 ) (RestartDeploymentExecution, error) {
 	target := intent.Target.Resource
@@ -64,7 +64,7 @@ func NewRestartDeploymentExecution(
 		target.UID != observation.DeploymentUID || target.ResourceVersion != observation.ResourceVersion ||
 		intent.Target.Fingerprint != observation.TemplateFingerprint ||
 		intent.Target.Generation != observation.DeploymentGeneration ||
-		intent.PolicyVersion != domain.RestartDeploymentApprovalPolicyVersion {
+		intent.PolicyVersion != domain.ActionPolicyVersion {
 		return RestartDeploymentExecution{}, ErrInvalidRestartDeploymentExecution
 	}
 	return RestartDeploymentExecution{observation: observation}, nil
@@ -176,7 +176,7 @@ func (attempt RestartDeploymentAttempt) Validate() error {
 
 // RestartDeploymentRevalidator owns the one exact fresh Deployment read.
 type RestartDeploymentRevalidator interface {
-	RevalidateApprovedRestart(context.Context, domain.OperationIntent) (RestartDeploymentObservation, error)
+	RevalidateApprovedRestart(context.Context, domain.ActionIntent) (RestartDeploymentObservation, error)
 }
 
 // RestartDeploymentExecutor is the sole fixed write seam. Only Application

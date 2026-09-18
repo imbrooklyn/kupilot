@@ -757,7 +757,7 @@ func (reader *ToolResourceReader) ReadResource(
 	return observation, nil
 }
 
-// ListResources performs one fixed typed LIST by reusing the S10 bounded
+// ListResources performs one fixed typed LIST by reusing the bounded
 // summary reader and translating it to the Tool-owned reader DTO.
 func (reader *ToolResourceReader) ListResources(
 	ctx context.Context,

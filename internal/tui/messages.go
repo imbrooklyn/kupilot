@@ -28,7 +28,7 @@ type ApprovalExpiryMsg struct {
 	RunID           domain.AgentRunID
 	ScopeGeneration int64
 	Sequence        int64
-	Digest          domain.ApprovalDigest
+	Digest          domain.ActionDigest
 }
 
 // WorkingTickMsg is a delivery-only animation frame correlated to one live
@@ -124,7 +124,7 @@ type ApplicationFailureMsg struct {
 	PolicyGeneration domain.PolicyGeneration
 	RunID            domain.AgentRunID
 	ApprovalID       domain.ApprovalID
-	ApprovalDigest   domain.ApprovalDigest
+	ActionDigest     domain.ActionDigest
 	ApprovalSequence int64
 	Command          application.UICommandKind
 	Query            application.UICompletionKind

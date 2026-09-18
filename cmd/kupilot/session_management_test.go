@@ -28,7 +28,7 @@ func TestNonInteractiveExactSessionDeletionRequiresTwoPhaseDigest(t *testing.T) 
 		t.Fatal(err)
 	}
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: filepath.Join(temporaryRoot, "state"), ApplicationVersion: "test", CorrelationID: "session-delete-test",
+		StateDir: filepath.Join(temporaryRoot, "state"), ApplicationVersion: "v0.1.0", CorrelationID: "session-delete-test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestBatchSessionDeletionUsesFrozenAbsoluteCutoffDigestAndTTYCountPhrase(t *
 	createSessions := func(records ...domain.Session) {
 		t.Helper()
 		database, openErr := sqlite.Open(ctx, sqlite.OpenOptions{
-			StateDir: paths.StateDir, ApplicationVersion: "test", CorrelationID: "batch-delete-seed",
+			StateDir: paths.StateDir, ApplicationVersion: "v0.1.0", CorrelationID: "batch-delete-seed",
 		})
 		if openErr != nil {
 			t.Fatal(openErr)
@@ -196,7 +196,7 @@ func TestBatchSessionDeletionUsesFrozenAbsoluteCutoffDigestAndTTYCountPhrase(t *
 	}
 
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: paths.StateDir, ApplicationVersion: "test", CorrelationID: "batch-delete-verify",
+		StateDir: paths.StateDir, ApplicationVersion: "v0.1.0", CorrelationID: "batch-delete-verify",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +230,6 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 
 	for _, name := range []string{
 		config.AgentAPIKeyEnvironmentVariable,
-		config.AgentAPIKeyEnvironmentVariable,
 		config.ApprovalReviewerAPIKeyEnvironmentVariable,
 		config.PrometheusAPIKeyEnvironmentVariable,
 		config.LokiAPIKeyEnvironmentVariable,
@@ -248,12 +247,16 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 		})
 	}
 	credentialCanary := strings.Repeat("doctor-key-", 5)
+	configuration := "version: 1\nmodels:\n  agent:\n    endpoint: https://model.example.test/v1\n    model: example-model\n    api_protocol: responses\n"
+	if err := os.WriteFile(paths.ConfigFile, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Setenv(config.AgentAPIKeyEnvironmentVariable, credentialCanary); err != nil {
 		t.Fatal(err)
 	}
 
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: paths.StateDir, ApplicationVersion: "test", CorrelationID: "doctor-test",
+		StateDir: paths.StateDir, ApplicationVersion: "v0.1.0", CorrelationID: "doctor-test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +276,7 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 
 	var output bytes.Buffer
 	intent := cli.StartIntent{Kind: cli.IntentDoctor, Doctor: &cli.DoctorOptions{JSON: true}}
-	if err := runLocalSessionCommand(ctx, intent, buildinfo.Info{Version: "v0.0.0-test"}, paths, sessionCommandIO{
+	if err := runLocalSessionCommand(ctx, intent, buildinfo.Info{Version: "v0.1.0"}, paths, sessionCommandIO{
 		output: &output, now: func() time.Time { return now }, isTTY: false,
 	}); err != nil {
 		t.Fatalf("runLocalSessionCommand(doctor) error = %v", err)
@@ -285,7 +288,8 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 	if envelope.SchemaVersion != "kupilot.cli-doctor/v1" || envelope.Doctor.SchemaVersion != application.DoctorSchemaVersion ||
 		envelope.Doctor.Storage.SessionCount != 1 || envelope.Terminal.InteractiveInput ||
 		envelope.Doctor.ModelCompatibility.RuntimeVersion != "v0.9.19" ||
-		envelope.Doctor.ModelCompatibility.AdapterVersion != "v0.1.13" ||
+		envelope.Doctor.ModelCompatibility.AdapterVersion != "v0.2.2" ||
+		envelope.Doctor.ModelCompatibility.Protocol != application.DoctorResponsesProtocol ||
 		envelope.Doctor.ModelCompatibility.LiveConformance != "not_run" ||
 		envelope.Doctor.ModelCompatibility.StreamContinuation != "protocol_continuation_unavailable" ||
 		envelope.Terminal.NativeClipboard != "unsupported" || envelope.Terminal.OSC52 != "unsupported" ||
@@ -300,7 +304,7 @@ func TestCLIDoctorJSONIsTypedRedactedAndDoesNotAdvanceLastActive(t *testing.T) {
 	}
 
 	database, err = sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: paths.StateDir, ApplicationVersion: "test", CorrelationID: "doctor-verify",
+		StateDir: paths.StateDir, ApplicationVersion: "v0.1.0", CorrelationID: "doctor-verify",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +332,7 @@ func TestCLIDoctorPreparesMissingStateDirectoryBeforeProcessLock(t *testing.T) {
 
 	var output bytes.Buffer
 	intent := cli.StartIntent{Kind: cli.IntentDoctor, Doctor: &cli.DoctorOptions{JSON: true}}
-	if err := runLocalSessionCommand(ctx, intent, buildinfo.Info{Version: "v0.0.0-test"}, paths, sessionCommandIO{
+	if err := runLocalSessionCommand(ctx, intent, buildinfo.Info{Version: "v0.1.0"}, paths, sessionCommandIO{
 		output: &output, now: func() time.Time { return time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC) }, isTTY: false,
 	}); err != nil {
 		t.Fatalf("doctor with missing state directory error = %v", err)

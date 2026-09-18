@@ -1,13 +1,13 @@
 # Kupilot Scope
 
 The current full scope targets the unreleased `v0.1.0` under
-[ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md). It supports
+[ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md). It supports
 OpenAI only, through the existing native Eino Chat Completions and Responses
 components.
 
 ## Native Eino ownership
 
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) defines the
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md) defines the
 current Eino ownership and protocol rules. Application directly composes
 Eino ADK; native message types remain private to Application. OpenAI profiles
 explicitly select `chat_completions` or `responses`; omission selects
@@ -236,7 +236,7 @@ History never restores operational authority. Eino ADK `ChatModelAgent`,
 `Runner`, message state, and summarization middleware are reused directly
 inside the sole adapter. The stable implementation path is the existing safe
 SQLite messages through a thin ordered bridge until a stable Eino runner-
-managed Session passes ADR-0047's adoption gate.
+managed Session passes ADR-0013's adoption gate.
 
 A compatible restart or forward migration preserves eligible Session listing
 and explicit resume. Historic Context and Namespace remain candidates only. An
@@ -325,13 +325,13 @@ reuse are not new durable stores or resumable authority.
 - [Architecture](architecture.md)
 - [Security Threat Model](security.md)
 - [Operational and Diagnostic Capabilities](diagnostic-capabilities.md)
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
+- [ADR-0009: Use a Fixed Capability Catalog and Finite Budgets](adr/0009-capability-catalog-and-budgets.md)
+- [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)

@@ -70,7 +70,8 @@ func TestAgentPolicyContractsComposeToolEvidenceAndDiagnosis(t *testing.T) {
 	}
 
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: "The Pod is not Ready. It may still be starting; recent Events were not collected.",
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        "The Pod is not Ready. It may still be starting; recent Events were not collected.",
 		ConfirmedFacts: []domain.ConfirmedFact{{
 			Statement:   "The projected Pod condition is not Ready.",
 			EvidenceIDs: []domain.EvidenceID{testEvidenceID},
@@ -116,7 +117,8 @@ func TestRunInputDefensivelyCopiesResourceAndOutcomeIsTerminal(t *testing.T) {
 		t.Fatalf("NewEvidenceRegistry() error = %v", err)
 	}
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: "No bounded observation was collected.",
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        "No bounded observation was collected.",
 		MissingInformation: []domain.MissingInformation{{
 			Kind:   domain.MissingInformationAbsent,
 			Detail: "No bounded observation was collected.",
@@ -180,7 +182,7 @@ func TestSystemPromptDoesNotEmbedQuestionOrToolLanguageInjection(t *testing.T) {
 		}
 	}
 	if strings.Contains(prompt, "request shell or kubectl execution") {
-		t.Fatal("System Prompt retained a retired prohibition that conflicts with exact policy-ID action proposals")
+		t.Fatal("System Prompt prohibits admitted exact policy-ID action proposals")
 	}
 	if got := input.Question(); got != question {
 		t.Fatalf("user message = %q", got)

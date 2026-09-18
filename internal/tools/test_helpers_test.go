@@ -577,7 +577,6 @@ func testRunInput(t *testing.T, resultBytes int) agent.RunInput {
 
 func boundGetCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	arguments = broadGetArguments(t, arguments)
 	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-get-1",
 		Name:          domain.ToolNameGetResource,
@@ -591,7 +590,6 @@ func boundGetCall(t *testing.T, input agent.RunInput, arguments string) agent.Bo
 
 func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {
 	t.Helper()
-	arguments = broadListArguments(t, arguments)
 	call, err := agent.BindToolCall(input, testInvocationID, agent.ToolSelection{
 		ID:            "call-list-1",
 		Name:          domain.ToolNameListResources,
@@ -601,100 +599,6 @@ func boundListCall(t *testing.T, input agent.RunInput, arguments string) agent.B
 		t.Fatalf("agent.BindToolCall(list_resources) error = %v", err)
 	}
 	return call
-}
-
-func broadGetArguments(t *testing.T, arguments string) string {
-	t.Helper()
-	var current struct {
-		ResourceType string `json:"resource_type"`
-	}
-	if json.Unmarshal([]byte(arguments), &current) == nil && current.ResourceType != "" {
-		return arguments
-	}
-	var legacy struct {
-		Detail    string `json:"detail"`
-		Namespace string `json:"namespace"`
-		Purpose   string `json:"purpose"`
-		Resource  struct {
-			Kind      string `json:"kind"`
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-		} `json:"resource"`
-	}
-	if json.Unmarshal([]byte(arguments), &legacy) != nil {
-		return arguments
-	}
-	detail := legacy.Detail
-	if detail == "" || detail == "diagnostic" {
-		detail = string(domain.ResourceViewDescribe)
-	}
-	namespace := legacy.Resource.Namespace
-	if namespace == "" {
-		namespace = legacy.Namespace
-	}
-	encoded, err := json.Marshal(struct {
-		Detail       string `json:"detail"`
-		Name         string `json:"name"`
-		Namespace    string `json:"namespace"`
-		Purpose      string `json:"purpose"`
-		ResourceType string `json:"resource_type"`
-	}{detail, legacy.Resource.Name, namespace, legacy.Purpose, resourceTypeID(legacy.Resource.Kind)})
-	if err != nil {
-		t.Fatalf("encode broad get arguments: %v", err)
-	}
-	return string(encoded)
-}
-
-func broadListArguments(t *testing.T, arguments string) string {
-	t.Helper()
-	var current struct {
-		ResourceType string `json:"resource_type"`
-	}
-	if json.Unmarshal([]byte(arguments), &current) == nil && current.ResourceType != "" {
-		return arguments
-	}
-	var legacy struct {
-		Health    string `json:"health_filter"`
-		Kind      string `json:"kind"`
-		Limit     int    `json:"limit"`
-		Namespace string `json:"namespace"`
-		Purpose   string `json:"purpose"`
-	}
-	if json.Unmarshal([]byte(arguments), &legacy) != nil {
-		return arguments
-	}
-	var limit *int
-	if legacy.Limit != 0 {
-		limit = &legacy.Limit
-	}
-	filters := []testResourceFilterArgument{}
-	encoded, err := json.Marshal(struct {
-		Filters      []testResourceFilterArgument `json:"filters"`
-		Format       domain.ResourceView          `json:"format"`
-		Limit        *int                         `json:"limit"`
-		Namespace    string                       `json:"namespace"`
-		Purpose      string                       `json:"purpose"`
-		ResourceType string                       `json:"resource_type"`
-	}{filters, domain.ResourceViewList, limit, legacy.Namespace, legacy.Purpose, resourceTypeID(legacy.Kind)})
-	if err != nil {
-		t.Fatalf("encode broad list arguments: %v", err)
-	}
-	return string(encoded)
-}
-
-type testResourceFilterArgument struct {
-	Field    string                        `json:"field"`
-	Operator domain.ResourceFilterOperator `json:"operator"`
-	Value    string                        `json:"value,omitempty"`
-}
-
-func resourceTypeID(kind string) string {
-	for _, policy := range domain.BuiltInResourcePolicies() {
-		if policy.Type.Kind == kind {
-			return policy.Type.ID
-		}
-	}
-	return "unknown-resource-type"
 }
 
 func boundEventCall(t *testing.T, input agent.RunInput, arguments string) agent.BoundToolCall {

@@ -292,8 +292,8 @@ func TestLoadRejectsUnknownOrSensitiveFileFields(t *testing.T) {
 		{name: "alias value", content: "version: 1\ncontext: &context development\nnamespace: *context\n"},
 		{name: "multiple documents", content: "version: 1\n---\nversion: 1\n"},
 		{name: "unknown nested field", content: "version: 1\nlogging:\n  backend: remote\n"},
-		{name: "retired paths", content: "version: 1\npaths:\n  state_dir: /tmp/state\n"},
-		{name: "retired API key source", content: "version: 1\nmodel:\n  api_key_source: environment\n"},
+		{name: "unknown path keys", content: "version: 1\npaths:\n  state_dir: /tmp/state\n"},
+		{name: "unknown credential selector", content: "version: 1\nmodel:\n  api_key_source: environment\n"},
 		{name: "authorization header", content: "version: 1\nmodel:\n  authorization: prohibited\n"},
 		{name: "insecure TLS override", content: "version: 1\nmodel:\n  insecure_skip_verify: true\n"},
 		{name: "redirect override", content: "version: 1\nmodel:\n  allow_cross_origin_redirects: true\n"},
@@ -531,8 +531,8 @@ func TestLoadVersion1StrictSchemaAndRejectsPreReleaseLayouts(t *testing.T) {
 		name    string
 		content string
 	}{
-		{name: "pre-release single model layout", content: "version: 1\nmodel:\n  endpoint: https://legacy.example.test/v1\n  model: legacy-model\n"},
-		{name: "pre-release version 2", content: strings.Replace(version1Config("", ""), "version: 1", "version: 2", 1)},
+		{name: "unknown model slot", content: "version: 1\nmodel:\n  endpoint: https://model.example.test/v1\n  model: example-model\n"},
+		{name: "unsupported version", content: strings.Replace(version1Config("", ""), "version: 1", "version: 2", 1)},
 		{name: "missing agent profile", content: "version: 1\nmodels: {}\n"},
 		{name: "partial agent profile", content: "version: 1\nmodels:\n  agent:\n    name: agent\n    role: agent\n"},
 		{name: "wrong reviewer type", content: version1Config("", "\n  approval_reviewer: enabled")},

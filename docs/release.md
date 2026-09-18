@@ -93,7 +93,7 @@ A development reset requires stopping the database owner and preserving a
 consistent owner-protected backup first. Old development binaries and backups
 are not a supported upgrade or rollback path. Never package user state,
 credentials or local backups into release artifacts. See [Storage](storage.md)
-and [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md).
+and [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md).
 
 ## Local candidate dry run
 
@@ -153,7 +153,7 @@ candidate being published is authoritative for that candidate.
   and the checksum/SBOM allowlist have been updated and re-verified before
   publication.
 - [ ] The public support matrix agrees with
-  [ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-use-go.md),
+  [ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-go-toolchain-and-platforms.md),
   [Dependency Compatibility](compatibility.md), and
   [Kubernetes Compatibility](kubernetes-compatibility.md).
 - [ ] Fresh creation, exact-schema reopen, incompatible/corrupt storage denial,

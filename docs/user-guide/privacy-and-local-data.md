@@ -1,7 +1,7 @@
 # Privacy and Local Data
 
 This page distinguishes current behavior from the Accepted `v0.1.0` privacy
-target. The checked-in source now exposes named model roles, role-scoped
+target. The checked-in source exposes named model roles, role-scoped
 consent, safe Session context and summarization, bounded data-source and remote-
 diagnostic pipelines, and default-off local execution. Human and Reviewer
 routes for remote diagnostics, Pod logs, and optional sources use the same
@@ -162,7 +162,7 @@ without sending an export command. To export a historical Session, resume it
 explicitly first and then use `/privacy`. Minimal Sessions have no retained
 conversation to export and do not offer this action.
 
-The deterministic `kupilot.export-summary.v4` Markdown projection may contain:
+The deterministic `kupilot.export-summary.v1` Markdown projection may contain:
 
 - The schema version, export and truncation state, Session ID, sanitized title,
   Created at and authoritative Last active timestamps, standard persistence
@@ -224,8 +224,8 @@ Kupilot resolves one process-frozen Home from `KUPILOT_HOME`, or uses
 | Current operational log | `logs/kupilot.log` |
 
 Known SQLite sidecars use the database base name with `-journal`, `-wal`, or
-`-shm`; bounded logs use `.1` and `.2` rotations. No version has been released
-with another local layout, so Kupilot performs no legacy discovery or migration.
+`-shm`; bounded logs use `.1` and `.2` rotations. Kupilot uses only this Home
+layout and does not discover or import files from other locations.
 
 On supported Unix platforms, newly created Kupilot directories use `0700` and
 new files use `0600`. Existing user-managed modes are respected and are not an

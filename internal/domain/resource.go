@@ -340,9 +340,9 @@ func (owner ResourceOwner) validFor(child ResourceKind) bool {
 // GET and LIST operations. It contains no labels, annotations, selectors,
 // environment, volumes, addresses, messages, or raw Kubernetes values.
 type ResourceSummary struct {
-	// Type carries exact API identity for broad-read results. Older built-in
-	// projections may omit it; EffectiveType then derives the one code-owned
-	// built-in identity from Reference.
+	// Type carries exact API identity for policy-bound results. Built-in
+	// projections may omit it because EffectiveType derives their code-owned
+	// identity from the exact API version and Kind in Reference.
 	Type      ResourceType
 	Reference ResourceRef
 	CreatedAt time.Time
@@ -351,7 +351,7 @@ type ResourceSummary struct {
 }
 
 // EffectiveType returns the explicit exact API identity, or the deterministic
-// built-in identity for legacy typed projections.
+// built-in identity for typed projections.
 func (summary ResourceSummary) EffectiveType() ResourceType {
 	if summary.Type != (ResourceType{}) {
 		if summary.Type.Validate() != nil {

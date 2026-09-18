@@ -2,7 +2,7 @@
 
 ## Native Eino ownership
 
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) defines the
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md) defines the
 current Eino ownership and protocol rules. Application directly composes
 Eino ADK; native message types remain private to Application. OpenAI profiles
 explicitly select `chat_completions` or `responses`; omission keeps the existing
@@ -19,7 +19,7 @@ generations, persistence intent, and commit decisions; Eino does not own the
 product follow-up queue.
 
 This document distinguishes the accepted `v0.1.0` target from current
-reachability. The checked-in runtime now uses the stable Eino ADK path, named
+reachability. The checked-in runtime uses the stable Eino ADK path, named
 model profiles, role-bound consent, safe Session context and summarization,
 separate Agent, Agent-summary, and Reviewer budgets, broad policy-bound
 Kubernetes resource reads, and deterministic observability adapters. It also
@@ -92,8 +92,8 @@ never reactivated after restart.
 
 1. Application durably creates the run before model or Kubernetes I/O.
 2. Runtime atomically reserves one Agent step and one model call.
-3. Application selects eligible safe committed Session context. The adapter
-   gives the trusted policy, ordered context, current question exactly once,
+3. Application selects eligible safe committed Session context and gives
+   the trusted policy, ordered context, current question exactly once,
    current scope metadata, versioned capability catalog, and remaining code-
    owned ceilings to Eino ADK `Runner`.
 4. Before each model invocation, Eino summarization runs first. A run-local
@@ -196,7 +196,7 @@ preemption does not establish Application Message commitment.
 ## Capability binding
 
 The current `kupilot-operational-tools-v1` catalog contains fourteen fixed
-diagnostic Tools. Resource get/list now select only a local `resource_type` ID
+diagnostic Tools. Resource get/list select only a local `resource_type` ID
 from the frozen built-in and exact configured CRD catalog. They support exact
 get, bounded list/count/table projections, normalized describe detail, typed
 field predicates, runtime-owned server selectors, and runtime-owned
@@ -255,7 +255,7 @@ order affects only provisional display. Unique same-run references are
 normalized to registry acceptance order after all ownership checks. Actual gaps
 remain explicit; no-source conversational answers create no artificial gap.
 
-See [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+See [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract
 and verification boundaries.
 
@@ -284,7 +284,6 @@ is applied. It is normalized, terminal-safe, sensitive-processed, and rendered
 without mandatory headings. A missing, unknown, duplicate, cross-run,
 cross-generation, stale, internally hash-inconsistent, or unauthorized
 claim/Evidence reference rejects a new final result before successful commit.
-Retained legacy records may still expose their bounded validation warnings.
 The wire claim does not contain a model-supplied hash. Runtime derives the
 digest from bounded normalized claim text before constructing the durable
 manifest.
@@ -460,9 +459,8 @@ validated visible Markdown is placed in `answer_markdown`;
 `evidence_citations`, `proposed_actions`, `limitations`, and `questions` are
 empty, while the remaining schema 1 outcome members retain the current grammar.
 The durable Message remains the safe Markdown answer, not raw model traffic.
-This role-preserving representation prevents a prior visible answer from
-becoming a plain-text or retired-schema response example and cannot restore
-historic Evidence or action authority.
+This role-preserving representation preserves the strict response grammar
+without restoring historic Evidence or action authority.
 
 The fixed profile response format is `prompt` or `json_object`. The latter is
 used only when explicitly configured from exact endpoint evidence and constrains
@@ -477,7 +475,7 @@ degraded/truncation state. The summary call reuses `agent` with a separate
 non-streaming no-Tool one-attempt budget. If required compaction fails, runtime
 sends no oversized or silently truncated context and preserves the last
 committed state. The existing SQLite messages are the stable durable source
-until a non-prerelease Eino runner-managed Session passes ADR-0047's gate.
+until a non-prerelease Eino runner-managed Session passes ADR-0013's gate.
 
 The current aggregate selection is capped at 4,096 eligible Messages and 4 MiB
 and is read in ascending keyset pages of 100. The Eino middleware is configured
@@ -568,7 +566,7 @@ when a code-owned source ceiling exists; otherwise freshness is unknown.
 Conflict and supersession require exact typed source, subject, field, revision,
 and value-digest relationships rather than prose interpretation.
 
-The adapter may reuse only one complete successful `safe` read in the same
+Application may reuse only one complete successful `safe` read in the same
 Session/Run/generations for the exact operation, canonical target and typed
 parameters within its fixed one-second freshness window. The original
 observation time and Evidence identity remain visible. Review/critical/deny,
@@ -604,14 +602,14 @@ or second request.
 - [Architecture](architecture.md)
 - [Security Threat Model](security.md)
 - [Diagnostic Capabilities](diagnostic-capabilities.md)
-- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md)
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- [ADR-0009: Use a Fixed Capability Catalog and Finite Budgets](adr/0009-capability-catalog-and-budgets.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
+- [ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)

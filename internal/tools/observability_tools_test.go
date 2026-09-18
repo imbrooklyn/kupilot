@@ -265,7 +265,6 @@ func TestDataSourceToolPolicyAndStateDenialsPerformZeroSourceCalls(t *testing.T)
 	}{
 		{name: "consent", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyConsentRequired, wantClass: domain.SafeErrorClassConsentRequired, wantPolicies: 1},
 		{name: "denied", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied, wantPolicies: 1},
-		{name: "denied", ctx: context.Background(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyDenied, wantClass: domain.SafeErrorClassPolicyDenied, wantPolicies: 1},
 		{name: "cancelled", ctx: cancelledContext(), guard: &sequenceScopeGuard{}, decision: ObservationPolicyAllowed, wantClass: domain.SafeErrorClassCancelled},
 		{name: "stale", ctx: context.Background(), guard: &sequenceScopeGuard{results: []bool{false}}, decision: ObservationPolicyAllowed, wantClass: domain.SafeErrorClassStaleScope},
 	}

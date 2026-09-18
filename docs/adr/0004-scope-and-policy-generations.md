@@ -1,4 +1,4 @@
-# ADR-0014: Isolate Scope and Policy Generations
+# ADR-0004: Isolate Scope and Policy Generations
 
 - Status: Accepted
 

@@ -136,8 +136,8 @@ func TestEvidenceTypeDoesNotReplaceInvalidExplicitAPIIdentity(t *testing.T) {
 	if got := effectiveEvidenceResourceType(evidenceTemplate{resourceType: invalid}); got != invalid {
 		t.Fatalf("effective Evidence resource type = %#v, want invalid explicit identity %#v", got, invalid)
 	}
-	legacy := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"}
-	if got := effectiveEvidenceResourceType(evidenceTemplate{resource: legacy}); got != domain.BuiltInResourceType(domain.ResourceKindPod) {
-		t.Fatalf("legacy inferred Evidence resource type = %#v", got)
+	builtin := domain.ResourceRef{APIVersion: "v1", Kind: "Pod", Namespace: "team-a", Name: "sample-pod"}
+	if got := effectiveEvidenceResourceType(evidenceTemplate{resource: builtin}); got != domain.BuiltInResourceType(domain.ResourceKindPod) {
+		t.Fatalf("derived builtin Evidence resource type = %#v", got)
 	}
 }

@@ -105,22 +105,29 @@
         "claim": "The container is waiting in CrashLoopBackOff after six recorded restarts.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001101"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent BackOff Event was observed for the Pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001102"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The Pod has a projected ReplicaSet owner relationship.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001104"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

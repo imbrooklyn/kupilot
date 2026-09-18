@@ -50,7 +50,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 			name: "valid Evidence observation",
 			makeDraft: func(id domain.EvidenceID) DiagnosisDraft {
 				claim := "The Pod is not Ready."
-				return DiagnosisDraft{AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
 					validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, id),
 				}}
 			},
@@ -60,7 +60,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 			name: "unsupported current observation",
 			makeDraft: func(domain.EvidenceID) DiagnosisDraft {
 				claim := "A current rollout revision was observed."
-				return DiagnosisDraft{AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
 					validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified),
 				}}
 			},
@@ -69,7 +69,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 			name: "stale Evidence generation",
 			makeDraft: func(id domain.EvidenceID) DiagnosisDraft {
 				claim := "The Pod is not Ready."
-				return DiagnosisDraft{AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
 					validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, id),
 				}}
 			},
@@ -82,7 +82,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 			name: "cross-run Evidence",
 			makeDraft: func(id domain.EvidenceID) DiagnosisDraft {
 				claim := "The Pod is not Ready."
-				return DiagnosisDraft{AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
 					validCoverageDraft(1, domain.ClaimCurrentObservation, claim, domain.ClaimCoverageVerified, id),
 				}}
 			},
@@ -99,7 +99,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 			name: "explicit uncertainty",
 			makeDraft: func(domain.EvidenceID) DiagnosisDraft {
 				claim := "The probe configuration was not collected."
-				return DiagnosisDraft{AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: claim, ClaimCoverage: []ClaimCoverageDraft{
 					validCoverageDraft(1, domain.ClaimUncertainty, claim, domain.ClaimCoverageLimited),
 				}}
 			},
@@ -108,7 +108,7 @@ func TestSyntheticClaimCoverageEvaluation(t *testing.T) {
 		{
 			name: "response byte bound",
 			makeDraft: func(domain.EvidenceID) DiagnosisDraft {
-				return DiagnosisDraft{AnswerMarkdown: strings.Repeat("x", MaxAnswerMarkdownBytes+1)}
+				return DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: strings.Repeat("x", MaxAnswerMarkdownBytes+1)}
 			},
 		},
 	}

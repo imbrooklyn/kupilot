@@ -3,7 +3,7 @@
 - Status: Accepted target for Kupilot `v0.1.0`
 - Last updated: 2026-09-07
 
-The checked-in implementation now includes named model roles, role-scoped
+The checked-in implementation includes named model roles, role-scoped
 consent, safe Session context/summarization, deterministic permission routing,
 the common ActionEnvelope/approval foundation, broad policy-bound built-in and
 exact CRD resource reads, and deterministic read-only observability adapters.
@@ -14,7 +14,7 @@ use the same human/Reviewer/automatic supervision and release no attempt
 authority until durable consume and exact target revalidation; no universal
 live cluster compatibility is claimed. Exact default-off
 local direct argv and shell plus typed scale/rollback/controller-owned-Pod
-delete/cordon/uncordon/drain now use the shared Application dispatcher. No live
+delete/cordon/uncordon/drain use the shared Application dispatcher. No live
 host-tool execution or operating-system sandbox claim is made.
 
 ## 1. Scope and security posture
@@ -82,8 +82,8 @@ or protection from a fully compromised local account.
   or provider error.
 
 OpenAI credentials are independently owned by the fixed Agent and Reviewer
-roles. Runtime derives these bindings from the configuration slots. Removed
-provider and inheritance fields are rejected; they cannot broaden authority.
+roles. Runtime derives these bindings from the configuration slots. Extra
+provider and inheritance selectors are rejected; they cannot broaden authority.
 
 ### Operationally sensitive data
 
@@ -217,8 +217,8 @@ action state. Eino's indexed argument assembly and every project-owned runtime
 authorization check remain mandatory.
 
 Retained assistant messages use the complete current response grammar with
-empty historic Evidence and action arrays rather than teaching a later model a
-retired schema. An explicitly configured JSON-object response constraint only
+empty historic Evidence and action arrays to preserve syntax without restoring
+authority. An explicitly configured JSON-object response constraint only
 narrows endpoint syntax. Strict local decoding, Evidence checks, and action
 binding remain mandatory, and an unsupported constraint cannot trigger a
 probe, downgrade, resend, or retry.
@@ -522,7 +522,7 @@ apply, edit, YAML, arbitrary delete, and model-generated command surfaces are
 denied.
 
 Predefined read-only Pod diagnostics (`review`), other Pod Exec (`critical`),
-and diagnostic Pods (`critical`) now use separate exact schemas and the common
+and diagnostic Pods (`critical`) use separate exact schemas and the common
 action lifecycle. Restricted local argv and shell use separate default-off
 policy catalogs and risk classes. Direct argv is structurally classified,
 scripts and known wrappers/interpreters are denied, and the shell command string
@@ -634,7 +634,7 @@ barriers, and temporary databases. Required proof includes:
 
 ## Native Responses run state
 
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) permits bounded native
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md) permits bounded native
 reasoning items only in current-run Application/Eino state and requests to the
 same consented model destination. These protocol items carry no authority and
 never enter TUI, logs, SQLite, export, or resumed history. Responses requests
@@ -648,16 +648,16 @@ disable provider storage, automatic caching, truncation, and SDK retries.
 - [Architecture](architecture.md)
 - [Privacy Overview](privacy-overview.md)
 - [Data Retention Contract](data-retention.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0014: Isolate Scope and Policy Generations](adr/0014-cluster-scope-generation-isolation.md)
-- [ADR-0020: Confine Kubernetes Access and Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md)
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0004: Isolate Scope and Policy Generations](adr/0004-scope-and-policy-generations.md)
+- [ADR-0005: Confine Kubernetes Access and Exec Credentials](adr/0005-kubernetes-and-exec-credentials.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0009: Use a Fixed Capability Catalog and Finite Budgets](adr/0009-capability-catalog-and-budgets.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)

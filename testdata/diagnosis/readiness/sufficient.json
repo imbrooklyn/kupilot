@@ -85,16 +85,22 @@
         "claim": "The projected Pod Ready condition is False.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001501"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent Unhealthy Event reported a readiness probe failure.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001502"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

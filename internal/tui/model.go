@@ -80,7 +80,7 @@ type RunView struct {
 // that have no human approval dialog. It is display state, never authority.
 type actionPresentation struct {
 	RequestID      domain.ApprovalID
-	Digest         domain.ApprovalDigest
+	Digest         domain.ActionDigest
 	Sequence       int64
 	ExecutionIndex int64
 }

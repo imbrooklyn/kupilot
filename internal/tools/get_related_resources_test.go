@@ -312,7 +312,7 @@ func TestGetRelatedResourcesDeniesOrMapsFailuresBeforeUnsafeReads(t *testing.T) 
 			input := testRunInput(t, 0)
 			call := boundRelatedCall(t, input, `{"purpose":"Trace a bounded graph.","resource":{"kind":"Pod","name":"sample-pod"}}`)
 			if test.wrongCall {
-				call = boundGetCall(t, input, `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+				call = boundGetCall(t, input, `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 			}
 			result := tool.Execute(test.ctx(), call)
 			if result.Validate() != nil || result.Error == nil || result.Error.Class != test.wantClass ||

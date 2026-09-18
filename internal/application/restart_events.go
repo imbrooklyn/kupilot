@@ -48,7 +48,7 @@ type UIRestartExecution struct {
 	ScopeGeneration    int64
 	Sequence           int64
 	EventIndex         int64
-	Digest             domain.ApprovalDigest
+	Digest             domain.ActionDigest
 	State              UIRestartExecutionState
 	ErrorClass         domain.SafeErrorClass
 	FailureCode        RestartRolloutFailureCode

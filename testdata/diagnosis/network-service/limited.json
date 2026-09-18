@@ -24,15 +24,25 @@
   "diagnosis": {
     "answer_markdown": "No network series was collected because the configured Prometheus observation was not authorized.\n\nNetwork behavior remains unknown; a denied source call does not imply zero traffic. Confidence: low. To verify: Exact source consent and permission allow a later bounded query for the same Pod.\n\nThe optional data-source observation was denied. Impact: No network sample can support the Service investigation.\n\nSuggested next step: Obtain exact consent and permission for the configured source before retrying. Risk: External-source access transfers approved operational metadata to that origin. Before acting: Verify the canonical origin and admitted data category.",
     "evidence_citations": [],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [],
     "hypotheses": [
-      {"index": 0, "assertion": "network_state_unknown"}
+      {
+        "index": 0,
+        "assertion": "network_state_unknown"
+      }
     ],
     "recommended_actions": [
-      {"index": 0, "assertion": "obtain_source_permission"}
+      {
+        "index": 0,
+        "assertion": "obtain_source_permission"
+      }
     ]
   },
   "required_confirmed_assertions": [],

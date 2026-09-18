@@ -211,7 +211,7 @@ type MissingInformation struct {
 // RecommendedAction is a bounded proposed action. A typed operation and target
 // may accompany explanatory text; neither creates execution authority.
 type RecommendedAction struct {
-	Operation     ApprovalOperation         `json:"operation,omitempty"`
+	Operation     ActionOperation           `json:"operation,omitempty"`
 	Target        *ResourceRef              `json:"target,omitempty"`
 	Parameters    *ProposedActionParameters `json:"parameters,omitempty"`
 	Action        string                    `json:"action"`

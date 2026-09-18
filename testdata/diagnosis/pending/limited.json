@@ -94,28 +94,36 @@
         "claim": "The latest projected Pod phase is Pending.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001411"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The latest projected PodScheduled condition is True.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001412"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "An older FailedScheduling Event was also observed.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001413"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The Pod has a projected ReplicaSet owner relationship.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001414"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

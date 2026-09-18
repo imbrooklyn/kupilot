@@ -171,7 +171,7 @@ func TestGetEventsDeniesOrMapsFailuresWithoutUnsafeActions(t *testing.T) {
 			tool, _ := NewGetEventsTool(eventDependencies(reader, test.guard))
 			call := boundEventCall(t, testRunInput(t, 0), `{"purpose":"Inspect recent events.","resource":{"kind":"Pod","name":"sample-pod"}}`)
 			if test.wrongCall {
-				call = boundGetCall(t, testRunInput(t, 0), `{"purpose":"Inspect one Pod.","resource":{"kind":"Pod","name":"sample-pod"}}`)
+				call = boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"sample-pod","namespace":null,"purpose":"Inspect one Pod.","resource_type":"pods"}`)
 			}
 			result := tool.Execute(test.context(), call)
 			if result.Validate() != nil || result.Error == nil || result.Error.Class != test.wantClass || reader.count() != test.wantReads ||

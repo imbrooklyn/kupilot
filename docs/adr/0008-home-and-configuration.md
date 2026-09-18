@@ -1,4 +1,4 @@
-# ADR-0035: Use One Home and Strict Configuration
+# ADR-0008: Use One Home and Strict Configuration
 
 - Status: Accepted
 

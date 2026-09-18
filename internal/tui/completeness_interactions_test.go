@@ -106,8 +106,8 @@ func TestSlashAvailabilityIsContentFreeAndTerminalCapabilityBound(t *testing.T) 
 func TestDoctorRenderingUsesOnlyTypedRedactedProjection(t *testing.T) {
 	model := newTestModel()
 	canary := "forbidden-session-title-canary"
-	result, err := application.NewDoctorResult("dev", "v3", domain.ModelProviderOpenAI, domain.SHA256Hex("origin"), true, false,
-		application.SessionStorageHealth{SchemaRevision: 16, SessionCount: 2})
+	result, err := application.NewDoctorResult("v0.1.0", "v1", domain.ModelProviderOpenAI, domain.ModelAPIProtocolChatCompletions, domain.SHA256Hex("origin"), true, false,
+		application.SessionStorageHealth{SchemaRevision: 1, SessionCount: 2})
 	if err != nil {
 		t.Fatalf("NewDoctorResult() error = %v", err)
 	}

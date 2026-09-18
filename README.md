@@ -7,7 +7,7 @@ model interpretation, and makes permission and verification state visible.
 
 > [!IMPORTANT]
 > The checked-in source implements the deterministic `v0.1.0` contract described
-> by the canonical docs and ADR-0063. All project-owned schema versions start at
+> by the canonical docs and ADR-0016. All project-owned schema versions start at
 > 1 and remain fixed until the first v0.1.0 publication. It is unreleased. Passing
 > deterministic gates is not a release-readiness claim, and opt-in live results
 > apply only to the exact endpoint, model, cluster, and versions tested.
@@ -85,7 +85,7 @@ own endpoint, model, credential, consent and finite budgets. Role, provider,
 credential-reference, inheritance and capability switches are not configuration
 fields. Summarization reuses `agent` with its independent budget.
 See [Configuration](docs/configuration.md) and
-[ADR-0063: Keep One Unreleased Version-One Baseline](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
+[ADR-0016: Keep One Unreleased Version-One Baseline](docs/adr/0016-unreleased-version-baseline.md).
 
 The `v0.1.0` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware directly inside Application. Kupilot
@@ -231,7 +231,7 @@ reduced-motion, narrow-resize, IME/Unicode, and restored-scrollback behavior
 retain textual safety meaning.
 
 Final response metadata and failure diagnostics follow
-[ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](docs/adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md).
+[ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](docs/adr/0015-evidence-and-typed-outcomes.md).
 Runtime derives mechanical metadata and reports fixed failure stages without
 exposing model or Evidence payloads.
 

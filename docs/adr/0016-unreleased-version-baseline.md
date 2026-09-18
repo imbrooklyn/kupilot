@@ -1,4 +1,4 @@
-# ADR-0063: Keep One Unreleased Version-One Baseline
+# ADR-0016: Keep One Unreleased Version-One Baseline
 
 - Status: Accepted
 
@@ -12,8 +12,9 @@ export formats at initial version 1 until the first publication. Correct the one
 initial checksummed SQLite schema in place. Do not add development migrations,
 compatibility readers, tags or alternate product versions.
 
-Dependency/API versions, ADR identities and runtime generation/sequence/concurrency
-counters are distinct and must not be renumbered as format versions.
+Dependency/API versions and runtime generation/sequence/concurrency counters
+retain their own semantics. ADRs are numbered consecutively from 0001 in the
+current decision index; their identifiers are not product format versions.
 
 Current documents describe the effective contract, implementation boundaries and
 explicit limitations. ADRs record current decisions, rationale, consequences and

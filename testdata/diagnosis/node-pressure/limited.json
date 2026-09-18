@@ -52,20 +52,34 @@
         "claim": "The projected MemoryPressure condition is False for example-node.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002211"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "node_memory_pressure_false"}
+      {
+        "index": 0,
+        "assertion": "node_memory_pressure_false"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "pressure_cleared_possible"}
+      {
+        "index": 0,
+        "assertion": "pressure_cleared_possible"
+      }
     ],
     "recommended_actions": [
-      {"index": 0, "assertion": "collect_node_metrics"}
+      {
+        "index": 0,
+        "assertion": "collect_node_metrics"
+      }
     ]
   },
   "required_confirmed_assertions": [

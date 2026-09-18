@@ -94,28 +94,36 @@
         "claim": "The projected Job status contains one failed attempt and no succeeded attempts.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001711"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The projected Failed condition is True.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001712"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A later bounded relationship observation contains one owned Pod in phase Succeeded.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001713"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The fixed owner graph connects the Job to that Pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001714"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

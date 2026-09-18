@@ -65,27 +65,45 @@
         "claim": "The projected MemoryPressure condition is True for example-node.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002201"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A current bounded Metrics API snapshot reports 1750 CPU millicores and 8589934592 memory bytes.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002202"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "node_memory_pressure_true"},
-      {"index": 1, "assertion": "node_usage_snapshot_observed"}
+      {
+        "index": 0,
+        "assertion": "node_memory_pressure_true"
+      },
+      {
+        "index": 1,
+        "assertion": "node_usage_snapshot_observed"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "node_usage_may_contribute"}
+      {
+        "index": 0,
+        "assertion": "node_usage_may_contribute"
+      }
     ],
     "recommended_actions": [
-      {"index": 0, "assertion": "correlate_node_conditions"}
+      {
+        "index": 0,
+        "assertion": "correlate_node_conditions"
+      }
     ]
   },
   "required_confirmed_assertions": [

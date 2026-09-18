@@ -161,7 +161,7 @@ type UIReviewerEvent struct {
 	PolicyGeneration domain.PolicyGeneration
 	Sequence         int64
 	EventIndex       int64
-	Digest           domain.ApprovalDigest
+	Digest           domain.ActionDigest
 	Status           UIReviewerStatus
 }
 
@@ -1505,7 +1505,7 @@ type UIApprovalRequest struct {
 	RunID                  domain.AgentRunID
 	SessionID              domain.SessionID
 	Sequence               int64
-	Operation              domain.ApprovalOperation
+	Operation              domain.ActionOperation
 	OperationSchema        string
 	PolicyVersion          string
 	PermissionProfile      domain.PermissionProfile
@@ -1538,7 +1538,7 @@ type UIApprovalRequest struct {
 	ParameterSummary       string
 	EffectSummary          string
 	Reviewer               *UIReviewerStatus
-	Digest                 domain.ApprovalDigest
+	Digest                 domain.ActionDigest
 	Nonce                  domain.ApprovalNonce
 	RequestedAt            time.Time
 	ExpiresAt              time.Time
@@ -1546,7 +1546,7 @@ type UIApprovalRequest struct {
 
 // Validate recomputes the operation digest from every displayed parameter.
 func (request UIApprovalRequest) Validate() error {
-	intent := domain.OperationIntent{
+	intent := domain.ActionIntent{
 		Operation: request.Operation, OperationSchemaVersion: request.OperationSchema,
 		PolicyVersion: request.PolicyVersion, PermissionProfile: request.PermissionProfile,
 		Risk: request.Risk, Effect: request.Effect, PolicyGeneration: request.PolicyGeneration,
@@ -1778,7 +1778,7 @@ type UIApprovalResult struct {
 	ScopeGeneration  int64
 	PolicyGeneration domain.PolicyGeneration
 	Sequence         int64
-	Digest           domain.ApprovalDigest
+	Digest           domain.ActionDigest
 	State            domain.ApprovalState
 	StateReason      domain.ApprovalStateReason
 	Execution        *UIRestartExecution

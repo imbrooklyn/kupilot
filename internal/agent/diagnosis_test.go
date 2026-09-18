@@ -10,6 +10,15 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
+func TestDiagnosisValidatorRequiresCurrentResponseSchema(t *testing.T) {
+	for _, version := range []int{0, 2} {
+		_, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: version, AnswerMarkdown: "A bounded answer."}, DiagnosisMetadata{}, nil)
+		if InteractionFailureOf(err, domain.FailureInternal) != domain.FailureFinalSchema {
+			t.Fatalf("schema %d: %v", version, err)
+		}
+	}
+}
+
 func TestDiagnosisValidatorRejectsUnregisteredEvidence(t *testing.T) {
 	input := testRunInput(t, "Why is this Pod not Ready?")
 	call := testBoundCall(t, input, testInvocationID, "sample-pod")
@@ -23,7 +32,8 @@ func TestDiagnosisValidatorRejectsUnregisteredEvidence(t *testing.T) {
 	}
 	forgedID := domain.EvidenceID("00000000-0000-7000-8000-000000004099")
 	_, err = ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: "The Pod is not Ready. Review its readiness probe before changing the workload.",
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        "The Pod is not Ready. Review its readiness probe before changing the workload.",
 		ConfirmedFacts: []domain.ConfirmedFact{
 			{Statement: "A fabricated observation claims a restart occurred.", EvidenceIDs: []domain.EvidenceID{forgedID}},
 			{Statement: "The projected Pod condition is not Ready.", EvidenceIDs: []domain.EvidenceID{testEvidenceID}},
@@ -58,7 +68,8 @@ func TestDiagnosisValidatorRejectsInvalidHypothesisReferences(t *testing.T) {
 	}
 	forgedID := domain.EvidenceID("00000000-0000-7000-8000-000000004099")
 	_, err = ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: "The application may still be starting.",
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        "The application may still be starting.",
 		ConfirmedFacts: []domain.ConfirmedFact{{
 			Statement: "The projected Pod condition is not Ready.", EvidenceIDs: []domain.EvidenceID{testEvidenceID},
 		}},
@@ -88,7 +99,8 @@ func TestDiagnosisValidatorSanitizesEveryModelFreeTextField(t *testing.T) {
 	canary := strings.Join([]string{"synthetic", "diagnosis", "field", "canary", "4501"}, "-")
 	unsafeText := "\x1b[31mObserved token=" + canary + "\x1b[0m\u202e"
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: unsafeText,
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        unsafeText,
 		ConfirmedFacts: []domain.ConfirmedFact{{
 			Statement: unsafeText, EvidenceIDs: []domain.EvidenceID{testEvidenceID},
 		}},
@@ -137,7 +149,7 @@ func TestDiagnosisValidatorPreservesAnswerMarkdownStructure(t *testing.T) {
 	}, "\r\n")
 	want := strings.ReplaceAll(answer, "\r\n", "\n")
 
-	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: answer}, DiagnosisMetadata{
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: answer}, DiagnosisMetadata{
 		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(),
 	}, registry)
 	if err != nil {
@@ -158,7 +170,8 @@ func TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence(t *test
 	blocked := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
 		canary + "\n" + strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ")
 	_, err = ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: blocked,
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        blocked,
 		RecommendedActions: []domain.RecommendedAction{{
 			Action: blocked, Risk: "Review is required.", Executed: false,
 		}},
@@ -166,7 +179,7 @@ func TestDiagnosisValidatorBlocksHighRiskModelTextWithoutSealingEvidence(t *test
 	if !errors.Is(err, ErrSensitiveModelTextBlocked) || strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), blocked) {
 		t.Fatalf("ValidateDiagnosis(blocked text) error = %v", err)
 	}
-	if _, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "No observation was collected."}, DiagnosisMetadata{
+	if _, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "No observation was collected."}, DiagnosisMetadata{
 		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(),
 	}, registry); err != nil {
 		t.Fatalf("blocked draft sealed or changed the Evidence registry: %v", err)
@@ -308,7 +321,7 @@ func TestDiagnosisRecordsToolResultLevelTruncationWithoutEvidence(t *testing.T) 
 	if accepted, err := registry.AcceptToolResult(call, result); err != nil || accepted != 0 {
 		t.Fatalf("AcceptToolResult(truncated) = %d, %v", accepted, err)
 	}
-	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "The observation was truncated before any item was returned."}, DiagnosisMetadata{
+	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "The observation was truncated before any item was returned."}, DiagnosisMetadata{
 		ID:        testDiagnosisID,
 		CreatedAt: input.Scope().ActivatedAt,
 	}, registry)
@@ -365,9 +378,10 @@ func TestClaimCoverageBindsObservationInferenceUncertaintyAndUnsupportedState(t 
 		validCoverageDraft(4, domain.ClaimUnsupportedObservation, "No current configuration observation supports a precise cause.", domain.ClaimCoverageUnsupported),
 	}
 	diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-		AnswerMarkdown: "The Pod is not Ready. The exact cause remains uncertain.",
-		ConfirmedFacts: []domain.ConfirmedFact{{Statement: coverage[0].Text, EvidenceIDs: []domain.EvidenceID{firstID}}},
-		ClaimCoverage:  coverage,
+		ResponseSchemaVersion: 1,
+		AnswerMarkdown:        "The Pod is not Ready. The exact cause remains uncertain.",
+		ConfirmedFacts:        []domain.ConfirmedFact{{Statement: coverage[0].Text, EvidenceIDs: []domain.EvidenceID{firstID}}},
+		ClaimCoverage:         coverage,
 	}, DiagnosisMetadata{
 		ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration(),
 	}, registry)
@@ -473,7 +487,8 @@ func TestClaimCoverageRejectsMalformedOrUnownedEvidence(t *testing.T) {
 			}
 			current.mutate(registry, input, firstID, secondID, &coverage, &metadata)
 			diagnosis, err := ValidateDiagnosis(DiagnosisDraft{
-				AnswerMarkdown: "The Pod is not Ready.", ClaimCoverage: coverage,
+				ResponseSchemaVersion: 1,
+				AnswerMarkdown:        "The Pod is not Ready.", ClaimCoverage: coverage,
 			}, metadata, registry)
 			if current.normalize {
 				if err != nil || diagnosis.Validate() != nil || len(diagnosis.ClaimCoverage) != 1 {
@@ -503,7 +518,7 @@ func TestClaimCoverageLimitsAreExactAndOneOverFailsClosed(t *testing.T) {
 	}
 	coverage[0] = validCoverageDraft(1, domain.ClaimCurrentObservation, "The Pod is not Ready.", domain.ClaimCoverageVerified, firstID)
 	metadata := DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration()}
-	if _, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "Bounded response.", ClaimCoverage: coverage}, metadata, registry); err != nil {
+	if _, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "Bounded response.", ClaimCoverage: coverage}, metadata, registry); err != nil {
 		t.Fatalf("ValidateDiagnosis(exact claim ceiling) error = %v", err)
 	}
 
@@ -511,7 +526,7 @@ func TestClaimCoverageLimitsAreExactAndOneOverFailsClosed(t *testing.T) {
 	over := append(append([]ClaimCoverageDraft(nil), coverage...),
 		validCoverageDraft(101, domain.ClaimUnsupportedObservation, "One over.", domain.ClaimCoverageUnsupported))
 	metadata.PolicyGeneration = input.PolicyGeneration()
-	if _, err := ValidateDiagnosis(DiagnosisDraft{AnswerMarkdown: "Bounded response.", ClaimCoverage: over}, metadata, registry); !errors.Is(err, ErrInvalidDiagnosisDraft) {
+	if _, err := ValidateDiagnosis(DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "Bounded response.", ClaimCoverage: over}, metadata, registry); !errors.Is(err, ErrInvalidDiagnosisDraft) {
 		t.Fatalf("ValidateDiagnosis(one-over claim ceiling) error = %v", err)
 	}
 }

@@ -554,7 +554,7 @@ func TestCoordinatorTurnsTypedSuggestionIntoApprovalOnlyAfterTrustedPreparation(
 	bridge.started = true
 	bridge.sequence = 8
 	diagnosis := domain.Diagnosis{RecommendedActions: []domain.RecommendedAction{{
-		Operation: domain.ApprovalOperationRestartDeployment,
+		Operation: domain.ActionOperationRestartDeployment,
 		Target: &domain.ResourceRef{
 			APIVersion: domain.RestartDeploymentTargetAPIVersion,
 			Kind:       domain.RestartDeploymentTargetKind,
@@ -743,7 +743,7 @@ func TestApprovalCoordinatorDecisionProofMismatchIsPersistedAndCleared(t *testin
 	fixture := newApprovalCoordinatorFixture(t)
 	request := fixture.submit(t, 40)
 	command := approvalDecisionCommand(UICommandApproveAction, request, 40, 105)
-	command.ApprovalDigest = domain.ApprovalDigest(fmt.Sprintf("%064d", 7))
+	command.ActionDigest = domain.ActionDigest(fmt.Sprintf("%064d", 7))
 	result, err := fixture.coordinator.Decide(context.Background(), command)
 	if !errors.Is(err, ErrApprovalInvalidated) || result.State != domain.ApprovalStateInvalidated ||
 		result.StateReason != domain.ApprovalReasonDigestMismatch || fixture.persistence.closes != 1 {
@@ -836,7 +836,7 @@ type approvalCoordinatorFixture struct {
 	identifiers *approvalCoordinatorIDs
 	runID       domain.AgentRunID
 	sessionID   domain.SessionID
-	intent      domain.OperationIntent
+	intent      domain.ActionIntent
 }
 
 type fakeRestartProposalPreparer struct {
@@ -950,7 +950,7 @@ func approvalDecisionCommand(kind UICommandKind, request domain.ApprovalRequest,
 		Kind: kind, RequestID: requestID, RunID: request.RunID,
 		ExpectedScopeGeneration:  request.Intent.Scope.Generation,
 		ExpectedPolicyGeneration: request.Intent.PolicyGeneration,
-		ApprovalID:               request.ID, ApprovalDigest: request.Digest, ApprovalNonce: request.Nonce,
+		ApprovalID:               request.ID, ActionDigest: request.Digest, ApprovalNonce: request.Nonce,
 		ApprovalSequence: sequence,
 	}
 }
@@ -970,7 +970,7 @@ func storedApprovalForRecovery(
 	request := domain.ApprovalRequest{
 		ID: id, RunID: fixture.runID, SessionID: fixture.sessionID, Intent: fixture.intent,
 		Nonce: nonce, State: state, RequestedAt: requestedAt,
-		ExpiresAt: requestedAt.Add(domain.ApprovalExecutionTTL), StateChangedAt: requestedAt,
+		ExpiresAt: requestedAt.Add(domain.ActionApprovalTTL), StateChangedAt: requestedAt,
 	}
 	if state == domain.ApprovalStateApproved {
 		request.StateReason = domain.ApprovalReasonUserApproved
@@ -1102,7 +1102,7 @@ func (observer *fakeApprovalRolloutObserver) ObserveRestartRollout(
 
 func (executor *fakeApprovalExecutor) RevalidateApprovedRestart(
 	ctx context.Context,
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 ) (approval.RestartDeploymentObservation, error) {
 	executor.revalidates++
 	if executor.revalidateErr != nil {

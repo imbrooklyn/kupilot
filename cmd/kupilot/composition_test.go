@@ -84,7 +84,7 @@ func TestSecurityAssuranceShutdownAggregationKeepsOnlySafeErrors(t *testing.T) {
 	sqliteCanary := strings.Repeat("s", 47) + "-generated"
 	stateDirectory := filepath.Join(t.TempDir(), "uncreated-state")
 	_, sqliteErr := sqlite.Open(context.Background(), sqlite.OpenOptions{
-		StateDir: stateDirectory, ApplicationVersion: "assurance", CorrelationID: sqliteCanary + "\n",
+		StateDir: stateDirectory, ApplicationVersion: "v0.1.0", CorrelationID: sqliteCanary + "\n",
 	})
 	if sqliteErr == nil {
 		t.Fatal("SQLite safe error = nil")
@@ -143,7 +143,7 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 		t.Fatalf("os.ReadFile(main.go) error = %v", err)
 	}
 	mainSource := string(mainContent)
-	if strings.Count(mainSource, "openaicompat.New(") != 0 || strings.Count(mainSource, "application.NewEinoRuntime(") != 1 ||
+	if strings.Count(mainSource, "application.NewEinoRuntime(") != 1 ||
 		strings.Count(mainSource, "tools.NewToolCatalog(") != 1 ||
 		strings.Count(mainSource, "sqlite.NewScopePreferenceRepository(") != 1 ||
 		strings.Count(mainSource, "ScopePreferences: scopePreferenceRepository") != 1 ||
@@ -158,8 +158,8 @@ func TestCompositionConstructsOneModelLifecycleAndOneSupervisedActionPath(t *tes
 		strings.Count(mainSource, "Remote: &tools.RemoteDiagnosticToolDependencies{") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRestarter(") != 1 ||
 		strings.Count(mainSource, "kube.NewDeploymentRolloutObserver(") != 1 {
-		t.Fatalf("composition constructor counts are model=%d agent=%d catalog=%d scope-preference=%d",
-			strings.Count(mainSource, "openaicompat.New("), strings.Count(mainSource, "application.NewEinoRuntime("),
+		t.Fatalf("composition constructor counts are agent=%d catalog=%d scope-preference=%d",
+			strings.Count(mainSource, "application.NewEinoRuntime("),
 			strings.Count(mainSource, "tools.NewToolCatalog("),
 			strings.Count(mainSource, "sqlite.NewScopePreferenceRepository("))
 	}

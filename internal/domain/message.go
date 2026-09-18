@@ -56,7 +56,7 @@ type Message struct {
 	RunID     *AgentRunID
 	// RunSequence is the zero-based committed conversation order inside one
 	// AgentRun. It is present for durable run user/assistant Messages and absent
-	// for Session-only notices and legacy non-run rows.
+	// for Session-only messages. Only complete run groups are model context.
 	RunSequence *int
 	Role        MessageRole
 	Content     string

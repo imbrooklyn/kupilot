@@ -1,4 +1,4 @@
-# ADR-0045: Require Digest-Bound Controlled Execution
+# ADR-0012: Require Digest-Bound Controlled Execution
 
 - Status: Accepted
 

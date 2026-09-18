@@ -106,7 +106,7 @@ func (restarter *DeploymentRestarter) PrepareRestartDeploymentProposal(
 // and returns only identity, fingerprint, generation, and fresh resourceVersion.
 func (restarter *DeploymentRestarter) RevalidateApprovedRestart(
 	ctx context.Context,
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 ) (approval.RestartDeploymentObservation, error) {
 	if ctx == nil || intent.ValidateRestartDeployment() != nil {
 		return approval.RestartDeploymentObservation{}, restartInputError("revalidate_restart_deployment")

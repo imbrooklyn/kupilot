@@ -64,7 +64,7 @@ func TestSecurityAssuranceSafeErrorCancellationIdentity(t *testing.T) {
 	modelErr := domain.NewModelError(domain.ModelErrorCodeCancelled, domain.ModelOperationRequest, "assurance-cancelled")
 	stateDirectory := filepath.Join(t.TempDir(), "state")
 	_, sqliteErr := sqlite.Open(cancelled, sqlite.OpenOptions{
-		StateDir: stateDirectory, ApplicationVersion: "assurance", CorrelationID: "assurance-cancelled",
+		StateDir: stateDirectory, ApplicationVersion: "v0.1.0", CorrelationID: "assurance-cancelled",
 	})
 	ports := &assuranceScopePorts{}
 	manager, err := application.NewScopeManager(ports, ports, ports, ports, func() time.Time {
@@ -290,7 +290,7 @@ func prepareSQLiteAssuranceBoundary(t *testing.T) assuranceBoundary {
 	canary := strings.Repeat("s", 47) + "-generated"
 	stateDirectory := filepath.Join(t.TempDir(), "uncreated-state")
 	_, err := sqlite.Open(context.Background(), sqlite.OpenOptions{
-		StateDir: stateDirectory, ApplicationVersion: "assurance", CorrelationID: canary + "\n",
+		StateDir: stateDirectory, ApplicationVersion: "v0.1.0", CorrelationID: canary + "\n",
 	})
 	if err == nil {
 		t.Fatal("sqlite.Open() error = nil")
@@ -484,7 +484,7 @@ func assertSecurityAssuranceBoundary(t *testing.T, boundary assuranceBoundary) {
 	}
 	stateDirectory := filepath.Join(stateRoot, "state")
 	database, err := sqlite.Open(context.Background(), sqlite.OpenOptions{
-		StateDir: stateDirectory, ApplicationVersion: "assurance", CorrelationID: "security-assurance",
+		StateDir: stateDirectory, ApplicationVersion: "v0.1.0", CorrelationID: "security-assurance",
 	})
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)

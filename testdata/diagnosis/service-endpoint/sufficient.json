@@ -83,28 +83,36 @@
         "claim": "The projected Service has one selector key.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001801"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The bounded relationship result contains a selector match to one Pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001803"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The matching Pod has zero ready containers out of one desired container.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001802"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The EndpointSlice projection reports zero ready and two not-ready endpoints.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001804"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

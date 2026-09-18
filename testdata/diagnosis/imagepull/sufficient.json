@@ -71,22 +71,29 @@
         "claim": "The container is waiting in ImagePullBackOff for image example-image:v2.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001301"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent Event reported a failed image pull.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001302"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent Event reported image pull backoff.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001303"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

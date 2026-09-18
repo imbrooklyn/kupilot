@@ -1,4 +1,4 @@
-# ADR-0020: Confine Kubernetes Access and Exec Credentials
+# ADR-0005: Confine Kubernetes Access and Exec Credentials
 
 - Status: Accepted
 

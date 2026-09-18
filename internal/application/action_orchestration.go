@@ -326,6 +326,6 @@ func approvalExecutionCommand(request domain.ApprovalRequest, sequence int64) UI
 		Kind: UICommandApproveAction, RequestID: uint64(sequence), RunID: request.RunID,
 		ExpectedScopeGeneration: request.Intent.Scope.Generation, ApprovalID: request.ID,
 		ExpectedPolicyGeneration: request.Intent.PolicyGeneration,
-		ApprovalDigest:           request.Digest, ApprovalNonce: request.Nonce, ApprovalSequence: sequence,
+		ActionDigest:             request.Digest, ApprovalNonce: request.Nonce, ApprovalSequence: sequence,
 	}
 }

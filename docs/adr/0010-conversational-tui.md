@@ -1,4 +1,4 @@
-# ADR-0040: Use One Conversational Supervision Screen
+# ADR-0010: Use One Conversational Supervision Screen
 
 - Status: Accepted
 

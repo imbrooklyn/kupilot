@@ -56,7 +56,7 @@ var (
 	ErrInvalidRelatedRead = errors.New("related-resource Tool read data is invalid")
 )
 
-// BoundToolCall is the S13/S14 runtime-owned immutable call. This alias keeps
+// BoundToolCall is the runtime-owned immutable call. This alias keeps
 // one authority contract while making handler signatures concise.
 type BoundToolCall = agent.BoundToolCall
 
@@ -282,7 +282,7 @@ func (value OptionalInt64) valid() bool {
 }
 
 // ResourceDiagnosticStatus contains only the additional fixed fields not
-// represented by the S10 cross-Kind summary.
+// represented by the cross-Kind summary.
 type ResourceDiagnosticStatus struct {
 	Current               domain.OptionalCount
 	Updated               domain.OptionalCount

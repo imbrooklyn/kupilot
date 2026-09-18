@@ -266,7 +266,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
 			message.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
 			message.ApprovalID != model.pendingApproval.RequestID ||
-			!message.ApprovalDigest.Equal(model.pendingApproval.Digest) ||
+			!message.ActionDigest.Equal(model.pendingApproval.Digest) ||
 			message.ApprovalSequence != model.pendingApproval.Sequence {
 			return false
 		}
@@ -278,7 +278,7 @@ func (model *Model) acceptApplicationFailure(message ApplicationFailureMsg) bool
 			message.RunID != model.pendingApproval.RunID || message.ScopeGeneration != model.pendingApproval.Scope.Generation ||
 			message.PolicyGeneration != model.pendingApproval.PolicyGeneration ||
 			message.ApprovalID != model.pendingApproval.RequestID ||
-			!message.ApprovalDigest.Equal(model.pendingApproval.Digest) ||
+			!message.ActionDigest.Equal(model.pendingApproval.Digest) ||
 			message.ApprovalSequence != model.pendingApproval.Sequence {
 			return false
 		}
@@ -1056,7 +1056,7 @@ func (model Model) submitApprovalDecision(forceCancel bool) (tea.Model, tea.Cmd)
 		Kind: kind, RequestID: requestID, RunID: request.RunID,
 		ExpectedScopeGeneration:  request.Scope.Generation,
 		ExpectedPolicyGeneration: request.PolicyGeneration,
-		ApprovalID:               request.RequestID, ApprovalDigest: request.Digest,
+		ApprovalID:               request.RequestID, ActionDigest: request.Digest,
 		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
 	}
 	if command.Validate() != nil {
@@ -2228,7 +2228,7 @@ func (model *Model) expirePendingApproval() tea.Cmd {
 		Kind: application.UICommandExpireAction, RequestID: requestID, RunID: request.RunID,
 		ExpectedScopeGeneration:  request.Scope.Generation,
 		ExpectedPolicyGeneration: request.PolicyGeneration,
-		ApprovalID:               request.RequestID, ApprovalDigest: request.Digest,
+		ApprovalID:               request.RequestID, ActionDigest: request.Digest,
 		ApprovalNonce: request.Nonce, ApprovalSequence: request.Sequence,
 	}
 	if command.Validate() != nil {
@@ -3365,7 +3365,7 @@ func (model *Model) acceptReviewerEvent(event application.UIReviewerEvent) bool 
 
 func (model *Model) acceptAutomaticActionEvent(
 	requestID domain.ApprovalID,
-	digest domain.ApprovalDigest,
+	digest domain.ActionDigest,
 	sequence int64,
 	executionIndex int64,
 ) bool {
@@ -3461,7 +3461,7 @@ func (model *Model) acceptWorkingTick(message WorkingTickMsg) tea.Cmd {
 	return workingTick(model.run, model.reducedMotion)
 }
 
-func approvalOperationLabel(operation domain.ApprovalOperation) string {
+func approvalOperationLabel(operation domain.ActionOperation) string {
 	switch operation {
 	case domain.ActionOperationRestartDeployment:
 		return "Restart Deployment"

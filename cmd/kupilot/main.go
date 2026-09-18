@@ -129,7 +129,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 
 	applicationVersion := info.Version
 	if applicationVersion == "" {
-		applicationVersion = "dev"
+		applicationVersion = buildinfo.Version
 	}
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
 		StateDir: loaded.Paths.StateDir, ApplicationVersion: applicationVersion, CorrelationID: "composition",
@@ -456,8 +456,9 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 	}()
 	coordinator, err := application.NewCoordinator(application.CoordinatorConfig{
 		ApplicationVersion: applicationVersion, ConfigurationSchema: fmt.Sprintf("v%d", config.CurrentVersion),
-		ModelProvider: domain.ModelProviderKind(loaded.Models.Agent.ProviderKind),
-		Sessions:      sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
+		ModelProvider:    domain.ModelProviderKind(loaded.Models.Agent.ProviderKind),
+		ModelAPIProtocol: domain.ModelAPIProtocol(loaded.Models.Agent.APIProtocol),
+		Sessions:         sessionRepository, Runs: runRepository, RunInputs: runRepository, Tools: toolRepository,
 		Audits: auditRepository, Scope: scopeManager,
 		ModelContext: messageRepository,
 		ModelRuntime: initialRuntime, ModelFactory: modelFactory, ModelProfiles: profileWriter,
@@ -965,7 +966,7 @@ func rejectedApplicationRequest(message tea.Msg) tea.Msg {
 		result.PolicyGeneration = request.Command.ExpectedPolicyGeneration
 		result.RunID = request.Command.RunID
 		result.ApprovalID = request.Command.ApprovalID
-		result.ApprovalDigest = request.Command.ApprovalDigest
+		result.ActionDigest = request.Command.ActionDigest
 		result.ApprovalSequence = request.Command.ApprovalSequence
 		result.Command = request.Command.Kind
 	case tui.ApplicationModelSetupMsg:

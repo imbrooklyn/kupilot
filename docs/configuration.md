@@ -2,7 +2,7 @@
 
 ## Initial OpenAI-only schema
 
-[ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md) defines
+[ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md) defines
 configuration version `1`.
 `models.agent` and optional `models.approval_reviewer` each accept `endpoint`,
 `model`, optional `api_key`, `api_protocol`, `reasoning_effort`,
@@ -142,7 +142,7 @@ extension payloads:
 - current namespace access, kubeconfig exec-credential policy, logging, Home,
   and credential protections; and
 - the existing `compact`, `balanced`, and `extended` run-budget selection,
-  now consumed by independent Agent, Agent-summary, Reviewer, and broad
+  consumed by independent Agent, Agent-summary, Reviewer, and broad
   Kubernetes page/item/byte ceilings;
 - an optional finite list of exact CRD read policies. Built-in resource
   policies remain code-owned and cannot be replaced by configuration; and
@@ -196,7 +196,7 @@ command, or per-run budget selector.
 
 ## Native protocol selection
 
-Under [ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md), OpenAI profiles
+Under [ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md), OpenAI profiles
 may set `api_protocol: responses` to use the native
 Eino Responses component.
 Omission selects `chat_completions`. Streaming behavior is derived from the
@@ -213,7 +213,7 @@ an actual key so it remains safe to copy and inspect.
 
 | Field | Default and validation |
 | --- | --- |
-| `version` | Required schema version `1`. Retired pre-release single-profile layouts and pre-release `version: 2` files are rejected rather than migrated implicitly. |
+| `version` | Required schema version `1`. Any other version or unknown configuration key is rejected. |
 | `context` | Empty; when set, at most 253 UTF-8 bytes with no control or bidirectional-control characters. When empty, startup uses the last successfully verified local Context, then kubeconfig `current-context`. |
 | `namespace` | `default`; when set, one working-Namespace DNS label of at most 63 bytes. It is never an all-Namespace marker. |
 | `no_color` | `false`; `--no-color` overrides it, while the presence of `NO_COLOR` supplies `true` at environment priority. |
@@ -226,7 +226,7 @@ an actual key so it remains safe to copy and inspect.
 | `models.agent.reasoning_effort` | Omitted preserves the endpoint default. Explicit `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` requires endpoint support. `none` explicitly disables reasoning; it is never selected automatically. |
 | `models.agent.response_format` | Effective fixed value `prompt` or `json_object`; omission resolves to `prompt`. `json_object` selects the provider's fixed JSON-object response constraint only when the exact endpoint has proved support. It never enables probing, fallback, or retry. |
 | `models.agent.temperature` | Optional; omission preserves endpoint defaults. Explicit values from 0 through 0.2 are sent unchanged, including zero. Null is rejected. |
-| `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint; it is not inferred from the historical version 1 value. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
+| `models.agent.max_output_tokens` | Optional positive value. It is omitted by default and sent only when exact evidence exists for the selected endpoint. Independent output-byte, stream, call, time, and cost-unit limits always apply. |
 | `models.agent.request_timeout_seconds` | Optional; the generated default is `900` and the accepted range is `1` through `900`. The effective default `balanced` profile tightens it to `600`, while any lower explicit value and the remaining run deadline may tighten it further. |
 | `models.approval_reviewer` | Optional independent profile. Requires endpoint and model; uses the same optional fields with a 30-second default timeout. Runtime fixes this role to non-streaming and Tool-free. No Agent setting or credential is inherited. |
 | `models.approval_reviewer.api_key` | Optional plaintext Reviewer credential; extracted separately from the Agent credential. |
@@ -264,7 +264,7 @@ an actual key so it remains safe to copy and inspect.
 <!-- markdownlint-enable MD013 -->
 
 The exact profile time envelopes and their no-retry semantics are defined by
-[ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md).
+[ADR-0009: Use a Fixed Capability Catalog and Finite Budgets](adr/0009-capability-catalog-and-budgets.md).
 
 Each supplied endpoint or model identifier is validated independently. If the
 effective endpoint, model identifier, or required OpenAI API key is absent,
@@ -431,10 +431,10 @@ sink. This is independent from the container-output category in `/privacy`.
 ## Deterministic response metadata and failure diagnostics
 
 Response schema 1 is code-owned, not a configurable compatibility relaxation.
-There is no legacy-schema, repair, retry, or permissive-decoding option.
+There is no alternate schema, repair, retry, or permissive-decoding option.
 Existing fixed provider selection, consent, budgets, and explicit
 structured-output settings continue to apply.
 
-See [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+See [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract
 and verification boundaries.

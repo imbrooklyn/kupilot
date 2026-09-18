@@ -2,7 +2,7 @@
 
 This contract separates authority checks, runtime derivation, unambiguous
 representation normalization, and presentation. It is governed by
-[ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md).
+[ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md).
 Test observations and limits must be reported separately from this target.
 
 ## Field audit
@@ -93,7 +93,7 @@ Native Responses uses the decoded `failed` or `cancelled` response status.
 This handling does not inspect raw error wording. Unknown errors remain
 fail-closed and are not retrospectively attributed without evidence. The original fixed `ModelErrorCode` and `SafeErrorClass`
 continue to distinguish transport authentication, rate limit, timeout, redirect,
-media, budget and protocol results inside the adapter.
+media, budget and protocol results inside Application's native model boundary.
 
 ### Start rejection detail
 
@@ -161,7 +161,7 @@ are deterministic fixture claims, not real Kubernetes or model-quality claims.
 
 | Decisions | Paired test evidence |
 | --- | --- |
-| Strict final fields present/missing/null/duplicate/unknown, old schema, malformed and one-over | `TestResponseConformanceRequiredFields`, `TestResponseConformanceMalformedAndRetiredFields`, `TestResponseConformanceNestedFields` |
+| Strict final fields present/missing/null/duplicate/unknown, old schema, malformed and one-over | `TestResponseConformanceRequiredFields`, `TestResponseConformanceMalformedAndUnknownFields`, `TestResponseConformanceNestedFields` |
 | Claim kind/support derivation; runtime-owned metadata; 100/101 claims; whitespace/escapes/order | `TestResponseConformanceClaimIntentAndDerivation`, `TestResponseConformanceExactLimitsAndRepresentation` |
 | Exact text/Markdown ceiling and one-over; empty/whitespace/different safe clarification candidate | `TestResponseTextLimitsAndClarificationPresentation` |
 | Known Evidence order canonicalization vs unknown/duplicate/foreign/stale/duplicate-claim rejection | `diagnosis_test.go` coverage-validator table; `TestInteractionCompositionScenarioMatrix` |
@@ -204,7 +204,7 @@ are separate and cannot be inferred from either fixture class.
 
 ## Application-owned native Eino decisions
 
-ADR-0013 places native Eino composition inside Application and admits the two
+ADR-0003 places native Eino composition inside Application and admits the two
 explicit native OpenAI protocols. The two configurations share the same Application
 pipeline and safety controls; one Agent/Runner is constructed for each run.
 No second loop is used to recover a failed request.

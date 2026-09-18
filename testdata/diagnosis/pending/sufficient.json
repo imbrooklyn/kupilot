@@ -94,28 +94,36 @@
         "claim": "The projected Pod phase is Pending.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001401"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The projected PodScheduled condition is False with reason Unschedulable.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001402"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent FailedScheduling Event reported unmatched projected constraints.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001403"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The Pod has a projected ReplicaSet owner relationship.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001404"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

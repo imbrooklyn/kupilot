@@ -69,7 +69,7 @@ func TestDiagnosisFailureMatrixKeepsDistinctBoundaryReasons(t *testing.T) {
 			if _, err = registry.AcceptToolResult(call, testToolResult(t, call, testEvidenceID, time.UnixMilli(1000).UTC())); err != nil {
 				t.Fatal(err)
 			}
-			draft := DiagnosisDraft{AnswerMarkdown: "A safe bounded answer."}
+			draft := DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "A safe bounded answer."}
 			metadata := DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1001).UTC(), PolicyGeneration: 1}
 			scenario.mutate(&draft, &metadata, &registry)
 			_, err = ValidateDiagnosis(draft, metadata, registry)

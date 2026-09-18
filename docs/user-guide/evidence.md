@@ -20,9 +20,9 @@ Pressing `Alt+E` explicitly enters observation inspection and shows only the
 selected position and a friendly state such as `ready` or `partial` before the
 safe detail is opened.
 
-- Press `Alt+E` to open the newest committed final's claim index. Legacy
-  retained answers without claim metadata open their supporting observations
-  directly.
+- Press `Alt+E` to open the newest committed final's claim index. A bounded
+  local result with supporting observations but no declared claims opens those
+  observations directly.
 - Press `Left` and `Right` to move between declared claims. Press `Up` or
   `Ctrl+P` and `Down` or `Ctrl+N` to move only between the exact Evidence
   references cited by the selected claim.

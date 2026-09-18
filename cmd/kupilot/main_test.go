@@ -70,7 +70,7 @@ func TestCompositionRoot(t *testing.T) {
 	t.Parallel()
 
 	info := buildinfo.Info{
-		Version:   "v0.0.0-test",
+		Version:   "v0.1.0",
 		Commit:    "0123456789ab",
 		BuildTime: "2026-08-08T00:00:00Z",
 		GoVersion: "go1.27.0",
@@ -95,7 +95,7 @@ func TestCompositionRoot(t *testing.T) {
 			name:       "version short circuit",
 			args:       []string{"--version"},
 			wantCode:   cli.ExitOK,
-			wantOutput: "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.27.0 platform=linux/amd64",
+			wantOutput: "kupilot version=v0.1.0 commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.27.0 platform=linux/amd64",
 		},
 		{
 			name:      "usage error",

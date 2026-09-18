@@ -98,7 +98,7 @@ type StoredRequest struct {
 	RunID          domain.AgentRunID
 	SessionID      domain.SessionID
 	Intent         StoredActionIntent
-	Digest         domain.ApprovalDigest
+	Digest         domain.ActionDigest
 	NonceHash      domain.ApprovalNonceHash
 	State          domain.ApprovalState
 	StateReason    domain.ApprovalStateReason
@@ -136,7 +136,7 @@ func (request StoredRequest) Validate() error {
 		!request.State.Valid() || !request.StateReason.ValidForState(request.State) ||
 		!validStoredApprovalTime(request.RequestedAt) || !validStoredApprovalTime(request.ExpiresAt) ||
 		!validStoredApprovalTime(request.StateChangedAt) ||
-		!request.ExpiresAt.Equal(request.RequestedAt.Add(domain.ApprovalExecutionTTL)) ||
+		!request.ExpiresAt.Equal(request.RequestedAt.Add(domain.ActionApprovalTTL)) ||
 		request.StateChangedAt.Before(request.RequestedAt) ||
 		request.State == domain.ApprovalStatePending && !request.StateChangedAt.Equal(request.RequestedAt) {
 		return ErrInvalidStoredApproval
@@ -192,7 +192,7 @@ func (request StoredRequest) ValidateAudit(event domain.AuditEvent) error {
 type StoredDecision struct {
 	RequestID          domain.ApprovalID
 	Choice             domain.ApprovalDecisionChoice
-	ShownDigest        domain.ApprovalDigest
+	ShownDigest        domain.ActionDigest
 	NonceHash          domain.ApprovalNonceHash
 	Actor              domain.ApprovalActor
 	Disposition        domain.ReviewDisposition

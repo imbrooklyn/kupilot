@@ -42,27 +42,45 @@
         "claim": "The current Metrics API snapshot reports 250 CPU millicores for example-pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002001"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The same bounded snapshot reports 134217728 memory bytes.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002001"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "pod_cpu_snapshot_observed"},
-      {"index": 1, "assertion": "pod_memory_snapshot_observed"}
+      {
+        "index": 0,
+        "assertion": "pod_cpu_snapshot_observed"
+      },
+      {
+        "index": 1,
+        "assertion": "pod_memory_snapshot_observed"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "resource_pressure_possible"}
+      {
+        "index": 0,
+        "assertion": "resource_pressure_possible"
+      }
     ],
     "recommended_actions": [
-      {"index": 0, "assertion": "compare_resource_configuration"}
+      {
+        "index": 0,
+        "assertion": "compare_resource_configuration"
+      }
     ]
   },
   "required_confirmed_assertions": [

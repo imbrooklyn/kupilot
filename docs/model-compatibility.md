@@ -1,7 +1,7 @@
 # Model Compatibility Contract
 
 - Status: Accepted, unreleased v0.1.0
-- Decision: [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- Decision: [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)
 
 ## Native Eino ownership
 
@@ -9,7 +9,7 @@ Kupilot supports OpenAI through the pinned native Eino components only:
 core `v0.9.19`, Chat Completions extension `v0.1.13`, and
 `agenticopenai v0.2.2` for Responses. Application directly constructs one
 `ChatModelAgent` and `Runner` and owns the sole ReAct loop under
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md). There is no provider
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md). There is no provider
 facade, second Agent, conversation loop, router, repair request, or fallback.
 
 ## Fixed roles and protocols
@@ -80,9 +80,9 @@ field. The selection is frozen configuration rather than endpoint inference.
 `max_tokens` is present only when typed configuration explicitly sets
 `models.agent.max_output_tokens` from endpoint evidence. When configuration sets
 `models.agent.reasoning_effort: none`, Eino also emits
-the configured reasoning-effort field; omission leaves it absent. The adapter never
+the configured reasoning-effort field; omission leaves it absent. Application never
 infers it from a model name or retries based on endpoint error text. Temperature
-is the one fixed, adapter-owned Eino `ExtraFields` entry: its value is the
+is the one fixed, Application-owned Eino `ExtraFields` entry: its value is the
 validated configuration scalar, not user-provided extension data. This avoids
 the pinned downstream client applying OpenAI-specific restrictions based only
 on a `gpt-5` identifier before an OpenAI-compatible endpoint can evaluate the
@@ -128,7 +128,7 @@ contiguous from zero.
 For visible provisional output, the final protocol places `answer_markdown`
 first. Its incremental JSON string decoder supports escaped characters and
 UTF-16 surrogate pairs split across content chunks. Before each provisional
-event, the adapter checks the exact model credential across chunk boundaries,
+event, Application checks the exact model credential across chunk boundaries,
 normalizes split terminal controls, applies the fixed sensitive-value policy,
 enforces answer and run-wide event ceilings, and verifies the immutable run
 scope. Raw envelope syntax, citation metadata, proposed actions, reasoning
@@ -249,8 +249,8 @@ and wall-time limits apply.
 
 ## Safe error mapping
 
-Raw HTTP, SSE, SDK, Eino, redirect, and response-body errors end at the adapter
-boundary. `ModelError` exposes only a stable class, code-defined operation and
+Raw HTTP, SSE, SDK, Eino, redirect, and response-body errors end at Application's
+native model boundary. `ModelError` exposes only a stable class, code-defined operation and
 message, conservative retryability, and a local bounded correlation identifier.
 Retryability is classification metadata; it never schedules a retry or expands
 the remaining run budget.
@@ -285,7 +285,7 @@ response is `invalid_external_response`, not `unavailable`.
 HTTP request rejection is reported as `model_invocation/provider_request_rejected`,
 separately from unsupported response media or stream behavior. It cannot identify
 the rejected parameter without endpoint-specific evidence. Kupilot never parses
-error prose to change settings or resend a request; see [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md).
+error prose to change settings or resend a request; see [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md).
 
 The endpoint comes only from typed user configuration. Model output, Tool
 arguments, messages, resumed history, and Kubernetes content cannot change it.
@@ -313,12 +313,12 @@ event, rendered TUI or history value, safe error, ordinary log field, callback,
 audit field, SQLite value, or child environment entry. Request and logger
 capture tests may inspect a generated synthetic value in memory, but logs never
 record Authorization or request bodies.
-The adapter also fails closed before a request or decoded Eino message can
+Application also fails closed before a request or decoded Eino message can
 carry the transport credential as configuration, content, metadata, text, or
 Tool-call data. Endpoint error bodies are read only to the fixed limit and are
 never decoded into a safe error or metadata value. Default logs discard them.
 Explicit sensitive diagnostics may retain only the credential-redacted prefix
-documented by ADR-0035.
+documented by ADR-0008.
 
 By default, the fixed local `model_request` log event records only the local
 request ID, operation, phase, outcome, stable class and code, retryability,
@@ -372,7 +372,7 @@ synthetic English content and loopback `httptest` servers.
 These fixtures define protocol compatibility, not model quality, prompt
 obedience, or suitability of any particular hosted service.
 
-The deterministic fixture matrix now covers role selection, same- and
+The deterministic fixture matrix covers role selection, same- and
 different-origin profiles, independent credentials and consent, strict
 non-streaming no-Tool Reviewer responses, malformed/timeout/cancelled review,
 safe Session context ordering, current-question-once, ADK summarization,
@@ -413,7 +413,7 @@ real Kubernetes correctness or release readiness.
 
 ## Native Responses dependency and fidelity gate
 
-ADR-0013 admits Application-owned native Eino composition with core `v0.9.19`
+ADR-0003 admits Application-owned native Eino composition with core `v0.9.19`
 and `agenticopenai v0.2.2`. The selected graph uses OpenAI Go SDK `v3.50.0` and pins
 ACL `v0.1.18-0.20260527084435-846f52bd97c6` transitively; this ACL revision is a
 pseudo-version, not a stable ACL release. The module graph and checksums remain

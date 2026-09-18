@@ -344,7 +344,7 @@ func (coordinator *ApprovalCoordinator) consumeApprovedDispatched(
 		currentScope = current.Snapshot()
 	}
 	claim, claimErr := coordinator.service.Claim(ctx, approval.ConsumeCommand{
-		RequestID: command.ApprovalID, ShownDigest: command.ApprovalDigest,
+		RequestID: command.ApprovalID, ShownDigest: command.ActionDigest,
 		Nonce: command.ApprovalNonce, CurrentScope: currentScope,
 	})
 	if claimErr != nil {

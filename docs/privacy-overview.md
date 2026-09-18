@@ -7,7 +7,7 @@ bounded content is sent only to the destination bound to its fixed consumer
 role after informed consent and local safety processing.
 
 This document defines the accepted `v0.1.0` privacy target and distinguishes it
-from current reachability. The checked-in implementation now has typed named
+from current reachability. The checked-in implementation has typed named
 Agent and optional Reviewer profiles, role/origin/category consent, safe Session
 context and summarization, and deterministic permission/Reviewer routing for the
 existing supervised Deployment restart. It also implements broad, bounded
@@ -141,8 +141,8 @@ Each model key is used only to authenticate its selected role and origin. An
 Agent key may come from masked TUI input, a one-shot Agent environment alias,
 or optional plaintext `models.agent.api_key`. A Reviewer with its own
 credential may use its one-shot role variable or optional plaintext
-`models.approval_reviewer.api_key`; an inheriting Reviewer receives a distinct
-opaque clone. Choosing to save discloses exactly which file-sourced plaintext
+`models.approval_reviewer.api_key`. Each role owns its credential independently.
+Choosing to save discloses exactly which file-sourced plaintext
 role keys will be written to the fixed Home configuration. No key enters
 SQLite, Session content, logs, audit, export, model content, or child
 environments.
@@ -161,7 +161,6 @@ an action phrase is authority.
 - A new strict response with a missing, unknown, duplicate, cross-run,
   cross-generation, stale, internally hash-inconsistent, or unauthorized
   Evidence reference fails closed and is not committed as a successful answer.
-  Retained legacy records may still display their bounded validation warnings.
 - A proposal does not mean approved, attempted, accepted, or verified.
 - Deterministic risk and permission routing plus a digest-bound immutable
   `ActionEnvelope` and durable pre-operation audit are required before every
@@ -391,7 +390,7 @@ arguments, resource names, cluster payloads, bodies, credentials, raw errors,
 paths, and local values.
 
 Explicit `logging.sensitive_diagnostics: true` may add the bounded provider
-failure details documented by ADR-0035. Provider text may reflect user or
+failure details documented by ADR-0008. Provider text may reflect user or
 cluster data, so the setting is for short-lived local troubleshooting. Logs are
 limited to three files of at most 1 MiB each and seven days. Logging can be
 disabled independently from the container-output consent category.
@@ -430,7 +429,7 @@ outside Kupilot's full control and is separately disclosed and gated.
 
 ## Native Responses run state
 
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) permits bounded native
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md) permits bounded native
 reasoning items only in current-run Application/Eino state and requests to the
 same consented model destination. These protocol items carry no authority and
 never enter TUI, logs, SQLite, export, or resumed history. Responses requests
@@ -444,12 +443,12 @@ disable provider storage, automatic caching, truncation, and SDK retries.
 - [Security Threat Model](security.md)
 - [Data Retention Contract](data-retention.md)
 - [Scope](scope.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
+- [ADR-0011: Route Deterministic Risk Through Permission Profiles](adr/0011-permission-profiles.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)

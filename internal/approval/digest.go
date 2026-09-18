@@ -19,7 +19,7 @@ func CanonicalOperation(request domain.ApprovalRequest) ([]byte, error) {
 }
 
 // OperationDigest hashes the exact canonical ActionEnvelope representation.
-func OperationDigest(request domain.ApprovalRequest) (domain.ApprovalDigest, error) {
+func OperationDigest(request domain.ApprovalRequest) (domain.ActionDigest, error) {
 	canonical, err := CanonicalOperation(request)
 	if err != nil {
 		return "", err

@@ -7,7 +7,7 @@ The unreleased v0.1.0 baseline has one initial SQLite migration. It retains the
 current safe Session, Message, run, Evidence, summary, consent, Diagnosis,
 ActionEnvelope and audit projections. All project-owned format versions start
 at 1. Incompatible state is rejected without deletion or rewrite.
-See [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md).
+See [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md).
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -90,11 +90,11 @@ The separate allowlisted local application log is not Session persistence. TUI
 mode uses bounded `info` logging by default and lets the user disable it. Default
 records contain no request or response body, Tool arguments, raw object, raw
 container output, credential, or arbitrary error text. They may contain the
-bounded safe model-failure projection from ADR-0035: local request ID, stable
+bounded safe model-failure projection from ADR-0008: local request ID, stable
 error metadata, observed HTTP status, fixed cause category, and a sink-generated
 project-function chain without files, lines, arguments, or values.
 
-Explicit `logging.sensitive_diagnostics` adds only the ADR-0035 bounded model-
+Explicit `logging.sensitive_diagnostics` adds only the ADR-0008 bounded model-
 failure endpoint, model, error-chain, failed-response prefix, and Go stack
 fields. These records remain outside SQLite and Session deletion. They use the
 same three-file, 1 MiB-per-file, seven-day rotation and are not removed merely
@@ -216,8 +216,9 @@ is canonical only after runtime policy validation.
 
 An eligible Diagnosis contains the bounded validated free-form Markdown answer,
 claim-to-Evidence citations, typed proposed actions, observed scope and time
-range, and validation warnings. Legacy four-collection fields may remain
-readable for historic rows but are not required or rendered for new answers.
+range, and bounded validation warnings. Structured facts, hypotheses, missing
+information and proposed actions are current internal projections; visible
+answers use free-form Markdown.
 
 The Diagnosis may outlive its 30-day Tool and Evidence detail. After detail
 purge, historic answer text remains historic Session content and must show that
@@ -347,7 +348,7 @@ a crash bundle, or another Kupilot-created durable store:
   capability-check bodies.
 - Process environment snapshots, value-bearing CLI arguments, SQL bind values in
   debug output, raw database rows outside explicit mappings, and raw application
-  logs. ADR-0035 admits only its safe function-name chain by default and its
+  logs. ADR-0008 admits only its safe function-name chain by default and its
   bounded model error, failed-response prefix, and current-goroutine stack when
   the user explicitly enables sensitive diagnostics.
 - Terminal byte streams, escape sequences, clipboard or device-control content,
@@ -400,12 +401,12 @@ ownership and do not make drafts eligible for persistence.
 
 ### 6.1 User-controlled redacted summary export
 
-ADR-0025 admits one durable output outside SQLite: an explicitly confirmed,
+ADR-0006 admits one durable output outside SQLite: an explicitly confirmed,
 versioned Markdown summary of the current resumable standard-persistence
 Session. Application projects a consistent SQLite snapshot through an explicit
 allowlist. Only safe Session display metadata, the versioned safe summary and
 coverage explanation, committed user and final assistant text, validated answer
-metadata and legacy compatible Diagnosis fields, bounded claim/Evidence
+metadata and validated Diagnosis projections, bounded claim/Evidence
 coverage metadata, and referenced Evidence summaries or expired markers are
 eligible. Claim hashes in that metadata are deterministic local derivatives of
 the retained normalized claim text, not model-supplied facts.
@@ -457,7 +458,7 @@ A cleanup transaction failure rolls back that batch, produces a safe storage
 error, and does not report the affected rows as deleted. Kupilot does not raise
 a retention value silently. Automatic frequent `VACUUM` is prohibited. An
 explicit maintenance command or tested size threshold may be added when driver
-behavior satisfies ADR-0025.
+behavior satisfies ADR-0006.
 
 ## 8. User-requested deletion
 
@@ -565,8 +566,8 @@ Kubernetes call, Reviewer decision, Session rule, approval wait, process, or
 execution request.
 
 Binary and compatible schema changes do not turn process-local generation
-values into Session-version gates. Forward migration preserves eligible
-historic Session rows and initializes only the explicitly defined new columns.
+values into Session-version gates. The current database has one initial schema;
+post-publication migrations must preserve eligible Session rows.
 Resume may reconstruct eligible context and an unverified scope candidate, but
 never historic generation, client, ResourceRef, Evidence, approval, action, or
 retry authority. The next explicit question uses only independently verified
@@ -621,7 +622,7 @@ fake clock, and failure injection:
   repository inputs, logical rows, database bytes, and WAL inspected by tests.
 
 The pure-Go driver, PRAGMA, sqlx bind type, checkpoint, sidecar, and permission
-behavior must satisfy ADR-0025.
+behavior must satisfy ADR-0006.
 
 ## 11. Local interaction and coverage data
 
@@ -665,7 +666,7 @@ before:
 
 ## Native Responses run state
 
-[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) permits bounded native
+[ADR-0003: Compose Native Eino Directly in Application](adr/0003-application-and-native-eino.md) permits bounded native
 reasoning items only in current-run Application/Eino state and requests to the
 same consented model destination. These protocol items carry no authority and
 never enter TUI, logs, SQLite, export, or resumed history. Responses requests
@@ -678,12 +679,12 @@ disable provider storage, automatic caching, truncation, and SDK retries.
 - [Architecture](architecture.md)
 - [Privacy Overview](privacy-overview.md)
 - [Scope](scope.md)
-- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0014: Isolate Scope and Policy Generations](adr/0014-cluster-scope-generation-isolation.md)
-- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- [ADR-0006: Use One Safe SQLite Store](adr/0006-sqlite-and-data-retention.md)
+- [ADR-0004: Isolate Scope and Policy Generations](adr/0004-scope-and-policy-generations.md)
+- [ADR-0012: Require Digest-Bound Controlled Execution](adr/0012-controlled-execution.md)
+- [ADR-0007: Bind Model Roles, Credentials and Consent](adr/0007-model-roles-and-consent.md)
+- [ADR-0013: Use Eino for Session Context and Summarization](adr/0013-session-context-and-summarization.md)
+- [ADR-0014: Own Steering and Queued Follow-Up Input](adr/0014-steering-and-queued-input.md)
+- [ADR-0010: Use One Conversational Supervision Screen](adr/0010-conversational-tui.md)
+- [ADR-0015: Validate Evidence-Backed Answers and Typed Outcomes](adr/0015-evidence-and-typed-outcomes.md)
+- [ADR-0016: Keep One Unreleased Version-One Baseline](adr/0016-unreleased-version-baseline.md)

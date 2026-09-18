@@ -180,7 +180,7 @@ func TestObservationPermissionProfileMatrixUsesExactEffect(t *testing.T) {
 	}
 }
 
-func TestS04ExecutionPermissionRouteMatrixIsComplete(t *testing.T) {
+func TestExecutionPermissionRouteMatrixIsComplete(t *testing.T) {
 	operations := []struct {
 		name      string
 		operation domain.ActionOperation
@@ -216,7 +216,7 @@ func TestS04ExecutionPermissionRouteMatrixIsComplete(t *testing.T) {
 				{"auto-review", permissionPolicy(domain.PermissionProfileAutoReview), permissionAutoReviewRoute(operation.risk), permissionAutoReviewReason(operation.risk)},
 				{"full-access", PermissionPolicy{Profile: domain.PermissionProfileFullAccess, Generation: 1, FullAccessAllowed: true, HighRiskAcknowledged: true}, domain.ReviewDispositionAutomatic, "explicit_full_access"},
 				{"custom default", permissionPolicy(domain.PermissionProfileCustom), permissionCustomDefaultRoute(operation.risk), permissionCustomDefaultReason(operation.risk)},
-				{"custom exact", exactS04CustomPermission(operation.operation, operation.risk), permissionCustomExactRoute(operation.risk), "custom_route"},
+				{"custom exact", exactExecutionCustomPermission(operation.operation, operation.risk), permissionCustomExactRoute(operation.risk), "custom_route"},
 			}
 			for _, profile := range profiles {
 				t.Run(profile.name, func(t *testing.T) {
@@ -286,7 +286,7 @@ func permissionCustomDefaultReason(risk domain.RiskClass) string {
 	return "custom_route_missing"
 }
 
-func exactS04CustomPermission(operation domain.ActionOperation, risk domain.RiskClass) PermissionPolicy {
+func exactExecutionCustomPermission(operation domain.ActionOperation, risk domain.RiskClass) PermissionPolicy {
 	disposition := domain.ReviewDispositionReviewer
 	acknowledged := false
 	if risk == domain.RiskCritical {

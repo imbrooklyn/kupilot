@@ -38,8 +38,8 @@ type RemoteDiagnosticActionSupervisor interface {
 }
 
 // RemoteDiagnosticActionGate applies the generic durable approval lifecycle to
-// the S04 operations. Automatic and matching Session-rule routes keep their
-// direct durable path; human and Reviewer routes use the shared S05 supervisor.
+// remote diagnostics. Automatic and matching Session-rule routes use the
+// direct durable path; human and Reviewer routes use the shared supervisor.
 type RemoteDiagnosticActionGate struct {
 	service      ApprovalLifecycle
 	persistence  ApprovalPersistence

@@ -108,34 +108,43 @@
         "claim": "The projected Job status contains one failed attempt.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001701"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The projected Failed condition is True with reason BackoffLimitExceeded.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001702"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The bounded relationship result includes an owned Pod in phase Failed.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001703"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "The fixed owner graph connects the Job to the observed Pod.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001704"
-        ]
+        ],
+        "claim_type": "current_observation"
       },
       {
         "claim": "A recent Job Event reported that the retry limit was reached.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000001705"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [

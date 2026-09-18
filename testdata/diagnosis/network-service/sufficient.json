@@ -42,20 +42,34 @@
         "claim": "A bounded Prometheus series for example-pod reported a latest network receive rate of 1280 bytes per second in the observed window.",
         "evidence_ids": [
           "00000000-0000-7000-8000-000000002101"
-        ]
+        ],
+        "claim_type": "current_observation"
       }
     ],
-    "proposed_actions": []
+    "proposed_actions": [],
+    "response_schema_version": 1,
+    "outcome": "answer",
+    "limitations": [],
+    "questions": []
   },
   "annotations": {
     "confirmed_facts": [
-      {"index": 0, "assertion": "pod_network_receive_series_observed"}
+      {
+        "index": 0,
+        "assertion": "pod_network_receive_series_observed"
+      }
     ],
     "hypotheses": [
-      {"index": 0, "assertion": "traffic_change_possible"}
+      {
+        "index": 0,
+        "assertion": "traffic_change_possible"
+      }
     ],
     "recommended_actions": [
-      {"index": 0, "assertion": "correlate_service_evidence"}
+      {
+        "index": 0,
+        "assertion": "correlate_service_evidence"
+      }
     ]
   },
   "required_confirmed_assertions": [

@@ -277,7 +277,7 @@ func TestToolResultCannotEnterASealedEvidenceRegistry(t *testing.T) {
 	}
 	// Fault injection: a terminal seal races with a previously bound result.
 	// Application never grants this ordering; registry acceptance still rejects it.
-	_, err = agent.ValidateDiagnosis(agent.DiagnosisDraft{AnswerMarkdown: "A bounded explanation."}, agent.DiagnosisMetadata{ID: "00000000-0000-7000-8000-000000009001", CreatedAt: clock.Now(), PolicyGeneration: input.PolicyGeneration()}, registry)
+	_, err = agent.ValidateDiagnosis(agent.DiagnosisDraft{ResponseSchemaVersion: 1, AnswerMarkdown: "A bounded explanation."}, agent.DiagnosisMetadata{ID: "00000000-0000-7000-8000-000000009001", CreatedAt: clock.Now(), PolicyGeneration: input.PolicyGeneration()}, registry)
 	if err != nil {
 		t.Fatal(err)
 	}

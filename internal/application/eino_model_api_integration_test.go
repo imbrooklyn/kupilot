@@ -84,7 +84,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 		if credential != nil {
 			credential.Destroy()
 		}
-		t.Skip("This legacy streaming matrix does not exercise Responses; use TestNativeResponsesAgentLive.")
+		t.Skip("This Chat Completions streaming matrix does not exercise Responses; use TestNativeResponsesAgentLive.")
 	}
 	transport := newLiveBudgetTransport(configuration.ProviderKind, liveModelCallCeiling, liveModelRequestByteCeiling)
 	client, modelError := newModelClientForTest(configuration, credential, nil, transport)

@@ -1,4 +1,4 @@
-# ADR-0025: Use One Safe SQLite Store
+# ADR-0006: Use One Safe SQLite Store
 
 - Status: Accepted
 

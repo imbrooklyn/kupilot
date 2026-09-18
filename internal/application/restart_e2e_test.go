@@ -475,7 +475,7 @@ func TestRestartRolloutContractsRejectCrossRequestAndConflatedPatchProjections(t
 	patchEvent := UIRestartExecution{
 		RequestID: "00000000-0000-7000-8000-000000008801",
 		RunID:     "00000000-0000-7000-8000-000000008802", ScopeGeneration: 7,
-		Sequence: 2, EventIndex: 1, Digest: domain.ApprovalDigest(fmt.Sprintf("%064d", 9)),
+		Sequence: 2, EventIndex: 1, Digest: domain.ActionDigest(fmt.Sprintf("%064d", 9)),
 		State: UIRestartPatchAccepted, TargetGeneration: 9, TargetReplicas: 3,
 	}
 	if patchEvent.Validate() != nil {

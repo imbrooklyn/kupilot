@@ -102,7 +102,7 @@ func TestDiagnosticResponseProtocolRejectsMalformedRepresentations(t *testing.T)
 		`{"answer_markdown":"answer","evidence_citations":[{"claim":%q,"claim_type":"uncertainty"}],"proposed_actions":[]}`,
 		"Current state is unknown.",
 	)
-	tests["legacy model claim hash"] = fmt.Sprintf(
+	tests["model-supplied claim hash"] = fmt.Sprintf(
 		`{"answer_markdown":"answer","evidence_citations":[{"claim":%q,"claim_type":"uncertainty","claim_hash":%q,"evidence_ids":[]}],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`,
 		"Current state is unknown.", domain.SHA256Hex("Current state is unknown."),
 	)

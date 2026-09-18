@@ -39,6 +39,7 @@ type CoordinatorConfig struct {
 	ApplicationVersion  string
 	ConfigurationSchema string
 	ModelProvider       domain.ModelProviderKind
+	ModelAPIProtocol    domain.ModelAPIProtocol
 	Sessions            SessionPersistence
 	Runs                RunPersistence
 	RunInputs           RunInputPersistence
@@ -106,6 +107,7 @@ type Coordinator struct {
 	applicationVersion  string
 	configurationSchema string
 	modelProvider       domain.ModelProviderKind
+	modelAPIProtocol    domain.ModelAPIProtocol
 
 	sessions             SessionPersistence
 	runs                 RunPersistence
@@ -290,10 +292,10 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 		return nil, ErrCoordinatorDependency
 	}
 	if config.ApplicationVersion == "" {
-		config.ApplicationVersion = "dev"
+		config.ApplicationVersion = "v0.1.0"
 	}
 	if config.ConfigurationSchema == "" {
-		config.ConfigurationSchema = "current"
+		config.ConfigurationSchema = "v1"
 	}
 	if config.ModelProvider == "" {
 		config.ModelProvider = domain.ModelProviderOpenAI
@@ -301,7 +303,7 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if !validDoctorToken(config.ApplicationVersion, 128) || !validDoctorToken(config.ConfigurationSchema, 64) {
 		return nil, ErrCoordinatorDependency
 	}
-	if !config.ModelProvider.Valid() {
+	if !config.ModelProvider.Valid() || !config.ModelAPIProtocol.Valid() {
 		return nil, ErrCoordinatorDependency
 	}
 	if config.Sessions == nil || config.Runs == nil || config.Tools == nil ||
@@ -391,8 +393,9 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	}
 	coordinator := &Coordinator{
 		applicationVersion: config.ApplicationVersion, configurationSchema: config.ConfigurationSchema,
-		modelProvider: config.ModelProvider,
-		sessions:      config.Sessions, runs: config.Runs, runInputs: runInputs, tools: config.Tools,
+		modelProvider:    config.ModelProvider,
+		modelAPIProtocol: config.ModelAPIProtocol,
+		sessions:         config.Sessions, runs: config.Runs, runInputs: runInputs, tools: config.Tools,
 		audits: config.Audits, scope: config.Scope,
 		runner: runner, modelRuntime: config.ModelRuntime,
 		modelFactory: config.ModelFactory, modelProfiles: config.ModelProfiles, reviewerModel: config.ReviewerModel,
@@ -2710,7 +2713,7 @@ func (coordinator *Coordinator) prepareRestartProposal(ctx context.Context, stat
 	var proposed *domain.RecommendedAction
 	for index := range state.diagnosis.RecommendedActions {
 		action := &state.diagnosis.RecommendedActions[index]
-		if action.Operation != domain.ApprovalOperationRestartDeployment {
+		if action.Operation != domain.ActionOperationRestartDeployment {
 			continue
 		}
 		if proposed != nil {
@@ -2988,7 +2991,7 @@ func (coordinator *Coordinator) SubmitRestartDeploymentProposal(
 	runID domain.AgentRunID,
 	sessionID domain.SessionID,
 	sequence int64,
-	intent domain.OperationIntent,
+	intent domain.ActionIntent,
 ) (domain.ApprovalRequest, error) {
 	if coordinator == nil || coordinator.approvals == nil || ctx == nil || ctx.Err() != nil {
 		return domain.ApprovalRequest{}, ErrApprovalUnavailable

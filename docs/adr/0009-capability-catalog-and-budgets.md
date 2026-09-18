@@ -1,4 +1,4 @@
-# ADR-0037: Use a Fixed Capability Catalog and Finite Budgets
+# ADR-0009: Use a Fixed Capability Catalog and Finite Budgets
 
 - Status: Accepted
 

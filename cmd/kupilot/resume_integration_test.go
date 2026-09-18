@@ -33,7 +33,7 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 		t.Fatalf("filepath.EvalSymlinks() error = %v", err)
 	}
 	database, err := sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: filepath.Join(stateRoot, "state"), ApplicationVersion: "test", CorrelationID: "session-adapter",
+		StateDir: filepath.Join(stateRoot, "state"), ApplicationVersion: "v0.1.0", CorrelationID: "session-adapter",
 	})
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
@@ -84,7 +84,7 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 		t.Fatalf("empty filepath.EvalSymlinks() error = %v", err)
 	}
 	emptyDatabase, err := sqlite.Open(ctx, sqlite.OpenOptions{
-		StateDir: filepath.Join(emptyRoot, "state"), ApplicationVersion: "test", CorrelationID: "empty-session-adapter",
+		StateDir: filepath.Join(emptyRoot, "state"), ApplicationVersion: "v0.1.0", CorrelationID: "empty-session-adapter",
 	})
 	if err != nil {
 		t.Fatalf("empty sqlite.Open() error = %v", err)
@@ -173,7 +173,7 @@ func TestResumeIntegrationSeparatesExplicitScopeActivationFromZeroIOAcceptance(t
 				t.Fatalf("filepath.EvalSymlinks() error = %v", err)
 			}
 			database, err := sqlite.Open(ctx, sqlite.OpenOptions{
-				StateDir: filepath.Join(stateRoot, "state"), ApplicationVersion: "test", CorrelationID: "resume-integration",
+				StateDir: filepath.Join(stateRoot, "state"), ApplicationVersion: "v0.1.0", CorrelationID: "resume-integration",
 			})
 			if err != nil {
 				t.Fatalf("sqlite.Open() error = %v", err)
