@@ -24,7 +24,7 @@ cancellation, or persistence safety.
 Exact model context windows, input/output tokens, request and stream ceilings,
 summary triggers, latency, concurrency, and cost values are accepted only from
 the exact pinned Eino/OpenAI source and tests plus selected-endpoint evidence.
-The historical global `8192` output value and middleware example defaults are
+Model-independent output limits and middleware example defaults are
 not universal `v0.1.0` performance contracts; configuration schema version 1
 omits an output-token parameter until selected-endpoint evidence supports one.
 
@@ -58,7 +58,7 @@ evidence.
 Every comparison records the exact source revision and dirty state, Go version,
 `GOOS`, `GOARCH`, `CGO_ENABLED`, operating-system version, CPU class and core
 count, physical memory, power mode, terminal dimensions when relevant, and the
-complete command line. Product binaries use Go 1.25.13, `CGO_ENABLED=0`,
+complete command line. Product binaries use Go 1.27.0, `CGO_ENABLED=0`,
 read-only modules, `-trimpath`, and stripped symbols. All workloads use fixed
 synthetic input, temporary SQLite files, and no real kubeconfig, model
 credential, network service, cluster, or user state.
@@ -103,8 +103,8 @@ never a zero result.
 | No-I/O startup | `BenchmarkCLIProcessStartupV1` executes an already-built native binary with `version` and `help` in an empty isolated environment. It verifies bounded output and zero filesystem creation. Existing CLI contract tests independently prove zero business-composition calls. | Three warm-ups followed by 30 one-process samples for each command; median and nearest-rank p95. | Candidate median wall time is at most 10% above the comparable accepted baseline and p95 is at most 20% above it. Both commands still cause zero database, log, model, Kubernetes, Tool, approval, or executor action. |
 | Peak and stable memory | Measure native `version`, one `BenchmarkSQLiteDiagnosticLifecycleV1` operation, and one `BenchmarkStreamRenderV1/RetainedHistory100x1KiB` operation as separate precompiled processes. Record platform maximum RSS, Go `B/op` and `allocs/op`, and, for benchmark test processes, `inuse_space` after the workload completes. | Ten fresh process samples per workload; median and maximum RSS, median and maximum available in-use heap, plus the workload allocation statistics below. | Maximum RSS and maximum available in-use heap each grow by no more than 10% or 8 MiB over the comparable accepted baseline, whichever allowance is larger. Allocation trends must also satisfy their workload rows. |
 | SQLite | `BenchmarkSQLiteMigrationFreshV1` opens, migrates, verifies, and closes one fresh real temporary database. `BenchmarkSQLiteResumeQueryV1` measures a 50-item picker, a 50-item literal search, and an exact 100-message history. `BenchmarkSQLiteDiagnosticLifecycleV1` stores one bounded Session/run/Tool/Evidence/Diagnosis lifecycle, reads resume and Diagnosis state, runs bounded retention, verifies migrations, foreign keys, permissions, and prohibited-data absence, and closes cleanly. | Ten independent outputs with `-benchmem`; one iteration per fresh migration or lifecycle output and 100 operations per reused resume-query output. Report medians. | Median `ns/op` is at most 15% above baseline. Median `B/op` and `allocs/op` are each at most 10% above baseline. Correctness, owner-only permissions, foreign keys, fixed migration history, and prohibited-data checks must pass in every sample. |
-| Diagnosis | `BenchmarkDiagnosisFixtureMatrixV1` runs all eight admitted diagnostic categories in both sufficient- and limited-Evidence variants through scripted local model and Tool adapters and applies the fixed rubric. One operation is the complete 16-fixture matrix. | Ten one-operation outputs with `-benchmem`; median `ns/op`, `B/op`, and `allocs/op`. | Each median is at most 10% above the comparable accepted baseline. Every fixture and rubric assertion must still pass; no network, Kubernetes, or external model call is permitted. |
-| Stream merge and render | `BenchmarkStreamDeltaMergeV1` merges one 64 KiB stream from 64 fixed 1 KiB deltas at the Application event bridge. `BenchmarkStreamRenderV1/BoundedStream64KiB` sends a 64 KiB stream, two Tool-step states, a stale event, a terminal result, and a post-terminal event through Bubble Tea `Update`, rendering after every event. `RetainedHistory100x1KiB` reconstructs and renders the maximum retained message count using fixed 1 KiB messages. | Ten outputs with `-benchmem`; 100 merge operations, 10 bounded-stream operations, and one retained-history operation per output. Report medians. | Median `ns/op`, `B/op`, and `allocs/op` are each at most 10% above baseline. Rendered state remains bounded and terminal-safe, and stale or post-terminal input cannot change accepted run state. |
+| Diagnosis | `BenchmarkDiagnosisFixtureMatrixV1` runs all eleven admitted diagnostic categories in both sufficient- and limited-Evidence variants through scripted local model and Tool adapters and applies the fixed rubric. One operation is the complete 22-fixture matrix. | Ten one-operation outputs with `-benchmem`; median `ns/op`, `B/op`, and `allocs/op`. | Each median is at most 10% above the comparable accepted baseline. Every fixture and rubric assertion must still pass; no network, Kubernetes, or external model call is permitted. |
+| Stream merge and render | `BenchmarkStreamDeltaMergeV1` merges one 64 KiB stream from 64 fixed 1 KiB deltas at the Application event bridge. `BenchmarkStreamRenderV1/BoundedStream128KiB` sends a 128 KiB stream, two Tool-step states, a stale event, a terminal result, and a post-terminal event through Bubble Tea `Update`, rendering after every event. `RetainedHistory100x1KiB` reconstructs and renders the maximum retained message count using fixed 1 KiB messages. | Ten outputs with `-benchmem`; 100 merge operations, 10 bounded-stream operations, and one retained-history operation per output. Report medians. | Median `ns/op`, `B/op`, and `allocs/op` are each at most 10% above baseline. Rendered state remains bounded and terminal-safe, and stale or post-terminal input cannot change accepted run state. |
 | Binary size | `binary-size-check` builds each supported macOS/Linux `amd64`/`arm64` target twice with the fixed pure-Go performance flags and compares exact bytes. | Two builds per target in one gate; retain one exact byte count for each accepted revision. | No target grows more than 5% from its supplied accepted target baseline, repeated build sizes match, and no uncompressed binary exceeds 96 MiB. CGO-free SQLite and dependency checks remain mandatory. |
 
 <!-- markdownlint-enable MD013 -->
@@ -121,23 +121,23 @@ The low-noise semantic smoke runs every versioned harness once. It checks
 correctness and isolation, not timing:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make test-performance
+GOTOOLCHAIN=go1.27.0 make test-performance
 ```
 
 Build the native performance binary with the same fixed flags used by the size
 gate:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make build
+GOTOOLCHAIN=go1.27.0 make build
 ```
 
 Collect startup warm-ups and measured samples separately:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkCLIProcessStartupV1/(Version|Help)$' \
   -benchtime=1x -count=3 ./cmd/kupilot
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkCLIProcessStartupV1/(Version|Help)$' \
   -benchtime=1x -count=30 ./cmd/kupilot
 ```
@@ -147,13 +147,13 @@ Collect SQLite and Diagnosis samples:
 <!-- markdownlint-disable MD013 -->
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^(BenchmarkSQLiteMigrationFreshV1|BenchmarkSQLiteDiagnosticLifecycleV1)$' \
   -benchmem -benchtime=1x -count=10 ./internal/persistence/sqlite
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkSQLiteResumeQueryV1' \
   -benchmem -benchtime=100x -count=10 ./internal/persistence/sqlite
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkDiagnosisFixtureMatrixV1$' \
   -benchmem -benchtime=1x -count=10 ./internal/agent
 ```
@@ -163,13 +163,13 @@ GOTOOLCHAIN=go1.25.13 go test -run '^$' \
 Collect stream merge and render samples:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkStreamDeltaMergeV1$' \
   -benchmem -benchtime=100x -count=10 ./internal/application
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkStreamRenderV1/BoundedStream64KiB$' \
   -benchmem -benchtime=10x -count=10 ./internal/tui
-GOTOOLCHAIN=go1.25.13 go test -run '^$' \
+GOTOOLCHAIN=go1.27.0 go test -run '^$' \
   -bench '^BenchmarkStreamRenderV1/RetainedHistory100x1KiB$' \
   -benchmem -benchtime=1x -count=10 ./internal/tui
 ```
@@ -179,8 +179,8 @@ reviewed directory containing `kupilot-<goos>-<goarch>` baseline binaries also
 enables the fixed 5% trend gate:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make binary-size-check
-GOTOOLCHAIN=go1.25.13 make binary-size-check \
+GOTOOLCHAIN=go1.27.0 make binary-size-check
+GOTOOLCHAIN=go1.27.0 make binary-size-check \
   BINARY_SIZE_BASELINE_DIR='<accepted-binaries>'
 ```
 
@@ -197,7 +197,7 @@ of the comparison:
 
 ```sh
 mkdir -p bin/perf
-GOTOOLCHAIN=go1.25.13 go test -c -o bin/perf/sqlite.test \
+GOTOOLCHAIN=go1.27.0 go test -c -o bin/perf/sqlite.test \
   ./internal/persistence/sqlite
 /usr/bin/time -lp bin/perf/sqlite.test -test.run '^$' \
   -test.bench '^BenchmarkSQLiteDiagnosticLifecycleV1$' \
@@ -225,7 +225,7 @@ bin/perf/sqlite.test -test.run '^$' \
   -test.bench '^BenchmarkSQLiteDiagnosticLifecycleV1$' \
   -test.benchtime=10x -test.cpuprofile bin/perf/sqlite.cpu.pprof \
   -test.memprofile bin/perf/sqlite.heap.pprof
-GOTOOLCHAIN=go1.25.13 go tool pprof -top -nodecount=20 \
+GOTOOLCHAIN=go1.27.0 go tool pprof -top -nodecount=20 \
   bin/perf/sqlite.heap.pprof
 ```
 
@@ -245,7 +245,7 @@ samples.
   Application and TUI state transitions. No benchmark owns a goroutine or
   performs model, Kubernetes, credential-helper, or public-network I/O.
 - The retained-history workload combines the maximum message count with a
-  fixed 1 KiB per message; the separate stream workload exercises the 64 KiB
+  fixed 1 KiB per message; the separate stream workload exercises the 128 KiB
   single-message boundary. It does not claim that every retained message will
   simultaneously contain the maximum byte count.
 - Binary equality in this gate means repeatable byte size, not byte-for-byte

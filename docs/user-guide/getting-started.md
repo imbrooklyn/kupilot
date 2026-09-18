@@ -11,7 +11,7 @@ cluster or host-tool compatibility is implied.
 Kupilot currently supports local interactive use on macOS and Linux on `amd64`
 and `arm64`. You need:
 
-- Go 1.25.0 or newer for a source build.
+- Go 1.27.0 or newer for a source build.
 - A UTF-8-capable terminal.
 - A local kubeconfig Context and an identity with the documented
   [least-privilege RBAC](../rbac/README.md).

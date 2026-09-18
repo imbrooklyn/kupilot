@@ -177,11 +177,8 @@ func newModelClientWithTransport(
 			Model:          configuration.Model,
 			MaxTokens:      maximum,
 			ResponseFormat: responseFormat,
-			// The pinned OpenAI client rejects temperature before transport for
-			// identifiers beginning with gpt-5, even for compatible endpoints that
-			// admit the configured field. Eino's fixed ExtraFields path keeps Eino
-			// as the serializer without allowing SDK model-name inference to change
-			// Kupilot's typed request contract.
+			// Native Temperature is float32; this fixed SDK serialization field
+			// preserves the configured float64 value, including explicit zero.
 			ExtraFields:     fields,
 			ReasoningEffort: einoopenai.ReasoningEffortLevel(configuration.ReasoningEffort),
 		})

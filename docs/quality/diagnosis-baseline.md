@@ -2,13 +2,13 @@
 
 ## Purpose and oracle
 
-This baseline defines deterministic acceptance for the eight admitted
+This baseline defines deterministic acceptance for the eleven admitted
 diagnostic categories. It measures Evidence provenance, visible uncertainty,
 allowed and forbidden semantic assertions, and unexecuted recommendations. It
 does not score prose style, compare complete natural-language answers, use a
 live model, or delegate judgment to another model.
 
-The Product Contract and ADR-0038 remain authoritative. A successful fixture
+The Product Contract and ADR-0052 remain authoritative. A successful fixture
 means the runtime honored the Evidence and Diagnosis contract for a bounded
 synthetic conversation; it does not establish a universal root-cause accuracy
 rate.
@@ -18,14 +18,14 @@ rate.
 The primary quality command is:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 go test -count=1 ./internal/agent \
+GOTOOLCHAIN=go1.27.0 go test -count=1 ./internal/agent \
   -run '^(TestDiagnosisScenarioFixtures|TestDiagnosisRubric.*)$'
 ```
 
 The offline integration command is:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make test-e2e
+GOTOOLCHAIN=go1.27.0 make test-e2e
 ```
 
 Both commands use the scripted local model, fixed Tool binding, synthetic Tool
@@ -40,7 +40,7 @@ weakening the rubric or changing prose alone.
 Every run must satisfy all of these thresholds:
 
 1. The Tool order exactly matches the category policy and the catalog remains
-   the seven admitted typed read capabilities.
+   the fourteen admitted typed capabilities.
 2. Every accepted Evidence item has the expected current AgentRun, immutable
    ClusterScope, ToolInvocation, category, safe projection, and exact
    observation time.
@@ -70,9 +70,9 @@ Every run must satisfy all of these thresholds:
     approval, or execution authority.
 
 No aggregate score can compensate for a failed threshold. The acceptance level
-is therefore eight of eight categories passing every applicable invariant.
+is therefore eleven of eleven categories passing every applicable invariant.
 
-## Eight-category failure and boundary matrix
+## Eleven-category failure and boundary matrix
 
 <!-- markdownlint-disable MD013 -->
 
@@ -86,6 +86,10 @@ is therefore eight of eight categories passing every applicable invariant.
 | Deployment with no available replicas | Deployment availability gap, bounded ReplicaSet/Pod graph, and relevant Event | Related graph partial, Event read forbidden, and Pod cause absent; unsupported citation is visible | A Deployment condition alone or an unobserved Pod proves root cause |
 | Failed Job | Failed controller state, owned Pod termination, and relevant Event | Job counts conflict with owned Pod phase and required Pod detail is absent; unsupported citation is visible | Failed count alone proves an application error or unobserved exit cause |
 | Service with no ready Endpoint | Selector summary, matched Pod readiness, and address-free EndpointSlice counts | Relationship read forbidden and backend state unknown; unsupported citation cannot create backend Evidence | Service existence or a missing count proves backend state; any endpoint address is known |
+
+| Pod CPU and memory snapshot | Current normalized Metrics API snapshot | Unsupported or unavailable metrics remain unknown | A snapshot proves historical OOM or sustained pressure |
+| Node pressure | Projected Node condition and normalized metrics | Missing metrics do not erase the condition or imply usage | One sample identifies a causal workload |
+| Pod network observation | Bounded code-owned Prometheus series for the exact Pod/window | Missing source consent or permission yields zero source calls | A sample proves a Service outage or generated PromQL is Evidence |
 
 <!-- markdownlint-enable MD013 -->
 

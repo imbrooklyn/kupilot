@@ -37,8 +37,8 @@ func TestSelectedDriverAndSQLXContract(t *testing.T) {
 	if err := db.handle.GetContext(ctx, &sqliteVersion, `SELECT sqlite_version()`); err != nil {
 		t.Fatalf("SQLite version query error = %v", err)
 	}
-	if sqliteVersion != "3.53.3" {
-		t.Fatalf("SQLite version = %q, want 3.53.3", sqliteVersion)
+	if sqliteVersion != "3.53.4" {
+		t.Fatalf("SQLite version = %q, want 3.53.4", sqliteVersion)
 	}
 	if _, err := db.handle.ExecContext(ctx, `
 		CREATE TABLE driver_contract_items (

@@ -33,7 +33,7 @@ denial tests before implementation.
 Until the first publication, the product remains `v0.1.0` and project-owned
 formats remain at version `1`. Correct the initial baseline in place; do not
 add development tags, migration chains, provider extension points, or legacy
-configuration aliases. See [ADR-0063](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
+configuration aliases. See [ADR-0063: Keep One Unreleased Version-One Baseline](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 ## Report security issues privately
 
@@ -44,8 +44,8 @@ an issue or pull request.
 
 ## Development environment
 
-Kupilot requires Go 1.25.0 or newer. The reproducible repository gates pin Go
-1.25.13 and versioned development tools. Build the current platform binary with:
+Kupilot requires Go 1.27.0 or newer. The reproducible repository gates pin Go
+1.27.0 and versioned development tools. Build the current platform binary with:
 
 ```sh
 make build
@@ -54,14 +54,14 @@ make build
 Run the fast gate while developing:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make check
+GOTOOLCHAIN=go1.27.0 make check
 ```
 
 Before requesting review, run the complete local equivalent of the required
 fast and slow gates:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make check-all
+GOTOOLCHAIN=go1.27.0 make check-all
 ```
 
 The complete target list, network policy, and hosted job matrix are documented

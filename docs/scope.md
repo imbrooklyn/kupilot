@@ -1,18 +1,17 @@
 # Kupilot Scope
 
 The current full scope targets the unreleased `v0.1.0` under
-[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md). It supports
+[ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md). It supports
 OpenAI only, through the existing native Eino Chat Completions and Responses
-components. Historical milestone labels do not restrict this baseline to the
-earlier read-only implementation.
+components.
 
 ## Native Eino ownership
 
-[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) defines the
 current Eino ownership and protocol rules. Application directly composes
 Eino ADK; native message types remain private to Application. OpenAI profiles
-explicitly select `chat_completions` or `responses`; omission keeps the existing
-Chat Completions behavior. There is one Agent/Runner per run, no automatic
+explicitly select `chat_completions` or `responses`; omission selects
+Chat Completions. There is one Agent/Runner per run, no automatic
 protocol selection, retry, fallback, or additional conversation store.
 
 - Status: Accepted `v0.1.0` target
@@ -224,12 +223,6 @@ category-bound. No provider discovery, routing, fallback or retry exists.
 No native request rewriting, generated-argument repair or provider-feature
 emulation is admitted.
 
-ADR-0059 admits only bounded restoration of code-owned native request metadata
-lost by the pinned serializer. It does not admit generated-argument repair,
-provider-feature emulation, prompt-specific routing, or a reduced-catalog
-fallback. A provider/model combination can remain incompatible after this
-request-fidelity correction.
-
 Every AgentRun after the first question in a Session must receive one ordered,
 bounded representation of all retained eligible prior user and final assistant
 messages. Standard mode supplies it in process and after explicit cross-process
@@ -332,25 +325,13 @@ reuse are not new durable stores or resumable authority.
 - [Architecture](architecture.md)
 - [Security Threat Model](security.md)
 - [Operational and Diagnostic Capabilities](diagnostic-capabilities.md)
-- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
-- [ADR-0054](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md)
-
-## Deterministic response metadata and failure diagnostics
-
-Response schema 1 and plan wire schema 1 admit deterministic response
-normalization and fixed interaction failure diagnostics. They add no capability,
-data source, authority, retry, fallback, Agent, loop, or durable store.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
+- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
+- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)

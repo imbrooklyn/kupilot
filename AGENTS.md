@@ -20,18 +20,8 @@ baseline and every relevant Accepted ADR:
   [Model Compatibility](docs/model-compatibility.md),
   [Agent Runtime](docs/agent-runtime.md), and
   [Operational Capabilities](docs/diagnostic-capabilities.md)
-- [ADR-0013: Layered Boundaries](docs/adr/0013-layered-architecture-and-consumer-owned-ports.md),
-  [ADR-0014: Scope Generation](docs/adr/0014-cluster-scope-generation-isolation.md),
-  [ADR-0038: Evidence-Backed Answers](docs/adr/0038-use-free-form-answers-with-verified-evidence-metadata.md),
-  and [ADR-0043: One Eino Boundary](docs/adr/0043-use-one-eino-runtime-boundary.md)
-- [ADR-0044: Daily Operations and Permission Profiles](docs/adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md),
-  [ADR-0045: Controlled Execution and Remediation](docs/adr/0045-admit-controlled-execution-and-remediation.md),
-  [ADR-0046: Named Model Roles and Auto-Review](docs/adr/0046-use-named-model-roles-and-optional-auto-review.md),
-  and [ADR-0047: Eino ADK Session Context](docs/adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0031: Explicit Session Resume](docs/adr/0031-require-explicit-cli-session-resume.md),
-  [ADR-0039: Runtime Budgets](docs/adr/0039-use-configurable-runtime-budget-profiles.md),
-  [ADR-0040: Conversational TUI](docs/adr/0040-use-a-codex-style-conversational-tui.md),
-  and [ADR-0041: Session Export](docs/adr/0041-export-free-form-session-summaries.md)
+- [Current Architecture Decisions](docs/adr/README.md), including the relevant
+  native Eino, scope, consent, permission, action, storage and history decisions
 
 Accepted public decisions are normative. An implementation MUST NOT silently
 contradict them. A decision change MUST be made explicitly through the public
@@ -184,9 +174,9 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   Application commands, queries, DTOs, and events. They MUST NOT call model,
   Eino, Kubernetes, Tool, persistence, Reviewer, or executor implementations.
 - `internal/application` MUST directly compose Eino ADK and native model
-  components under ADR-0061. Eino/provider types MUST NOT enter Domain,
+  components under ADR-0013. Eino/provider types MUST NOT enter Domain,
   delivery, Tools, Kubernetes, or persistence. MUST NOT recreate an Agent
-  facade or the removed `internal/agent/einoadapter` package.
+  facade or another Eino adapter package.
 - `internal/tools` MUST own strict capability handlers and the narrow ports
   they consume. Handlers MUST NOT import TUI, Application orchestration,
   repositories, persistence, Eino, or a generic Kubernetes/process client.
@@ -454,7 +444,10 @@ Namespace, or namespace-policy changes MUST advance scope generation first.
   durable outcome, and any retry requires a fresh envelope.
 - Existing restart safety primitives MAY be generalized, but restart-only
   enums, schemas, digest fields, ports, SQLite constraints, UI copy, and
-  verification DTOs MUST be replaced or split through a forward-only migration.
+  verification DTOs MUST be replaced or split. Before the first `v0.1.0`
+  release, storage changes MUST correct the single initial checksummed schema
+  in place under ADR-0063. After publication, storage changes MUST use
+  forward-only, versioned, checksummed migrations.
 
 ## TUI and CLI
 

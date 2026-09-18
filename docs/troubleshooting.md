@@ -26,7 +26,7 @@ output, local database, or local log into a public support request.
 
 ## The binary does not build
 
-- Confirm `go version` is 1.25.0 or newer.
+- Confirm `go version` is exactly 1.27.0 for repository gates.
 - `make build` uses `CGO_ENABLED=0` and writes `./bin/kupilot`.
 - A cold module cache needs access to the configured Go module sources.
 - The complete contributor gates require the exact patch release documented in

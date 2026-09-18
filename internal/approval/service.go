@@ -236,6 +236,9 @@ func (service *Service) Decide(
 	record.request.StateReason = nextReason
 	record.request.StateChangedAt = now
 	record.decision = &decision
+	if next.Terminated() {
+		delete(service.records, record.request.ID)
+	}
 	return record.request, decision, nil
 }
 
@@ -522,8 +525,7 @@ func (service *Service) CommitConsume(ctx context.Context, claim ExecutionClaim)
 	if !exists || !record.executing || record.request != claim.Request || record.decision == nil || *record.decision != claim.Decision {
 		return consumed, domain.NewApprovalError(domain.ApprovalErrorCodeInvalidTransition)
 	}
-	record.request = consumed
-	record.executing = false
+	delete(service.records, claim.Request.ID)
 	return consumed, nil
 }
 
@@ -569,6 +571,7 @@ func (service *Service) expireLocked(record *approvalRecord, now time.Time) doma
 	record.request.StateReason = domain.ApprovalReasonTTLExpired
 	record.request.StateChangedAt = now
 	record.executing = false
+	delete(service.records, record.request.ID)
 	return record.request
 }
 
@@ -585,6 +588,7 @@ func (service *Service) cancelLocked(
 	record.request.StateReason = reason
 	record.request.StateChangedAt = now
 	record.executing = false
+	delete(service.records, record.request.ID)
 	return record.request
 }
 
@@ -601,6 +605,7 @@ func (service *Service) invalidateLocked(
 	record.request.StateReason = reason
 	record.request.StateChangedAt = now
 	record.executing = false
+	delete(service.records, record.request.ID)
 	return record.request
 }
 

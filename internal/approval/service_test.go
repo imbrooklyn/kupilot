@@ -34,6 +34,9 @@ func TestApprovalLifecycleClaimsAndConsumesWithoutExecutor(t *testing.T) {
 	if _, err := service.CommitConsume(context.Background(), claim); err == nil {
 		t.Fatal("replayed claim was accepted")
 	}
+	if len(service.records) != 0 || store.auditCommits != 1 {
+		t.Fatal("consumed authority was retained or audited twice")
+	}
 }
 
 func TestApprovalTTLIsHalfOpenAcrossDecisionClaimAndCommit(t *testing.T) {
@@ -159,6 +162,54 @@ func TestApprovalCommitStorageFailureClosesAuthorityWithoutRetry(t *testing.T) {
 	}
 	if _, err := service.CommitConsume(context.Background(), claim); err == nil || store.consumeCalls != 1 {
 		t.Fatalf("replay error/calls = %v/%d", err, store.consumeCalls)
+	}
+	if len(service.records) != 0 {
+		t.Fatal("failed authority remained in memory")
+	}
+}
+
+func TestApprovalTerminalTransitionsReleaseAuthorityAndRejectReplay(t *testing.T) {
+	for _, terminal := range []string{"reject", "expire", "cancel", "invalidate", "context"} {
+		t.Run(terminal, func(t *testing.T) {
+			base := time.UnixMilli(1_700_000_000_000).UTC()
+			service, clock, store := newTestService(t, base, testNonce(t, 8))
+			request, err := service.Request(context.Background(), testRequestCommand())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var closed domain.ApprovalRequest
+			switch terminal {
+			case "reject":
+				command := approveCommand(request)
+				command.Choice = domain.ApprovalDecisionReject
+				closed, _, err = service.Decide(context.Background(), command)
+			case "expire":
+				clock.Set(request.ExpiresAt)
+				closed, err = service.Expire(context.Background(), request.ID)
+			case "cancel":
+				closed, err = service.Cancel(context.Background(), request.ID, domain.ApprovalReasonUserCancelled)
+			case "invalidate":
+				closed, err = service.Invalidate(context.Background(), request.ID, domain.ApprovalReasonScopeChanged)
+			case "context":
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				closed, _, err = service.Decide(ctx, approveCommand(request))
+				requireApprovalErrorCode(t, err, domain.ApprovalErrorCodeCancelled)
+				err = nil
+			}
+			if err != nil || !closed.State.Terminated() || len(service.records) != 0 {
+				t.Fatalf("terminal state retained authority: state=%s records=%d err=%v", closed.State, len(service.records), err)
+			}
+			if _, _, err := service.Decide(context.Background(), approveCommand(request)); err == nil {
+				t.Fatal("closed request accepted a replayed decision")
+			}
+			if _, err := service.Claim(context.Background(), consumeCommand(request)); err == nil {
+				t.Fatal("closed request accepted a claim")
+			}
+			if store.auditCommits != 0 || store.WriteCount() != 0 {
+				t.Fatal("closed request reached pre-operation audit or execution")
+			}
+		})
 	}
 }
 

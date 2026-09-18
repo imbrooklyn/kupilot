@@ -496,6 +496,12 @@ func TestAdapterCloseWaitsForAdmittedRunAndRejectsNewRuns(t *testing.T) {
 }
 
 func TestToolSchemaBridgePreservesTheFixedCatalogSnapshot(t *testing.T) {
+	type toolInfoWire struct {
+		Name           string          `json:"name"`
+		Desc           string          `json:"desc"`
+		HasParamsOneOf bool            `json:"has_params_one_of"`
+		JSONSchema     json.RawMessage `json:"json_schema"`
+	}
 	specifications := agent.ToolSpecifications()
 	infos := make([]*schema.ToolInfo, len(specifications))
 	snapshot := make([]toolInfoWire, len(specifications))

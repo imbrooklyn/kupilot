@@ -266,7 +266,7 @@ func Load(ctx context.Context, options LoadOptions) (Loaded, error) {
 	}
 	environmentCredentialsTransferred = true
 	return Loaded{
-		Config: config, Paths: options.Paths, SourceVersion: sourceVersion,
+		Config: config, Paths: options.Paths,
 		Credentials: credentials, Warnings: warnings,
 	}, nil
 }

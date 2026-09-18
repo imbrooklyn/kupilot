@@ -1,172 +1,36 @@
-# ADR-0035: Use One User-Managed Home and Interactive Model Setup
+# ADR-0035: Use One Home and Strict Configuration
 
 - Status: Accepted
-- Date: 2026-08-28
-- Supersedes: ADR-0021
-- Amended by: ADR-0042 and ADR-0046
-
-ADR-0046 replaces the single active model-profile restriction with explicit
-named `agent` and optional `approval_reviewer` profiles, which may bind distinct
-canonical origins. Setup remains explicit and credential-safe, there is still
-no auto-detection, fallback, or router, and the expanded configuration remains
-the sole pre-release version 1 schema rather than creating a compatibility
-migration between unpublished layouts.
 
 ## Context
-
-Before the first public release, Kupilot split configuration, SQLite state,
-cache, and logs across platform-specific locations and required a complete model
-profile plus an environment-only API key before the TUI could open. That made a
-local single-user Agent difficult to discover, back up, inspect, reset, and
-start. Exact owner-only mode checks also rejected otherwise usable directories
-that the user had deliberately selected and manages locally.
-
-There is no released configuration or database layout to migrate. The public
-configuration schema remains version 1 and may be corrected in place without a
-compatibility reader, legacy path discovery, or data migration.
+Startup and model setup need predictable paths and strict configuration without
+repository-local discovery, global mutable configuration or hidden credentials.
 
 ## Decision
+Use one user-managed Kupilot Home: KUPILOT_HOME or ~/.kupilot. Resolve and
+validate it independently of the current working directory. Keep fixed config,
+database, log, cache and export descendants. Respect existing permissions and
+create new private paths with owner-only modes.
 
-Kupilot has one process-frozen Home. `KUPILOT_HOME` selects it; otherwise it is
-`$HOME/.kupilot`. Resolution requires an absolute normalized path, resolves an
-existing Home symlink to one canonical target, and rejects roots that cannot be
-used safely. Every automatic Kupilot filesystem write is confined to these
-fixed children of the canonical Home:
+Use Cobra for fixed CLI routing and go.yaml.in/yaml/v3 for strict typed
+configuration. Pre-extract credentials into opaque wrappers. Reject duplicate,
+unknown, null and wrong-type settings. Configuration schema remains version 1.
+Use one loaded version field; no aliases or older-development schema readers.
 
-- `config.yaml`
-- `state/kupilot.db` and SQLite-owned sidecars
-- `cache/`
-- `logs/kupilot.log` and bounded rotations
+help, version and cache clear short-circuit before business storage, model,
+Kubernetes or TUI startup. An unconfigured Agent enters the one masked setup
+flow. Saving is explicit, atomic and limited to the disclosed Home file; never
+rewrite an external configuration. Reviewer setup is separate and optional.
 
-An explicit Session-summary export remains the sole user-selected write outside
-Home. `--config` and `KUPILOT_CONFIG_FILE` remain read-only configuration
-sources; interactive setup never modifies them and writes only the fixed Home
-`config.yaml`.
+Ordinary local diagnostics contain only bounded project-owned classes and
+content-free correlation. Explicit sensitive diagnostics are opt-in and have
+a visible warning, bounded fields and retention. They still exclude credentials,
+raw model traffic, Kubernetes objects and reasoning state.
 
-Kupilot creates a missing default or selected Home and its own missing
-directories with mode `0700`, and creates its own missing regular files with
-mode `0600`, on supported Unix platforms. It does not chmod or chown an existing
-user-selected Home, directory, or regular file merely to enforce an exact mode.
-Group or other permission bits may produce a bounded warning but do not by
-themselves block startup. Symlink traversal below the canonical Home,
-non-regular files, path replacement races, and actual read/write failures still
-fail the affected component safely. An unavailable log sink is disabled
-visibly; an unavailable cache is bypassed; unavailable durable state still
-blocks operations whose contracts require it.
-
-The version 1 YAML schema has no `paths` object or configurable credential
-source. It contains one required named `models.agent` profile and may contain
-one `models.approval_reviewer` profile. Each profile has a fixed
-`credential_ref` and may carry only its admitted optional plaintext `api_key`.
-Role-specific environment values take precedence over file values. An
-environment key is read once, copied into an opaque non-renderable wrapper, and
-removed from the process environment; it is never written back. A dedicated
-extraction boundary removes file keys before Viper sees configuration bytes.
-A key is not a normal Config, Domain, model-content, log, audit, error, SQLite,
-formatting, or generic serialization value.
-
-A bare `kupilot` starts the single-screen TUI even when endpoint, model, or key
-is absent. The UI reports `model not configured` and opens the fixed model-setup
-flow. The flow collects endpoint, model identifier, credential, and one of two
-explicit storage choices: `Save locally` or `Use for this run`. The former
-discloses that the key is plaintext and not encrypted, then atomically publishes
-the Home configuration with a `0600` mode for a newly created file. The latter
-keeps the key only in the current runtime. `/model` repeats this flow. Every
-step renders a code-authored field label immediately above the sole composer;
-the label remains visible after input replaces the placeholder. API-key input
-remains masked and the label never contains the key.
-
-Application owns model setup and replacement. A question cannot reserve or
-start a run until one model runtime is ready. Reconfiguration cancels and joins
-the active run, validates and constructs the replacement before swapping it,
-then closes the old runtime. A changed canonical origin invalidates the prior
-consent binding. At every point there is at most one active provider runtime;
-there is no provider discovery, fallback, routing, or simultaneous provider
-support. Model and Tool call counts remain zero until model configuration,
-verified scope, consent, and durable run start have all succeeded.
-
-`Ctrl+C` or `Esc` cancels any editable setup step without replacing the current
-runtime. While construction is in flight, the TUI sends one request-ID-bound
-cancellation to the delivery-owned operation Context and waits for its terminal
-result. Cancellation before the setup commit point closes a constructed
-replacement, destroys the transient credential, and keeps the prior runtime.
-If a successful durable profile save has already crossed the commit point, the
-origin and runtime swap completes so process and disk state do not diverge; the
-correlated success is reported instead of a false cancellation.
-
-The fixed `kupilot cache clear` command resolves Home and removes only directory
-entries beneath the canonical `cache` child. It does not initialize Viper,
-SQLite, logs, Kubernetes, the model, or the TUI. A missing cache is a successful
-no-op and is not created. The command never follows a cache symlink and never
-removes Home, configuration, state, or logs. It reports partial failure honestly
-and does not claim forensic deletion.
-
-## Consequences
-
-Local state becomes predictable and first startup becomes interactive. Users
-can choose convenient local permissions and plaintext credential persistence
-with an explicit disclosure. Wider existing permissions and plaintext keys may
-be exposed to other local principals, backups, snapshots, or filesystem tools;
-Kupilot warns but does not claim encryption, secrecy from the host, or forensic
-erasure.
-
-The Home resolver, sensitive extractor, atomic writer, runtime replacement, and
-cache cleaner require narrow interfaces and deterministic tests. No legacy
-locations, legacy schema fields, or old database copies are recognized.
-
-## Security and privacy impact
-
-The local configuration file becomes an admitted credential source and
-therefore a sensitive local asset. The value remains confined to the extractor,
-opaque wrapper, writer, and same-origin Authorization header. Synthetic canary
-tests must prove absence from ordinary Config values, Viper state, rendered UI,
-transcript and composer history, Application events, errors, logs, audits,
-SQLite, model content, and child environments. Atomic publication must reject
-symlinks and replacement races and must never overwrite an explicit external
-configuration source.
-
-Permission warnings identify exposure without making exact Unix mode a product
-availability gate. On platforms where the mode guarantee is unavailable,
-documentation must describe the limitation and tests must not claim otherwise.
-
-## Validation
-
-Deterministic tests must cover:
-
-1. Default and overridden Home resolution, canonicalization, fixed descendants,
-   invalid roots, missing creation, existing wider permissions, symlink denial
-   below Home, and cancellation.
-2. Version 1 named-profile strict decoding, rejection of retired pre-release
-   layouts, file and environment precedence, one-shot unsetting, plaintext
-   local extraction, serialization denial, atomic write failure, and distinct
-   sensitive canaries.
-3. Bare unconfigured startup, masked setup input, both save choices, `/model`,
-   persistent field labels, cancellation at every editable step, correlated
-   in-flight cancellation and commit races, invalid settings, construction
-   failure, active-run cancellation and join, single-runtime swap, origin
-   consent invalidation, and zero forbidden calls.
-4. `cache clear` success, absent cache, nested entries, root and cache symlinks,
-   path replacement, partial failure, short-circuit initialization counts, and
-   proof that configuration, state, logs, and Home remain intact.
-
-## Revisit triggers
-
-- Adding another provider, credential manager, encrypted store, remote config,
-  live reload, or simultaneous model runtime.
-- Adding another automatic write outside Home or another cache namespace.
-- Publishing a release whose data or configuration needs migration.
-
-## References
-
-- [Product Contract](../product.md)
-- [Architecture](../architecture.md)
-- [Security Threat Model](../security.md)
-- [Privacy Overview](../privacy-overview.md)
-- [Data Retention Contract](../data-retention.md)
-- [ADR-0010: Support One OpenAI-Compatible Model Origin](0010-support-one-openai-compatible-model-origin.md)
-- [ADR-0013: Layered Architecture and Consumer-Owned Ports](0013-layered-architecture-and-consumer-owned-ports.md)
-- [ADR-0023: Use a Single-Screen Agent-Supervision TUI](0023-use-a-single-screen-agent-supervision-tui.md)
-- [ADR-0026: Require Informed Consent Before Model Transfer](0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0033: Use Cobra for Fixed CLI Routing and Viper for Configuration](0033-use-cobra-for-cli-and-viper-for-configuration.md)
-- [ADR-0042: Remember the Last Verified Kubernetes Context](0042-remember-the-last-verified-kubernetes-context.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](0046-use-named-model-roles-and-optional-auto-review.md)
+## Consequences and validation
+Strict decoding avoids a general configuration framework and stale aliases.
+One Home simplifies ownership and deletion without claiming OS-level isolation.
+Test CLI zero-I/O short circuits, precedence, validation, secret extraction,
+atomic publication, symlinks, existing permissions, cancellation and setup
+teardown. See [Configuration](../configuration.md) and
+[Development](../development.md).

@@ -1,864 +1,191 @@
 # Kupilot Architecture
 
-## Native Eino ownership
+Kupilot v0.1.0 is local, single-process and single-user, with one active run and
+one verified Kubernetes Context. This document owns package boundaries and the
+execution path. [Product](product.md) and [Scope](scope.md) own capability
+admission; the [current ADRs](adr/README.md) record design rationale.
 
-[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
-current Eino ownership and protocol rules. Application directly composes
-Eino ADK; native message types remain private to Application. OpenAI profiles
-explicitly select `chat_completions` or `responses`; omission keeps the existing
-Chat Completions behavior. There is one Agent/Runner per run, no automatic
-protocol selection, retry, fallback, or additional conversation store.
+## Composition and dependency direction
 
-Status: Accepted architecture target for Kupilot `v0.1.0`.
-
-The checked-in implementation now includes the named-model, stable Eino ADK,
-role-scoped consent, safe Session-memory/summarization, deterministic
-permission routing, Application-owned run steering and queued follow-up,
-authoritative Session activity/deletion, invocation preflight, typed final
-outcomes, common ActionEnvelope/approval lifecycle, and related
-budget and status foundations. The broad read/observability catalog, existing
-typed Deployment restart, and default-off Pod Exec, container-file, and
-diagnostic-Pod handlers are composed. The shared Application dispatcher also
-composes typed scale, rollback, controller-owned Pod delete, cordon, uncordon,
-drain, exact local direct argv, the separate shell operation, and supervised
-remote diagnostics. This document does not claim live cluster or local-tool
-execution or release readiness.
-
-This document is normative for package ownership, dependency direction, scope
-and run isolation, capability dispatch, action approval, data ownership, and
-adapter contracts. The [Product Contract](product.md) and [Scope](scope.md)
-define the admitted behavior.
-
-## 1. Architectural invariants
-
-1. `internal/domain` contains only project-owned values, transitions, and
-   invariants. It performs no I/O and imports no delivery, persistence, Eino,
-   client-go, or database package.
-2. `internal/application` is the only use-case layer. It owns Session, run,
-   scope, cancellation, persistence intent, event acceptance, consent, status,
-   and action-approval orchestration.
-3. `cmd/kupilot` is the only composition root. It constructs concrete
-   dependencies explicitly and owns startup and shutdown order.
-4. `internal/cli` and `internal/tui` are delivery adapters. They use only typed
-   Application commands, queries, DTOs, and events. Bubble Tea `Update` and
-   `View` perform no business I/O.
-5. Application directly composes Eino ADK, native model components and the
-   bounded model transport. Native types remain private to Application; no
-   framework-neutral Agent facade sits between Application and Eino.
-6. `internal/tools` owns strict capability handlers and the narrow Kubernetes
-   ports each handler consumes. A handler does not receive a generic client,
-   REST request builder, GVR, selector, repository, or executor.
-7. `internal/kube` owns client-go and kubeconfig behavior. No client-go object,
-   `rest.Config`, credential, or raw response crosses its adapter boundary.
-8. `internal/persistence/sqlite` owns SQL and database handles. SQL rows,
-   transactions, sqlx values, and `db` tags remain inside that adapter.
-9. Every AgentRun has one immutable RunInput: run identity, verified
-   ClusterScope, working Namespace, namespace-access policy, scope and policy
-   generations, optional resource, role- and origin-bound consent snapshot,
-   capability catalog version, permission profile, and capability-aware budget
-   profile.
-10. Scope and applicable policy generations are checked before each external
-    capability call, after every return, when Application accepts the event,
-    and immediately before an execution attempt. Cancellation is not the sole
-    stale-work defense.
-11. Runtime, not prompt text, authorizes capabilities, arguments, Namespace
-    reach, budgets, Evidence, actions, approval, and execution.
-12. Only deterministic local capability handling creates Evidence. Model prose
-    and user text cannot create an observation or execution result.
-13. Every sensitive or effectful operation uses an immutable digest-bound
-    `ActionEnvelope`, deterministic risk and permission routing, fresh target
-    or executable revalidation, durable pre-operation audit, at most one
-    execution attempt, and distinct outcome and verification.
-14. Interfaces are consumer-owned, task-specific, and normally contain one to
-    three operations. No generic repository, event bus, Kubernetes gateway,
-    service locator, or speculative extension point is admitted.
-15. Stable Eino ADK `ChatModelAgent`, `Runner`, message state, and
-    summarization middleware are reused directly inside the one Eino boundary.
-    Kupilot owns policy and safe projections, not a parallel ReAct loop,
-    `MemoryManager`, summary engine, checkpoint store, or framework facade.
-16. The optional model Reviewer is never authority. Application's
-    deterministic policy remains the only source of capability, risk, scope,
-    approval, execution, and fail-closed decisions.
-17. Application is the only steering and follow-up queue owner. Eino v0.9.19
-    supplies the next-model-boundary state rewrite and model wrapper, but Eino
-    `TurnLoop`, another conversation loop, and another durable input store are
-    prohibited.
-18. Delivery owns only run-local terminal capabilities and interaction state.
-    Application owns Last active, deletion plans, preflight, terminal reasons,
-    coverage, recovery decisions, and all mutation or execution authority.
-
-## 2. System context
-
-```mermaid
-flowchart LR
-    User["Terminal user"]
-    Config["Kupilot Home configuration"]
-    Kubeconfig["Local kubeconfig"]
-
-    subgraph Host["User workstation"]
-        Kupilot["Kupilot local process"]
-        Database[("SQLite")]
-    end
-
-    Kubernetes["Selected Kubernetes API server"]
-    AgentModel["Configured Agent model origin"]
-    ReviewerModel["Optional Reviewer model origin"]
-    DataSources["Explicit optional data sources"]
-    LocalProcess["Policy-selected local process"]
-
-    User -->|"questions, scope, approval, cancellation"| Kupilot
-    Kupilot -->|"conversation, activity, status"| User
-    Config -->|"validated settings and local credential source"| Kupilot
-    Kubeconfig -->|"local Context and credential resolution"| Kupilot
-    Kupilot -->|"typed reads and approved writes"| Kubernetes
-    Kubernetes -->|"RBAC-constrained responses"| Kupilot
-    Kupilot -->|"consented projected bounded content"| AgentModel
-    AgentModel -->|"stream and structured capability choices"| Kupilot
-    Kupilot -.->|"minimal consented review envelope"| ReviewerModel
-    ReviewerModel -.->|"approve, deny, or escalate_to_user"| Kupilot
-    Kupilot -.->|"typed bounded query"| DataSources
-    Kupilot -.->|"fixed executable and argv"| LocalProcess
-    Kupilot -->|"sanitized history, Evidence, audit"| Database
-```
-
-Kupilot has no operated server, account, telemetry backend, listener, or remote
-control plane. "Local" describes orchestration and credential ownership, not
-where configured models or data sources run. Models have no direct Kubernetes,
-SQLite, filesystem, shell, approval, or executor connection. Dashed edges are
-optional, default-off capability boundaries, not implicit fallbacks.
-
-The TUI starts with one cleared full-height primary-terminal frame and keeps the
-composer anchored at the bottom. A delivery-only Bubble Tea runtime wrapper
-first removes each newly immutable terminal-safe history block from the live
-projection, shrinks and settles that frame, and then inserts history in batches
-no taller than the protected area above it. Each block owns exactly one inert
-trailing separator row. It acknowledges the block only after insertion. This
-prevents transient Tool, Working, answer, or layout spacer rows from being
-pushed into scrollback while keeping submitted history separate from Working
-and `Worked for` separate from the composer. A terminal without one protected
-insertion row keeps the block in the safe live and pending projection. Mouse
-reporting remains disabled, so native selection, copy, wheel, and trackpad
-scrolling belong to the terminal emulator. The retained bounded transcript
-supports keyboard review. This delivery projection is independent of SQLite
-Message commitment and explicit Session resume.
-
-During a regular active run, delivery routes ordinary `Enter` input to an
-Application pending-steer command and ordinary `Tab` input to its process-local
-FIFO queue only after modal, picker, completion, approval, Reviewer, IME,
-paste, selection, and composer editing have declined the event. `Alt+Up`
-requests one atomic LIFO edit only when the composer is empty. Delivery renders
-bounded Application projections; it neither owns the queue nor appends a user
-history row before a committed event.
-
-Shutdown may print a prepared block only before its first insertion batch. Once
-insertion has begun, renderer completion is ambiguous during interruption, so
-the runtime never replays the entire block and risks duplicating rows already
-owned by terminal scrollback.
-
-The composer publishes a real terminal cursor at the textarea insertion point;
-the placeholder remains separate rendered content. This gives operating-system
-input methods a stable candidate-window anchor without adding another editor.
-While a run is active, a TUI-only timer schedules animation frames for the
-`Working` row. Each frame carries the run ID, scope generation, sequence, and
-terminal snapshot and is discarded when stale. It changes no Application time,
-budget, progress, Evidence, scope, approval, or cancellation authority.
-
-## 3. Dependency direction
-
-```mermaid
-flowchart TB
-    Root["cmd/kupilot\ncomposition root"]
-    CLI["internal/cli\ndelivery"]
-    TUI["internal/tui\ndelivery"]
-    App["internal/application\nuse cases and ports"]
-    Domain["internal/domain\npure values"]
-    Agent["internal/agent\nrun contracts"]
-    Eino["Eino ADK and native model components"]
-    Tools["internal/tools\ntyped capabilities"]
-    Kube["internal/kube\nclient-go adapters"]
-    SQLite["internal/persistence/sqlite\nstorage adapters"]
-    Security["internal/security\nsafety primitives"]
-
-    Root --> CLI
-    Root --> TUI
-    Root --> App
-    App --> Eino
-    Root --> Tools
-    Root --> Kube
-    Root --> SQLite
-    Root --> Security
-    CLI --> App
-    TUI --> App
-    App --> Domain
-    App --> Agent
-    Agent --> Domain
-    Tools --> Agent
-    Tools --> Domain
-    Tools --> Security
-    Kube --> App
-    Kube --> Tools
-    Kube --> Domain
-    SQLite --> App
-    SQLite --> Domain
-```
-
-An adapter may import the consumer contract it implements. A consumer never
-imports the concrete adapter. In particular, TUI and CLI do not call model,
-Kubernetes, Tool, persistence, approval-service, or executor implementations.
-
-### Layer responsibilities
-
-<!-- markdownlint-disable MD013 -->
-
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| Domain | Values, enums, validation, transitions, stable safe classes | I/O, frameworks, clients, SQL, UI state |
-| Application | Session/run/scope use cases, Last active, deletion plans, policy generation, permission routing, preflight, terminal reasons, coverage/recovery, consent, event ordering, `/status`, persistence intent, approval coordination, native Eino composition | SQL, terminal rendering, Kubernetes projection |
-| Agent | Immutable run policy, model-role and capability contracts, Evidence-reference validation | A parallel ReAct loop, live scope mutation, client-go, SQLite, TUI state, executor calls |
-| Tools | Strict schemas, canonical arguments, projected results, Evidence construction | Generic Kubernetes access, repositories, TUI, approval authority |
-| Infrastructure | Kubeconfig and client lifecycle, typed Kubernetes calls, model/data-source/process transport, storage mappings | End-to-end product decisions or policy widening |
-| Delivery | CLI intent, Bubble Tea state, rendering, keyboard input, completed terminal transcript projection | Business I/O or authorization |
-| Composition | Concrete construction and lifecycle | Hidden globals, policy dispatch, service lookup |
-
-<!-- markdownlint-enable MD013 -->
-
-## 4. Question-to-answer flow
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant TUI
-    participant App as Application
-    participant Store as Persistence port
-    participant Agent as Application-owned Eino ADK
-    participant Model
-    participant Tool as Capability handler
-    participant Kube as Kubernetes adapter
-
-    User->>TUI: Submit natural-language question
-    TUI->>App: StartRun(Session, both expected generations, selected resource)
-    App->>App: Compare exact delivery projection with current authority
-    App->>App: Freeze scope, policy generations, permission, consent, catalog, budgets
-    App->>Store: Durably begin run
-    Store-->>App: committed
-    App-->>TUI: RunStarted
-    App->>Agent: Run(ctx, safe Session context, immutable RunInput, event sink)
-    Agent->>Model: ADK Runner with bounded messages and typed catalog
-    Model-->>Agent: Eino-decoded bounded content chunks
-    Agent->>Agent: passive answer-field decode and cross-chunk safety
-    Agent-->>App: ordered safe provisional Markdown deltas
-    App-->>TUI: bounded coalesced provisional answer
-    Model-->>Agent: structured capability call
-    Agent->>Agent: strict decode, canonicalize, reserve budget, pre-scope check
-    Agent->>Tool: Execute(BoundToolCall)
-    Tool->>Kube: typed bounded request
-    Kube-->>Tool: projected DTO or safe error
-    Tool-->>Agent: safe ToolResult and candidate Evidence
-    Agent->>Agent: post-scope check and Evidence acceptance
-    Agent-->>App: structural Tool and Evidence events
-    App->>App: run/generation/sequence/terminal check
-    App->>Store: persist eligible safe metadata
-    Agent->>Model: untrusted ToolResult envelope
-    Model-->>Agent: final answer envelope chunks
-    Agent-->>App: safe provisional answer deltas
-    Agent->>Agent: validate Markdown, citations, proposed actions
-    Agent-->>App: AnswerReady
-    App->>Store: final answer and terminal run transaction
-    App-->>TUI: replace draft with validated free-form Markdown
-```
-
-At a later Eino model boundary, the summary handler runs first. The steering
-handler then claims at most one current pending input and appends it to Eino
-message state. Its model wrapper calls the Application persistence and event
-commit barrier before delegating to real model I/O. A failed barrier performs
-zero model calls. A clean durably completed run may atomically claim and start
-one FIFO successor; every unsafe or unknown terminal outcome suppresses
-automatic drain.
-
-The model/Tool middle segment is owned by Eino ADK `ChatModelAgent` and `Runner`
-inside Application and repeats within frozen role and capability budgets.
-Application selects eligible ordered same-Session context and translates it
-once into native Eino messages. Kupilot does not run a parallel conversation or ReAct loop. Calls are
-serial unless a later Accepted decision defines an owned bounded coordinator.
-The provisional projector does not interpret response modality or create
-authority. A requested Tool clears text projected from that pre-Tool turn. No
-partial stream is promoted to a final assistant Message, Evidence, action,
-persistence record, log, audit event, export, or terminal scrollback entry.
-
-An accepted proposed action enters a separate permission and execution flow.
-Application proves the normalized action belongs to the frozen exact catalog,
-creates an `ActionEnvelope`, classifies risk, routes it under the frozen
-profile, obtains any human or Reviewer decision, revalidates, durably consumes
-authority and pre-audits, and only then calls an executor at most once. The
-Agent and Reviewer never receive the executor.
-
-If persistence fails before durable run start, model and Kubernetes call counts
-remain zero. A later read-side persistence failure may let the in-memory answer
-finish with visible degraded state; it is not claimed resumable. A pre-write
-storage or audit failure always produces zero executor calls.
-
-A question that cannot cross the durable-start barrier returns a bounded typed
-reason and safe current-state projection instead of a generic transport error.
-Application distinguishes unavailable Session, unverified or stale scope,
-stale ResourceRef, stale or invalid policy, active/starting run, another bounded
-operation, degraded or failed precommit persistence, missing model, missing
-consent, local input rejection, and an unknown fail-closed condition. Delivery
-restores the draft once and commits no transcript/history row. A returned active
-run repairs stale delivery state; a returned verified scope may update the
-delivery projection for a later explicit submit. The result itself performs no
-send, steer, queue, retarget, or retry.
-
-## 5. Scope and namespace-access isolation
-
-`ClusterScope` contains:
-
-| Field | Meaning |
+| Package | Ownership |
 | --- | --- |
-| Context | Verified kubeconfig Context name for the selected API server |
-| Working Namespace | Verified default Namespace and persistent UI context |
-| Namespace access | Frozen `current` or `all` policy |
-| Generation | Process-local monotonic stale-work epoch |
-| Activated at | UTC activation time |
+| cmd/kupilot | Sole composition root; explicit construction and startup/shutdown |
+| internal/domain | Pure project values, transitions and invariants; no I/O or vendor types |
+| internal/application | Sole use-case and execution authority; Session/run, generations, consent, queue, persistence barriers, Eino and action orchestration |
+| internal/agent | Concrete catalog, budgets, Evidence registry and answer-validation rules |
+| internal/cli, internal/tui | Typed Application commands/events and delivery projection; no business I/O in Update/View |
+| internal/tools | Strict handlers and exact consumer-owned capability ports |
+| internal/kube | client-go, kubeconfig, typed projections and exact execution ports |
+| internal/observability | Explicit bounded Prometheus/Loki adapters |
+| internal/executor | Policy-selected local process lifecycle and bounded output |
+| internal/approval, internal/audit, internal/session | Concrete lifecycle values and narrow services used by Application |
+| internal/persistence/sqlite | Explicit SQL, mappings, short transactions and the sole durable database |
+| internal/persistence/filesystem | Safe bounded export publication |
+| internal/platform, internal/security, internal/config | Host lifecycle, build identity, safe logging, filtering and strict configuration |
 
-The generation is an ephemeral authority epoch, not a Session, executable,
-database, schema, or migration version. Persisted generations are provenance
-only. After restart, an eligible historic scope is a candidate; equality with
-an independently verified current Context and Namespace permits reuse of the
-current epoch, never restoration of the historic one.
+Interfaces are consumer-owned and task-specific, usually one to three operations.
+Keep concrete project DTOs across boundaries. No generic repository, event bus,
+service locator, framework-neutral Agent facade or second memory framework exists.
+Eino/provider types stay in Application; client-go types stay in Kubernetes;
+sqlx/SQL/rows/transactions stay in SQLite. Credentials remain opaque or confined
+to the adapter that needs them.
 
-The Context and working Namespace remain immutable for a run. `all` does not
-replace ClusterScope with a global mutable scope; it authorizes an explicit
-per-call namespaced target in the same Context. Canonical arguments record the
-actual Namespace or the explicit all-Namespace marker. `current` rejects any
-other target before Kubernetes I/O.
+## Core call path
 
-Cluster-scoped Namespace, Node, and PersistentVolume resources have an empty
-resource Namespace by definition. Evidence separately retains the run's
-ClusterScope and the exact ResourceRef, so no fake namespaced provenance is
-created.
-
-A Context, working-Namespace, or namespace-policy change follows this order:
-
-1. validate the expected generation and candidate;
-2. increment generation and mark scope unavailable or activating;
-3. cancel and join the active run;
-4. clear selected resource, completion caches, and approval state;
-5. dispose or rebuild the client as required;
-6. verify and publish the new scope, or remain unavailable at the new
-   generation.
-
-Every run-scoped external call must pass:
-
-1. a complete scope and generation check before reservation and I/O;
-2. the same check after every success, partial, and error return; and
-3. Application's run ID, generation, monotonic sequence, and terminal-state
-   event acceptance check.
-
-Permission profile, capability policy, Session rule, relevant data-source
-policy, or model-origin policy changes use a separate process-local
-`policy_generation`. The change invalidates pending Reviewer decisions,
-approvals, Session rules, and ActionEnvelopes before cancelling old work. Any
-operation affected by both dimensions must pass both generations at all gates.
-
-## 6. Capability catalog and external boundaries
-
-The catalog is code-owned and versioned per run. It may evolve across releases
-but never through runtime registration, model discovery, or a generic API or
-process handle. The `v0.1.0` P0 categories are defined in [Scope](scope.md):
-typed built-in and exact policy-admitted CRD reads and bounded queries, Events,
-all bounded log modes and local search, Pod/Node metrics, explicit optional
-Prometheus/Loki sources, container-file read, Pod diagnostics, diagnostic Pods,
-typed remediation, restricted direct local argv, and a separate shell class.
-
-A model-visible schema may contain an explicit Namespace or operation parameter
-where the capability needs one. It never contains Context, access policy,
-kubeconfig, endpoint, credential, arbitrary API type or GVR, raw selector,
-executable, image, network destination, YAML, deadline, or hard ceiling. The
-separate default-off shell schema is the only capability that may carry one
-exact bounded command string as a typed proposal field. Runtime injects
-authority into a bound capability or immutable `ActionEnvelope` only after
-strict decoding and canonicalization. The current model proposal is narrower:
-it selects only a configured local policy ID, including for shell.
-
-Built-in and exact CRD mappings remain narrow task-specific Kubernetes ports.
-A policy-admitted CRD entry names exact group, version, resource, Kind, scope,
-verbs, projected fields, limits, and Evidence mapping; discovery cannot expand
-it. No client-go object, dynamic client, REST client, request builder, Watch, or
-informer crosses the Kubernetes adapter boundary.
-
-List and query handlers use safe server-side filtering where supported, while
-runtime owns continuation tokens and bounded pagination. Per-page and aggregate
-page, item, byte, and time limits are independent, and incomplete results carry
-explicit partial or truncation state. Safe Secret metadata and separately
-reviewed exact ConfigMap-key or non-credential environment values use distinct
-projected categories; Secret values and generic or bulk values remain denied.
-
-Optional data sources and local processes have their own consumer-owned ports.
-They do not reuse a generic network or command interface, select each other as
-fallbacks, or bypass the normal data pipeline:
-
-1. source and operation allowlist;
-2. scope and policy authorization;
-3. project-owned projection;
-4. text normalization and terminal-control removal;
-5. sensitive-value block or typed redaction;
-6. item and byte limits;
-7. neutral serialization;
-8. final role-, category-, and origin-bound consent check.
-
-Credential values, Secret values, ServiceAccount tokens, kubeconfig, raw
-objects, raw external output, and unlisted APIs never become generic Tool,
-model, history, log, audit, or SQLite content. Redaction never turns an unlisted
-source into an allowed source.
-
-The remote-diagnostic boundary uses four narrow consumer-owned ports: exact Pod
-or Service resolution, Application-owned pre-consumption target revalidation,
-one no-shell Pod command, and one fixed diagnostic-Pod lifecycle. Client-go
-remotecommand, SPDY upgrade streams, Pod objects, log
-streams, and create/delete transports remain inside `internal/kube`. Pod Exec
-uses one redirect-denying SPDY attempt with no WebSocket or kubectl fallback.
-Across the boundary, stdout/stderr are opaque project-owned ordered chunks and
-only a content-free result summary is audit eligible. Each ActionEnvelope binds
-an exact digest of the live Pod/container or Service DNS/port destination. The
-client bundle owns stream cancellation and join during scope replacement or
-shutdown. It cancels remote owners first, keeps the typed transport available
-for their bounded exact cleanup, joins them, and only then closes transport.
-
-Container-file reads reuse the exact Pod command port with a fixed USTAR argv,
-reserve framing inside the immutable transport-byte limit, and locally validate
-ordered parent/file headers; diagnostic Pods use a policy-
-fixed Namespace, Service, port, pinned image and argv plus a runtime-built
-restricted Pod spec with Service links disabled. The create response and every
-wait projection must preserve that exact spec before output is accepted. Their
-create, wait, log, delete, and cleanup states are persisted as one atomic five-
-event outcome set. A definite API rejection performs no cleanup delete; an
-ambiguous create cleans only the invocation-bound identity. Sensitive root
-mounts and volume devices, duplicate volume identities, unknown mount/device
-references, ExternalName or selectorless Services, and obvious metadata/link-
-local/address-confusion targets fail closed. A NetworkPolicy-required flag is
-an operator assertion and never substitutes for evidence of CNI enforcement.
-Scope, policy, and category consent are checked again after projection and
-durable outcome audit before prepared output is accepted.
-
-The local-process boundary uses an Application-owned intent/preparation port
-and one adapter in `internal/executor`; only that adapter imports production
-`os/exec` outside the distinct kubeconfig credential-plugin exception. Runtime
-resolves the model-selected policy ID to an absolute executable, exact
-structurally classified argv or separate shell string, cwd, ordered minimal
-environment, credential-reference identity, origin/effects, and finite limits.
-The adapter rechecks non-symlink executable content and cwd identities before
-one start, rejects script executables, supplies no stdin or TTY, owns a process
-group and bounded cancellation/drain/join, and projects combined ordered output
-through terminal, Unicode, sensitive, line, and byte controls. It deliberately
-provides no OS filesystem or network sandbox; the approval UI says so.
-
-## 7. Runtime budgets, permissions, and status
-
-The current RunInput contains immutable Agent and Agent-summary limits, while
-the optional Reviewer has a separate role budget owned by Application.
-Reservations are atomic and occur before model I/O, and child deadlines are no
-later than the owning operation or run. Each Run freezes a finite
-`LocalProcessCalls` ceiling; Application atomically reserves one opportunity
-before Namespace or filesystem preparation, and the current profiles admit at
-most one local-process proposal per Run. Local-process policies additionally
-supply finite per-operation time, line, byte, and output ceilings; typed
-remediation supplies finite operation time and target-count ceilings. Remote
-diagnostics intersect exact per-policy timeout/line/byte ceilings with the
-immutable Tool request, log, result, aggregate, call, and run deadlines.
-
-All budgets remain finite. Exact context windows, input/output tokens, request
-and stream limits, summary thresholds, latency, concurrency, and cost ceilings
-require evidence for the exact pinned Eino core, selected OpenAI component and endpoint. Values from another endpoint are
-not universal limits.
-Absent exact token evidence, conservative byte, call, time, and cost ceilings
-still fail closed.
-
-The current `/status` combines an Application-owned read-only query over bounded
-safe state with TUI display data. It includes Session memory/coverage, named
-model roles and origin hashes, consent, scope generation, capability catalog,
-Agent/summary/Reviewer budgets, remote-diagnostic policy version/counts, local-
-execution policy version/counts, run state, and storage health. Application also
-provides content-free local permission-policy, Session-rule, and active-action
-status queries. These queries perform no model, Kubernetes, Tool, Reviewer,
-process, or executor I/O and expose no credentials or content. The
-`/permissions` management interaction uses a fixed local picker and typed
-Application command; it advances policy generation and invalidates dependent
-work before cancellation. The one conversation renders bounded approval,
-Reviewer, attempt, ambiguity, and verification state for composed actions.
-
-## 8. Free-form answer and Evidence model
-
-The strict response schema 1 envelope contains bounded
-`response_schema_version`, `outcome`, `answer_markdown`,
-`evidence_citations`, `proposed_actions`, `limitations`, and
-`questions` fields. `outcome` is exactly `answer` or `needs_user_input`.
-
-Eligible historic assistant answers are translated into this complete current
-envelope before Eino receives them. Historic citations and actions are empty
-and the prompt marks the representation as context-only, so grammar continuity
-does not restore authority. A profile may explicitly select the standard
-provider JSON-object response constraint. The selected pinned Eino component
-serializes that setting for structured Agent or Reviewer output; Agent summaries
-remain plain text. Prompt-only mode remains available, and neither mode permits
-capability probing, fallback, or a second request.
-
-The model boundary directly constructs the selected native Eino OpenAI
-component: Chat Completions or Responses. Application freezes the protocol,
-role, origin, settings and budgets. The guarded transport enforces origin,
-media, credential, byte and redirect limits. Eino owns request serialization
-and Tool-message pairing. No native-provider request repair or synthesized
-Tool identity remains. See [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
-
-- Markdown is the visible answer and receives no mandatory local headings.
-- An Evidence citation binds a bounded claim to one or more accepted current-run
-  Evidence IDs.
-- A proposed action contains only a code-defined operation name and its strict
-  safe proposal fields. It has no approval or executor authority.
-
-For new strict responses, runtime rejects missing, unknown, duplicate,
-cross-run, cross-generation, stale, internally hash-inconsistent, or
-unauthorized claim/Evidence coverage before successful commit. Retained legacy
-records may still carry their bounded validation warnings. This validation does
-not claim semantic proof of arbitrary prose. Claim hashes are derived locally
-after normalization. The Evidence registry remains the source of accepted
-observations and observation time windows.
-
-The prompt places `answer_markdown` first. The Eino boundary may pass its
-already decoded content chunks through an authority-free incremental JSON
-string projector. Exact model-credential checks, cross-chunk sensitive-value
-recognition, terminal normalization, byte and event ceilings, and current-scope
-checks happen before each provisional event. Application provides immediate
-first output plus bounded byte- and time-based coalescing. The TUI
-renders that draft in the active Agent entry and replaces it with the validated
-terminal answer.
-
-`Diagnosis` remains the durable name for the validated terminal result to avoid
-an unnecessary migration of every storage concept. Its current semantic core is
-the answer or typed clarification, completeness and source-coverage manifest,
-Evidence citations, proposed actions, stop reason, limitations, scope,
-observation window, and creation time. Legacy four-collection rows may be read
-for compatibility but are not required or rendered for new answers.
-
-## 9. Permission, ActionEnvelope, and execution boundary
-
-A model or Reviewer cannot call a Kubernetes, data-source, remote-exec, or
-local-process executor. A proposed sensitive or effectful operation crosses
-into Application as strict typed input. Application canonicalizes one immutable
-`ActionEnvelope` containing operation and policy versions, risk and profile,
-Session/run/request identity, exact scope and both generations, target identity
-and fingerprints, typed parameters or fixed executable plus argv,
-stdin/TTY/shell flags, data/sink/network effects, hard limits, expiry, and a
-verification plan.
-
-Restricted argv binds only policy-owned executable and argv values. The
-separate default-off shell operation may bind one exact bounded command string
-as a typed parameter; it is never accepted through an argv fallback.
-
-Application then performs this fixed sequence:
-
-1. strict catalog/schema validation and canonicalization;
-2. deterministic capability policy and hard-deny checks;
-3. permission-profile routing;
-4. fresh target/RBAC or executable-policy validation;
-5. exact human approval, permitted Reviewer decision, or matching human
-   Session rule;
-6. nonce, digest, time, profile, policy, scope, generation, and target recheck;
-7. atomic single-use consumption and durable pre-operation audit;
-8. final scope and policy-generation check;
-9. at most one external execution attempt;
-10. accepted, failed, or ambiguous/unknown outcome classification; and
-11. separate bounded verification and post-operation audit.
-
-The checked-in foundation implements the closed project-owned action types,
-canonical digest, all five deterministic permission profiles, process-local
-Session-rule creation/list/revocation APIs, strict Reviewer routing, durable
-decision and single-use consumption, final generation checks, and content-free
-status. The composition root enables restart and the six additional typed
-remediation operations, plus exact local direct argv and the separate shell,
-through one dispatcher. Remote diagnostics, Pod logs, and optional
-Prometheus/Loki reads retain operation-specific catalog/privacy gates while
-using the same Application-owned supervision lifecycle. Each path requires a
-fresh exact target plan, routes human/Reviewer/automatic decisions, consumes
-authority only with durable pre-operation audit, and reaches only its matching
-narrow port. The Tool call stays blocked until exact authority is durably
-consumed or safely closed. Merely naming or configuring any operation does not
-grant RBAC, process authority, source access, or approval.
-
-`ask` is the default permission profile. Reviewer delegation applies only to
-`review`; `critical` remains human-routed under `ask` and `auto-review`.
-`full-access` and exact custom critical-auto rules may omit a per-action prompt
-only after explicit high-risk selection and never bypass capability enablement,
-RBAC, scope, consent, audit, revalidation, or `deny`.
-
-Expiry, cancellation, replay, restart, generation change, target change,
-conflict, audit failure, or ambiguous prior outcome fails closed and never
-causes an automatic execution retry. API acceptance, progress, unknown outcome,
-and verified completion are distinct events for every operation.
-
-A composite drain remains one envelope execution. Its fixed ordered target set
-cannot change after review, every pre-bound mutation has at most one attempt
-and its own durable outcome, and any retry requires a fresh envelope.
-
-## 10. Core data ownership
-
-<!-- markdownlint-disable MD013 -->
-
-| Value | Essential safe data | Authority rule |
-| --- | --- | --- |
-| Session | ID, title, privacy mode, created/updated metadata, authoritative Last active, optional saved scope/resource candidates | History only; resume restores no live authority |
-| ClusterScope | Context, working Namespace, access policy, generation, activation time | Application-owned immutable run authority |
-| ResourceRef | API version, Kind, actual Namespace when namespaced, name, optional UID/version | Identity only, never an object body |
-| AgentRun | IDs, frozen scope/policy/profile, counters, status, times, safe reason | One Application-owned terminal transition |
-| ModelProfile | Name, fixed consumer role, non-secret settings, canonical origin hash, limits | Explicit composition only; no fallback or router |
-| SessionContext | Eligible committed message IDs, safe summary and coverage, recent tail | Context only; never restores operational authority |
-| ConversationInput | Item/request ID, Session/run binding, scope and policy generations, safe text hash, creation time, revision, lifecycle | Application-owned process-local draft; only `committed` becomes a Message |
-| ToolInvocation | versioned name, canonical safe arguments, injected scope, status, summary, limits | Model syntax alone is not authorization |
-| ToolResult | ephemeral typed data, Evidence, warnings, truncation, safe error | Never persisted as a generic result body |
-| Evidence | IDs, run/invocation, exact ResourceRef, run scope, fact, source, time, safety metadata | Created only by deterministic local handling |
-| Diagnosis | Markdown or clarification, citations, completeness manifest, stop reason and code-owned basis, source coverage, proposed actions, warnings, observed window | Model draft becomes valid only after local checks |
-| PermissionPolicy | Profile, risk routing, policy generation, current-process Session rules | Deterministic Application authority; Reviewer cannot widen it |
-| ActionEnvelope | Versioned operation, exact scope/target/parameters/effects/limits/verification and digest | Immutable review and execution identity; no generic payload |
-| Approval | envelope digest, actor, state, expiry, nonce hash | Local single-use authority; model, Reviewer, and TUI cannot mint it |
-| AuditEvent | typed safe metadata and correlation | Not an arbitrary log or tamper-resistance claim |
-
-<!-- markdownlint-enable MD013 -->
-
-## 11. Consumer-owned ports and concurrency
-
-Representative contracts are:
-
-```text
-EinoRuntime.Run(ctx, immutable RunInput with safe Session context, RunEventSink)
-    -> validated Diagnosis or classified terminal error
-
-RunInputBridge.Claim/Commit(ctx, exact run and generation)
-    -> one bounded steer claim or no input
-
-Tool.Execute(ctx, BoundToolCall)
-    -> safe ToolResult
-
-ResourceReader.<task>(ctx, typed request)
-    -> projected DTO or classified error
-
-StatusQuery.CurrentStatus()
-    -> bounded in-memory UIStatusResult
-
-ApprovalCoordinator.Decide(ctx, typed decision)
-    -> typed approval/execution state
-
-PermissionQuery.CurrentPolicy()
-    -> bounded in-memory permission state
-
-SessionManager.List/PreviewDeletion/CommitDeletion(ctx, concrete request)
-    -> bounded metadata, frozen digest plan, or committed counts
-
-RunPreflight.Check(ctx, exact invocation facts)
-    -> content-free projection or zero-call denial
+```mermaid
+flowchart TD
+    CLI["CLI / TUI"] --> App["Application: sole authority"]
+    Root["cmd/kupilot: composition and lifecycle"] --> App
+    App --> Gate["scope, policy, consent, storage and budget preflight"]
+    Gate --> History["eligible Messages + summary + current question"]
+    History --> Eino["one native Eino Agent / Runner"]
+    Eino --> Bind["strict fixed Tool binding"]
+    Bind --> Tools["typed handlers"]
+    Tools --> Kube["Kubernetes / optional source adapters"]
+    Tools --> Action["Application ActionEnvelope gate"]
+    Action --> Audit["atomic consume + durable pre-operation audit"]
+    Audit --> Execute["one exact external attempt + separate verification"]
+    Kube --> Evidence["accepted run-owned Evidence"]
+    Execute --> Evidence
+    Evidence --> Eino
+    Eino --> Final["strict final validation"]
+    Final --> Store["SQLite persistence barrier"]
+    Store --> Events["correlated Application events"]
+    Events --> CLI
 ```
 
-No contract returns `any`, `map[string]any`, client-go objects, Eino values,
-Bubble Tea messages, SQL rows, DB handles, raw errors, or credentials.
+The graph describes authority, not a second orchestration loop. Eino owns native
+message state, Tool pairing, ReAct iteration and events. Application owns every
+admission, acceptance and commit decision.
 
-Application owns the sole run goroutine, cancellation function, and join path.
-The Eino boundary owns model stream and HTTP response-body closure. The
-producer or sole coordinator owns channel closure. Every goroutine has one
-owner, cancellation path, and bounded termination path. Tests use barriers,
-fake clocks, and channels rather than long sleeps.
+## Startup, Session and scope
 
-The Eino boundary directly composes stable ADK `ChatModelAgent` and `Runner`,
-which own in-run message state, Tool-message pairing, ReAct iteration, and
-events. Commentary that precedes or accompanies an indexed Tool selection is
-discarded only when the same response terminates with `tool_calls`; only
-complete calls that pass the project-owned strict binder can reach runtime
-dispatch. Valid `stop` text becomes a Diagnosis draft, while `length` becomes a
-local budget stop. Tool calls completed with either finish reason remain
-invalid. Kupilot does not add a second conversation loop, memory manager,
-summary engine, or framework-neutral runtime facade.
+help, version and cache clear exit before business initialization. Normal startup
+loads strict version-1 configuration and opaque role credentials, resolves one
+Home and constructs exact adapters.
 
-The run-local input bridge is not a framework-neutral Agent facade. It is the
-narrow consumer port required by the Application-owned Eino composition to claim one steer and
-run the Application commit barrier. Application's single queue mutex owns FIFO
-drain, LIFO edit, revisions, invalidation, and the edit-versus-drain race.
+Bare startup creates a new Session without querying history. Explicit resume
+loads only eligible local safe history and unverified scope/resource candidates;
+it performs zero model, Kubernetes, Tool, Reviewer or executor I/O. Verify a
+candidate independently before an operational question.
 
-The passive provisional projector does not alter that ownership. It does not
-decode SSE, assemble Eino messages or Tool arguments, or decide a finish reason.
-If a response later resolves to `tool_calls`, the first requested Tool event
-clears any final-envelope-shaped prose projected from that turn. Failure,
-cancellation, timeout, and stale scope replace visible provisional text with a
-safe terminal state.
+A run freezes Session/run identity, complete scope and namespace-access policy,
+scope and policy generations, permission profile, role/origin/category consent,
+catalog, mode and finite budgets. Context/Namespace changes advance scope
+generation first. Permission/catalog/rule/origin-policy changes advance policy
+generation and invalidate dependent authority first. Then cancel and join old
+work, clear resources and action state, and dispose/rebuild affected clients.
 
-## 12. Persistence and retention
+Check generations before I/O, after return, at Application event acceptance and
+before execution. Cancellation alone cannot reject a late result.
 
-SQLite stores only the explicit safe fields admitted by the Data Retention
-Contract. It never stores kubeconfig, credentials, raw Kubernetes objects, raw
-Events or logs, full prompts, raw model traffic, raw ToolResult bodies, vendor
-errors, framework objects, or generic payload maps.
+## History, invocation and native model state
 
-Standard persistence may retain committed user and final assistant Messages,
-the validated Diagnosis, safe invocation metadata, Evidence, model-request
-metadata, a bounded safe summary and coverage metadata, audit, and action
-records for their specified periods. Minimal mode keeps model context only in
-the current process and retains only mandatory lifecycle and action-audit
-metadata.
+Application selects one ordered bounded representation of all retained eligible
+prior turns. Translate it once and include the current question exactly once.
+Coverage, consent, generation, storage or budget failure causes zero model calls;
+there is no current-question-only fallback.
 
-A completed run group contains one initial user Message, zero or more
-committed steer user Messages in commit order, and one final assistant Message.
-The existing `messages` table remains the sole durable conversation source.
-Pending, committing, queued, rejected, and recovered items are not persisted,
-resumed, summarized, retained, or exported as drafts. Unknown lifecycle
-metadata is process-local; its already committed Message follows ordinary
-retention and export, while the incomplete or failed run group is excluded from
-model replay.
+Standard mode uses the safe SQLite Messages and summary. Minimal mode keeps model
+context only in process. Eino summarization middleware uses the agent profile
+with an independently reserved, non-streaming, Tool-free, one-attempt budget.
+Summary coverage binds exact ordered Message identities and a digest; the tail
+remains eligible Message rows. Required compaction failure preserves committed
+state and sends no oversized or silently truncated request.
 
-For every AgentRun after the first question in a Session, Application supplies
-Eino with exactly one ordered, bounded representation of all retained eligible
-prior same-Session messages. On the current stable dependency line, existing
-SQLite Messages are the only durable source and the adapter bridge performs only
-selection, ordering, coverage, and DTO translation. Eino summarization
-middleware reuses the `agent` profile with an independent reserved budget.
-Runner-managed Session support may replace the bridge only after a stable,
-non-prerelease tag passes ADR-0047's storage, authority, consent, retention, and
-test gate.
+OpenAI Chat Completions streams. Native Responses uses Generate because the pinned
+stable component loses encrypted reasoning during streaming. Reviewer and summary
+calls are non-streaming and Tool-free. Preserve explicit reasoning and sampling.
+Disable SDK retries, response storage, automatic response caching and truncation.
+Reasoning items stay bounded, current-run-only and same-origin; they never enter
+TUI, logs, SQLite, exports or resumed history.
 
-Resume restores safe history and unverified candidates but performs no model,
-Kubernetes, Tool, Reviewer, approval, process, or executor I/O. The next
-explicit question transmits the required eligible representation only after
-current consent, scope, policy, coverage, and budget checks. A failed gate
-causes zero model calls rather than a current-question-only fallback. History
-never restores a running Agent, stream, client, generation, Evidence authority,
-permission rule, Reviewer decision, approval, ActionEnvelope, or execution
-state.
+The narrow HTTP guard enforces canonical origin, credential isolation, request/
+response bounds, deadlines and closure. It does not rewrite Tool schemas or repair
+generated arguments. ToolInfo is constructed through Eino's public schema API.
 
-A new Session receives the configured default Context and Namespace only as a
-candidate and activates it through the normal independent verification path.
-A resumed historic scope is likewise only a candidate. If the same scope was
-already independently verified in the current process, Application may use
-that current authority; unavailable or conflicting candidates enter the
-picker without silent fallback.
+## Tool execution and Evidence
 
-The initial schema includes `last_activity_at_ms`, advanced monotonically only
-by admitted lifecycle writes. Read-only operations do not change it. Diagnosis
-contains bounded completeness and clarification metadata. There is one initial
-migration and no historical development table-rebuild path; incompatible local
-state fails closed until explicitly backed up and reset.
+Strict binding rejects unknown, malformed, authority-bearing and sensitive Tool
+arguments before handler I/O. The model cannot choose Context, generation, GVR,
+continuation token, executable, destination or limits. Policy owns exact sources
+and selectors. Lists enforce separate per-page and aggregate ceilings.
 
-## 13. Security and conformance requirements
+Adapters allowlist sources, project reviewed fields, normalize and filter sensitive
+values, bound output and serialize neutrally before category/sink consent permits
+transfer. Deterministic handling creates Evidence bound to invocation, run, scope,
+policy and observation time. Application accepts it only while those identities
+remain current. Historic references never become live Evidence authority.
 
-Required deterministic checks include:
+Final validation checks the strict response envelope, safe Markdown, accepted
+Evidence references, typed clarification, limitations and unexecuted proposals.
+Runtime derives hashes/order/coverage and terminal reasons. Model output cannot
+mint success, approval or execution. A valid draft is projected only through the
+appropriate persistence and event-acceptance barriers.
 
-1. static import and composition-root boundaries;
-2. strict schema, duplicate/unknown/wrong-type/oversize rejection;
-3. exact Kubernetes verbs, resources, API groups, Namespaces, subresources,
-   limits, projections, and optional data-source or process requests for every
-   admitted source;
-4. zero external calls for credentials, Secret values, unknown API or CRD,
-   policy-disallowed Namespace, stale scope or policy, malformed call,
-   exhausted budget, missing consent, and unapproved action paths;
-5. pre-, post-, and event-acceptance generation races;
-6. free-form Markdown, citation, action-proposal, terminal-control, sensitive
-   output, persistence, and historic compatibility cases, including fragmented
-   provisional answers, cancellation, timeout, stale scope, event ceilings,
-   Tool-turn clearing, and final replacement;
-7. role- and capability-aware profile and hard-ceiling tests with fake clocks;
-8. permission-profile and risk routing, Reviewer failure, Session-rule,
-   approval mismatch, expiry, replay, target-change, pre-audit failure,
-   ambiguous outcome, and verification-state tests;
-9. dark, light, ANSI-16, and `NO_COLOR` TUI goldens, real-cursor Unicode input,
-   correlated Working-frame rejection, primary-screen history insertion and
-   live-frame cleanup, disabled mouse reporting, one-editor, and local
-   `/status` zero-I/O checks;
-10. temporary-file SQLite migration, summary coverage, explicit resume,
-    retention, deletion, export, and degraded-storage tests;
-11. atomic queue cancel/clear races, committed-only copy/search, content-free
-    title teardown, and exact context-pressure tests; and
-12. same-Agent plan-only restrictions, manual use of the existing Eino
-    summarizer, strict claim/Evidence coverage, deterministic offline quality
-    scoring, and proof that unsupported stream continuation adds no retry or
-    checkpoint path;
-13. authoritative Last active and exact/digest-bound deletion ordering,
-    protection, stale snapshot, rollback, cascade, and zero-call cases; and
-14. terminal reason/preflight/budget projections, clarification, source
-    coverage/freshness/conflict, safe-read reuse, endpoint/injection fixtures,
-    accessibility, doctor, and unified recovery behavior.
+## Sensitive operations and action authority
 
-## 14. Bounded planning, Session control, and local observability
+Every sensitive or effectful operation first becomes an immutable digest-bound
+ActionEnvelope. Application applies strict schema/canonicalization, hard policy,
+deterministic risk/profile routing, fresh target/RBAC or executable validation,
+exact decision, nonce/digest/time/policy/scope recheck, atomic consumption with
+durable pre-operation audit, final generation check, at most one attempt, outcome
+and separate verification/post-audit.
 
-Application owns the one-shot plan arm, queue revision mutations, manual
-compaction intent, and pressure projection. Delivery owns only the single-
-composer search interaction, explicit clipboard gesture, and rendering of
-fixed title states. `internal/application` invokes the same Eino
-summarization middleware for automatic and manual compaction and freezes plan
-mode into the existing `RunInput`. It remains the only Eino/provider boundary.
+Reviewer recommendations and TUI decisions do not independently authorize an
+executor. Pre-operation storage failure means zero attempts. Conflict, timeout,
+cancellation, restart or unknown outcome never causes automatic execution retry.
+Composite drain binds a fixed complete target plan, with one attempt and durable
+outcome per pre-bound mutation.
 
-The claim manifest is a concrete Domain value bound to the accepting Run,
-scope snapshot, and policy generation. SQLite retains it with a completed
-Diagnosis in standard mode; historic replay strips Evidence authority. No
-queue, search, clipboard, notification, compaction, plan-arm, or response-
-handle state is durable.
+The approval service retains only live process-local authority. Terminal values
+return to Application for persistence and presentation, then leave that map.
+Durable identity and atomic consumption prevent replay; terminal records are not
+kept as an unbounded in-memory archive.
 
-The same Application boundary owns bounded Session metadata queries and exact
-deletion plans. SQLite orders discovery by
-`last_activity_at_ms DESC, session_id DESC`; inactive selection uses strict
-`< cutoff` and oldest-first order. Current, active, consuming, future, corrupt,
-or otherwise unproved Sessions are protected. A content-free schema-1 digest
-binds cutoff, ordered IDs and activities, count, Session versions, and database
-schema revision; the adapter reselects the snapshot in the deletion transaction.
+## Queue, cancellation and delivery
 
-Before each actual endpoint entry, a run-local bridge verifies the exact
-Session/Run, initial input and steer sequence, generations, profile/origin,
-consent, context coverage, Tool catalog, storage health, budget, sink, run mode,
-and recovery state. Its content-free event precedes model I/O. Strict response
-schema 1 then produces either a bounded answer manifest or typed clarification.
-The Agent declares claim text, type, and exact Evidence IDs. Runtime derives
-sequence, structural coverage, and the normalized claim hash before binding the
-durable manifest.
-Application derives the terminal reason and safe next actions from accepted
-lifecycle state, so model prose cannot promote denied, partial, conflicting,
-unknown, or degraded work to completed.
+Application owns one process-local queue and mutex for FIFO drain, LIFO edit,
+revisions and invalidation. Active Enter claims a steer at a native model boundary;
+the persistence barrier must commit it before it becomes model input. Active Tab
+queues a successor. Pending/failed/unknown inputs never silently resend.
 
-Delivery keeps terminal capability detection, search queries and matches,
-semantic selection, undo/redo, notification dedupe, and doctor rendering
-run-local. It never queries the clipboard or terminal, launches a helper
-process, or persists those states. Claims and Evidence navigate through exact
-accepted IDs; provenance reports only counts, times, generations, coverage,
-freshness/conflict, and checked/not-checked source state.
+One completed run group contains an initial user Message, committed steers in
+order and a final assistant Message. Queue drafts, plan arms, search, selection,
+clipboard state and response handles are not durable.
 
-## 15. Decision references
+The run owner controls cancellation and bounded join. Stream/body/process owners
+close their resources; the producer or its sole coordinator closes channels.
+Late events cannot mutate a terminal run. Async TUI messages validate request/run,
+generations, sequence and terminal state. Optional presentation failures preserve
+the business outcome and add no external retry.
 
-- [ADR-0012: Require Digest-Bound Approval for Writes](adr/0012-require-digest-bound-write-approval.md)
-- [ADR-0013: Use Layered Boundaries and Consumer-Owned Ports](adr/0013-layered-architecture-and-consumer-owned-ports.md)
-- [ADR-0014: Isolate Runs with ClusterScope Generation](adr/0014-cluster-scope-generation-isolation.md)
-- [ADR-0017: Do Not Persist Full Prompts or Raw Outputs](adr/0017-do-not-persist-full-prompts-or-raw-outputs.md)
-- [ADR-0020: Contain Kubeconfig Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
-- [ADR-0026: Require Informed Consent Before Model Transfer](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0031: Require Explicit CLI Session Resume](adr/0031-require-explicit-cli-session-resume.md)
-- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
-- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
-- [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)
-- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
-- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+The TUI has one borderless one-to-eight-row composer. Search, pickers, provenance,
+approval and status remain bounded inline supervision. Rendering normalizes
+Unicode and strips unsafe terminal controls; no meaning relies on color alone.
+Terminal scrollback is an external retention surface.
 
-## Deterministic response metadata and failure diagnostics
+## Persistence, deletion and verification
 
-Response schema 1 removes model-supplied sequence, coverage state, and stop
-reason fields. Plan wire schema 1 removes step sequences; the durable Plan
-remains schema 1. Runtime normalizes unique validated Evidence references to
-acceptance order and renders typed questions. Project-owned failure stage/reason
-values cross the Agent, Application, and delivery boundaries without raw errors
-or payloads.
+SQLite safe Messages are the only durable conversation source. Explicit typed
+repositories own safe Session, run, Diagnosis, Evidence, invocation, summary,
+consent and action/audit records. Standard and minimal mode follow the exact
+[Data Retention Contract](data-retention.md); no raw transcript or generic payload
+is admitted.
 
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
+Last active advances monotonically only on admitted lifecycle writes. Exact and
+inactive-batch deletion use bounded snapshots, version/digest checks and one
+transaction. Protect active or unproved Sessions and clear UI only after commit.
+Export is a version-1 redacted free-form summary without restored authority.
+
+The initial schema is one checksummed migration. Incompatible/corrupt storage
+fails closed and is not silently recreated. Post-publication migrations are
+forward-only. Credentials, kubeconfig, raw objects/output, model traffic, Reviewer
+bytes and framework state are prohibited durable data.
+
+Validation uses static boundaries, request-recording fixtures, synthetic Tools,
+real temporary SQLite, barriers/fake clocks, no-call denials, cancellation and
+sensitive-data canaries. Full gates and native CI are required for changes;
+live model and cluster observations are separate exact-configuration evidence.
+See [Agent Runtime](agent-runtime.md), [Security](security.md),
+[Storage](storage.md) and [Interaction Conformance](interaction-conformance.md).

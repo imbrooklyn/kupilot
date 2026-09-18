@@ -338,7 +338,7 @@ func TestProtocolContinuationDecisionPinsTheInspectedStableStack(t *testing.T) {
 		{"github.com/cloudwego/eino", "v0.9.19", "h1:i71YUBK3nwY4L53dkzRgZpAcPSZ4v4eRponN7W9sDtk="},
 		{"github.com/cloudwego/eino-ext/components/model/openai", "v0.1.13", "h1:5XHRTiTD5bt9KQrMHcfvuWNklEC3tpm3XHejdozt9vM="},
 		{"github.com/cloudwego/eino-ext/libs/acl/openai", "v0.1.18-0.20260527084435-846f52bd97c6", "h1:ES/xufN5eqJ3h+9tw/tq6F8kkgnAxBAHVUB6nqKsIDU="},
-		{"github.com/meguminnnnnnnnn/go-openai", "v0.1.2", "h1:iXombGGjqjBrmE9WaSidUhhi3YQhf42QTHvHLMkgvCA="},
+		{"github.com/meguminnnnnnnnn/go-openai", "v0.1.5", "h1:K9XFfnEUj9E+9djustmfa4eIdg8Q2vWD4mGv+AHbQ2k="},
 	}
 	for _, dependency := range want {
 		moduleLine := dependency.module + " " + dependency.version
@@ -355,6 +355,7 @@ func TestModelClientUsesEinoRequestAndStreamOnceForGPT5CompatibleIdentifier(t *t
 	server := newFixtureServer(t, "")
 	configuration := fixtureConfiguration(server.endpoint("reasoning-none"), time.Second)
 	configuration.Model = "gpt-5.6-luna"
+	configuration.Temperature = testTemperature(0.1234567890123)
 	configuration.ReasoningEffort = domain.ModelReasoningEffortNone
 	configuration.ResponseFormat = domain.ModelResponseFormatJSONObject
 	apiCanary := strings.Repeat("k", 43) + "-generated"

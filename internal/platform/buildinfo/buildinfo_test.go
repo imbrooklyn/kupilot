@@ -12,11 +12,11 @@ func TestInfoLine(t *testing.T) {
 		Version:   "v0.0.0-test",
 		Commit:    "0123456789ab",
 		BuildTime: "2026-08-08T00:00:00Z",
-		GoVersion: "go1.25.0",
+		GoVersion: "go1.27.0",
 		GOOS:      "linux",
 		GOARCH:    "arm64",
 	}
-	const want = "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.25.0 platform=linux/arm64"
+	const want = "kupilot version=v0.0.0-test commit=0123456789ab built=2026-08-08T00:00:00Z go=go1.27.0 platform=linux/arm64"
 
 	if got := info.Line(); got != want {
 		t.Fatalf("Info.Line() = %q, want %q", got, want)

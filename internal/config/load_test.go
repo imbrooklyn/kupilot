@@ -520,10 +520,10 @@ func TestLoadVersion1StrictSchemaAndRejectsPreReleaseLayouts(t *testing.T) {
 		if readErr != nil || !bytes.Equal(current, original) {
 			t.Fatalf("configuration file was rewritten: %q, %v", current, readErr)
 		}
-		if loaded.SourceVersion != CurrentVersion || loaded.Version != CurrentVersion ||
+		if loaded.Version != CurrentVersion ||
 			loaded.Models.Agent.Name != "agent" || loaded.Models.Agent.Role != ModelRoleAgent ||
 			loaded.Models.Agent.MaxOutputTokens != 2048 || len(loaded.Warnings) != 0 {
-			t.Fatalf("schema load = version %d source %d profile %#v warnings=%q", loaded.Version, loaded.SourceVersion, loaded.Models.Agent, loaded.Warnings)
+			t.Fatalf("schema load = version %d profile %#v warnings=%q", loaded.Version, loaded.Models.Agent, loaded.Warnings)
 		}
 	})
 

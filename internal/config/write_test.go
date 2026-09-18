@@ -107,7 +107,7 @@ func TestSaveModelProfilesPreservesOnlyExplicitFileReviewerCredential(t *testing
 		t.Fatalf("Load() error = %v", err)
 	}
 	defer loaded.Credentials.Destroy()
-	if loaded.SourceVersion != CurrentVersion || loaded.Credentials.Agent.Source != CredentialSourceFile ||
+	if loaded.Version != CurrentVersion || loaded.Credentials.Agent.Source != CredentialSourceFile ||
 		loaded.Credentials.ApprovalReviewer == nil || loaded.Credentials.ApprovalReviewer.Source != CredentialSourceFile ||
 		loaded.Models.ApprovalReviewer == nil || loaded.Models.ApprovalReviewer.Role != ModelRoleApprovalReviewer {
 		t.Fatalf("saved role profiles = %#v credentials=%#v", loaded.Models, loaded.Credentials)

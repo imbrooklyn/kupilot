@@ -50,11 +50,11 @@ enter `go.mod` or the production dependency graph.
 
 | Tool | Version | Purpose | License |
 | --- | --- | --- | --- |
-| Go | 1.25.13 | Compile and inspect release binaries | BSD-3-Clause |
-| GoReleaser | v2.13.3 | Build, archive, and checksum the matrix | MIT |
-| Syft | v1.44.0 | Produce archive-level SPDX JSON SBOMs | Apache-2.0 |
+| Go | 1.27.0 | Compile and inspect release binaries | BSD-3-Clause |
+| GoReleaser | v2.18.0 | Build, archive, and checksum the matrix | MIT |
+| Syft | v1.52.0 | Produce archive-level SPDX JSON SBOMs | Apache-2.0 |
 
-These tool versions are selected because they build with the exact Go 1.25.13
+These tool versions are selected because they build with the exact Go 1.27.0
 gate toolchain. A version update requires review of its Go requirement,
 license, configuration schema, generated contents, and reproducibility
 behavior.
@@ -74,7 +74,7 @@ and architecture. A `v0.1.0` artifact therefore has this output shape:
 
 <!-- markdownlint-disable MD013 -->
 ```text
-kupilot version=v0.1.0 commit=0123456789ab built=2026-01-02T03:04:05Z go=go1.25.13 platform=darwin/arm64
+kupilot version=v0.1.0 commit=0123456789ab built=2026-01-02T03:04:05Z go=go1.27.0 platform=darwin/arm64
 ```
 <!-- markdownlint-enable MD013 -->
 
@@ -93,7 +93,7 @@ A development reset requires stopping the database owner and preserving a
 consistent owner-protected backup first. Old development binaries and backups
 are not a supported upgrade or rollback path. Never package user state,
 credentials or local backups into release artifacts. See [Storage](storage.md)
-and [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
+and [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 ## Local candidate dry run
 
@@ -102,8 +102,8 @@ creation or publishing credentials. Run the complete local CI equivalent
 before packaging:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make check-all
-GOTOOLCHAIN=go1.25.13 make release-dry-run RELEASE_VERSION=0.1.0
+GOTOOLCHAIN=go1.27.0 make check-all
+GOTOOLCHAIN=go1.27.0 make release-dry-run RELEASE_VERSION=0.1.0
 ```
 
 The dry-run target performs the following fixed sequence:
@@ -113,7 +113,7 @@ The dry-run target performs the following fixed sequence:
    `CGO_ENABLED=0`, require `modernc.org/sqlite`, and reject `runtime/cgo`,
    `github.com/mattn/go-sqlite3`, or any selected CgoFiles.
 3. Create an isolated temporary workspace and run GoReleaser in snapshot mode.
-4. Build all four targets with Go 1.25.13, `-trimpath`, read-only modules, and
+4. Build all four targets with Go 1.27.0, `-trimpath`, read-only modules, and
    reproducible commit timestamps.
 5. Create archives, SPDX SBOMs, and SHA-256 checksums without publishing.
 6. Copy only the nine upload-allowlisted files into the printed candidate
@@ -153,7 +153,7 @@ candidate being published is authoritative for that candidate.
   and the checksum/SBOM allowlist have been updated and re-verified before
   publication.
 - [ ] The public support matrix agrees with
-  [ADR-0028](adr/0028-support-macos-and-linux-with-experimental-windows.md),
+  [ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-use-go.md),
   [Dependency Compatibility](compatibility.md), and
   [Kubernetes Compatibility](kubernetes-compatibility.md).
 - [ ] Fresh creation, exact-schema reopen, incompatible/corrupt storage denial,
@@ -166,9 +166,9 @@ candidate being published is authoritative for that candidate.
 
 ### Gates and candidate contents
 
-- [ ] `GOTOOLCHAIN=go1.25.13 make check-all` passes with a current
+- [ ] `GOTOOLCHAIN=go1.27.0 make check-all` passes with a current
   vulnerability database.
-- [ ] `GOTOOLCHAIN=go1.25.13 make release-dry-run
+- [ ] `GOTOOLCHAIN=go1.27.0 make release-dry-run
   RELEASE_VERSION=0.1.0` passes from the same commit.
 - [ ] A second dry run produces the same SHA-256 value for each of the four
   archives.
@@ -176,8 +176,8 @@ candidate being published is authoritative for that candidate.
   SPDX JSON documents, and one checksum file.
 - [ ] Every checksum verifies and every archive contains only `kupilot` and
   `LICENSE`.
-- [ ] Binary metadata reports Go 1.25.13, `CGO_ENABLED=0`, the correct target,
-  `modernc.org/sqlite v1.56.0`, and no CGO SQLite driver.
+- [ ] Binary metadata reports Go 1.27.0, `CGO_ENABLED=0`, the correct target,
+  `modernc.org/sqlite v1.59.0`, and no CGO SQLite driver.
 - [ ] Archive, binary-string, and SBOM scans contain no database, WAL/SHM
   sidecar, log, product configuration, key material, private source path, or
   local-only documentation.

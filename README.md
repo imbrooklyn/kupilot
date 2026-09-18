@@ -85,7 +85,7 @@ own endpoint, model, credential, consent and finite budgets. Role, provider,
 credential-reference, inheritance and capability switches are not configuration
 fields. Summarization reuses `agent` with its independent budget.
 See [Configuration](docs/configuration.md) and
-[ADR-0063](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
+[ADR-0063: Keep One Unreleased Version-One Baseline](docs/adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 The `v0.1.0` Agent directly reuses stable Eino ADK `ChatModelAgent`, `Runner`,
 message state, and summarization middleware directly inside Application. Kupilot
@@ -132,7 +132,7 @@ make build
 ./bin/kupilot --version
 ```
 
-Requirements are Go 1.25.0 or newer and macOS or Linux on `amd64` or `arm64`.
+Requirements are Go 1.27.0 or newer and macOS or Linux on `amd64` or `arm64`.
 The contributor and CI toolchain uses the exact patch version documented in
 [Development and CI Gates](docs/development.md).
 
@@ -231,7 +231,7 @@ reduced-motion, narrow-resize, IME/Unicode, and restored-scrollback behavior
 retain textual safety meaning.
 
 Final response metadata and failure diagnostics follow
-[ADR-0057](docs/adr/0057-derive-response-metadata-and-classify-interaction-failures.md).
+[ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](docs/adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md).
 Runtime derives mechanical metadata and reports fixed failure stages without
 exposing model or Evidence payloads.
 

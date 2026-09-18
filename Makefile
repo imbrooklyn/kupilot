@@ -6,15 +6,15 @@ BINARY ?= $(BIN_DIR)/kupilot
 CROSS_BIN_DIR ?= $(BIN_DIR)/cross
 COMMAND_PACKAGE ?= ./cmd/kupilot
 TOOLS_BIN_DIR ?= $(BIN_DIR)/tools
-GATE_GO_VERSION ?= go1.25.13
+GATE_GO_VERSION ?= go1.27.0
 BINARY_SIZE_BASELINE_DIR ?=
 
-GOIMPORTS_VERSION ?= v0.48.0
-GOLANGCI_LINT_VERSION ?= v2.11.4
-GOVULNCHECK_VERSION ?= v1.6.0
+GOIMPORTS_VERSION ?= v0.50.0
+GOLANGCI_LINT_VERSION ?= v2.13.2
+GOVULNCHECK_VERSION ?= v1.8.0
 ACTIONLINT_VERSION ?= v1.7.12
-GORELEASER_VERSION ?= v2.13.3
-SYFT_VERSION ?= v1.44.0
+GORELEASER_VERSION ?= v2.18.0
+SYFT_VERSION ?= v1.52.0
 RELEASE_VERSION ?= 0.1.0
 
 GOIMPORTS_BIN := $(TOOLS_BIN_DIR)/goimports/$(GOIMPORTS_VERSION)/goimports
@@ -188,7 +188,7 @@ release-verify: release-version-check
 		grep -Fq 'CGO_ENABLED=0' "$$metadata"; \
 		grep -Fq "GOOS=$$goos" "$$metadata"; \
 		grep -Fq "GOARCH=$$goarch" "$$metadata"; \
-		grep -Eq 'dep[[:space:]]+modernc\.org/sqlite[[:space:]]+v1\.56\.0' "$$metadata"; \
+		grep -Eq 'dep[[:space:]]+modernc\.org/sqlite[[:space:]]+v1\.59\.0' "$$metadata"; \
 		if grep -Fq 'github.com/mattn/go-sqlite3' "$$metadata"; then \
 			printf '%s\n' "A CGO SQLite dependency entered $$(basename "$$archive")."; \
 			exit 1; \

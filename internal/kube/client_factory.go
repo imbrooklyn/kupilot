@@ -32,7 +32,7 @@ import (
 
 const (
 	// DefaultUserAgent is the fixed Kubernetes transport identity.
-	DefaultUserAgent = "kupilot/0.5"
+	DefaultUserAgent = "kupilot/0.1.0"
 
 	// DefaultClientQPS and DefaultClientBurst are the non-expandable client
 	// rate defaults.

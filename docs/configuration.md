@@ -2,15 +2,15 @@
 
 ## Initial OpenAI-only schema
 
-[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md) replaces
-the earlier development model layout while keeping configuration version `1`.
+[ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md) defines
+configuration version `1`.
 `models.agent` and optional `models.approval_reviewer` each accept `endpoint`,
 `model`, optional `api_key`, `api_protocol`, `reasoning_effort`,
 `response_format`, `temperature`, `max_output_tokens`, and
 `request_timeout_seconds`. The containing slot determines role, identity and
 credential ownership. Reviewer settings and credentials are independent.
 Provider, role, name, credential-reference, inheritance, streaming and
-Tool-required switches are removed. Removed and unknown fields are rejected.
+Tool-required switches are not accepted. Unknown fields are rejected.
 
 OpenAI is fixed. `api_protocol` defaults to `chat_completions`; `responses`
 selects the existing native non-streaming Responses component. Reasoning and
@@ -21,17 +21,15 @@ collects endpoint, model, save choice and a masked API key.
 Use `KUPILOT_AGENT_API_KEY` or `models.agent.api_key` for the Agent, and
 `KUPILOT_APPROVAL_REVIEWER_API_KEY` or
 `models.approval_reviewer.api_key` for the Reviewer. Environment values take
-precedence and are removed after one-shot loading. Retired `KUPILOT_MODEL_*`
-aliases are not supported. Loading does not migrate or rewrite old local files.
+precedence and are removed after one-shot loading. Only the documented
+role-specific environment variables are supported. Loading never rewrites files.
 
 - Status: Accepted `v0.1.0` contract with named-model, read, observability,
   remote-diagnostic, and local-execution policy configuration implemented
 - Date: 2026-09-07
 
-The current parser reads and writes strict schema version 1. No public release
-established a predecessor configuration schema, so the retired pre-release
-single-profile layout and pre-release `version: 2` files are rejected rather
-than treated as compatibility inputs. Loading never rewrites a user file.
+The parser reads and writes only strict schema version 1. Unsupported versions
+and layouts are rejected; there is no compatibility reader.
 Version 1 implements typed `agent` and optional `approval_reviewer` profiles,
 exact `kubernetes.resource_policies` entries for approved CRDs, and the two
 fixed optional `observability.prometheus` and `observability.loki` slots. It
@@ -198,7 +196,7 @@ command, or per-run budget selector.
 
 ## Native protocol selection
 
-Under [ADR-0061](adr/0061-use-eino-directly-in-application.md), OpenAI profiles
+Under [ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md), OpenAI profiles
 may set `api_protocol: responses` to use the native
 Eino Responses component.
 Omission selects `chat_completions`. Streaming behavior is derived from the
@@ -266,7 +264,7 @@ an actual key so it remains safe to copy and inspect.
 <!-- markdownlint-enable MD013 -->
 
 The exact profile time envelopes and their no-retry semantics are defined by
-[ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md).
+[ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md).
 
 Each supplied endpoint or model identifier is validated independently. If the
 effective endpoint, model identifier, or required OpenAI API key is absent,
@@ -333,9 +331,8 @@ These modes do not provide encryption, protection from another process running
 as the same user, or forensic deletion. Windows remains experimental; Kupilot
 does not claim equivalent Unix mode enforcement there.
 
-Because no version has been released with the retired filesystem or
-configuration layouts, Kupilot performs no legacy path discovery and no
-pre-release configuration-schema migration.
+Kupilot uses only the documented paths and schema. It performs no alternate
+path discovery or development configuration-schema migration.
 
 ## Credential boundary
 
@@ -438,6 +435,6 @@ There is no legacy-schema, repair, retry, or permissive-decoding option.
 Existing fixed provider selection, consent, budgets, and explicit
 structured-output settings continue to apply.
 
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
+See [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 and [Interaction Conformance](interaction-conformance.md) for the exact contract
 and verification boundaries.

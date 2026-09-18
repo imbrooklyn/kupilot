@@ -9,8 +9,8 @@ tamper-resistant ledger.
 
 The storage adapter uses these pinned components:
 
-- `modernc.org/sqlite` v1.56.0 as the only production SQLite driver. It is a
-  CGo-free BSD-3-Clause implementation, embeds SQLite 3.53.3, and registers the
+- `modernc.org/sqlite` v1.59.0 as the only production SQLite driver. It is a
+  CGo-free BSD-3-Clause implementation, embeds SQLite 3.53.4, and registers the
   fixed driver name `sqlite`.
 - `github.com/jmoiron/sqlx` v1.4.0 as a thin adapter-private mapping and
   transaction helper.
@@ -28,8 +28,9 @@ There is no alternate or CGo fallback driver.
 sqlx's upstream module metadata covers compatibility tests for multiple
 database drivers. Their checksum entries may therefore appear in `go.sum`, but
 Kupilot does not import, register, or link those drivers. The build and test
-package closure must contain only `modernc.org/sqlite` as a SQLite driver and
-must not contain `runtime/cgo`.
+package closure must contain only `modernc.org/sqlite` as a SQLite driver.
+Production builds with `CGO_ENABLED=0` must not contain `runtime/cgo`; race
+instrumentation uses the Go toolchain's native support separately.
 
 ## Path and file policy
 
@@ -269,14 +270,3 @@ start time. Recovery is idempotent, honors Context cancellation, returns only a
 count, and never reconstructs or replays Agent, model, Tool, scope, approval, or
 write state. A validation or update failure rolls back the complete recovery
 operation and prevents resume results from being treated as available.
-
-## Deterministic response metadata and failure diagnostics
-
-The initial schema stores validated response completeness and durable Plan
-metadata at version 1. It is corrected in place until first publication.
-Runtime failure diagnostics introduce no table, raw payload column, or second
-conversation store.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.

@@ -22,7 +22,7 @@ import (
 	toolcontract "github.com/imbrooklyn/kupilot/internal/tools"
 )
 
-const userAgent = "kupilot/0.5"
+const userAgent = "kupilot/0.1.0"
 
 type sourceClient struct {
 	kind        domain.DataSourceKind

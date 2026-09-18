@@ -1,7 +1,7 @@
 # Model Compatibility Contract
 
 - Status: Accepted, unreleased v0.1.0
-- Decision: [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md)
+- Decision: [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
 
 ## Native Eino ownership
 
@@ -9,10 +9,8 @@ Kupilot supports OpenAI through the pinned native Eino components only:
 core `v0.9.19`, Chat Completions extension `v0.1.13`, and
 `agenticopenai v0.2.2` for Responses. Application directly constructs one
 `ChatModelAgent` and `Runner` and owns the sole ReAct loop under
-[ADR-0061](adr/0061-use-eino-directly-in-application.md). There is no provider
+[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md). There is no provider
 facade, second Agent, conversation loop, router, repair request, or fallback.
-Ollama support, dependencies, request rewriting, native Tool identity synthesis,
-NDJSON parsing and live-test targets have been removed.
 
 ## Fixed roles and protocols
 
@@ -34,6 +32,11 @@ Explicit values are transmitted unchanged. Kupilot never disables reasoning,
 changes protocol or sampling after an error, retries, or infers capabilities
 from a model name. `response_format: prompt` is the default;
 `json_object` is an explicit endpoint capability requirement.
+
+Chat Completions passes temperature through the native component's fixed
+ExtraFields serialization field because its typed Temperature field is float32
+while the public configuration is float64. This preserves precision and explicit
+zero; it is not a model-name workaround or an HTTP request rewrite.
 
 ## Runtime boundaries
 
@@ -282,7 +285,7 @@ response is `invalid_external_response`, not `unavailable`.
 HTTP request rejection is reported as `model_invocation/provider_request_rejected`,
 separately from unsupported response media or stream behavior. It cannot identify
 the rejected parameter without endpoint-specific evidence. Kupilot never parses
-error prose to change settings or resend a request; see [ADR-0060](adr/0060-distinguish-provider-request-rejection.md).
+error prose to change settings or resend a request; see [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md).
 
 The endpoint comes only from typed user configuration. Model output, Tool
 arguments, messages, resumed history, and Kubernetes content cannot change it.
@@ -315,7 +318,7 @@ carry the transport credential as configuration, content, metadata, text, or
 Tool-call data. Endpoint error bodies are read only to the fixed limit and are
 never decoded into a safe error or metadata value. Default logs discard them.
 Explicit sensitive diagnostics may retain only the credential-redacted prefix
-documented by ADR-0036.
+documented by ADR-0035.
 
 By default, the fixed local `model_request` log event records only the local
 request ID, operation, phase, outcome, stable class and code, retryability,
@@ -362,7 +365,7 @@ synthetic English content and loopback `httptest` servers.
 | Tracking response bodies and first-use incompatibility | Closure on every terminal path and no probe, retry, downgrade, or fallback |
 | Fragmented final-envelope integration route | Incremental answer-only projection, UI coalescing, final replacement, and no envelope metadata disclosure |
 | Scripted steer boundary routes | Summary-before-steer order, durable commit before model I/O, exact-once active input, intact Tool pairs, and zero model calls after a failed barrier |
-| Current-schema history routes | Complete schema 1 retained assistant representation and a later strict final without retired three-member imitation |
+| Current-schema history routes | Complete schema 1 retained assistant representation and a later strict final matching the current grammar |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -406,17 +409,16 @@ and the [decision matrix](interaction-conformance.md).
 Deterministic fixtures establish request fidelity, boundary handling and local
 invariants. Opt-in live endpoint conformance establishes structural behavior
 only for the exact tested configuration. Neither proves model semantic quality,
-real Kubernetes correctness or release readiness. Historical Ollama campaigns
-are superseded development evidence and do not qualify this OpenAI baseline.
+real Kubernetes correctness or release readiness.
 
 ## Native Responses dependency and fidelity gate
 
-ADR-0061 admits Application-owned native Eino composition with core `v0.9.19`
-and `agenticopenai v0.2.2`. The latter brings OpenAI Go SDK `v3.35.0` and pins
+ADR-0013 admits Application-owned native Eino composition with core `v0.9.19`
+and `agenticopenai v0.2.2`. The selected graph uses OpenAI Go SDK `v3.50.0` and pins
 ACL `v0.1.18-0.20260527084435-846f52bd97c6` transitively; this ACL revision is a
 pseudo-version, not a stable ACL release. The module graph and checksums remain
 explicit in `go.mod` and `go.sum`. Eino and its extensions use Apache-2.0;
-OpenAI Go uses Apache-2.0 and the new Azure SDK/tidwall dependencies use MIT.
+OpenAI Go uses Apache-2.0 and the Azure SDK/tidwall dependencies use MIT.
 These dependencies do not enable Azure routing or hosted capabilities.
 
 The recording fixture `TestNativeResponsesAgentToolAndFinal` sends native

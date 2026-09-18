@@ -12,10 +12,7 @@ is recorded in the [Changelog](CHANGELOG.md). This policy covers the current
 source boundary, not an unverified distribution artifact.
 
 The normative controls and residual risks are documented in the
-[Security Threat Model](docs/security.md). The
-[v0.1 Read-Only Composition Security Review](docs/security-review-v0.1.md) is
-historical evidence for controls retained from the earlier boundary; it is not
-a complete review of the broader catalog or composed write path. Current
+[Security Threat Model](docs/security.md). Current
 deterministic tests cover typed request allowlists, scope gates, sensitive-data
 projections, approval denial paths, and exact external-action counts. This is
 not a claim about real production data, live RBAC, or third-party penetration

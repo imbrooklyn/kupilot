@@ -24,12 +24,12 @@ steps.
 
 ## Required versions
 
-The module's supported minimum remains Go 1.25.0. CI pins Go 1.25.13 as the
-reviewed patch version on that minimum-version line. `GOTOOLCHAIN` is set to
+The module and CI require Go 1.27.0, including all development tools and
+transitive dependencies. `GOTOOLCHAIN` is set to
 `local` in CI so a job cannot silently replace the selected toolchain.
 Aggregate gate targets verify that exact Go patch version before running. With
 Go toolchain management enabled, the complete local equivalent can be selected
-explicitly with `GOTOOLCHAIN=go1.25.13 make check-all`. The supporting version,
+explicitly with `GOTOOLCHAIN=go1.27.0 make check-all`. The supporting version,
 security, platform, and maintenance evidence is recorded in
 [Dependency Compatibility](compatibility.md).
 
@@ -39,9 +39,9 @@ enter `go.mod` or the production dependency graph.
 
 | Tool | Version | Gate |
 | --- | --- | --- |
-| `goimports` | v0.48.0 | Import grouping and Go formatting |
-| `golangci-lint` | v2.11.4 | Repository lint configuration |
-| `govulncheck` | v1.6.0 | Reachable Go and module vulnerability scan |
+| `goimports` | v0.50.0 | Import grouping and Go formatting |
+| `golangci-lint` | v2.13.2 | Repository lint configuration |
+| `govulncheck` | v1.8.0 | Reachable Go and module vulnerability scan |
 | `actionlint` | v1.7.12 | GitHub Actions syntax and semantic checks |
 
 ## Local commands
@@ -69,9 +69,9 @@ Session contract and offline Reviewer evaluation are repeatable and do not
 need a real endpoint, credential, kubeconfig, cluster, or public network:
 
 ```sh
-GOTOOLCHAIN=go1.25.13 make test-integration-session
-GOTOOLCHAIN=go1.25.13 make test-integration-contracts
-GOTOOLCHAIN=go1.25.13 make test-reviewer-eval-offline
+GOTOOLCHAIN=go1.27.0 make test-integration-session
+GOTOOLCHAIN=go1.27.0 make test-integration-contracts
+GOTOOLCHAIN=go1.27.0 make test-reviewer-eval-offline
 ```
 
 The contracts target covers named Agent/Reviewer profile topology, consent,
@@ -95,7 +95,7 @@ printed.
 KUPILOT_INTEGRATION_LIVE=authorized \
 KUPILOT_INTEGRATION_MAX_COST_USD=1.00 \
 KUPILOT_INTEGRATION_PREFERRED_MODEL=gpt-4o-mini \
-GOTOOLCHAIN=go1.25.13 \
+GOTOOLCHAIN=go1.27.0 \
 make test-integration-model-preferred
 ```
 
@@ -107,9 +107,7 @@ The model harness bounds calls, bytes, output tokens, wall time and explicitly
 authorized cost. Request fixtures assert omitted sampling separately from an
 explicit zero and prove native Tool schemas, reasoning and history fidelity.
 No live test may relax malformed Tools, Evidence, cancellation, timeout,
-credential or persistence checks based on model quality. Ollama targets and
-its provider-specific probes are removed under ADR-0063.
-
+credential or persistence checks based on model quality.
 The live Reviewer evaluation is a separate quality command. It sends eleven
 bounded, Tool-free, non-streaming cases and records false approvals, false
 denials, escalations, fail-closed results, latency, available usage, and the
@@ -123,7 +121,7 @@ KUPILOT_INTEGRATION_REVIEWER_EVAL=authorized \
 KUPILOT_INTEGRATION_MODEL_TARGET=preferred \
 KUPILOT_INTEGRATION_MAX_COST_USD=2.00 \
 KUPILOT_INTEGRATION_PREFERRED_MODEL=gpt-4o-mini \
-GOTOOLCHAIN=go1.25.13 \
+GOTOOLCHAIN=go1.27.0 \
 make test-reviewer-eval-live
 ```
 
@@ -141,11 +139,11 @@ always attempts Namespace deletion.
 KUPILOT_INTEGRATION_KUBE_CONTEXT=k3d-example \
 KUPILOT_INTEGRATION_KUBE_MUTATION=authorized \
 KUPILOT_INTEGRATION_KUBE_IMAGE=registry.example/fixture@sha256:REPLACE_WITH_64_HEX_DIGEST \
-GOTOOLCHAIN=go1.25.13 \
+GOTOOLCHAIN=go1.27.0 \
 make test-integration-kubernetes
 ```
 
-`GOTOOLCHAIN=go1.25.13 make test-integration` runs every tagged surface and the
+`GOTOOLCHAIN=go1.27.0 make test-integration` runs every tagged surface and the
 offline Reviewer fixtures. Missing live prerequisites remain visible as
 `SKIP`/`BLOCKED`; they are never counted as release `PASS` evidence. No target
 uploads configuration, databases, logs, responses, or output artifacts.
@@ -210,7 +208,7 @@ deletion; terminal capabilities, reverse search, semantic navigation,
 undo/redo, doctor and accessibility; typed clarification and terminal reasons;
 preflight and category budgets; Evidence freshness/conflict/negative coverage;
 narrow safe-read reuse; strict completeness; the synthetic injection corpus;
-and the unified recovery matrix.
+and recovery behavior at the actual failure boundaries.
 
 ## Hosted CI
 
@@ -284,12 +282,11 @@ finding introduced or made reachable by the current work remains a blocking
 failure for that work item and cannot use this separation.
 
 The platform policy is defined by
-[ADR-0028](adr/0028-support-macos-and-linux-with-experimental-windows.md).
+[ADR-0001: Use Go and a Fixed Platform Toolchain](adr/0001-use-go.md).
 Security and privacy requirements remain normative in the
 [Security Threat Model](security.md) and [Privacy Overview](privacy-overview.md).
-The [v0.1 Security Review](security-review-v0.1.md) is historical evidence only;
-a future `v0.1.0` release requires a fresh review of the actually reachable
-composition; Accepted documentation alone is not release evidence.
+A v0.1.0 release requires a fresh review of the actually reachable composition;
+Accepted documentation alone is not release evidence.
 
 The deterministic quality harness uses only synthetic response and
 Evidence fixtures. It reports reference validity, unsupported current-state
@@ -310,29 +307,14 @@ quality evidence.
 
 ## References
 
-- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-
-## Deterministic response metadata and failure diagnostics
-
-Interaction conformance records statement coverage with go test -coverprofile
-and a separate auditable decision matrix. Go does not measure branch coverage
-natively. Scripted full-composition fixtures, bounded opt-in OpenAI
-conformance with synthetic Tools, and real-model quality evaluation are distinct
-evidence levels. A failed local scenario is recorded once without repair or
-retry.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
+- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
+- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
 
 ## Native Responses conformance
 

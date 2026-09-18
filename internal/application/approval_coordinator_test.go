@@ -676,8 +676,8 @@ func TestApprovalCoordinatorFailureExpiryScopeAndCancellationNeverExecute(t *tes
 			if _, err := fixture.coordinator.Decide(context.Background(), approvalDecisionCommand(UICommandApproveAction, request, 31, 102)); !errors.Is(err, ErrApprovalPersistenceUnavailable) {
 				t.Fatalf("Decide() error = %v", err)
 			}
-			if snapshot, ok := fixture.service.Snapshot(request.ID); !ok || snapshot.State != domain.ApprovalStateCancelled {
-				t.Fatalf("in-memory state after persistence failure = %#v/%v", snapshot, ok)
+			if _, ok := fixture.service.Snapshot(request.ID); ok {
+				t.Fatal("closed authority remained in memory after persistence failure")
 			}
 		}},
 		{name: "expired", run: func(t *testing.T, fixture *approvalCoordinatorFixture) {

@@ -1,137 +1,34 @@
-# ADR-0020: Contain Kubeconfig Exec Credentials
+# ADR-0020: Confine Kubernetes Access and Exec Credentials
 
 - Status: Accepted
-- Date: 2026-08-08
 
 ## Context
-
-Many local Kubernetes Contexts obtain short-lived credentials through the
-kubeconfig exec credential mechanism. Rejecting all exec authentication would
-exclude common managed-cluster workflows. Running an executable named by a
-kubeconfig is nevertheless code execution with the local user's privileges and
-may perform its own network requests, read environment, hang, or emit sensitive
-credential material.
-
-Exec authentication must remain a Kubernetes transport concern and must never
-become a general command Tool or a model-selected capability.
+Kubernetes objects and authentication mechanisms expose more data and authority
+than any admitted Tool needs.
 
 ## Decision
+Use client-go only inside internal/kube, behind exact consumer-owned ports.
+Keep rest.Config, credentials, clients, discovery, GVRs and raw objects confined.
+Use typed reviewed resource projections and fixed relationships. Exact CRD policy
+names group, version, resource, Kind, scope, verbs, fields, limits and Evidence
+mapping; discovery validates an entry but cannot create authority.
 
-Kupilot will support the standard kubeconfig exec credential mechanism only when
-it is required by the explicitly selected local Context. Kubeconfig resolution,
-ExecCredential schemas and codecs, and Kubernetes transport construction use
-client-go. The Kubernetes adapter owns the bounded process invocation so that
-Context cancellation and environment filtering do not depend on client-go's
-process-global exec authenticator.
+Deny generic request builders, arbitrary selectors, JSONPath/templates,
+model-selected APIs, Watch and informers. Enforce frozen scope and safe
+server-side filtering, runtime-owned continuation, independent page/item/byte/time
+ceilings and explicit partial results.
 
-Typed configuration provides a strict-deny mode. When enabled, Kupilot rejects a
-Context that requires exec authentication before launching the program. The
-model, Agent, Tool, Session history, and TUI cannot disable or bypass this mode.
-When strict deny is off, the explicitly selected kubeconfig is the source of the
-exec configuration; Kupilot does not create a second approval or command system.
+Kubeconfig exec credentials are a distinct opt-in local-process boundary.
+Strict deny is available. Allow invokes only the configured program and argv,
+without a shell, with a minimal environment, bounded output and timeout, and
+Context-owned cancellation and child reaping. Output goes only to the credential
+decoder. Never forward credentials or raw kubeconfig to the model, application
+events, logs, history, SQLite, exports or other children.
 
-Runtime requirements are:
-
-- Launch the resolved program directly, never through a shell or a command
-  string.
-- Accept only `client.authentication.k8s.io/v1` and `v1beta1` credentials in
-  non-interactive mode. Reject `Always` interactive mode before launch.
-- Take executable, arguments, protocol API version, and declared exec environment
-  only from the selected kubeconfig after local validation. The model, user
-  question, Session, Tool, and Kubernetes data cannot modify them.
-- Remove Kupilot's model API-key environment variable and other Kupilot-only
-  sensitive variables from the child environment. Do not add cluster or model
-  content.
-- Honor the owning Context, use a bounded deadline, terminate the child on
-  cancellation or scope disposal, and allow no orphan process.
-- Feed protocol output only to the credential decoder. Never render, log,
-  persist, include in safe errors, or send standard output or standard error to
-  the model.
-- Bound standard output before decoding, bound standard error without exposing
-  it, and translate failure into a stable safe class without copying vendor
-  text.
-- Never provide interactive terminal access unless client-go and TUI behavior
-  can remain bounded, cancellable, and deterministic on supported platforms.
-
-Kupilot cannot guarantee or audit network activity performed inside the
-user-configured external program. Safe status and documentation must state that
-it is part of Kubernetes authentication, not a Kupilot Tool.
-
-## Consequences
-
-Positive consequences:
-
-- Common short-lived authentication workflows can work without storing
-  credentials.
-- Users can disable this local execution surface with strict-deny configuration.
-- Model and Tool injection cannot choose or invoke a command.
-- Credential protocol output remains confined to client transport setup.
-
-Costs and constraints:
-
-- Context activation may fail when strict deny is enabled, the program is
-  unavailable, or the required interactive behavior is unsupported.
-- Kupilot cannot sandbox an arbitrary external program portably under the
-  accepted platform scope.
-- Environment filtering and child-process ownership require platform tests.
-- Allowing standard exec authentication does not make a malicious kubeconfig
-  safe; the user still owns the kubeconfig trust decision.
-
-## Alternatives considered
-
-- Disabling exec authentication was rejected because it would exclude common
-  local kubeconfig workflows.
-- Requiring a separate per-launch command approval was rejected because exec is
-  a user-configured authentication mechanism, while strict deny provides the
-  explicit fail-closed choice without confusing it with write approval.
-- Turning exec into a general Tool was rejected because it would create the
-  shell capability explicitly excluded from the product.
-- Persisting a broad approval for an executable was rejected because the
-  underlying file, kubeconfig, arguments, or environment can change.
-- Implementing a portable application sandbox was rejected as outside the MVP
-  and not a substitute for user trust in kubeconfig.
-
-## Security and privacy impact
-
-Exec output can contain live Kubernetes credentials and is never eligible for
-model, TUI, Application event, ordinary log, or persistence sinks. The model API
-key must not be inherited by the child. Safe errors state the operation and
-classification only.
-
-An exec plugin is not authorized by prompt text, model output, or Tool syntax.
-Allowing the selected kubeconfig mechanism does not authorize cluster writes or
-widen the selected ClusterScope.
-
-## Validation
-
-Official client-go APIs and process-control tests must verify:
-
-1. Supported exec credential API versions, bundle-local cache behavior,
-   non-interactive policy, environment construction, and cancellation hooks.
-2. Strict-deny behavior before launch and safe identification of an exec-related
-   Context without exposing sensitive fields.
-3. Direct launch without a shell, removal of the model key environment source,
-   bounded output, timeout, cancellation, and child reaping on macOS and Linux.
-4. Safe handling of success, malformed protocol output, nonzero exit, missing
-   executable, permission denial, timeout, and scope switch.
-5. Canary absence across model transport, TUI, Application events, logs, safe
-   errors, and SQLite.
-
-The selected client-go API and supported interactive behavior remain documented
-with the compatibility contract.
-
-## Revisit triggers
-
-- client-go changes exec protocol, caching, environment, or process ownership.
-- Supported platforms gain a reviewed sandbox that materially improves
-  containment.
-- A required provider cannot operate under bounded non-interactive behavior.
-- Evidence shows that strict deny and documentation are insufficient to make the
-  trust boundary understandable.
-
-## References
-
-- [Security Threat Model](../security.md)
-- [Kubernetes Compatibility](../kubernetes-compatibility.md)
-- [ADR-0007: Use client-go Behind Narrow Kubernetes Ports](0007-use-client-go-behind-narrow-kubernetes-ports.md)
-- [ADR-0035: Use One User-Managed Home and Interactive Model Setup](0035-use-one-user-managed-home-and-interactive-model-setup.md)
+## Consequences and validation
+Exact projections cost adapter code but prevent raw APIs from becoming model
+authority. RBAC complements rather than replaces these controls. Request
+fixtures verify exact verb/GVR/Namespace/subresource/body/filter/precondition,
+pagination and zero-call denials. Process fixtures verify environment, output
+bounds, cancellation and join. See [Kubernetes Compatibility](../kubernetes-compatibility.md),
+[Security](../security.md) and [RBAC](../rbac/README.md).

@@ -10,6 +10,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"github.com/eino-contrib/jsonschema"
 
 	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/domain"
@@ -107,31 +108,18 @@ func (bridge *toolBridge) InvokableRun(ctx context.Context, argumentsInJSON stri
 	return result, err
 }
 
-type toolInfoWire struct {
-	Name           string          `json:"name"`
-	Desc           string          `json:"desc"`
-	HasParamsOneOf bool            `json:"has_params_one_of"`
-	JSONSchema     json.RawMessage `json:"json_schema"`
-}
-
 func toolInfo(specification agent.ToolSpecification) (*schema.ToolInfo, error) {
 	if specification.Validate() != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, nil)
 	}
-	encoded, err := json.Marshal(toolInfoWire{
-		Name:           string(specification.Name),
-		Desc:           specification.Description,
-		HasParamsOneOf: true,
-		JSONSchema:     json.RawMessage(specification.InputSchemaJSON),
-	})
-	if err != nil {
+	var parameters jsonschema.Schema
+	if err := json.Unmarshal([]byte(specification.InputSchemaJSON), &parameters); err != nil {
 		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
 	}
-	var info schema.ToolInfo
-	if err := json.Unmarshal(encoded, &info); err != nil || info.ParamsOneOf == nil {
-		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
-	}
-	return &info, nil
+	return &schema.ToolInfo{
+		Name: string(specification.Name), Desc: specification.Description,
+		ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&parameters),
+	}, nil
 }
 
 func validateBoundToolInfos(infos []*schema.ToolInfo) error {

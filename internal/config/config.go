@@ -225,10 +225,9 @@ func (credentials *ModelCredentials) Destroy() {
 // opaque credentials remain distinct.
 type Loaded struct {
 	Config
-	Paths         Paths
-	SourceVersion int
-	Credentials   ModelCredentials
-	Warnings      []string
+	Paths       Paths
+	Credentials ModelCredentials
+	Warnings    []string
 }
 
 // KubernetesConfig contains the non-sensitive kubeconfig execution policy.

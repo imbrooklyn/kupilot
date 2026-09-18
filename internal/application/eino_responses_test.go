@@ -143,7 +143,7 @@ func TestNativeResponsesPinnedStreamingReasoningLimitation(t *testing.T) {
 		if block.Reasoning != nil {
 			reasoning++
 			if block.Reasoning.Signature != "" {
-				t.Fatal("Upstream reasoning fidelity changed; review streaming admission and ADR-0061.")
+				t.Fatal("Upstream reasoning fidelity changed; review streaming admission and ADR-0013.")
 			}
 		}
 	}

@@ -1,120 +1,45 @@
-# ADR-0013: Use Layered Boundaries and Consumer-Owned Ports
+# ADR-0013: Compose Native Eino Directly in Application
 
 - Status: Accepted
-- Date: 2026-08-05
-- Amended by: ADR-0037 and ADR-0043
 
 ## Context
-
-Kupilot combines a terminal UI, a single-Agent runtime, structured Tools,
-Kubernetes clients, a cloud model transport, local persistence, and safety
-processing. Without explicit ownership, framework types and I/O concerns could
-leak into the domain, the TUI could become a second cluster client, and
-cross-package calls could form cycles.
-
-The architecture must remain understandable and testable for a small project.
-It must not create a large framework or a package for every concept merely to
-look layered.
+Native Eino already provides message state, Tool pairing, ReAct iteration,
+Runner events and summarization. A parallel framework would duplicate lifecycle
+ownership and risk losing native reasoning state.
 
 ## Decision
+Application is the sole use-case and execution authority and directly composes
+one stable Eino ChatModelAgent and Runner. Domain contains pure project-owned
+values and invariants. cmd/kupilot is the sole composition root. CLI and TUI are
+delivery adapters; Tools own exact handlers and consumer ports; Kubernetes and
+SQLite remain confined adapters. Cross-boundary values are concrete project DTOs.
 
-Kupilot will use a small layered, ports-and-adapters style with the following
-fixed ownership:
+Use native Eino Chat Completions or Responses according to explicit configuration.
+Chat Completions Agent calls stream. Responses Agent calls use Generate because
+agenticopenai v0.2.2 Stream loses encrypted reasoning in output-item completion;
+do not emulate streaming or disable reasoning. Reviewer and summary calls are
+non-streaming and Tool-free. Native reasoning stays bounded and ephemeral within
+the current run, returning only to the same consented origin.
 
-- `internal/domain` owns pure models and invariants.
-- `internal/application` is the only use-case layer and owns orchestration,
-  commands, queries, events, and outbound ports.
-- `internal/agent` owns neutral single-Agent policy and its consumer ports.
-- `internal/agent/einoadapter` is the sole Eino and model-provider boundary. It
-  owns the pinned model component, guarded transport, and ReAct translation;
-  Eino and provider types do not cross it.
-- `internal/tools` owns the admitted structured handlers and the narrow Kubernetes
-  read ports they consume.
-- `internal/kube` and `internal/persistence/sqlite` are infrastructure adapters.
-- `internal/cli` and `internal/tui` are delivery adapters that depend only on
-  Application contracts for use cases.
-- `cmd/kupilot` is the sole composition root and explicitly supplies concrete
-  implementations to consumers.
+Disable SDK retries, server-side response storage, automatic response caching
+and truncation. No hosted Tools, remote conversation store, checkpoint, repair,
+fallback or second Agent is admitted. Project hooks retain preflight, consent,
+generations, budgets, Tool policy, Evidence validation and persistence barriers.
+The HTTP guard owns origin, credential, byte, timeout and body-closure checks.
 
-Interfaces belong to the consumer that needs the capability and normally have
-one to three methods. Infrastructure may import the consumer contract it
-implements; the consumer does not import the infrastructure package. Contract
-values are project-owned, task-specific DTOs.
+Build ToolInfo with Eino's public NewParamsOneOfByJSONSchema constructor. Preserve
+the exact closed schema and defensive snapshots. Retain narrow consumer-owned
+interfaces only where an actual isolation or test seam requires them.
 
-The architecture will not introduce a generic repository, generic Kubernetes
-gateway, service locator, reflection-based dependency injector, general event
-bus, dynamic registry, or framework-wide unit of work. Every package and
-interface must have an active consumer and a testable responsibility. Empty
-package trees are prohibited.
-
-## Consequences
-
-Positive consequences:
-
-- Domain invariants can be tested without framework or I/O dependencies.
-- Application tests can replace Agent, Kubernetes, and persistence adapters
-  with narrow fakes.
-- Vendor churn is confined to adapter mappings.
-- Import direction and the single composition root can be checked statically.
-- TUI state remains a projection of Application state rather than a competing
-  source of truth.
-
-Costs and constraints:
-
-- Explicit DTO mapping is required at framework, Kubernetes, and SQLite
-  boundaries.
-- Some adapter packages import consumer contracts, which can be unfamiliar when
-  reading imports without considering port ownership.
-- Maintainers must review new interfaces and packages for a real consumer and
-  avoid speculative abstraction.
-
-## Alternatives considered
-
-- A package-by-technical-feature monolith was rejected because UI, model,
-  Kubernetes, and SQL types would be difficult to isolate and test.
-- A strict framework with generated dependency injection and generic
-  repositories was rejected because it adds indirection and abstractions before
-  concrete needs exist.
-- Letting each feature coordinate its own adapters was rejected because it
-  would create multiple use-case layers and composition roots.
-- Exposing vendor SDK types through shared contracts was rejected because it
-  couples unrelated packages to volatile external APIs.
-
-## Security and privacy impact
-
-The boundaries make safety controls independently enforceable:
-
-- TUI input cannot directly invoke Kubernetes or persistence.
-- The Agent can use Kubernetes only through structured Tool contracts.
-- Kubernetes infrastructure has no Agent dependency and cannot interpret model
-  content as a request.
-- SQL rows, transport bodies, credentials, and framework callbacks cannot enter
-  Domain or Application contracts.
-- The composition root is the one place where an adapter can become reachable;
-  the current composition includes only the admitted read adapters and the one
-  supervised Deployment restart path.
-
-Layering is not sufficient by itself. Runtime generation checks, allowlists,
-projection, redaction, budgets, and tests remain required.
+## Consequences and alternatives
+Native messages retain protocol capabilities without a neutral provider facade.
+Responses provisional text remains unavailable until a stable native component
+passes the reasoning-stream fidelity fixture. A vendor fork or raw-event repair
+adds an unsupported protocol implementation and is not an alternative.
 
 ## Validation
-
-The [Architecture](../architecture.md) records the compile-time graph, forbidden
-edges, runtime owners, and consumer port table. Static import-boundary checks
-and contract tests must fail if Eino escapes its adapter, delivery imports
-infrastructure, Domain imports a framework, or a second composition root
-appears.
-
-## Revisit triggers
-
-- A concrete use case cannot be expressed without a documented dependency
-  cycle under these boundaries.
-- Repeated mapping code creates measured maintenance risk that a narrower shared
-  value package can solve without vendor leakage.
-- A new process boundary or product topology is accepted through another ADR.
-
-## References
-
-- [Architecture](../architecture.md)
-- [ADR-0002: Use a Local Single Process with No Kupilot Server](0002-local-single-process-no-server.md)
-- [ADR-0003: Keep the Product Agent-First](0003-agent-first-interaction.md)
+Inspect the exact pinned Eino source and tests. Run native request, Tool-pairing,
+reasoning, history, cancellation, failure, no-retry and import-boundary tests.
+Deterministic fixtures establish local correctness; separately authorized live
+tests establish only the exact endpoint configuration tested.
+See [Agent Runtime](../agent-runtime.md) and [Architecture](../architecture.md).

@@ -165,12 +165,10 @@ binding receives only fixed local policy feedback; rejected arguments are not
 echoed and Tool handler and Kubernetes call counts remain zero. Unknown,
 malformed, authority-bearing, and sensitive selections still fail terminally.
 
-The native request guard restores parameter schemas only from the immutable
-catalog validated at binding. Exact Tool identities, order, descriptions, and
-count must match before restoration. Neither request metadata nor a provider's
-partial JSON Schema support grants authority: returned arguments still pass
-strict local binding. Invalid envelopes and corrected request-size excess make
-zero model network calls ([ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md)).
+Application binds the exact code-owned Tool schemas through native Eino.
+Provider JSON Schema support never grants authority: returned arguments still
+pass strict local binding. Invalid bindings and request-size excess make zero
+model network calls.
 
 ### T02: Cross-Namespace or cross-Context confusion
 
@@ -634,6 +632,15 @@ barriers, and temporary databases. Required proof includes:
 - The pinned streaming protocol cannot prove same-response continuation.
   Ambiguous disconnects therefore remain unknown and are never retried.
 
+## Native Responses run state
+
+[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) permits bounded native
+reasoning items only in current-run Application/Eino state and requests to the
+same consented model destination. These protocol items carry no authority and
+never enter TUI, logs, SQLite, export, or resumed history. Responses requests
+disable provider storage, automatic caching, truncation, and SDK retries.
+
+
 ## References
 
 - [Product Contract](product.md)
@@ -641,44 +648,16 @@ barriers, and temporary databases. Required proof includes:
 - [Architecture](architecture.md)
 - [Privacy Overview](privacy-overview.md)
 - [Data Retention Contract](data-retention.md)
-- [ADR-0012: Require Digest-Bound Approval for Writes](adr/0012-require-digest-bound-write-approval.md)
-- [ADR-0014: Isolate Runs with ClusterScope Generation](adr/0014-cluster-scope-generation-isolation.md)
-- [ADR-0020: Contain Kubeconfig Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
-- [ADR-0026: Require Informed Consent Before Model Transfer](adr/0026-require-informed-consent-before-model-transfer.md)
-- [ADR-0037: Adopt an Operational Capability Catalog](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0038: Use Free-Form Answers with Verified Evidence Metadata](adr/0038-use-free-form-answers-with-verified-evidence-metadata.md)
-- [ADR-0039: Use Configurable Runtime Budget Profiles](adr/0039-use-configurable-runtime-budget-profiles.md)
-- [ADR-0040: Use a Codex-Style Conversational TUI](adr/0040-use-a-codex-style-conversational-tui.md)
-- [ADR-0043: Use One Eino Runtime Boundary](adr/0043-use-one-eino-runtime-boundary.md)
-- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
-
-## Deterministic response metadata and failure diagnostics
-
-Response normalization never invents Evidence, scope, target, action, or intent.
-Duplicate and foreign references, malformed or unknown fields, missing/null
-required fields, stale generations, sensitivity, and budget violations remain
-denied. Runtime derives structural metadata only after validation. A
-presentation difference cannot grant authority; invalid final answers still
-cannot commit or drain queued input.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
-
-## Native Responses run state
-
-[ADR-0061](adr/0061-use-eino-directly-in-application.md) permits bounded native
-reasoning items only in current-run Application/Eino state and requests to the
-same consented model destination. These protocol items carry no authority and
-never enter TUI, logs, SQLite, export, or resumed history. Responses requests
-disable provider storage, automatic caching, truncation, and SDK retries.
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0014: Isolate Scope and Policy Generations](adr/0014-cluster-scope-generation-isolation.md)
+- [ADR-0020: Confine Kubernetes Access and Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
+- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
+- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md)
+- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)

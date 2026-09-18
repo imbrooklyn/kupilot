@@ -2,28 +2,27 @@
 
 ## Unreleased baseline
 
-[ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md) establishes
+[ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md) establishes
 `v0.1.0` as the first, still-unreleased product version with the current full
 operational scope. OpenAI is the only supported provider. Project-owned schema,
 policy, prompt, catalog and export formats remain at their initial version until
-that release. Earlier milestone labels are development history, not supported
-releases or compatibility obligations.
+that release.
 
 ## Native Eino ownership
 
-[ADR-0061](adr/0061-use-eino-directly-in-application.md) defines the
+[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) defines the
 current Eino ownership and protocol rules. Application directly composes
 Eino ADK; native message types remain private to Application. OpenAI profiles
-explicitly select `chat_completions` or `responses`; omission keeps the existing
-Chat Completions behavior. There is one Agent/Runner per run, no automatic
+explicitly select `chat_completions` or `responses`; omission selects
+Chat Completions. There is one Agent/Runner per run, no automatic
 protocol selection, retry, fallback, or additional conversation store.
 
 - Status: Accepted `v0.1.0` target
 - Date: 2026-09-07
 
-The checked-in implementation now includes the named-model, Eino ADK runtime,
+The implementation includes the named-model, Eino ADK runtime,
 role-scoped consent, safe Session context and summarization, and deterministic
-permission/action foundation of ADR-0044 through ADR-0048. Active-run steering,
+permission/action foundation. Active-run steering,
 bounded process-local follow-up input, edit-last, authoritative Session
 activity/deletion, invocation preflight, and typed terminal outcomes remain Application-owned
 while Eino retains the one in-run Agent loop. The supervised
@@ -70,8 +69,8 @@ dashboard, command palette, YAML editor, action menu, or shell console.
    uses one immutable digest-bound `ActionEnvelope`, durable pre-operation
    audit, at most one attempt, and separate outcome and verification states.
 8. **Framework-first Agent runtime.** Kupilot directly uses stable Eino ADK
-   Agent, Runner, message-state, and summarization facilities inside one
-   adapter boundary. It does not rebuild those facilities or add facades for
+   Agent, Runner, message-state, and summarization facilities inside
+   Application. It does not rebuild those facilities or add facades for
    hypothetical framework replacement.
 9. **Finite capability-aware budgets.** Agent, Reviewer, summary, read, log,
    metrics, remote-exec, local-process, item, byte, time, and cost limits remain
@@ -330,7 +329,7 @@ Composer cursor navigation remains editor-owned: `Ctrl+B/F` moves by character;
 `Alt+B/F`, Alt+Left/Right, and Ctrl+Left/Right move by word. `Ctrl+A`/`Ctrl+E`, `Home`/`End`,
 and directly delivered Command+Left/Right move to the line start/end without
 changing focus. `Alt+E` explicitly opens or closes supporting-observation
-inspection under [ADR-0062](adr/0062-preserve-composer-line-navigation.md).
+inspection under [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md).
 Transcript search uses `Alt+S` or `/find`; failure navigation uses
 `Alt+I`/`Alt+Shift+I`. Native Bubbles v2.2.1 owns movement and selection, including
 safe termination at empty and whitespace-only input boundaries. Selection
@@ -369,28 +368,13 @@ needed for daily operations.
 - [Security Threat Model](security.md)
 - [Privacy Overview](privacy-overview.md)
 - [Data Retention Contract](data-retention.md)
-- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0053: Scale Bounded Runtime Time Profiles for Local Models](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
-- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
-
-## Deterministic response metadata and failure diagnostics
-
-Final response schema 1 leaves intent, claim types, exact Evidence references,
-and action proposals with the model. Runtime supplies ordering, structural
-coverage, stop reasons, and typed clarification rendering. Content-free failure
-stage/reason codes distinguish malformed responses, invalid bindings, and commit
-failures. A greeting without a current observation does not imply a missing
-cluster read.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
+- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
+- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)

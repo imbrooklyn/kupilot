@@ -6,9 +6,8 @@
 The unreleased v0.1.0 baseline has one initial SQLite migration. It retains the
 current safe Session, Message, run, Evidence, summary, consent, Diagnosis,
 ActionEnvelope and audit projections. All project-owned format versions start
-at 1. Historical development migrations and restart-only archive tables are
-removed; existing incompatible state is rejected without deletion or rewrite.
-See [ADR-0063](adr/0063-establish-the-unreleased-openai-only-baseline.md).
+at 1. Incompatible state is rejected without deletion or rewrite.
+See [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md).
 
 This document defines what Kupilot may persist, the default lifetime of each
 eligible category, the exact meaning of minimal-persistence, deletion behavior,
@@ -91,11 +90,11 @@ The separate allowlisted local application log is not Session persistence. TUI
 mode uses bounded `info` logging by default and lets the user disable it. Default
 records contain no request or response body, Tool arguments, raw object, raw
 container output, credential, or arbitrary error text. They may contain the
-bounded safe model-failure projection from ADR-0036: local request ID, stable
+bounded safe model-failure projection from ADR-0035: local request ID, stable
 error metadata, observed HTTP status, fixed cause category, and a sink-generated
 project-function chain without files, lines, arguments, or values.
 
-Explicit `logging.sensitive_diagnostics` adds only the ADR-0036 bounded model-
+Explicit `logging.sensitive_diagnostics` adds only the ADR-0035 bounded model-
 failure endpoint, model, error-chain, failed-response prefix, and Go stack
 fields. These records remain outside SQLite and Session deletion. They use the
 same three-file, 1 MiB-per-file, seven-day rotation and are not removed merely
@@ -183,11 +182,9 @@ or endpoint error body. The endpoint origin itself belongs to typed local
 configuration; the database stores only the consent and request hashes needed by
 the accepted contracts.
 
-The native request-fidelity guard's bound catalog reference and corrected
-request buffer exist only for the current call. They are not a durable
-conversation record or new retention category. Request/response bytes and
-provider error text remain excluded; the existing safe metadata policy above
-continues to apply ([ADR-0059](adr/0059-preserve-bound-native-tool-schemas.md)).
+Native model request state exists only for the current call. It is not a
+durable conversation record or new retention category. Request/response bytes
+and provider error text remain excluded under the safe metadata policy above.
 
 ### 3.3 ToolInvocation and Evidence
 
@@ -350,7 +347,7 @@ a crash bundle, or another Kupilot-created durable store:
   capability-check bodies.
 - Process environment snapshots, value-bearing CLI arguments, SQL bind values in
   debug output, raw database rows outside explicit mappings, and raw application
-  logs. ADR-0036 admits only its safe function-name chain by default and its
+  logs. ADR-0035 admits only its safe function-name chain by default and its
   bounded model error, failed-response prefix, and current-goroutine stack when
   the user explicitly enables sensitive diagnostics.
 - Terminal byte streams, escape sequences, clipboard or device-control content,
@@ -403,7 +400,7 @@ ownership and do not make drafts eligible for persistence.
 
 ### 6.1 User-controlled redacted summary export
 
-ADR-0041 admits one durable output outside SQLite: an explicitly confirmed,
+ADR-0025 admits one durable output outside SQLite: an explicitly confirmed,
 versioned Markdown summary of the current resumable standard-persistence
 Session. Application projects a consistent SQLite snapshot through an explicit
 allowlist. Only safe Session display metadata, the versioned safe summary and
@@ -460,7 +457,7 @@ A cleanup transaction failure rolls back that batch, produces a safe storage
 error, and does not report the affected rows as deleted. Kupilot does not raise
 a retention value silently. Automatic frequent `VACUUM` is prohibited. An
 explicit maintenance command or tested size threshold may be added when driver
-behavior satisfies ADR-0018.
+behavior satisfies ADR-0025.
 
 ## 8. User-requested deletion
 
@@ -624,7 +621,7 @@ fake clock, and failure injection:
   repository inputs, logical rows, database bytes, and WAL inspected by tests.
 
 The pure-Go driver, PRAGMA, sqlx bind type, checkpoint, sidecar, and permission
-behavior must satisfy ADR-0018 and ADR-0030.
+behavior must satisfy ADR-0025.
 
 ## 11. Local interaction and coverage data
 
@@ -666,45 +663,27 @@ before:
 - Selecting a storage driver whose journal, locking, deletion, or permission
   behavior cannot satisfy this contract.
 
+## Native Responses run state
+
+[ADR-0013: Compose Native Eino Directly in Application](adr/0013-layered-architecture-and-consumer-owned-ports.md) permits bounded native
+reasoning items only in current-run Application/Eino state and requests to the
+same consented model destination. These protocol items carry no authority and
+never enter TUI, logs, SQLite, export, or resumed history. Responses requests
+disable provider storage, automatic caching, truncation, and SDK retries.
+
+
 ## References
 
 - [Security Threat Model](security.md)
 - [Architecture](architecture.md)
 - [Privacy Overview](privacy-overview.md)
 - [Scope](scope.md)
-- [ADR-0008: Use SQLite for Local Persistence](adr/0008-use-sqlite-for-local-persistence.md)
-- [ADR-0018: Require One Pure-Go SQLite Driver](adr/0018-require-one-pure-go-sqlite-driver.md)
-- [ADR-0025: Enforce Data Retention and User Deletion](adr/0025-enforce-data-retention-and-user-deletion.md)
-- [ADR-0030: Use sqlx Inside the SQLite Adapter](adr/0030-use-sqlx-inside-the-sqlite-adapter.md)
-- [ADR-0041: Export Free-Form Session Summaries](adr/0041-export-free-form-session-summaries.md)
-- [ADR-0042: Remember the Last Verified Kubernetes Context](adr/0042-remember-the-last-verified-kubernetes-context.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0046: Use Named Model Roles and Optional Auto-Review](adr/0046-use-named-model-roles-and-optional-auto-review.md)
-- [ADR-0047: Reuse Eino ADK for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
-- [ADR-0048: Own Run Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
-- [ADR-0049: Bound TUI Observability, Planning, Compaction, and Evidence Coverage](adr/0049-bound-tui-observability-planning-compaction-and-evidence-coverage.md)
-- [ADR-0050: Use Authoritative Session Activity and Transactional Deletion](adr/0050-use-authoritative-session-activity-and-transactional-deletion.md)
-- [ADR-0051: Use Bounded TUI Navigation, Capabilities, and Local Diagnostics](adr/0051-use-bounded-tui-navigation-capabilities-and-local-diagnostics.md)
-- [ADR-0052: Use Typed Agent Outcomes, Evidence Integrity, and Preflight](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
-- [ADR-0054: Preserve Structured Response Compatibility Across Turns](adr/0054-preserve-structured-response-compatibility-across-turns.md)
-- [ADR-0063: Establish the Unreleased OpenAI-only Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)
-
-## Deterministic response metadata and failure diagnostics
-
-Response schema 1 uses the existing durable safe conversation source. Retained
-Messages from this initial baseline are reconstructed in the current grammar
-without historic authority. Interaction failure stage/reason
-metadata is current-process diagnostic state. No raw response or copied
-conversation log is added to SQLite or exports.
-
-See [ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md)
-and [Interaction Conformance](interaction-conformance.md) for the exact contract
-and verification boundaries.
-
-## Native Responses run state
-
-[ADR-0061](adr/0061-use-eino-directly-in-application.md) permits bounded native
-reasoning items only in current-run Application/Eino state and requests to the
-same consented model destination. These protocol items carry no authority and
-never enter TUI, logs, SQLite, export, or resumed history. Responses requests
-disable provider storage, automatic caching, truncation, and SDK retries.
+- [ADR-0025: Use One Safe SQLite Store](adr/0025-enforce-data-retention-and-user-deletion.md)
+- [ADR-0014: Isolate Scope and Policy Generations](adr/0014-cluster-scope-generation-isolation.md)
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)
+- [ADR-0026: Bind Model Roles, Credentials and Consent](adr/0026-require-informed-consent-before-model-transfer.md)
+- [ADR-0047: Use Eino for Session Context and Summarization](adr/0047-reuse-eino-adk-for-session-context-and-summarization.md)
+- [ADR-0048: Own Steering and Queued Follow-Up Input](adr/0048-own-run-steering-and-queued-follow-up-input.md)
+- [ADR-0040: Use One Conversational Supervision Screen](adr/0040-use-a-codex-style-conversational-tui.md)
+- [ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md)
+- [ADR-0063: Keep One Unreleased Version-One Baseline](adr/0063-establish-the-unreleased-openai-only-baseline.md)

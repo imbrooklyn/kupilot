@@ -16,12 +16,12 @@ action dispatcher. The exact local runner is a separate non-Kubernetes adapter
 and never serves as a fallback for these typed operations. Deterministic tests
 are not live-cluster, RBAC-installation, or local-tool evidence.
 
-Kupilot pins `k8s.io/client-go v0.35.7` together with matching `k8s.io/api` and
-`k8s.io/apimachinery` modules. The upstream module requires Go 1.25.0. Kupilot
-does not support mixed Kubernetes module minors.
+Kupilot pins `k8s.io/client-go v0.37.0` together with matching `k8s.io/api` and
+`k8s.io/apimachinery` modules. The upstream module requires Go 1.26.0; Kupilot
+requires Go 1.27.0 and does not support mixed Kubernetes module minors.
 
-The upstream [client-go compatibility contract](https://github.com/kubernetes/client-go/blob/v0.35.7/README.md)
-and [module declaration](https://github.com/kubernetes/client-go/blob/v0.35.7/go.mod)
+The upstream [client-go compatibility contract](https://github.com/kubernetes/client-go/blob/v0.37.0/README.md)
+and [module declaration](https://github.com/kubernetes/client-go/blob/v0.37.0/go.mod)
 are dependency inputs; Kupilot's product surface remains narrower than
 client-go.
 
@@ -29,11 +29,13 @@ client-go.
 
 | Kubernetes API server | Kupilot contract |
 | --- | --- |
-| 1.34.x | Supported for the documented stable APIs shared with 1.35. |
-| 1.35.x | Supported; exact client-go minor match. |
-| 1.36.x | Supported for the documented stable APIs shared with 1.35. |
+| 1.34.x | Declared stable-API target; live compatibility requires exact cluster evidence. |
+| 1.35.x | Declared stable-API target; not an exact client-go minor match. |
+| 1.36.x | Declared stable-API target; not an exact client-go minor match. |
 
-Older and newer minors are outside the supported matrix. Discovery never
+This product matrix does not expand merely because client-go is newer. The
+selected 0.37 client does not establish live conformance for any row. Older
+and newer server minors are outside the declared matrix. Discovery never
 expands the surface, and this matrix is not a claim that every client-go API is
 supported.
 
@@ -88,7 +90,7 @@ inside `internal/kube`.
 
 Each selected Context owns a fresh bundle with:
 
-- the fixed User-Agent `kupilot/0.5`;
+- the fixed User-Agent `kupilot/0.1.0`;
 - QPS 5 and Burst 10;
 - a Kubernetes request deadline selected from the immutable run profile, at
   most 180 seconds and no later than the owning run deadline;
@@ -228,7 +230,7 @@ Deployment GETs and never changes the prior write outcome.
 ## Implemented `v0.1.0` remote diagnostics
 
 Remote command transport is confined to `internal/kube` and uses the pinned
-client-go v0.35.7 `remotecommand.NewSPDYExecutorRejectRedirects` API. The exact
+client-go v0.37.0 `remotecommand.NewSPDYExecutorRejectRedirects` API. The exact
 POST targets `api/v1/namespaces/<namespace>/pods/<pod>/exec`, sends a typed
 `PodExecOptions`, and sets `stdin=false`, `tty=false`, `stdout=true`, and
 `stderr=true`. The runtime includes the exact container and argv parameters and
@@ -354,8 +356,7 @@ PDB cases, and zero-call denial without contacting a cluster.
 - [Scope](scope.md)
 - [Security Threat Model](security.md)
 - [Least-Privilege RBAC](rbac/README.md)
-- [ADR-0007](adr/0007-use-client-go-behind-narrow-kubernetes-ports.md)
-- [ADR-0037](adr/0037-adopt-an-operational-capability-catalog.md)
-- [ADR-0044](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045](adr/0045-admit-controlled-execution-and-remediation.md)
-- [ADR-0053](adr/0053-scale-bounded-runtime-time-profiles-for-local-models.md)
+- [ADR-0020: Confine Kubernetes Access and Exec Credentials](adr/0020-contain-kubeconfig-exec-credentials.md)
+- [ADR-0037: Use a Fixed Capability Catalog and Finite Budgets](adr/0037-adopt-an-operational-capability-catalog.md)
+- [ADR-0044: Route Deterministic Risk Through Permission Profiles](adr/0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
+- [ADR-0045: Require Digest-Bound Controlled Execution](adr/0045-admit-controlled-execution-and-remediation.md)

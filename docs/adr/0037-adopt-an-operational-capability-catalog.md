@@ -1,134 +1,37 @@
-# ADR-0037: Adopt an Operational Capability Catalog
+# ADR-0037: Use a Fixed Capability Catalog and Finite Budgets
 
 - Status: Accepted
-- Date: 2026-08-30
-- Supersedes: ADR-0009, ADR-0011, ADR-0024, and ADR-0029
-- Amended by: ADR-0044 and ADR-0045
-
-ADR-0044 defines the broader `v0.5` daily-operations P0 catalog, explicit CRD
-policy, observability sources, permission profiles, and capability-aware finite
-budgets. ADR-0045 admits typed remediation and controlled remote/local
-execution through `ActionEnvelope`. The strict versioned catalog, deterministic
-Evidence, explicit scope, bounded projection, and prohibition on dynamic model
-authority remain normative. The exact built-in list and restart-only examples
-below describe the earlier catalog revision. ADR-0044 also replaces the blanket
-ConfigMap-value and container-environment prohibition below with exact
-policy-admitted sensitive reads; safe Secret metadata is distinct from Secret
-values, which remain denied.
 
 ## Context
-
-The original read-only MVP proved the scope, projection, Evidence, consent, and
-approval boundaries, but its exact six-Tool, five-Kind, one-Namespace contract
-prevents common Kubernetes operational investigations. In particular, an Agent
-cannot answer ordinary questions about Nodes, Namespaces, common controllers,
-storage, networking, or a workload in another Namespace even when the selected
-Kubernetes identity already has the required RBAC permission.
-
-Removing every runtime boundary would create a shell or generic Kubernetes
-client controlled by untrusted model output. Keeping the original product
-boundary, however, makes the Agent unsuitable for its intended daily use.
+A model needs useful operational capabilities without selecting arbitrary APIs,
+commands, output sources, budgets or network destinations.
 
 ## Decision
+Use a compile-time code-owned version-1 catalog with strict typed Tool schemas.
+Catalog admission names the current need, operation, sources/fields/sinks,
+permissions, privacy, limits, partial/error behavior, Evidence and verification.
+The runtime injects scope and authority; model arguments cannot broaden them.
 
-Kupilot will be a local conversational Kubernetes operations Agent. It remains
-single-process, single-user, and centered on one natural-language conversation;
-it does not become a resource dashboard, k9s clone, kubectl terminal, or shell.
+Admit reviewed typed resource reads, bounded list/query/describe relationships,
+Events, non-following logs and local log search, metrics, exact optional
+Prometheus/Loki sources, separately controlled sensitive projections, remote
+diagnostics, typed remediation and exact default-off local execution as specified
+in [Operational Capabilities](../diagnostic-capabilities.md). Secret values,
+generic HTTP, arbitrary patch/apply/edit/delete and raw object access remain denied.
 
-The model-visible capability catalog is versioned and code-owned rather than
-permanently fixed to six entries. Every capability still requires a strict
-schema, canonical arguments, a consumer-owned port, local authorization,
-bounded projection, sensitive-data handling, deterministic Evidence or action
-metadata, and request-recording tests. There is no prompt-parsed command,
-dynamic plugin, arbitrary GVR, raw REST request, YAML apply, or shell fallback.
+Freeze finite budgets before I/O. Reserve atomically for Agent, Reviewer, summary,
+Tool, Kubernetes, optional data source, remote/local execution, pages, items,
+samples, lines, bytes, streams, repetition and wall/idle time. Per-capability
+ceilings remain independent of run totals. Model and Tool output cannot select
+or enlarge a profile. Exact token/cost/context limits require pinned component
+and selected endpoint evidence, never character-to-token estimates.
 
-The first operational read catalog expands direct typed access to these stable
-built-in resources:
+Reuse accepted safe reads only when exact run, target, scope, policy, query and
+freshness identity match. Reuse cannot restore historical Evidence authority.
 
-- Core `v1`: Namespace, Node, Pod, Service, PersistentVolumeClaim,
-  PersistentVolume, and ConfigMap metadata only.
-- `apps/v1`: Deployment, ReplicaSet, StatefulSet, and DaemonSet.
-- `batch/v1`: Job and CronJob.
-- `networking.k8s.io/v1`: Ingress.
-- `autoscaling/v2`: HorizontalPodAutoscaler.
-- `policy/v1`: PodDisruptionBudget.
-
-Secret objects and data remain prohibited. ConfigMap values, container
-environment values, projected credentials, admission objects, RBAC objects,
-custom resources, and arbitrary discovered APIs are not model-readable. Adding
-a source still requires explicit projection and sink review; the catalog may
-evolve without another "exactly N Tools" product freeze, but not dynamically at
-runtime.
-
-`ClusterScope` continues to bind one verified Context, one working Namespace,
-and one generation to a run. The working Namespace is the default target and is
-always visible in the TUI. A frozen namespace-access policy additionally
-authorizes either:
-
-- `current`: only the working Namespace; or
-- `all`: an explicit different Namespace or a bounded all-Namespace list in the
-  same Context.
-
-The default operational profile is `all`; operators can tighten it to
-`current`. The model cannot change the policy. Every explicit Namespace is
-validated locally, included in canonical arguments and Evidence, and remains
-subject to Kubernetes RBAC. An all-Namespace request is represented explicitly,
-never by an empty value that can be confused with the working Namespace.
-Cluster-scoped Node, Namespace, and PersistentVolume references carry no fake
-Namespace. Cross-Context and cross-cluster calls remain prohibited.
-
-Reads remain side-effect free. Mutations are separate typed operations. Every
-mutation requires a code-defined semantic diff, exact target, digest-bound
-local approval, revalidation, durable pre-operation audit, a single execution
-attempt, and separate verification. The existing Deployment restart is the
-first admitted mutation, but it is no longer a permanent claim that all later
-versions may contain exactly one write. A new mutation requires its own schema,
-risk text, precondition, audit, denial tests, and explicit catalog entry. There
-is no autonomous remediation or reusable approval.
-
-## Consequences
-
-Kupilot can investigate the cluster topology and common workload, storage, and
-networking failures that dominate daily Kubernetes operations. RBAC remains the
-operator's final Kubernetes authorization boundary, while Kupilot still
-minimizes and validates what reaches the model and terminal.
-
-The adapter and test surface grows because every built-in Kind needs a stable
-typed client mapping and a reviewed projection. The product must show the
-active namespace-access policy and action availability through `/status` so a
-broader policy is not invisible.
-
-## Security and privacy impact
-
-Broader read authority can expose more names, status, topology, and operational
-text. Consent categories, projection, normalization, sensitive-value blocking,
-byte and item limits, and retention apply before every sink. Kubernetes RBAC
-denial is never bypassed or retried with another identity.
-
-Cluster-scoped and cross-Namespace Evidence records the exact observed resource
-scope. A working Namespace is presentation and defaulting context, not a false
-claim that every observation came from it. Scope generation still invalidates
-all late work for the selected Context and access policy.
-
-## Validation
-
-Deterministic tests must cover every admitted Kind and Namespace mode with exact
-verb, group, version, resource, Namespace, limit, and projection assertions.
-Secret and ConfigMap-data requests, unknown APIs, cross-Context calls, policy
-expansion, malformed Namespaces, and all-Namespace calls under `current` must
-produce zero Kubernetes actions.
-
-Every write catalog entry must additionally prove zero executor calls on
-missing approval, mismatch, expiry, replay, stale scope, target change,
-persistence failure, or ambiguous prior outcome.
-
-## References
-
-- [Product Contract](../product.md)
-- [Scope](../scope.md)
-- [Architecture](../architecture.md)
-- [Security Threat Model](../security.md)
-- [ADR-0012: Require Digest-Bound Approval for Writes](0012-require-digest-bound-write-approval.md)
-- [ADR-0014: Isolate Runs with ClusterScope Generation](0014-cluster-scope-generation-isolation.md)
-- [ADR-0044: Prioritize Daily Operations and Adopt Permission Profiles](0044-prioritize-daily-operations-and-adopt-permission-profiles.md)
-- [ADR-0045: Admit Controlled Execution and Remediation](0045-admit-controlled-execution-and-remediation.md)
+## Consequences and validation
+Closed capabilities make denial and exact-request tests meaningful. Every new
+capability needs complete admission and bounded fixtures, rather than a plugin
+or generic client. Test zero calls on denial, one-over limits, atomic reservations,
+pagination, truncation, cancellation and stale generations. Budget values live
+in [Agent Runtime](../agent-runtime.md), not duplicated ADR tables.

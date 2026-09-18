@@ -2,20 +2,20 @@
 
 This contract separates authority checks, runtime derivation, unambiguous
 representation normalization, and presentation. It is governed by
-[ADR-0057](adr/0057-derive-response-metadata-and-classify-interaction-failures.md).
+[ADR-0052: Validate Evidence-Backed Answers and Typed Outcomes](adr/0052-use-typed-agent-outcomes-evidence-integrity-and-preflight.md).
 Test observations and limits must be reported separately from this target.
 
 ## Field audit
 
 | Field | Model responsibility | Runtime responsibility | Rejection |
 | --- | --- | --- | --- |
-| Final schema and outcome | Exact version 4; answer or typed clarification intent | Dispatch one strict decoder | Old/unknown/missing/null version or outcome |
+| Final schema and outcome | Exact version 1; answer or typed clarification intent | Dispatch one strict decoder | Old/unknown/missing/null version or outcome |
 | Answer Markdown | Candidate bounded safe prose | Normalize safely; render typed clarification instead | Unsafe content, invalid string, excessive size |
 | Claims | Text, explicit kind, exact Evidence references | Sequence, normalized hash, structural support, run/scope/policy binding | Unknown kind, duplicate claim, missing support for current observation |
 | Evidence IDs | Choose known references without duplication | Validate ownership first, then sort by acceptance order | Missing, unknown, duplicate, foreign, stale IDs |
 | Source coverage | No wire field | Derive from accepted Tool outcomes and source gaps | Model-supplied source metadata |
 | Clarification | One to three kind/prompt/label-only choice structures | Ordinals, choice IDs, rendering, needs-user-input stop | Missing/null arrays, invalid choices, mixed answer/action/Evidence |
-| Plan | Wire version 2, title, description-only steps, limitations, claims | Step ordinals, durable Plan version 1, rendering | Unknown/action fields, invalid line/count/byte bounds |
+| Plan | Wire version 1, title, description-only steps, limitations, claims | Step ordinals, durable Plan version 1, rendering | Unknown/action fields, invalid line/count/byte bounds |
 | Tool call | Fixed Tool and exact typed intent parameters | Invocation ID, canonical binding, scope, budgets, pairing | Malformed/duplicate/unknown call, unauthorized target or capability |
 | Retained assistant history | No model reconstruction work | Current strict envelope, empty authority arrays, complete ordered coverage | Missing eligible history, corrupt coverage, oversized representation |
 | Stream assembly | Provider protocol events | Pinned Eino concatenation, bounded validation, native call IDs | Malformed/duplicate/out-of-order events, invalid finish/usage |
@@ -90,7 +90,7 @@ failure. Tool/Evidence metadata already accepted cannot authorize an answer.
 | Internal invariant | `internal_invariant_failed` | Reject invalid local IDs, clocks, generated state or an adapter returning without an accepted terminal; inspect doctor | prefix | input |
 
 Native Responses uses the decoded `failed` or `cancelled` response status.
-This handling inspects error wording. Unknown errors remain
+This handling does not inspect raw error wording. Unknown errors remain
 fail-closed and are not retrospectively attributed without evidence. The original fixed `ModelErrorCode` and `SafeErrorClass`
 continue to distinguish transport authentication, rate limit, timeout, redirect,
 media, budget and protocol results inside the adapter.
@@ -159,17 +159,17 @@ are deterministic fixture claims, not real Kubernetes or model-quality claims.
 
 ### Auditable decision coverage
 
-| Changed decisions | Paired test evidence |
+| Decisions | Paired test evidence |
 | --- | --- |
 | Strict final fields present/missing/null/duplicate/unknown, old schema, malformed and one-over | `TestResponseConformanceRequiredFields`, `TestResponseConformanceMalformedAndRetiredFields`, `TestResponseConformanceNestedFields` |
-| Claim kind/support derivation; removed wire metadata; 100/101 claims; whitespace/escapes/order | `TestResponseConformanceClaimIntentAndDerivation`, `TestResponseConformanceExactLimitsAndRepresentation` |
+| Claim kind/support derivation; runtime-owned metadata; 100/101 claims; whitespace/escapes/order | `TestResponseConformanceClaimIntentAndDerivation`, `TestResponseConformanceExactLimitsAndRepresentation` |
 | Exact text/Markdown ceiling and one-over; empty/whitespace/different safe clarification candidate | `TestResponseTextLimitsAndClarificationPresentation` |
 | Known Evidence order canonicalization vs unknown/duplicate/foreign/stale/duplicate-claim rejection | `diagnosis_test.go` coverage-validator table; `TestInteractionCompositionScenarioMatrix` |
 | Direct diagnosis metadata, plan/clarification alternatives, redaction growth, missing internal citation fields | `TestDiagnosisFailureMatrixKeepsDistinctBoundaryReasons`, `TestPlanWireDerivesOrdinalsAndRejectsStructuralAlternatives`, `TestFinalAlternativeAndInternalGrammarFailuresRemainTyped` |
 | Empty Tool acceptance changes revision; old snapshot and second seal rejected | `TestEmptyAcceptedSourceInvalidatesEvidenceSnapshot` |
 | Partial/truncated detail state agrees with SQLite | `TestInteractionCompositionScenarioMatrix` partial and truncated rows |
 | SSE finish, usage, stop, choice count/index, malformed JSON, exact usage ceiling/one-over, EOF/newline | `TestProviderOrderDecisionMatrix`, `TestBoundedSSEOrderObserverPreservesBytesAndEOFRejection` |
-| Native provider error vs absent/empty/null/non-string/malformed field; EOF/newline; no content retained | `TestNativeProviderErrorIsTypedBeforePinnedClientLosesItsShape` |
+| HTTP and stream failures retain safe typed classes without raw content | `TestModelClientMapsHTTPAndStreamFailuresSafely` |
 | Tool selection schema and pairing denial before handler | `TestAdapterRejectsHostileToolSelectionsBeforeHandler`, `runtime_policy_test.go`, `model_contract_test.go` |
 | Retained message roles, metadata, exact current input; assembled finish and summary normalization | `TestRetainedConversationFailuresNeverReachModelOrTool`, `TestAssembledMessageAndSummaryFailuresHaveExactReasons` |
 | Tool feedback identity, duplicate binding, invalid completion, sealed registry | `TestBoundToolResultAndFeedbackCannotChangeIdentity`, `TestToolBindingMalformedAndDuplicateBatchesHaveNoHandlerCalls`, `TestToolResultCannotEnterASealedEvidenceRegistry` |
@@ -187,41 +187,14 @@ JSON-token paths behind complete JSON validation are exercised with direct
 internal probes, explicitly distinguished from reachable wire inputs. The
 string-only JSON encoder failure and clarification renderer failure after
 sanitization/validation remain structural invariants; no provider fixture can
-reach them without violating those preceding checks. Whole-package
-statement coverage and remaining uncovered changed statements are reported
-separately below.
-
-### Measured statement coverage
-
-The same four-package `go test -count=1 -coverprofile` command was run before
-implementation at `d722730f4d78acb391c6a667ca8995403077b4d5` and after the
-changes, using Go 1.25.13. Profiles were temporary artifacts outside the
-repository.
-
-| Package | Before | After |
-| --- | --- | --- |
-| `internal/agent` | 74.0% | 78.4% |
-| `internal/application` | 78.6% | 81.6% |
-| `internal/application` | 70.8% | 71.9% |
-| `internal/tui` | 76.4% | 76.4% |
-
-An additional `-coverpkg` run instruments calls across all four packages so
-Application composition tests count toward adapter/Agent statement execution.
-A diff-to-profile audit checks every instrumented block intersecting a changed
-production line: 396 of 397 such blocks were observed. This block audit is not
-a branch percentage. The remaining
-unreachable changed return is the clarification-render failure after the same
-request has already passed sanitization and validation: the fixed question and
-choice ceilings are below the fixed Markdown ceiling. The error remains as a
-defensive invariant; it is not removed for coverage or described as a tested
-external branch.
+reach them without violating those preceding checks.
 
 ## Evidence levels
 
 ### Interpretation
 
 Go `-coverprofile` is statement coverage, not native branch coverage. A decision
-matrix must name tests for both outcomes of changed decisions and explicit
+matrix must name tests for both outcomes of decisions and explicit
 error returns. Deterministic full-composition tests use recording transports,
 synthetic Tools/Evidence, and temporary SQLite; they do not prove real-cluster
 integration or semantic answer quality. Opt-in bounded OpenAI conformance
@@ -231,14 +204,14 @@ are separate and cannot be inferred from either fixture class.
 
 ## Application-owned native Eino decisions
 
-ADR-0061 moves the existing Eino boundary into Application and admits a second
-explicit native OpenAI API. The two configurations share the same Application
+ADR-0013 places native Eino composition inside Application and admits the two
+explicit native OpenAI protocols. The two configurations share the same Application
 pipeline and safety controls; one Agent/Runner is constructed for each run.
 No second loop is used to recover a failed request.
 
 | Decision | Allow / deny evidence |
 | --- | --- |
-| Protocol and sampling admission | `TestNativeModelProtocolAndOptionalTemperatureConfiguration`: existing Chat defaults, Responses non-streaming, omitted OpenAI temperature; removed streaming switches, unknown/duplicate/null protocol and null temperature denied |
+| Protocol and sampling admission | `TestNativeModelProtocolAndOptionalTemperatureConfiguration`: Chat defaults, Responses non-streaming, omitted OpenAI temperature; user-supplied streaming switches, unknown/duplicate/null protocol and null temperature denied |
 | Configuration persistence | `TestSaveNativeResponsesProfilePreservesOmissionAndReasoning`: native fields and omitted sampling round trip |
 | Reasoning and Tool state | `TestNativeResponsesAgentToolAndFinal`: exactly two native model calls, one synthetic Tool, encrypted reasoning and correlated Tool output retained in the second request |
 | Pinned upstream streaming loss | `TestNativeResponsesPinnedStreamingReasoningLimitation`: demonstrate missing encrypted content and reject streaming Responses configuration before a model call |
@@ -252,14 +225,5 @@ No second loop is used to recover a failed request.
 
 The composition suite has 56 protocol/scenario combinations. Native Responses
 uses JSON generation, so the two SSE-only event-order cases apply only to Chat
-Completions. Ollama-specific regressions were removed with that provider. These are deterministic
+Completions. These are deterministic
 structural tests with synthetic Tools and zero real Kubernetes access.
-
-Statement coverage measured from the pre-change HEAD archive and the refactored
-worktree was Agent 78.4% before/after, TUI 76.8% before/after, and Application
-71.9% plus the former adapter 82.8% before, versus merged Application 74.9%
-after. For a comparable combined population, Application plus Eino increased
-from 8,414/11,312 statements (74.38%) to 8,680/11,587 (74.91%). Package moves
-change the denominator. Go reports statement coverage, not native branch
-coverage; the decision table is a separate review aid, not a percentage or a
-claim of exhaustive model-output exploration.
