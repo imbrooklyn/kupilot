@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -308,43 +309,34 @@ func TestClientBundleOwnerCancellationStopsInFlightRequest(t *testing.T) {
 func TestClientBundleEnforcesRequestTimeout(t *testing.T) {
 	t.Parallel()
 
-	started := make(chan struct{}, 1)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		assertExactPodGet(t, request, 50*time.Millisecond)
-		started <- struct{}{}
-		<-request.Context().Done()
-	}))
-	defer server.Close()
+	path := writeSingleContextKubeconfig(t, "https://cluster.example.invalid", nil, &clientcmdapi.AuthInfo{})
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 50 * time.Millisecond
+		factory, err := NewClientFactory(newConfigLoaderForPaths([]string{path}), ExecCredentialsAllow, timeout)
+		if err != nil {
+			t.Fatalf("NewClientFactory() error = %v", err)
+		}
+		bundle, err := factory.Create(context.Background(), "selected")
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		defer bundle.Close()
 
-	path := writeSingleContextKubeconfig(t, server.URL, testServerCAData(server), &clientcmdapi.AuthInfo{})
-	factory, err := NewClientFactory(newConfigLoaderForPaths([]string{path}), ExecCredentialsAllow)
-	if err != nil {
-		t.Fatalf("NewClientFactory() error = %v", err)
-	}
-	factory.requestTimeout = 50 * time.Millisecond
-	bundle, err := factory.Create(context.Background(), "selected")
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	defer bundle.Close()
-
-	result := make(chan error, 1)
-	go func() {
-		_, err := bundle.typed.CoreV1().Pods("default").Get(context.Background(), "synthetic", metav1.GetOptions{})
-		result <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Kubernetes request did not start")
-	}
-	select {
-	case rawErr := <-result:
-		err := classifyKubernetesError("read_namespace", rawErr)
+		calls := 0
+		bundle.lifecycle.base = roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			assertExactPodGet(t, request, timeout)
+			calls++
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		})
+		started := time.Now()
+		_, rawErr := bundle.typed.CoreV1().Pods("default").Get(context.Background(), "synthetic", metav1.GetOptions{})
+		err = classifyKubernetesError("read_namespace", rawErr)
 		assertKubeSafeError(t, err, ClassTimeout, "kubernetes_request_timeout")
-	case <-time.After(3 * time.Second):
-		t.Fatal("request timeout did not stop the Kubernetes request")
-	}
+		if calls != 1 || time.Since(started) != timeout {
+			t.Fatalf("request calls/elapsed = %d/%s, want 1/%s", calls, time.Since(started), timeout)
+		}
+	})
 }
 
 func TestClosedClientBundlePerformsNoRequest(t *testing.T) {
