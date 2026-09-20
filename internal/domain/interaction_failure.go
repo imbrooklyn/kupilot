@@ -99,6 +99,9 @@ func (failure InteractionFailure) Valid() bool { return failure.Stage() != "" }
 
 // SafeMessage is deliberately assembled only from fixed catalog values.
 func (failure InteractionFailure) SafeMessage() string {
+	if failure == FailureEvidenceUnknown {
+		return "The model cited Evidence not accepted in this run. The answer was rejected (claim_binding/evidence_reference_unknown)."
+	}
 	if !failure.Valid() {
 		return "The diagnostic runtime failed safely."
 	}

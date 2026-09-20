@@ -32,7 +32,7 @@ func TestInteractionFailuresAreClosedContentFreeBoundaryValues(t *testing.T) {
 			}
 			seen[reason] = true
 			message := reason.SafeMessage()
-			if len(message) > 160 || !strings.HasPrefix(message, "The interaction stopped safely at ") || !strings.Contains(message, string(reason)) || strings.ContainsAny(message, "\n\r\x1b") {
+			if len(message) > 160 || !strings.Contains(message, string(group.stage)) || !strings.Contains(message, string(reason)) || strings.ContainsAny(message, "\n\r\x1b") {
 				t.Fatalf("unsafe fixed projection: %q", message)
 			}
 		}
@@ -41,5 +41,8 @@ func TestInteractionFailuresAreClosedContentFreeBoundaryValues(t *testing.T) {
 		if reason.Valid() || reason.Stage() != "" || reason.SafeMessage() != "The diagnostic runtime failed safely." {
 			t.Fatal("unknown reason escaped into diagnostics")
 		}
+	}
+	if !strings.Contains(FailureEvidenceUnknown.SafeMessage(), "The model cited Evidence not accepted in this run") {
+		t.Fatal("unknown reference failure does not explain the model citation error")
 	}
 }

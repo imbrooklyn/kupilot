@@ -40,7 +40,7 @@ Enter sends when idle and steers an active run at its next model boundary. Durin
 Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up when the composer is empty.
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
-The mouse wheel scrolls conversation or dialogs. Use your terminal's selection bypass (usually Shift+drag) to select text.
+Drag to select text with your terminal. Page Up/Page Down scroll conversation or dialogs (Fn+Up/Fn+Down on Mac).
 Alt+E opens supporting observation details. Ctrl+A/E moves to the line start/end. Esc interrupts an active run when no local interaction owns it.
 Alt+S reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
 Ctrl+B/F moves by character; Alt+B/F and Alt/Ctrl+Left/Right move by word.

@@ -266,9 +266,9 @@ uses one alternate-screen renderer and a bounded transcript viewport. Dialogs,
 progress and completed turns remain in that managed screen. On clean exit the
 terminal is restored and only the completed safe transcript is printed once.
 There is no timed live-to-scrollback insertion or inline frame handoff. Mouse
-wheel input moves only the read-only viewport or dialog; selection uses the
-terminal's reporting-bypass gesture. Model-selected styling, clipboard controls
-and device controls cannot enter the shutdown transcript. The composer exposes
+reporting stays disabled so native terminal selection works. Keyboard paging
+moves only the read-only viewport or dialog. Model-selected styling, clipboard
+controls and device controls cannot enter the shutdown transcript. The composer exposes
 one real cursor for operating-system input-method positioning; its placeholder is never editable
 state. Working animation messages are local, bounded, correlated to the active
 run and scope generation, and rejected after terminal or stale state. They

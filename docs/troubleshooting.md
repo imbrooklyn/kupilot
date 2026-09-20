@@ -86,10 +86,22 @@ on an interactive terminal. A terminal request has no delivery acknowledgement;
 if it is reported as unconfirmed, check the terminal's clipboard permissions
 and multiplexer passthrough settings, or use terminal selection or `/export`.
 Clipboard helpers have a two-second deadline and their output is not displayed.
-Conversation and dialogs share one managed screen. Use the wheel or Page Up/Page
-Down for conversation history, and Up/Down or Page Up/Page Down in long dialogs.
-Use the terminal's selection bypass (usually Shift+drag) for manual copying.
+Conversation and dialogs share one managed screen. Use Page Up/Page Down
+(Fn+Up/Fn+Down on Mac) for conversation history, and Up/Down or paging in long
+dialogs. Drag normally and use the terminal's Copy command to copy selected
+text; Kupilot leaves mouse reporting disabled. Wheel behavior is terminal-owned.
 Completed safe conversation is printed to primary scrollback on clean exit.
+
+## A diagnostic answer stops at claim_binding
+
+`evidence_reference_unknown` means a model citation did not match any accepted
+Evidence in that run. It does not mean the preceding Kubernetes reads failed.
+Resource UIDs and Tool invocation IDs cannot substitute for Evidence IDs.
+Kupilot rejects the answer before committing it and performs no automatic
+repair or retry. `/doctor` reports the safe boundary; it cannot recover the
+rejected model response. A subsequent question is a new, explicitly submitted
+run. Terminal selection can copy the failure text; `/copy` remains limited to
+the latest successfully committed answer.
 
 ## The OpenAI model API key is missing or rejected
 

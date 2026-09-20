@@ -187,7 +187,7 @@ func TestExitLeavesTrailingHistoryForTerminalRuntimeFallback(t *testing.T) {
 		t.Fatal("exit did not issue one direct quit command")
 	}
 	view := model.View()
-	if !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion ||
+	if !view.AltScreen || view.MouseMode != tea.MouseModeNone ||
 		!strings.Contains(view.Content, "A submitted question awaiting startup.") || view.Cursor != nil {
 		t.Fatalf("exit state did not retain safe terminal history with native input ownership: %#v", view)
 	}
@@ -372,7 +372,7 @@ func TestMouseWheelScrollsTranscriptWithoutRecallingInputHistory(t *testing.T) {
 	}
 
 	view := model.View()
-	if view.MouseMode != tea.MouseModeCellMotion || view.OnMouse != nil {
+	if view.MouseMode != tea.MouseModeNone || view.OnMouse != nil {
 		t.Fatalf("conversation view captured terminal mouse input: mode=%v callback=%v", view.MouseMode, view.OnMouse != nil)
 	}
 	for _, message := range []tea.MouseMsg{
@@ -410,7 +410,7 @@ func TestRemovedMouseSlashCannotChangeTerminalInputOwnership(t *testing.T) {
 	model := newTestModel()
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/mouse"})
 	model, command := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if command != nil || !model.dialog.Open() || model.View().MouseMode != tea.MouseModeCellMotion {
+	if command != nil || !model.dialog.Open() || model.View().MouseMode != tea.MouseModeNone {
 		t.Fatalf("removed mouse command changed terminal authority: command=%v dialog=%v mode=%v",
 			command != nil, model.dialog.Open(), model.View().MouseMode)
 	}
@@ -736,7 +736,7 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 40, Height: 12})
 	view := model.View()
 	if model.width != 40 || model.height != 12 || model.EditorCount() != 1 ||
-		view.MouseMode != tea.MouseModeCellMotion {
+		view.MouseMode != tea.MouseModeNone {
 		t.Fatalf("resize or mouse invariant failed: size=%dx%d editors=%d", model.width, model.height, model.EditorCount())
 	}
 }

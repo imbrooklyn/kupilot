@@ -119,6 +119,11 @@ func TestManagedScreenSurvivesDialogsAndToolProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := final.(probeHarness).Model
+	for _, enable := range []string{"\x1b[?1000h", "\x1b[?1002h", "\x1b[?1003h"} {
+		if strings.Contains(out.all, enable) {
+			t.Fatal("renderer enabled mouse reporting and intercepted native selection")
+		}
+	}
 	if strings.Count(out.all, "\x1b[?1049h") != 1 || strings.Count(out.all, "\x1b[?1049l") != 1 {
 		t.Fatal("dialog or progress changed renderer ownership")
 	}

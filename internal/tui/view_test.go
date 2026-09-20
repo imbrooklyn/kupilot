@@ -362,7 +362,7 @@ func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview
 	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
 		t.Fatal("pure TUI state lost terminal Agent history or emitted a runtime command")
 	}
-	if !model.View().AltScreen || model.View().MouseMode != tea.MouseModeCellMotion {
+	if !model.View().AltScreen || model.View().MouseMode != tea.MouseModeNone {
 		t.Fatal("conversation view did not leave primary-screen selection and scrolling under terminal ownership")
 	}
 	model, duplicate := updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})

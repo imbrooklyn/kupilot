@@ -33,10 +33,11 @@ request as a confirmed copy. Helpers receive only the explicitly selected safe
 answer on stdin, a minimal environment, no shell, and a finite deadline.
 
 Use one alternate-screen renderer and the existing transcript viewport for
-conversation, dialogs and review. Wheel and Page Up/Page Down navigate the
-viewport; terminal selection uses the terminal's mouse-reporting bypass gesture
-(usually Shift+drag). On clean exit, restore the original terminal and print
-only the completed safe transcript once. Never transfer live rows to unmanaged
+conversation, dialogs and review. Leave mouse reporting disabled so ordinary
+terminal drag selection and copying work without a bypass gesture. Page Up/Page
+Down navigate the viewport (Fn+Up/Fn+Down on a Mac keyboard). On clean exit,
+restore the original terminal and print only the completed safe transcript once.
+Never transfer live rows to unmanaged
 scrollback while rendering: inline frame resizing and timer-based insertion do
 not provide an atomic handoff. All layouts remain bounded by the terminal.
 

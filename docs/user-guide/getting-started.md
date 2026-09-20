@@ -251,12 +251,14 @@ resume is accepted, `Up` and `Down` recall that Session's restored user
 questions; restored answers and notices are display-only and never become
 editable input history. A failed or cancelled resume keeps the current input
 history unchanged. Conversation and dialogs use one managed terminal screen.
-Wheel and trackpad scrolling navigate the transcript, never composer history.
-Page Up and Page Down provide keyboard navigation. Explicit transcript review
-stays at the selected position until it returns to the bottom. To select text
-with your terminal, use its mouse-reporting bypass gesture (usually Shift+drag),
-or use /copy for the latest completed answer. Long dialogs support Up/Down and
-Page Up/Page Down scrolling. Closing a dialog restores the conversation without
+Page Up and Page Down navigate the transcript (Fn+Up and Fn+Down on a Mac),
+never composer history. Explicit transcript review stays at the selected position
+until it returns to the bottom. To select text
+with your terminal, drag normally; mouse reporting is disabled. Use the terminal's
+Copy command (Command+C on Mac), or /copy for the latest completed answer.
+Wheel behavior belongs to the terminal; use keyboard paging for app history.
+Long dialogs support Up/Down and Page Up/Page Down scrolling.
+Closing a dialog restores the conversation without
 leaving dialog text in history. On clean exit the original terminal is restored
 and completed safe conversation is printed once into ordinary scrollback.
 

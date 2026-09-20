@@ -302,6 +302,14 @@ The runtime cannot prove that prose semantically follows Evidence. Evidence
 metadata improves traceability but does not turn model interpretation into a
 verified fact.
 
+The model copies citation IDs only from `result.evidence[].id` in the exact
+supporting Tool message, or `reuse.evidence_ids` for an admitted same-run reuse.
+Invocation IDs, resource UIDs, hashes and array positions are not citations.
+Partial results expose only their returned Evidence as support; missing data
+remains a limitation. The prompt makes this distinction at both the final
+response grammar and each Tool result. Runtime still rejects unknown references
+without guessing a replacement, repairing the response, or making another call.
+
 ## Proposed actions
 
 The deterministic permission and controlled-action foundation described here

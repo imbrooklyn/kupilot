@@ -37,7 +37,9 @@ func (model Model) configureView(view tea.View) tea.View {
 	view.AltScreen = true
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
-	view.MouseMode = tea.MouseModeCellMotion
+	// Mouse reporting consumes native terminal selection, including on macOS.
+	// Keep selection terminal-owned; Page Up/Down navigate the viewport.
+	view.MouseMode = tea.MouseModeNone
 	view.OnMouse = nil
 	if model.terminalStatusTitles {
 		view.WindowTitle = model.terminalTitle()
