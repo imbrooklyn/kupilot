@@ -262,16 +262,14 @@ replaces unsafe control sequences before render state. `Update` and `View` have
 no business I/O. Scope, policy, approval, and execution states include text and
 do not rely on color. Unknown terminal backgrounds prefer default foreground
 and dim styling rather than low-contrast hard-coded colors. Runtime content
-uses a cleared primary-screen live frame. Newly immutable safe history is
-removed from the live projection before a settled compact frame accepts
-bounded row insertion. A completed block is acknowledged only afterward, and
-an undersized terminal retains it safely instead of risking duplicate live
-rows or transient layout gaps in scrollback. The only admitted spacing is one
-code-owned inert trailing row per immutable block. Composer and streaming
-drafts, model-selected styling, clipboard controls, and device controls cannot
-enter scrollback. Mouse reporting remains disabled so native selection and
-scrolling stay terminal-owned. The composer exposes one real cursor for
-operating-system input-method positioning; its placeholder is never editable
+uses one alternate-screen renderer and a bounded transcript viewport. Dialogs,
+progress and completed turns remain in that managed screen. On clean exit the
+terminal is restored and only the completed safe transcript is printed once.
+There is no timed live-to-scrollback insertion or inline frame handoff. Mouse
+wheel input moves only the read-only viewport or dialog; selection uses the
+terminal's reporting-bypass gesture. Model-selected styling, clipboard controls
+and device controls cannot enter the shutdown transcript. The composer exposes
+one real cursor for operating-system input-method positioning; its placeholder is never editable
 state. Working animation messages are local, bounded, correlated to the active
 run and scope generation, and rejected after terminal or stale state. They
 cannot affect budgets, Evidence, authority, or external calls.

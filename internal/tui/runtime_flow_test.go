@@ -71,7 +71,7 @@ func TestPrivacyReviewDisplaysExactPolicyAndDispatchesTypedDecisions(t *testing.
 	model, _ = updateModel(t, model, CommandResultMsg{Result: application.UICommandOutcome{
 		Command: application.UICommandShowPrivacy, RequestID: show.RequestID, Privacy: &review, Lifecycle: &lifecycle,
 	}})
-	frame := model.render()
+	frame := model.dialog.View(80)
 	for _, want := range []string{"https://model.example", application.PrivacyPolicyVersion, "User question", "Container output", "Never eligible"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("privacy frame missing %q", want)
@@ -137,7 +137,7 @@ func TestPrivacyLifecycleControlsReuseOneComposerAndRequireDeleteConfirmation(t 
 		Command: application.UICommandShowPrivacy, RequestID: show.RequestID,
 		Privacy: &privacy, Lifecycle: &lifecycle,
 	}})
-	frame := model.render()
+	frame := model.dialog.View(80)
 	for _, want := range []string{
 		"Session storage: history saved", "Operational details: kept for 30 days", "Read and lifecycle audit: 90 days",
 		"Approval and write audit: 180 days", "memory-only Sessions cannot be resumed", "not forensic erasure",
@@ -594,7 +594,7 @@ func TestFocusResizeAndSmallTerminalPreserveKeyboardSafety(t *testing.T) {
 		t.Fatalf("small-terminal editor state = count %d, height %d", model.EditorCount(), model.composer.Height())
 	}
 	view := model.View()
-	if !view.ReportFocus || view.AltScreen || view.MouseMode != tea.MouseModeNone ||
+	if !view.ReportFocus || !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion ||
 		containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
 		t.Fatal("small-terminal View lost focus reporting, terminal ownership, or terminal safety")
 	}

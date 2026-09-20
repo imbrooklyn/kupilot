@@ -61,10 +61,13 @@ func (model *Model) showDoctor(result application.UIDoctorResult) {
 }
 
 func (model Model) copyLatestCommittedAnswer() (Model, tea.Cmd) {
+	if model.pendingClipboardID != 0 {
+		return model, nil
+	}
 	model.composer.Reset()
 	model.slashMenu.Close()
 	if !model.terminalClipboard {
-		model.showDialog("Clipboard unavailable", "Terminal-native clipboard support could not be established. No clipboard command was emitted.")
+		model.showDialog("Clipboard unavailable", "No local clipboard or interactive terminal route is available. Use /export to save the answer.")
 		return model, nil
 	}
 	answer, ok := model.transcript.LatestCommittedAssistantFinal()
@@ -77,8 +80,21 @@ func (model Model) copyLatestCommittedAnswer() (Model, tea.Cmd) {
 		model.showDialog("Copy unavailable", "The committed answer is empty after terminal-safety normalization or exceeds the exact 65536-byte clipboard limit. Nothing was copied.")
 		return model, nil
 	}
-	model.transcript.AppendNotice("The latest committed assistant final answer was sent to the terminal-native clipboard sink.")
+	if model.copyToClipboard != nil {
+		model.pendingClipboardID = model.nextUIRequestID()
+		model.pendingClipboardSession = model.session.ID
+		return model, model.copyToClipboard(model.pendingClipboardID, answer)
+	}
+	model.transcript.AppendNotice("Copy requested from the terminal; delivery is unconfirmed.")
 	return model, tea.SetClipboard(answer)
+}
+
+// ClipboardResultMsg reports only delivery status, never clipboard content or
+// helper output. It cannot affect Application state.
+type ClipboardResultMsg struct {
+	RequestID uint64
+	Copied    bool
+	Requested bool
 }
 
 func (model Model) beginTranscriptSearch(query, returnDraft string) (Model, tea.Cmd) {

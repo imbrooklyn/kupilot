@@ -217,7 +217,7 @@ The compile-time command registry is fixed:
 | `/delete` | Preview deletion of the idle current Session; this is the `/privacy` `D` operation. |
 | `/privacy` | Review model data sharing, persistence, retention, deletion, and export controls. |
 | `/queue cancel ITEM_ID`, `/queue clear` | Remove exact editable follow-up state, with confirmation for clear. |
-| `/copy` | Send the latest committed assistant final to a verified terminal-native clipboard sink. |
+| `/copy` | Copy the latest committed assistant final using the local clipboard or request terminal clipboard delivery. |
 | `/find [query]` | Search only committed visible Session transcript content locally. |
 | `/compact` | Request one explicit idle safe-context compaction. |
 | `/plan`, `/plan off` | Arm or cancel the next one-shot bounded plan-only run. |
@@ -250,16 +250,15 @@ fields cannot recall ordinary question history. After an explicit Session
 resume is accepted, `Up` and `Down` recall that Session's restored user
 questions; restored answers and notices are display-only and never become
 editable input history. A failed or cancelled resume keeps the current input
-history unchanged. Kupilot does not enable mouse reporting. Native terminal
-drag selection and copy therefore remain available, while wheel and trackpad
-momentum use the terminal emulator's own scrollback behavior and never recall
-composer history. `Page Up` and `Page Down` provide an explicit in-memory
-transcript review fallback. While new output is live, Working-state layout
-changes keep the complete newest user message and Agent output attached to the
-bottom. Explicit transcript review stays at the selected position until it
-returns to the bottom. Before completed output enters scrollback, Kupilot
-removes it from the live projection and settles a compact frame; transient Tool
-steps, Working text, and layout spacer rows are not copied into history.
+history unchanged. Conversation and dialogs use one managed terminal screen.
+Wheel and trackpad scrolling navigate the transcript, never composer history.
+Page Up and Page Down provide keyboard navigation. Explicit transcript review
+stays at the selected position until it returns to the bottom. To select text
+with your terminal, use its mouse-reporting bypass gesture (usually Shift+drag),
+or use /copy for the latest completed answer. Long dialogs support Up/Down and
+Page Up/Page Down scrolling. Closing a dialog restores the conversation without
+leaving dialog text in history. On clean exit the original terminal is restored
+and completed safe conversation is printed once into ordinary scrollback.
 
 Structured inventories with multiple resources and shared attributes use a
 compact Markdown table per Kind by default. The user does not need to request
@@ -277,7 +276,7 @@ after typing begins.
 
 Use `/quit`, `/exit`, or `Ctrl+C` with an empty composer. If a draft is present,
 the first `Ctrl+C` clears it without exiting. Kupilot cancels owned work,
-clears only its remaining live frame, leaves already committed safe history in
+restores the terminal, prints the completed safe transcript once into
 terminal-owned scrollback, closes the model and Kubernetes adapters, waits for
 bounded child work, and closes the SQLite database and local log. A run that
 was durable and still marked running at process interruption is classified as

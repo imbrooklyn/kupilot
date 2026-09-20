@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -515,6 +516,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		ReducedMotion:           loaded.ReducedMotion,
 		TerminalStatusTitles:    terminalTitles,
 		TerminalClipboard:       terminalCapabilities.NativeClipboard == tui.TerminalCapabilityAvailable || terminalCapabilities.OSC52 == tui.TerminalCapabilityAvailable,
+		CopyToClipboard:         clipboardCommand(ctx, terminalWriter(stdout), os.Getenv),
 		TerminalCapabilities:    &terminalCapabilities,
 		StartIntent:             startIntent,
 		Scope:                   initialScope,
@@ -553,7 +555,7 @@ func start(ctx context.Context, intent cli.StartIntent, info buildinfo.Info, std
 		}
 	}()
 	program := tea.NewProgram(
-		tui.NewTerminalRuntime(model),
+		model,
 		tea.WithContext(ctx),
 		tea.WithOutput(stdout),
 		tea.WithFilter(applicationRequestFilter(requestContext, requests)),
@@ -615,16 +617,7 @@ func terminalClipboardSupported(output io.Writer, getenv func(string) string) bo
 }
 
 func terminalClipboardEnvironmentSupported(getenv func(string) string) bool {
-	if getenv == nil || getenv("TMUX") != "" || getenv("STY") != "" ||
-		getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("SSH_CLIENT") != "" {
-		return false
-	}
-	switch strings.ToLower(getenv("TERM_PROGRAM")) {
-	case "iterm.app", "wezterm", "ghostty", "vscode", "kitty":
-		return true
-	}
-	term := strings.ToLower(getenv("TERM"))
-	return strings.Contains(term, "kitty") || strings.Contains(term, "wezterm")
+	return getenv != nil && getenv("TERM") != "dumb"
 }
 
 func terminalStatusTitlesSupported(output io.Writer, getenv func(string) string) bool {
@@ -669,6 +662,13 @@ func projectTerminalCapabilitiesForState(terminal bool, getenv func(string) stri
 		}
 		return profile
 	}
+	if nativeClipboardAvailable(runtime.GOOS, getenv) {
+		profile.NativeClipboard = tui.TerminalCapabilityAvailable
+	}
+	profile.AlternateScreen = tui.TerminalCapabilityAvailable
+	if terminalClipboardEnvironmentSupported(getenv) {
+		profile.OSC52 = tui.TerminalCapabilityAvailable
+	}
 	multiplexer := getenv("TMUX") != "" || getenv("STY") != ""
 	remote := getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("SSH_CLIENT") != ""
 	if multiplexer {
@@ -678,16 +678,12 @@ func projectTerminalCapabilitiesForState(terminal bool, getenv func(string) stri
 		profile.RemoteSession = tui.TerminalCapabilityRestricted
 	}
 	if multiplexer || remote {
-		profile.OSC52 = tui.TerminalCapabilityRestricted
 		if titleEnabled {
 			profile.Title = tui.TerminalCapabilityRestricted
 		} else {
 			profile.Title = tui.TerminalCapabilityDisabled
 		}
 		return profile
-	}
-	if terminalClipboardEnvironmentSupported(getenv) {
-		profile.OSC52 = tui.TerminalCapabilityAvailable
 	}
 	if !titleEnabled {
 		profile.Title = tui.TerminalCapabilityDisabled
@@ -698,40 +694,19 @@ func projectTerminalCapabilitiesForState(terminal bool, getenv func(string) stri
 }
 
 func restoreTerminalAfterRuntime(output io.Writer, finalState tea.Model, runErr error) error {
-	var finalModel tui.Model
-	var pendingTranscript string
-	switch state := finalState.(type) {
-	case tui.TerminalRuntime:
-		finalModel = state.Model()
-		pendingTranscript = state.PendingTerminalTranscript()
-	case tui.Model:
-		finalModel = state
-		pendingTranscript = finalModel.PendingTerminalTranscript()
-	default:
+	finalModel, ok := finalState.(tui.Model)
+	if !ok {
 		return errors.New("TUI final state is unavailable")
-	}
-	frameHeight := finalModel.TerminalFrameHeight()
-	if frameHeight > 0 {
-		if _, err := fmt.Fprint(output, "\r"); err != nil {
-			return fmt.Errorf("restore terminal frame: %w", err)
-		}
-		if frameHeight > 1 {
-			if _, err := fmt.Fprintf(output, "\x1b[%dA", frameHeight-1); err != nil {
-				return fmt.Errorf("restore terminal frame: %w", err)
-			}
-		}
-		if _, err := fmt.Fprint(output, "\x1b[J"); err != nil {
-			return fmt.Errorf("restore terminal frame: %w", err)
-		}
 	}
 	if runErr != nil {
 		return nil
 	}
-	if pendingTranscript == "" {
+	transcript := finalModel.TerminalTranscript()
+	if transcript == "" {
 		return nil
 	}
-	if _, err := fmt.Fprintln(output, pendingTranscript); err != nil {
-		return fmt.Errorf("write pending terminal transcript: %w", err)
+	if _, err := fmt.Fprintln(output, transcript); err != nil {
+		return fmt.Errorf("write terminal transcript: %w", err)
 	}
 	return nil
 }

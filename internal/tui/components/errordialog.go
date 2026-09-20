@@ -1,6 +1,10 @@
 package components
 
-import "charm.land/lipgloss/v2"
+import (
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 // DialogStyles keeps modal meaning explicit in text as well as color.
 type DialogStyles struct {
@@ -16,6 +20,7 @@ type ErrorDialog struct {
 	title  string
 	body   string
 	hint   string
+	offset int
 	styles DialogStyles
 }
 
@@ -36,6 +41,7 @@ func (dialog *ErrorDialog) ShowWithHint(title, body, hint string) {
 	dialog.title = title
 	dialog.body = body
 	dialog.hint = hint
+	dialog.offset = 0
 }
 
 // Close closes and clears the modal.
@@ -44,18 +50,44 @@ func (dialog *ErrorDialog) Close() {
 	dialog.title = ""
 	dialog.body = ""
 	dialog.hint = ""
+	dialog.offset = 0
 }
 
 // Open reports whether the modal captures keyboard input.
 func (dialog ErrorDialog) Open() bool { return dialog.open }
 
 // View renders a compact modal with an explicit close hint.
-func (dialog ErrorDialog) View(width int) string {
+func (dialog ErrorDialog) View(width int, heights ...int) string {
 	if !dialog.open {
 		return ""
 	}
-	content := dialog.styles.Title.Render(dialog.title) + "\n\n" +
-		dialog.styles.Body.Render(dialog.body) + "\n\n" +
-		dialog.styles.Hint.Render(dialog.hint)
-	return dialog.styles.Frame.Width(max(1, min(width-6, 72))).Render(content)
+	innerWidth := max(1, min(width-1, 78)-dialog.styles.Frame.GetHorizontalFrameSize())
+	body := dialog.styles.Body.Width(innerWidth).Render(dialog.body)
+	hint := dialog.hint
+	if len(heights) > 0 {
+		lines := strings.Split(body, "\n")
+		available := dialog.bodyHeight(width, heights[0])
+		start := min(dialog.offset, max(0, len(lines)-available))
+		body = strings.Join(lines[start:min(len(lines), start+available)], "\n")
+		if len(lines) > available {
+			hint = "Up/Down, PgUp/PgDn scroll · " + hint
+		}
+	}
+	content := dialog.styles.Title.Render(dialog.title) + "\n\n" + body + "\n\n" + dialog.styles.Hint.Render(hint)
+	return dialog.styles.Frame.Width(innerWidth + dialog.styles.Frame.GetHorizontalPadding()).Render(content)
+}
+
+func (dialog ErrorDialog) bodyHeight(width, height int) int {
+	innerWidth := max(1, min(width-1, 78)-dialog.styles.Frame.GetHorizontalFrameSize())
+	title := lipgloss.Height(dialog.styles.Title.Width(innerWidth).Render(dialog.title))
+	hint := lipgloss.Height(dialog.styles.Hint.Width(innerWidth).Render("Up/Down, PgUp/PgDn scroll · " + dialog.hint))
+	return max(1, height-dialog.styles.Frame.GetVerticalFrameSize()-title-hint-4)
+}
+
+// Scroll changes only the bounded read-only dialog projection.
+func (dialog *ErrorDialog) Scroll(delta, width, height int) {
+	innerWidth := max(1, min(width-1, 78)-dialog.styles.Frame.GetHorizontalFrameSize())
+	body := dialog.styles.Body.Width(innerWidth).Render(dialog.body)
+	limit := max(0, lipgloss.Height(body)-dialog.bodyHeight(width, height))
+	dialog.offset = min(limit, max(0, dialog.offset+delta))
 }

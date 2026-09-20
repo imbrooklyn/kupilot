@@ -187,7 +187,7 @@ func TestExitLeavesTrailingHistoryForTerminalRuntimeFallback(t *testing.T) {
 		t.Fatal("exit did not issue one direct quit command")
 	}
 	view := model.View()
-	if view.AltScreen || view.MouseMode != tea.MouseModeNone ||
+	if !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion ||
 		!strings.Contains(view.Content, "A submitted question awaiting startup.") || view.Cursor != nil {
 		t.Fatalf("exit state did not retain safe terminal history with native input ownership: %#v", view)
 	}
@@ -357,7 +357,7 @@ func TestUpdateComposerHeightPasteHistoryAndInternalScroll(t *testing.T) {
 	}
 }
 
-func TestMouseInputRemainsTerminalOwnedAndCannotRecallInputHistory(t *testing.T) {
+func TestMouseWheelScrollsTranscriptWithoutRecallingInputHistory(t *testing.T) {
 	t.Parallel()
 
 	model := newTestModel()
@@ -372,15 +372,13 @@ func TestMouseInputRemainsTerminalOwnedAndCannotRecallInputHistory(t *testing.T)
 	}
 
 	view := model.View()
-	if view.MouseMode != tea.MouseModeNone || view.OnMouse != nil {
+	if view.MouseMode != tea.MouseModeCellMotion || view.OnMouse != nil {
 		t.Fatalf("conversation view captured terminal mouse input: mode=%v callback=%v", view.MouseMode, view.OnMouse != nil)
 	}
 	for _, message := range []tea.MouseMsg{
 		tea.MouseClickMsg{Button: tea.MouseLeft},
 		tea.MouseReleaseMsg{Button: tea.MouseLeft},
 		tea.MouseMotionMsg{Button: tea.MouseLeft},
-		tea.MouseWheelMsg{Button: tea.MouseWheelUp},
-		tea.MouseWheelMsg{Button: tea.MouseWheelDown},
 		tea.MouseWheelMsg{Button: tea.MouseWheelLeft},
 		tea.MouseWheelMsg{Button: tea.MouseWheelRight},
 	} {
@@ -390,6 +388,14 @@ func TestMouseInputRemainsTerminalOwnedAndCannotRecallInputHistory(t *testing.T)
 		}
 	}
 
+	model, command := updateModel(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if command != nil || model.transcript.ScrollOffset() >= bottom || model.composer.Value() != "" {
+		t.Fatal("wheel did not scroll only the transcript")
+	}
+	model, _ = updateModel(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if model.transcript.ScrollOffset() != bottom {
+		t.Fatal("wheel did not return to the live tail")
+	}
 	model.composer.RecordSubmission("first question")
 	model.composer.RecordSubmission("second question")
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyUp})
@@ -404,7 +410,7 @@ func TestRemovedMouseSlashCannotChangeTerminalInputOwnership(t *testing.T) {
 	model := newTestModel()
 	model, _ = updateModel(t, model, tea.PasteMsg{Content: "/mouse"})
 	model, command := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if command != nil || !model.dialog.Open() || model.View().MouseMode != tea.MouseModeNone {
+	if command != nil || !model.dialog.Open() || model.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatalf("removed mouse command changed terminal authority: command=%v dialog=%v mode=%v",
 			command != nil, model.dialog.Open(), model.View().MouseMode)
 	}
@@ -730,7 +736,7 @@ func TestUpdateComposerSoftWrapLimitAndResize(t *testing.T) {
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 40, Height: 12})
 	view := model.View()
 	if model.width != 40 || model.height != 12 || model.EditorCount() != 1 ||
-		view.MouseMode != tea.MouseModeNone {
+		view.MouseMode != tea.MouseModeCellMotion {
 		t.Fatalf("resize or mouse invariant failed: size=%dx%d editors=%d", model.width, model.height, model.EditorCount())
 	}
 }

@@ -33,7 +33,7 @@ func TestCopyUsesOnlyLatestCommittedFinalAndTerminalNativeSink(t *testing.T) {
 		t.Fatalf("clipboard message = %T %q, want terminal-native %q", message, fmt.Sprint(message), want)
 	}
 	entries := model.transcript.Entries()
-	if len(entries) == 0 || !strings.Contains(entries[len(entries)-1].Text, "sent to the terminal-native clipboard sink") {
+	if len(entries) == 0 || !strings.Contains(entries[len(entries)-1].Text, "delivery is unconfirmed") {
 		t.Fatal("successful copy did not add its fixed local notice")
 	}
 	unchanged, readCommand := updateModel(t, model, tea.ClipboardMsg{Content: "clipboard read canary"})
@@ -48,7 +48,7 @@ func TestCopyUnavailableEmptyAndExactByteLimit(t *testing.T) {
 	unsupported.transcript.StartAgent()
 	unsupported.transcript.FinishCommittedAgent("committed")
 	unsupported, command := unsupported.copyLatestCommittedAnswer()
-	if command != nil || !unsupported.dialog.Open() || !strings.Contains(unsupported.dialog.View(80), "could not be established") {
+	if command != nil || !unsupported.dialog.Open() || !strings.Contains(unsupported.dialog.View(80), "No local clipboard") {
 		t.Fatalf("unsupported clipboard result = command %t dialog %q", command != nil, unsupported.dialog.View(80))
 	}
 
@@ -75,6 +75,31 @@ func TestCopyUnavailableEmptyAndExactByteLimit(t *testing.T) {
 	over, command = over.copyLatestCommittedAnswer()
 	if command != nil || !strings.Contains(over.dialog.View(80), "exceeds the exact 65536-byte") {
 		t.Fatalf("one-over clipboard result = command %t dialog %q", command != nil, over.dialog.View(80))
+	}
+}
+
+func TestClipboardCompletionIsCorrelatedAndReportsActualOutcome(t *testing.T) {
+	model := newTestModel()
+	model.terminalClipboard = true
+	model.transcript.StartAgent()
+	model.transcript.FinishCommittedAgent("safe answer")
+	model.copyToClipboard = func(id uint64, text string) tea.Cmd {
+		if text != "safe answer" {
+			t.Fatal("unexpected clipboard content")
+		}
+		return func() tea.Msg { return ClipboardResultMsg{RequestID: id, Copied: true} }
+	}
+	model, cmd := model.copyLatestCommittedAnswer()
+	before := len(model.transcript.Entries())
+	model, _ = updateModel(t, model, ClipboardResultMsg{RequestID: model.pendingClipboardID + 1, Copied: true})
+	if len(model.transcript.Entries()) != before {
+		t.Fatal("stale copy completion accepted")
+	}
+	message := cmd()
+	model, _ = updateModel(t, model, message)
+	model, _ = updateModel(t, model, message)
+	if len(model.transcript.Entries()) != before+1 {
+		t.Fatal("copy completion lost or duplicated")
 	}
 }
 
@@ -111,8 +136,8 @@ func TestFindReusesComposerNavigatesAndLeavesNoShutdownState(t *testing.T) {
 	narrowTranscript := model.TerminalTranscript()
 	model, _ = updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if model.searchMode || model.composer.Value() != "preserved ordinary draft" || before == "" || model.TerminalTranscript() != narrowTranscript ||
-		strings.Contains(model.PendingTerminalTranscript(), "Search match") || strings.Contains(model.PendingTerminalTranscript(), "⟦") {
-		t.Fatalf("search state reached shutdown transcript: before=%q after=%q pending=%q", before, model.TerminalTranscript(), model.PendingTerminalTranscript())
+		strings.Contains(model.TerminalTranscript(), "Search match") || strings.Contains(model.TerminalTranscript(), "⟦") {
+		t.Fatalf("search state reached shutdown transcript: before=%q after=%q pending=%q", before, model.TerminalTranscript(), model.TerminalTranscript())
 	}
 }
 

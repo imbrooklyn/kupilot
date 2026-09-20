@@ -32,13 +32,12 @@ func (model Model) View() tea.View {
 }
 
 func (model Model) configureView(view tea.View) tea.View {
-	// Completed conversation is inserted above this live primary-screen frame.
-	// Keeping mouse reporting disabled leaves selection, copy, and high-density
-	// wheel or trackpad scrolling under terminal ownership.
-	view.AltScreen = false
+	// One renderer owns the entire mutable screen. Only the final safe
+	// transcript is written to primary scrollback after terminal restoration.
+	view.AltScreen = true
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
-	view.MouseMode = tea.MouseModeNone
+	view.MouseMode = tea.MouseModeCellMotion
 	view.OnMouse = nil
 	if model.terminalStatusTitles {
 		view.WindowTitle = model.terminalTitle()
@@ -104,8 +103,7 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	if top != "" {
 		liveHeight += lipgloss.Height(top) + gap
 	}
-	visibleHistoryRows := min(max(0, model.terminalHistoryRows), max(0, model.height-liveHeight))
-	targetHeight := max(liveHeight, model.height-visibleHistoryRows)
+	targetHeight := max(liveHeight, model.height)
 	spacer := max(0, targetHeight-liveHeight)
 	main := bottom
 	if top != "" {
@@ -121,18 +119,15 @@ func (model Model) renderLayout() (content string, composerY int, composerVisibl
 	case model.evidenceDialog.Open():
 		overlay = model.evidenceDialog.View(model.width, model.height)
 	case model.dialog.Open():
-		overlay = model.dialog.View(model.width)
+		overlay = model.dialog.View(model.width, model.height)
 	}
 	if overlay == "" {
 		main, composerY = model.constrainLayoutHeight(main, composerY)
 		return main, composerY, true
 	}
 
-	x := max(0, (model.width-lipgloss.Width(overlay))/2)
-	y := max(0, (targetHeight-lipgloss.Height(overlay))/2)
-	baseLayer := lipgloss.NewLayer(main).Z(0)
-	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
-	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render(), composerY, false
+	bounded := lipgloss.NewStyle().MaxWidth(contentWidth).MaxHeight(max(1, model.height)).Render(overlay)
+	return lipgloss.Place(contentWidth, max(1, model.height), lipgloss.Center, lipgloss.Center, bounded), composerY, false
 }
 
 // renderApprovalLayout gives the exact action review the whole working area.

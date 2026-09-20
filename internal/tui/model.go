@@ -124,6 +124,7 @@ type Config struct {
 	Permission              application.UIPermissionStatus
 	TerminalStatusTitles    bool
 	TerminalClipboard       bool
+	CopyToClipboard         func(uint64, string) tea.Cmd
 	TerminalCapabilities    *TerminalCapabilityProfile
 	Now                     func() time.Time
 }
@@ -211,6 +212,9 @@ type Model struct {
 	historySearchIndex       int
 	terminalStatusTitles     bool
 	terminalClipboard        bool
+	copyToClipboard          func(uint64, string) tea.Cmd
+	pendingClipboardID       uint64
+	pendingClipboardSession  domain.SessionID
 	terminalCapabilities     TerminalCapabilityProfile
 	pendingPrivacyID         uint64
 	pendingDeleteID          uint64
@@ -239,7 +243,6 @@ type Model struct {
 	quitAfterLocalDeletion   bool
 	exitAfterSessionDeletion bool
 	terminalFocused          bool
-	terminalHistoryRows      int
 
 	styles styleSet
 	keymap KeyMap
@@ -300,6 +303,7 @@ func NewModel(config Config) Model {
 		reducedMotion:        config.ReducedMotion,
 		terminalStatusTitles: terminalCapabilities.Title == TerminalCapabilityAvailable,
 		terminalClipboard:    terminalCapabilities.clipboardAvailable(),
+		copyToClipboard:      config.CopyToClipboard,
 		terminalCapabilities: terminalCapabilities,
 		composer:             components.NewComposer(styles.composer, application.MaxQuestionBytes),
 		transcript:           components.NewTranscript(styles.transcript, styles.toolSteps),
@@ -522,23 +526,6 @@ func (model Model) contentWidth() int {
 // any provisional Agent stream.
 func (model *Model) TerminalTranscript() string {
 	return model.transcript.TerminalTranscript()
-}
-
-// PendingTerminalTranscript returns only completed history that the active
-// renderer did not already insert into terminal-owned scrollback.
-func (model *Model) PendingTerminalTranscript() string {
-	return model.transcript.PendingTerminalTranscript()
-}
-
-// TerminalFrameHeight reports the renderer-owned live rows that must be
-// cleared after Bubble Tea restores terminal modes. Completed history lives
-// above this frame and is deliberately excluded.
-func (model Model) TerminalFrameHeight() int {
-	content := model.View().Content
-	if content == "" {
-		return 0
-	}
-	return min(max(1, model.height), 1+strings.Count(content, "\n"))
 }
 
 func (model Model) layoutGap() int {

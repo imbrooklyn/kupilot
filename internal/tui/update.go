@@ -40,6 +40,7 @@ Enter sends when idle and steers an active run at its next model boundary. Durin
 Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up when the composer is empty.
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
+The mouse wheel scrolls conversation or dialogs. Use your terminal's selection bypass (usually Shift+drag) to select text.
 Alt+E opens supporting observation details. Ctrl+A/E moves to the line start/end. Esc interrupts an active run when no local interaction owns it.
 Alt+S reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
 Ctrl+B/F moves by character; Alt+B/F and Alt/Ctrl+Left/Right move by word.
@@ -47,8 +48,7 @@ Ctrl+R searches committed submitted input; Alt+Z and Alt+Y provide bounded compo
 Alt+U/A/I/P jumps to the previous user/final/failure/approval item; add Shift for the next item. Alt+E navigates cited Evidence.
 Ctrl+C cancels the active local interaction; otherwise it clears a draft before cancelling a run or quitting.`
 
-// Update reduces one message into pure UI state. The TerminalRuntime wrapper,
-// not this reducer, owns renderer-only history insertion.
+// Update reduces one message into delivery state; View is the only live renderer.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return model.update(msg)
 }
@@ -182,10 +182,48 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			model.focus = FocusComposer
 		}
 		return model, nil
-	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
+	case tea.MouseWheelMsg:
+		delta := 3
+		if message.Button == tea.MouseWheelUp {
+			delta = -3
+		}
+		if message.Button != tea.MouseWheelUp && message.Button != tea.MouseWheelDown {
+			return model, nil
+		}
+		switch {
+		case model.dialog.Open():
+			model.dialog.Scroll(delta, model.width, model.height)
+		case model.approvalDialog.Open():
+			model.approvalDialog.Scroll(delta)
+		case model.evidenceDialog.Open():
+			return model, nil
+		case delta < 0:
+			model.transcript.ScrollUp(-delta)
+		default:
+			model.transcript.ScrollDown(delta)
+		}
+		return model, nil
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
 		return model, nil
 	case tea.ClipboardMsg:
 		// Kupilot never requests or accepts clipboard reads.
+		return model, nil
+	case ClipboardResultMsg:
+		if message.RequestID == 0 || message.RequestID != model.pendingClipboardID {
+			return model, nil
+		}
+		model.pendingClipboardID = 0
+		if model.pendingClipboardSession != model.session.ID {
+			return model, nil
+		}
+		switch {
+		case message.Copied:
+			model.transcript.AppendNotice("Copied the latest committed assistant answer to the system clipboard.")
+		case message.Requested:
+			model.transcript.AppendNotice("Copy requested from the terminal; delivery is unconfirmed. Use /export if unavailable.")
+		default:
+			model.showDialog("Copy failed", "The clipboard write failed. Use terminal selection or /export.")
+		}
 		return model, nil
 	case tea.PasteMsg:
 		if model.dialog.Open() || model.approvalDialog.Open() ||
@@ -738,6 +776,20 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	if model.dialog.Open() {
+		switch message.Code {
+		case tea.KeyUp:
+			model.dialog.Scroll(-1, model.width, model.height)
+			return model, nil
+		case tea.KeyDown:
+			model.dialog.Scroll(1, model.width, model.height)
+			return model, nil
+		case tea.KeyPgUp:
+			model.dialog.Scroll(-max(1, model.height/2), model.width, model.height)
+			return model, nil
+		case tea.KeyPgDown:
+			model.dialog.Scroll(max(1, model.height/2), model.width, model.height)
+			return model, nil
+		}
 		if model.queueClearConfirmation != nil {
 			return model.updateQueueClearConfirmationKey(message)
 		}
@@ -1432,14 +1484,17 @@ func (model Model) slashAvailability(command SlashCommand) slashAvailabilityProj
 			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no editable queued, rejected, or recovered input."}
 		}
 	case "copy":
+		if model.pendingClipboardID != 0 {
+			return slashAvailabilityProjection{State: SlashBusy, Reason: "Wait for the clipboard write to finish."}
+		}
 		if !model.terminalClipboard {
-			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No verified terminal-native clipboard sink is available."}
+			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No local clipboard or interactive terminal route is available."}
 		}
 		if model.terminalCapabilities.NativeClipboard == TerminalCapabilityDisabled && model.terminalCapabilities.OSC52 == TerminalCapabilityDisabled {
 			return slashAvailabilityProjection{State: SlashDisabled, Reason: "Clipboard output is disabled."}
 		}
 		if !model.terminalCapabilities.clipboardAvailable() {
-			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No verified terminal-native clipboard sink is available."}
+			return slashAvailabilityProjection{State: SlashUnsupportedTerminal, Reason: "No local clipboard or interactive terminal route is available."}
 		}
 		if _, ok := model.transcript.LatestCommittedAssistantFinal(); !ok {
 			return slashAvailabilityProjection{State: SlashNotApplicable, Reason: "There is no committed assistant final answer to copy."}

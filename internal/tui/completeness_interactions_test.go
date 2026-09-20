@@ -113,8 +113,8 @@ func TestDoctorRenderingUsesOnlyTypedRedactedProjection(t *testing.T) {
 	}
 	model.session.Title = canary
 	model.showDoctor(result)
-	view := model.View().Content
-	if strings.Contains(view, canary) || !strings.Contains(view, "No model, Kubernetes, Tool") || !strings.Contains(view, "Reviewer, approval, process") ||
+	view := model.dialog.View(80)
+	if strings.Contains(view, canary) || !strings.Contains(view, "No model, Kubernetes, Tool") || !strings.Contains(view, "approval, process") ||
 		!strings.Contains(view, "protocol_continuation_unavailable") || !strings.Contains(view, "eino_adk v0.9.19") ||
 		!strings.Contains(view, "eino_openai v0.1.13") || !strings.Contains(view, "live conformance not_run") {
 		t.Fatalf("doctor view was not bounded/redacted: %q", view)

@@ -365,9 +365,9 @@ a crash bundle, or another Kupilot-created durable store:
 
 The terminal-byte exclusion means Kupilot does not copy terminal output into
 SQLite, logs, exports, crash bundles, or another generic durable sink. It does
-not mean displayed text vanishes: Kupilot inserts completed safe history into
-the primary terminal, and a terminal emulator, multiplexer, or session recorder
-may keep it in its own scrollback. Session deletion, clear-history,
+not mean displayed text vanishes: on clean exit Kupilot prints completed safe
+history to the primary terminal, and a terminal emulator, multiplexer, or
+session recorder may keep it in its own scrollback. Session deletion, clear-history,
 delete-all-local-state, and minimal persistence do not control that external
 retention.
 

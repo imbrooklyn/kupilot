@@ -213,14 +213,12 @@ answer may be persisted or committed to terminal scrollback.
 
 ## Terminal output and scrollback
 
-Ordinary conversation starts in one cleared primary-screen live frame. Kupilot
-removes each newly immutable, bounded terminal-safe history block from the live
-projection, settles a compact frame, and inserts bounded row batches above it.
-Each immutable block includes one inert trailing separator row and remains
-pending until insertion is acknowledged. Composer drafts, placeholders, footer
-and dialog state, the live Working row, provisional model output, and transient
-layout spacer rows are excluded. Completed history may therefore remain in
-terminal-emulator scrollback during and after Kupilot.
+Conversation, dialogs and review share one alternate-screen renderer and a
+bounded transcript viewport. The original primary screen is restored on exit.
+After a clean exit, Kupilot writes the completed safe transcript once to the
+primary terminal. Composer drafts, placeholders, footer and dialog state, the
+live Working row, provisional model output and layout spacers are excluded.
+The terminal may retain this completed history after Kupilot exits.
 
 Provisional output exists only in the replaceable live Agent entry. A Tool
 request clears any draft from that pre-Tool turn. Completion replaces the draft
@@ -228,10 +226,9 @@ with the validated answer; cancellation, timeout, stale scope, model failure,
 and final-validation failure replace it with code-authored terminal text. None
 of those transitions promotes a partial response into Session history.
 
-If shutdown interrupts an insertion after its first batch may have reached the
-terminal, Kupilot does not replay the entire ambiguous block. This prevents a
-duplicate terminal disclosure; retained Session data continues to follow the
-selected persistence mode.
+A failed or cancelled terminal runtime does not print a shutdown transcript.
+An interrupted output write is never automatically retried; retained Session
+data continues to follow the selected persistence mode.
 
 Terminal scrollback is not SQLite or a second Kupilot-created history store;
 its capture, lifetime, search, copy, and deletion behavior belong to the
@@ -401,10 +398,14 @@ Queue cancel/clear, transcript search, context-pressure projection, plan arm,
 and title selection are local and content-free outside the single visible TUI.
 Search queries and match state, clipboard state, plan authority, compaction
 intent, and terminal title state are not logged, exported, or persisted.
-`/copy` may send one sanitized committed assistant answer to the terminal's
-OSC 52 clipboard sink after explicit user action; the terminal and clipboard
-then control retention. Fixed title states contain no Session, input, answer,
-scope, resource, Evidence, command, error, or credential data.
+`/copy` may send one sanitized committed assistant answer (at most 65,536 UTF-8
+bytes) to macOS's fixed `/usr/bin/pbcopy` helper or the terminal's OSC 52 sink
+after explicit user action. The helper receives only the answer on stdin and
+locale variables, has a two-second deadline, and does not expose its output.
+SSH uses the attached terminal; tmux also forwards to its attached terminal.
+OSC 52 delivery is unconfirmed. The terminal and clipboard control retention.
+No clipboard reads are requested. Fixed title states contain no Session, input,
+answer, scope, resource, Evidence, command, error, or credential data.
 
 Validated claim coverage stores only bounded claim text/hash, classification,
 Evidence identifiers, and run/generation provenance with the Diagnosis. It

@@ -81,6 +81,16 @@ an Agent failure. `Protocol continuation unavailable` means a disconnected
 stream remains unknown/recovered and requires a new explicit input; it is not a
 request to retry automatically.
 
+`/copy` uses the macOS system clipboard locally and otherwise attempts OSC 52
+on an interactive terminal. A terminal request has no delivery acknowledgement;
+if it is reported as unconfirmed, check the terminal's clipboard permissions
+and multiplexer passthrough settings, or use terminal selection or `/export`.
+Clipboard helpers have a two-second deadline and their output is not displayed.
+Conversation and dialogs share one managed screen. Use the wheel or Page Up/Page
+Down for conversation history, and Up/Down or Page Up/Page Down in long dialogs.
+Use the terminal's selection bypass (usually Shift+drag) for manual copying.
+Completed safe conversation is printed to primary scrollback on clean exit.
+
 ## The OpenAI model API key is missing or rejected
 
 Use masked TUI setup, optional plaintext `models.agent.api_key`, or

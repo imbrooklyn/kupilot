@@ -21,8 +21,8 @@ const (
 )
 
 // TerminalCapabilityProfile is a bounded projection derived by the delivery
-// composition root from the output TTY and a small allowlist of terminal
-// environment markers. It performs no active capability query.
+// composition root from the output TTY and local delivery routes. Available
+// OSC 52 means a request can be sent, not that the terminal acknowledged it.
 type TerminalCapabilityProfile struct {
 	NativeClipboard TerminalCapabilityState
 	OSC52           TerminalCapabilityState
@@ -75,7 +75,7 @@ func defaultTerminalCapabilityProfile(theme ThemeMode, clipboard, title bool) Te
 		Title:           titleState,
 		Notification:    TerminalCapabilityDisabled,
 		Color:           color,
-		AlternateScreen: TerminalCapabilityDisabled,
+		AlternateScreen: TerminalCapabilityAvailable,
 		ReducedMotion:   false,
 		Scrollback:      TerminalScrollbackRestoredCommitted,
 	}

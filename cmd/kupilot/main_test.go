@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -194,7 +195,7 @@ func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 	if err := restoreTerminalAfterRuntime(&output, model, nil); err != nil {
 		t.Fatalf("restoreTerminalAfterRuntime() error = %v", err)
 	}
-	if !strings.HasPrefix(output.String(), "\r\x1b[") ||
+	if strings.Contains(output.String(), "\x1b[J") ||
 		strings.Count(output.String(), "How many Nodes are Ready?") != 1 ||
 		strings.Count(output.String(), "Three Nodes are Ready.") != 1 ||
 		strings.Contains(output.String(), "Ask a question") || strings.Contains(output.String(), "supervised") {
@@ -205,7 +206,7 @@ func TestTerminalRuntimeCleanupWritesOnlyPendingSafeHistory(t *testing.T) {
 	if err := restoreTerminalAfterRuntime(&output, model, context.Canceled); err != nil ||
 		strings.Contains(output.String(), "How many Nodes are Ready?") ||
 		strings.Contains(output.String(), "Three Nodes are Ready.") ||
-		!strings.HasSuffix(output.String(), "\x1b[J") {
+		output.Len() != 0 {
 		t.Fatalf("interrupted runtime did not limit output to live-frame cleanup: error=%v output=%q", err, output.String())
 	}
 
@@ -306,12 +307,12 @@ func TestTerminalCapabilityProjectionIsConservativeAndContentFree(t *testing.T) 
 		},
 		{
 			name: "multiplexer is restricted", terminal: true, values: map[string]string{"TERM": "xterm-256color", "TMUX": "present"},
-			titleEnabled: true, wantOSC52: tui.TerminalCapabilityRestricted, wantMux: tui.TerminalCapabilityRestricted,
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityAvailable, wantMux: tui.TerminalCapabilityRestricted,
 			wantRemote: tui.TerminalCapabilityAvailable, wantTitle: tui.TerminalCapabilityRestricted, wantColor: tui.TerminalColorANSI,
 		},
 		{
 			name: "remote terminal is restricted", terminal: true, values: map[string]string{"TERM_PROGRAM": "iTerm.app", "SSH_TTY": "present"},
-			titleEnabled: true, wantOSC52: tui.TerminalCapabilityRestricted, wantMux: tui.TerminalCapabilityAvailable,
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityAvailable, wantMux: tui.TerminalCapabilityAvailable,
 			wantRemote: tui.TerminalCapabilityRestricted, wantTitle: tui.TerminalCapabilityRestricted, wantColor: tui.TerminalColorANSI,
 		},
 		{
@@ -322,17 +323,25 @@ func TestTerminalCapabilityProjectionIsConservativeAndContentFree(t *testing.T) 
 		},
 		{
 			name: "unknown direct terminal", terminal: true, values: map[string]string{"TERM": "vt100"},
-			titleEnabled: true, wantOSC52: tui.TerminalCapabilityUnsupported, wantMux: tui.TerminalCapabilityAvailable,
+			titleEnabled: true, wantOSC52: tui.TerminalCapabilityAvailable, wantMux: tui.TerminalCapabilityAvailable,
 			wantRemote: tui.TerminalCapabilityAvailable, wantTitle: tui.TerminalCapabilityUnsupported, wantColor: tui.TerminalColorANSI,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			profile := projectTerminalCapabilitiesForState(test.terminal, lookup(test.values), test.noColor, test.titleEnabled, test.reducedMotion)
+			wantNative := tui.TerminalCapabilityUnsupported
+			if test.terminal && nativeClipboardAvailable(runtime.GOOS, lookup(test.values)) {
+				wantNative = tui.TerminalCapabilityAvailable
+			}
+			wantAlternate := tui.TerminalCapabilityDisabled
+			if test.terminal {
+				wantAlternate = tui.TerminalCapabilityAvailable
+			}
 			if profile.OSC52 != test.wantOSC52 || profile.Multiplexer != test.wantMux || profile.RemoteSession != test.wantRemote ||
 				profile.Title != test.wantTitle || profile.Color != test.wantColor || profile.ReducedMotion != test.reducedMotion ||
-				profile.Notification != tui.TerminalCapabilityDisabled || profile.NativeClipboard != tui.TerminalCapabilityUnsupported ||
-				profile.AlternateScreen != tui.TerminalCapabilityDisabled || profile.Scrollback != tui.TerminalScrollbackRestoredCommitted {
+				profile.Notification != tui.TerminalCapabilityDisabled || profile.NativeClipboard != wantNative ||
+				profile.AlternateScreen != wantAlternate || profile.Scrollback != tui.TerminalScrollbackRestoredCommitted {
 				t.Fatalf("terminal capability projection = %#v", profile)
 			}
 		})

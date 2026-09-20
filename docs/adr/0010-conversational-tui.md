@@ -25,6 +25,21 @@ Plan mode uses the same Agent and safe-read subset. Search, semantic selection,
 undo/redo, clipboard gestures, status titles and notifications are ephemeral,
 bounded delivery features and cannot change run authority.
 
+Copy uses a bounded native clipboard write when a local platform helper is
+available, then an OSC 52 request on an interactive terminal if needed. SSH
+uses the attached terminal; tmux requests use its passthrough framing. Do not
+gate copying on terminal-brand allowlists or describe an unacknowledged terminal
+request as a confirmed copy. Helpers receive only the explicitly selected safe
+answer on stdin, a minimal environment, no shell, and a finite deadline.
+
+Use one alternate-screen renderer and the existing transcript viewport for
+conversation, dialogs and review. Wheel and Page Up/Page Down navigate the
+viewport; terminal selection uses the terminal's mouse-reporting bypass gesture
+(usually Shift+drag). On clean exit, restore the original terminal and print
+only the completed safe transcript once. Never transfer live rows to unmanaged
+scrollback while rendering: inline frame resizing and timer-based insertion do
+not provide an atomic handoff. All layouts remain bounded by the terminal.
+
 Normalize external Unicode and strip or visibly replace unsafe terminal,
 device and bidirectional controls. Do not depend on color alone. Optional
 presentation failures preserve the business result and cause no external retry.

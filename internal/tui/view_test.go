@@ -94,8 +94,6 @@ func TestViewKeepsRealCursorInsideComposerAcrossRunGrowth(t *testing.T) {
 			model, _ = updateModel(t, model, tea.PasteMsg{Content: "Explain the scheduling path."})
 			model, submit := updateModel(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 			_ = commandFromCmd(t, submit)
-			_, submittedRows := model.transcript.CommitReady()
-			model.terminalHistoryRows += submittedRows
 			model.reflow()
 			assertCursorOnComposer(t, model, "submitted question")
 
@@ -364,7 +362,7 @@ func TestCompletedConversationRemainsAvailableForTerminalCommitAndKeyboardReview
 	if cmd != nil || !strings.Contains(model.View().Content, "Three Nodes are Ready.") {
 		t.Fatal("pure TUI state lost terminal Agent history or emitted a runtime command")
 	}
-	if model.View().AltScreen || model.View().MouseMode != tea.MouseModeNone {
+	if !model.View().AltScreen || model.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatal("conversation view did not leave primary-screen selection and scrolling under terminal ownership")
 	}
 	model, duplicate := updateModel(t, model, ApplicationEventMsg{Event: terminalEvent})

@@ -95,8 +95,12 @@ cannot be removed. The command must match the current scope and policy
 generations; once it does, a recovered draft may be discarded even though its
 preserved provenance names an earlier invalidated generation.
 
-`/copy` copies only the latest committed successful assistant final answer
-when terminal-native clipboard support is known. `/find` or `Alt+S` reuses the
+`/copy` copies only the latest committed successful assistant final answer.
+On local macOS it uses the system clipboard, including Apple Terminal. Linux
+and SSH use OSC 52; tmux and screen use passthrough framing. Terminal clipboard
+permissions still apply. A terminal request is reported as unconfirmed, not as
+a successful copy; terminal selection or `/export` remains available if it is
+blocked. No terminal-brand allowlist is required. `/find` or `Alt+S` reuses the
 composer to search the current committed transcript; fixed next/previous keys
 navigate and Escape restores the prior draft. Neither interaction includes
 queue, composer, streaming, failed, or recovered content.

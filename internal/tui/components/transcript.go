@@ -89,8 +89,6 @@ type TranscriptStyles struct {
 type Transcript struct {
 	entries       []Entry
 	activeAgent   int
-	committed     int
-	prepared      int
 	viewport      viewport.Model
 	width         int
 	height        int
@@ -112,7 +110,6 @@ type Transcript struct {
 }
 
 const (
-	terminalHistorySeparatorRows  = 1
 	MaxTranscriptSearchQueryBytes = 512
 	MaxTranscriptSearchMatches    = 100
 	MaxTranscriptSearchEntries    = 4096
@@ -624,87 +621,6 @@ func (transcript *Transcript) TerminalTranscript() string {
 	return transcript.renderRange(0, end, false)
 }
 
-// PrepareCommit removes the next immutable block from the live projection
-// without claiming that the terminal renderer has inserted it. A streaming
-// Agent entry is a barrier: neither its provisional prose nor later entries can
-// reach terminal-owned scrollback until the Agent becomes terminal.
-func (transcript *Transcript) PrepareCommit() (string, int, int) {
-	if transcript.prepared > transcript.committed {
-		return "", 0, 0
-	}
-	end := transcript.committableEnd()
-	if end <= transcript.committed {
-		return "", 0, 0
-	}
-	block := transcript.renderCommitBlock(transcript.committed, end)
-	if block == "" {
-		transcript.committed = end
-		transcript.prepared = end
-		transcript.refresh(true)
-		return "", 0, 0
-	}
-	transcript.prepared = end
-	transcript.refresh(true)
-	return block, lipgloss.Height(block), end
-}
-
-// CompleteCommit records that one prepared block reached terminal scrollback.
-func (transcript *Transcript) CompleteCommit(end int) bool {
-	if end <= transcript.committed || end != transcript.prepared {
-		return false
-	}
-	transcript.committed = end
-	transcript.refresh(true)
-	return true
-}
-
-// AbortCommit restores a prepared block to the live projection when the
-// terminal cannot provide one safe insertion row.
-func (transcript *Transcript) AbortCommit(end int) bool {
-	if end <= transcript.committed || end != transcript.prepared {
-		return false
-	}
-	transcript.prepared = transcript.committed
-	transcript.refresh(true)
-	return true
-}
-
-// CommitReady is the synchronous component-level form used outside the
-// terminal renderer. Runtime insertion uses PrepareCommit and CompleteCommit
-// so pending output remains recoverable until it has actually been handed off.
-func (transcript *Transcript) CommitReady() (string, int) {
-	block, rows, end := transcript.PrepareCommit()
-	if block == "" {
-		return "", 0
-	}
-	if !transcript.CompleteCommit(end) {
-		return "", 0
-	}
-	return block, rows
-}
-
-// PendingTerminalTranscript returns immutable history that has not yet been
-// handed to the running terminal renderer. It is used only as a bounded
-// shutdown fallback.
-func (transcript *Transcript) PendingTerminalTranscript() string {
-	end := transcript.committableEnd()
-	if end <= transcript.committed {
-		return ""
-	}
-	return transcript.renderCommitBlock(transcript.committed, end)
-}
-
-func (transcript *Transcript) renderCommitBlock(start, end int) string {
-	block := transcript.renderRange(start, end, false)
-	if block == "" {
-		return ""
-	}
-	// Every renderer-owned immutable block leaves one inert row after itself.
-	// That single rule separates submitted history from the live Working row
-	// and a final Worked separator from the composer without transient chrome.
-	return block + strings.Repeat("\n", terminalHistorySeparatorRows)
-}
-
 func (transcript *Transcript) committableEnd() int {
 	end := 0
 	for end < len(transcript.entries) {
@@ -794,7 +710,7 @@ func (transcript *Transcript) renderVisibleContent() string {
 	if transcript.reviewing || transcript.selecting || transcript.searching {
 		return transcript.renderRange(0, len(transcript.entries), transcript.selecting || transcript.searching || transcript.landmarkEntry >= 0)
 	}
-	return transcript.renderRange(max(transcript.committed, transcript.prepared), len(transcript.entries), false)
+	return transcript.renderRange(0, len(transcript.entries), false)
 }
 
 func (transcript *Transcript) renderRange(start, end int, includeSelection bool) string {

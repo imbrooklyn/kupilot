@@ -38,7 +38,7 @@ func TestPrivacyExportUsesOnlyTheRootComposerAndExplicitConfirmation(t *testing.
 		t.Fatalf("export confirmation state = %#v command=%v dialog=%v editors=%d/%d",
 			model.sessionExport, cmd != nil, model.dialog.Open(), model.EditorCount(), model.FocusedEditorCount())
 	}
-	frame := model.render()
+	frame := model.dialog.View(80)
 	for _, want := range []string{
 		target,
 		application.ExportSummarySchemaVersion,
@@ -51,7 +51,7 @@ func TestPrivacyExportUsesOnlyTheRootComposerAndExplicitConfirmation(t *testing.
 			t.Fatalf("export confirmation missing %q", want)
 		}
 	}
-	for _, denied := range []string{"raw cluster-read requests and results", "raw logs", "approval nonce"} {
+	for _, denied := range []string{"raw cluster-read requests and results", "logs", "approval nonce"} {
 		if !strings.Contains(frame, denied) {
 			t.Fatalf("export confirmation did not disclose exclusion %q", denied)
 		}
