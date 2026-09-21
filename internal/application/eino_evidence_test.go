@@ -65,7 +65,7 @@ func TestMultiReadFinalUsesOnlyExactReturnedEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				final := `{"answer_markdown":"The returned checkout observations show unready Pods; partial Events do not establish a complete cause.","evidence_citations":[{"claim":"The returned checkout observations show unready Pods.","claim_type":"current_observation","evidence_ids":` + string(encoded) + `}],"proposed_actions":[]}`
+				final := `{"answer_markdown":"The returned checkout observations show unready Pods; partial Events do not establish a complete cause.\ue200cite\ue202` + string(ids[0]) + `\ue201","evidence_citations":[{"claim":"The returned checkout observations show unready Pods.","claim_type":"current_observation","evidence_ids":` + string(encoded) + `}],"proposed_actions":[]}`
 				return scriptedChunks(diagnosisChunks(final)...)(ctx, request)
 			})
 			sequence := 0
@@ -99,6 +99,9 @@ func TestMultiReadFinalUsesOnlyExactReturnedEvidence(t *testing.T) {
 				t.Fatal("Final validation retried or lost a read")
 			}
 			if mode == "accepted" {
+				if outcome.Diagnosis != nil && outcome.Diagnosis.AnswerMarkdown != "The returned checkout observations show unready Pods; partial Events do not establish a complete cause." {
+					t.Fatal("inline citation reached the accepted answer")
+				}
 				if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || len(outcome.Diagnosis.ClaimCoverage[0].EvidenceIDs) != 18 || outcome.Diagnosis.Completeness.StopReason != domain.RunTerminalPartialResult {
 					t.Fatalf("Accepted partial multi-read result failed: %s", outcome.Diagnostic)
 				}

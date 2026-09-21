@@ -100,9 +100,20 @@ On local macOS it uses the system clipboard, including Apple Terminal. Linux
 and SSH use OSC 52; tmux and screen use passthrough framing. Terminal clipboard
 permissions still apply. A terminal request is reported as unconfirmed, not as
 a successful copy; terminal selection or `/export` remains available if it is
-blocked. No terminal-brand allowlist is required. `/find` or `Alt+S` reuses the
+blocked. No terminal-brand allowlist is required.
+
+Wheel/trackpad gestures scroll conversation or dialog content, even above the
+composer; they never edit input or recall submitted history. Drag visible
+transcript text to highlight it, then Ctrl+C or right-click copies that display
+selection through the same bounded clipboard route. Escape clears it; scrolling,
+resizing or a changed transcript display invalidates it. This explicit selection
+may include provisional text and local notices; `/copy` still selects only a
+committed successful final. Command+C on Mac is a terminal shortcut and does not
+copy the application's selection. A stationary click does not select or copy.
+
+`/find` or `Alt+S` reuses the
 composer to search the current committed transcript; fixed next/previous keys
-navigate and Escape restores the prior draft. Neither interaction includes
+navigate and Escape restores the prior draft. Both `/copy` and `/find` exclude
 queue, composer, streaming, failed, or recovered content.
 
 `Ctrl+R` searches only committed ordinary submitted input, while another
@@ -118,7 +129,7 @@ user input, `Alt+A`/`Alt+Shift+A` for assistant finals,
 `Alt+I`/`Alt+Shift+I` for failure or unknown, and
 `Alt+P`/`Alt+Shift+P` for approval. `Alt+E` opens the claim index; Left/Right
 select a claim and Up/Down select only Evidence cited by it. These jumps
-do not create a transcript page or interfere with terminal mouse selection.
+do not create a transcript page. Navigation clears a display text selection.
 
 `/plan` arms the next ordinary input as a one-shot plan-only run; `/plan off`
 cancels before start. The plan may use safe reads, has at most twelve steps,

@@ -88,8 +88,13 @@ and multiplexer passthrough settings, or use terminal selection or `/export`.
 Clipboard helpers have a two-second deadline and their output is not displayed.
 Conversation and dialogs share one managed screen. Use Page Up/Page Down
 (Fn+Up/Fn+Down on Mac) for conversation history, and Up/Down or paging in long
-dialogs. Drag normally and use the terminal's Copy command to copy selected
-text; Kupilot leaves mouse reporting disabled. Wheel behavior is terminal-owned.
+dialogs. Wheel/trackpad input scrolls content without editing the composer or
+recalling submitted history. Drag transcript text and press Ctrl+C or right-click
+to copy the highlighted selection. Escape clears it; scrolling, resizing or
+replacing the selected display also clears it. Use `/copy` for the full latest
+completed answer. On Mac, Command+C belongs to the terminal, not the application's
+selection. Mouse reporting stays enabled so the terminal does not translate
+wheel gestures into composer Up/Down keys.
 Completed safe conversation is printed to primary scrollback on clean exit.
 
 ## A diagnostic answer stops at claim_binding

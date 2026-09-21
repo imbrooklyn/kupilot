@@ -253,10 +253,13 @@ editable input history. A failed or cancelled resume keeps the current input
 history unchanged. Conversation and dialogs use one managed terminal screen.
 Page Up and Page Down navigate the transcript (Fn+Up and Fn+Down on a Mac),
 never composer history. Explicit transcript review stays at the selected position
-until it returns to the bottom. To select text
-with your terminal, drag normally; mouse reporting is disabled. Use the terminal's
-Copy command (Command+C on Mac), or /copy for the latest completed answer.
-Wheel behavior belongs to the terminal; use keyboard paging for app history.
+until it returns to the bottom. Wheel and trackpad gestures scroll the transcript
+or open dialog, including when the pointer is over the composer; they never
+recall input history. Drag visible transcript text, then press Ctrl+C or
+right-click to copy the selection. Escape clears it. Scrolling, resizing or
+changing the selected display clears selection. Use `/copy` for the entire latest
+completed answer, including text outside the viewport. Command+C is handled by
+the Mac terminal and does not copy the application's highlighted selection.
 Long dialogs support Up/Down and Page Up/Page Down scrolling.
 Closing a dialog restores the conversation without
 leaving dialog text in history. On clean exit the original terminal is restored

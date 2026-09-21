@@ -16,6 +16,9 @@ log viewer, YAML viewer, or proof of causality.
 
 Completed answers do not show Evidence IDs, citation aliases, or repeated
 reference rows. Those correlation values remain internal and machine-checked.
+Complete model-emitted inline citation control tokens are removed from new
+answer text before display and storage; structured references are still checked
+independently. This does not rewrite previously stored answers.
 Pressing `Alt+E` explicitly enters observation inspection and shows only the
 selected position and a friendly state such as `ready` or `partial` before the
 safe detail is opened.

@@ -101,7 +101,8 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewToolCatalog() error = %v", err)
 	}
-	model := &integrationModel{diagnosis: integrationDiagnosisJSON(integrationEvidenceID1)}
+	model := &integrationModel{diagnosis: strings.Replace(integrationDiagnosisJSON(integrationEvidenceID1),
+		"before changing it.", "before changing it.\\ue200cite\\ue202"+string(integrationEvidenceID1)+"\\ue201", 1)}
 	modelServer := httptest.NewServer(model)
 	defer modelServer.Close()
 	modelCredential, err := config.NewSecretValue("integration-model-credential-8401")
@@ -239,6 +240,10 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		t.Fatalf("GetByRunID(diagnosis) error = %v", err)
 	}
 	references := diagnosis.ReferencedEvidenceIDs()
+	if strings.ContainsRune(diagnosis.AnswerMarkdown, '\ue200') ||
+		strings.Contains(diagnosis.AnswerMarkdown, string(integrationEvidenceID1)) {
+		t.Fatal("inline citation reached persisted answer")
+	}
 	if len(references) != 1 || references[0] != integrationEvidenceID1 || strings.Contains(fmt.Sprintf("%#v", diagnosis), canary) {
 		t.Fatalf("persisted Diagnosis = %#v", diagnosis)
 	}
@@ -249,6 +254,9 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		t.Fatalf("ListCommittedBySession() = %#v/%v", messages, err)
 	}
 	for index, message := range messages.Messages {
+		if strings.ContainsRune(message.Content, '\ue200') || strings.Contains(message.Content, `\ue200`) {
+			t.Fatal("inline citation reached retained message history")
+		}
 		if strings.Contains(message.Content, canary) {
 			t.Fatalf("Message[%d] contains the sensitive canary", index)
 		}

@@ -35,6 +35,8 @@ func diagnosisDraftForMode(message *schema.Message, mode agent.RunMode) (agent.D
 
 func diagnosisDraftContainsCredential(credential *config.SecretValue, draft agent.DiagnosisDraft) bool {
 	values := []string{draft.AnswerMarkdown}
+	var presentation agent.AnswerPresentation
+	values = append(values, presentation.Push(draft.AnswerMarkdown)+presentation.Finish())
 	for _, fact := range draft.ConfirmedFacts {
 		values = append(values, fact.Statement)
 		for _, evidenceID := range fact.EvidenceIDs {

@@ -20,12 +20,15 @@ var errProvisionalAnswerStopped = errors.New("provisional answer projection stop
 // from a model response. It has no role in Eino response assembly, Tool-call
 // interpretation, Diagnosis validation, persistence, or runtime authority.
 type provisionalAnswer struct {
-	ctx        context.Context
-	stop       context.CancelFunc
-	state      *runState
-	extractor  answerMarkdownExtractor
-	credential credentialStreamGuard
-	redactor   *security.StreamingRedactor
+	ctx            context.Context
+	stop           context.CancelFunc
+	state          *runState
+	extractor      answerMarkdownExtractor
+	credential     credentialStreamGuard
+	redactor       *security.StreamingRedactor
+	presentation   agent.AnswerPresentation
+	textCredential credentialStreamGuard
+	textRedactor   *security.StreamingRedactor
 
 	disabled bool
 	finished bool
@@ -39,11 +42,13 @@ func newProvisionalAnswer(
 	credential *config.SecretValue,
 ) (*provisionalAnswer, error) {
 	redactor, err := security.NewStreamingRedactor(agent.MaxAnswerMarkdownBytes)
-	if ctx == nil || stop == nil || state == nil || credential != nil && !credential.IsSet() || err != nil {
-		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)
+	textRedactor, textErr := security.NewStreamingRedactor(agent.MaxAnswerMarkdownBytes)
+	if ctx == nil || stop == nil || state == nil || credential != nil && !credential.IsSet() || err != nil || textErr != nil {
+		return nil, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, errors.Join(err, textErr))
 	}
 	return &provisionalAnswer{
 		ctx: ctx, stop: stop, state: state, credential: credentialStreamGuard{credential: credential}, redactor: redactor,
+		textCredential: credentialStreamGuard{credential: credential}, textRedactor: textRedactor,
 	}, nil
 }
 
@@ -97,7 +102,10 @@ func (preview *provisionalAnswer) project(decoded string, final bool) error {
 		tail, err = preview.redactor.Finish()
 		projected += tail
 	}
-	if errors.Is(err, security.ErrSensitiveOutputBlocked) {
+	if err == nil {
+		projected, err = preview.present(projected, final)
+	}
+	if errors.Is(err, security.ErrSensitiveOutputBlocked) || errors.Is(err, agent.ErrSensitiveModelTextBlocked) {
 		return preview.fail(failedRuntime(
 			domain.SafeErrorClassSensitiveOutputBlocked,
 			safeSensitiveModelTextBlocked,
@@ -126,6 +134,31 @@ func (preview *provisionalAnswer) project(decoded string, final bool) error {
 		return preview.fail(err)
 	}
 	return nil
+}
+
+// Both sides of token removal need screening: the original token may contain a
+// secret, or removal may join surrounding fragments into one. Reuse the existing
+// streaming guards so neither case can reach even provisional display.
+func (preview *provisionalAnswer) present(text string, final bool) (string, error) {
+	text = preview.presentation.Push(text)
+	if final {
+		text += preview.presentation.Finish()
+	}
+	text, found := preview.textCredential.push(text, final)
+	if found {
+		return "", agent.ErrSensitiveModelTextBlocked
+	}
+	var out string
+	var err error
+	if text != "" {
+		out, err = preview.textRedactor.Push(text)
+	}
+	if err == nil && final {
+		var tail string
+		tail, err = preview.textRedactor.Finish()
+		out += tail
+	}
+	return out, err
 }
 
 func (preview *provisionalAnswer) fail(err error) error {

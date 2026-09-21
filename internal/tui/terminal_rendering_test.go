@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,58 @@ func (o *probeOutput) expect(marker string) {
 }
 
 type probeStep int
+
+type mouseInputHarness struct {
+	Model
+	wheels       int
+	scrolled     bool
+	changedDraft bool
+}
+
+func (h mouseInputHarness) Init() tea.Cmd { return nil }
+
+func (h mouseInputHarness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := h.Model.transcript.ScrollOffset()
+	next, cmd := h.Model.Update(msg)
+	h.Model = next.(Model)
+	switch event := msg.(type) {
+	case tea.MouseWheelMsg:
+		h.wheels++
+		h.scrolled = h.scrolled || h.Model.transcript.ScrollOffset() != before
+		h.changedDraft = h.changedDraft || h.Model.composer.Value() != "" || cmd != nil
+	case tea.KeyPressMsg:
+		if event.Code == tea.KeyUp {
+			return h, tea.Quit
+		}
+	}
+	return h, cmd
+}
+
+func TestTerminalMouseProtocolSeparatesWheelFromKeyboardHistory(t *testing.T) {
+	model := newTestModel()
+	model.composer.RecordSubmission("keyboard history")
+	for range 50 {
+		model.transcript.AppendNotice("Scrollable row")
+	}
+	model.reflow()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	// Real SGR wheel reports over the composer, followed by a physical Up key.
+	input := strings.NewReader("\x1b[<64;5;23M\x1b[<65;5;23M\x1b[A")
+	program := tea.NewProgram(mouseInputHarness{Model: model}, tea.WithContext(ctx),
+		tea.WithInput(input), tea.WithOutput(io.Discard), tea.WithWindowSize(80, 24),
+		tea.WithEnvironment([]string{"TERM=xterm-256color"}), tea.WithoutSignalHandler())
+	final, err := program.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := final.(mouseInputHarness)
+	if result.wheels != 2 || !result.scrolled || result.changedDraft || result.composer.Value() != "keyboard history" {
+		t.Fatalf("mouse/keyboard separation failed: wheels=%d scrolled=%t changed draft=%t final=%q",
+			result.wheels, result.scrolled, result.changedDraft, result.composer.Value())
+	}
+}
+
 type probeHarness struct{ Model }
 
 func (h probeHarness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -119,10 +172,11 @@ func TestManagedScreenSurvivesDialogsAndToolProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := final.(probeHarness).Model
-	for _, enable := range []string{"\x1b[?1000h", "\x1b[?1002h", "\x1b[?1003h"} {
-		if strings.Contains(out.all, enable) {
-			t.Fatal("renderer enabled mouse reporting and intercepted native selection")
-		}
+	if !strings.Contains(out.all, "\x1b[?1002h") || !strings.Contains(out.all, "\x1b[?1006h") {
+		t.Fatal("renderer did not enable cell-motion and SGR mouse reporting")
+	}
+	if !strings.Contains(out.all, "\x1b[?1002l") || !strings.Contains(out.all, "\x1b[?1006l") {
+		t.Fatal("renderer did not restore mouse reporting on exit")
 	}
 	if strings.Count(out.all, "\x1b[?1049h") != 1 || strings.Count(out.all, "\x1b[?1049l") != 1 {
 		t.Fatal("dialog or progress changed renderer ownership")

@@ -21,6 +21,7 @@ const (
 // View deterministically renders transcript, composer, suggestions, then footer.
 func (model Model) View() tea.View {
 	content, composerY, composerVisible := model.renderLayout()
+	content = model.highlightTranscriptSelection(content)
 	view := tea.NewView(content)
 	if composerVisible {
 		if cursor := model.composer.Cursor(); cursor != nil {
@@ -37,9 +38,9 @@ func (model Model) configureView(view tea.View) tea.View {
 	view.AltScreen = true
 	view.ReportFocus = true
 	view.DisableBracketedPasteMode = false
-	// Mouse reporting consumes native terminal selection, including on macOS.
-	// Keep selection terminal-owned; Page Up/Down navigate the viewport.
-	view.MouseMode = tea.MouseModeNone
+	// Without reporting, alternate-screen terminals can translate wheel input
+	// into arrow keys and recall composer history. Own scrolling and selection.
+	view.MouseMode = tea.MouseModeCellMotion
 	view.OnMouse = nil
 	if model.terminalStatusTitles {
 		view.WindowTitle = model.terminalTitle()

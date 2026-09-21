@@ -40,7 +40,8 @@ Enter sends when idle and steers an active run at its next model boundary. Durin
 Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up when the composer is empty.
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
-Drag to select text with your terminal. Page Up/Page Down scroll conversation or dialogs (Fn+Up/Fn+Down on Mac).
+Wheel/trackpad scroll conversation or dialogs, never the composer. Page Up/Page Down also scroll (Fn+Up/Fn+Down on Mac).
+Drag transcript text, then Ctrl+C or right-click to copy; Esc clears selection. /copy copies the latest completed answer.
 Alt+E opens supporting observation details. Ctrl+A/E moves to the line start/end. Esc interrupts an active run when no local interaction owns it.
 Alt+S reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
 Ctrl+B/F moves by character; Alt+B/F and Alt/Ctrl+Left/Right move by word.
@@ -50,7 +51,12 @@ Ctrl+C cancels the active local interaction; otherwise it clears a draft before 
 
 // Update reduces one message into delivery state; View is the only live renderer.
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return model.update(msg)
+	updated, cmd := model.update(msg)
+	if next, ok := updated.(Model); ok {
+		next.clearStaleTextSelection()
+		return next, cmd
+	}
+	return updated, cmd
 }
 
 func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -70,6 +76,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case tea.WindowSizeMsg:
+		model.textSelection = transcriptTextSelection{}
 		model.width = max(1, message.Width)
 		model.height = max(1, message.Height)
 		model.reflow()
@@ -171,6 +178,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case tea.BlurMsg:
+		model.textSelection = transcriptTextSelection{}
 		model.terminalFocused = false
 		model.composer.Blur()
 		return model, nil
@@ -183,6 +191,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case tea.MouseWheelMsg:
+		model.textSelection = transcriptTextSelection{}
 		delta := 3
 		if message.Button == tea.MouseWheelUp {
 			delta = -3
@@ -204,7 +213,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
-		return model, nil
+		return model.updateTranscriptMouse(message)
 	case tea.ClipboardMsg:
 		// Kupilot never requests or accepts clipboard reads.
 		return model, nil
@@ -218,7 +227,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case message.Copied:
-			model.transcript.AppendNotice("Copied the latest committed assistant answer to the system clipboard.")
+			model.transcript.AppendNotice("Copied text to the system clipboard.")
 		case message.Requested:
 			model.transcript.AppendNotice("Copy requested from the terminal; delivery is unconfirmed. Use /export if unavailable.")
 		default:
@@ -691,6 +700,15 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	message.Text = sanitizeExternalText(message.Text, 0)
 	if !model.terminalFocused {
 		return model, nil
+	}
+	if model.textSelection.content != "" {
+		if message.String() == "ctrl+c" && model.selectedTranscriptText() != "" {
+			return model.copyTranscriptSelection()
+		}
+		model.textSelection = transcriptTextSelection{}
+		if message.Code == tea.KeyEscape {
+			return model, nil
+		}
 	}
 	if model.approvalDialog.Open() {
 		return model.updateApprovalDialogKey(message)

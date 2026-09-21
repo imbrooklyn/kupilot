@@ -158,6 +158,33 @@ func TestAdapterStreamsFragmentedAnswerWithoutEnvelopeMetadata(t *testing.T) {
 	}
 }
 
+func TestAdapterNormalizesFragmentedInlineCitationsBeforePublishing(t *testing.T) {
+	clock := newTestClock()
+	const want = "Readiness failed.\n\nNo changes made."
+	const response = `{"answer_markdown":"Readiness failed.\ue200cite\ue202display-only-id\ue201\n\nNo changes made.","evidence_citations":[],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`
+	var chunks []*schema.Message
+	for _, char := range response {
+		chunks = append(chunks, &schema.Message{Role: schema.Assistant, Content: string(char)})
+	}
+	chunks = append(chunks, &schema.Message{Role: schema.Assistant, ResponseMeta: &schema.ResponseMeta{FinishReason: "stop"}})
+	model := &recordingModel{scripts: []modelScript{scriptedChunks(chunks...)}}
+	recorder := newEventRecorder()
+	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+	outcome := testAdapter(t, clock, model, new(recordingTool), newTestScopeGuard()).Run(context.Background(), input, recorder)
+	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || outcome.Diagnosis.AnswerMarkdown != want {
+		t.Fatalf("normalized outcome = %#v", outcome)
+	}
+	var streamed strings.Builder
+	for _, event := range recorder.Events() {
+		if event.Kind == agent.RunEventTextDelta {
+			streamed.WriteString(event.TextDelta)
+		}
+	}
+	if streamed.String() != want {
+		t.Fatalf("streamed %q, want %q", streamed.String(), want)
+	}
+}
+
 func TestAdapterStopsStreamingWhenScopeBecomesStale(t *testing.T) {
 	clock := newTestClock()
 	guard := newTestScopeGuard()
@@ -201,6 +228,16 @@ func TestAdapterBlocksJSONEscapedCredentialFromEveryDiagnosisSink(t *testing.T) 
 		name      string
 		diagnosis string
 	}{
+		{
+			name: "credential joined by citation removal",
+			diagnosis: `{"answer_markdown":"test-model-\ue200cite\ue202id\ue201credential-8100",` +
+				`"evidence_citations":[],"proposed_actions":[]}`,
+		},
+		{
+			name: "private key joined by citation removal",
+			diagnosis: `{"answer_markdown":"-----BEGIN PRI\ue200cite\ue202id\ue201VATE KEY-----",` +
+				`"evidence_citations":[],"proposed_actions":[]}`,
+		},
 		{
 			name: "answer",
 			diagnosis: `{"answer_markdown":"` + escaped +

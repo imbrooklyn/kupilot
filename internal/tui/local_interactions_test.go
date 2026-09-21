@@ -73,7 +73,7 @@ func TestCopyUnavailableEmptyAndExactByteLimit(t *testing.T) {
 	over.transcript.StartAgent()
 	over.transcript.FinishCommittedAgent(strings.Repeat("x", MaxClipboardAnswerBytes+1))
 	over, command = over.copyLatestCommittedAnswer()
-	if command != nil || !strings.Contains(over.dialog.View(80), "exceeds the exact 65536-byte") {
+	if command != nil || !strings.Contains(strings.Join(strings.Fields(over.dialog.View(80)), " "), "exact 65536-byte") {
 		t.Fatalf("one-over clipboard result = command %t dialog %q", command != nil, over.dialog.View(80))
 	}
 }

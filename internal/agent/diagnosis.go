@@ -451,7 +451,7 @@ func sanitizeDiagnosisDraft(draft DiagnosisDraft) (DiagnosisDraft, error) {
 	}
 	if draft.AnswerMarkdown != "" {
 		answer, err := processModelMarkdown(draft.AnswerMarkdown, MaxAnswerMarkdownBytes)
-		if err != nil || answer == "" && draft.Clarification == nil {
+		if err != nil || strings.TrimSpace(answer) == "" && draft.Clarification == nil {
 			if errors.Is(err, ErrSensitiveModelTextBlocked) {
 				return DiagnosisDraft{}, err
 			}
@@ -765,6 +765,21 @@ func sourceFreshness(state domain.SourceCoverageState) domain.EvidenceFreshnessS
 }
 
 func processModelMarkdown(value string, maximumBytes int) (string, error) {
+	processed, err := screenModelMarkdown(value, maximumBytes)
+	if err != nil {
+		return "", err
+	}
+	var presentation AnswerPresentation
+	clean := presentation.Push(processed) + presentation.Finish()
+	if clean == processed {
+		return clean, nil
+	}
+	// Removing a token can join text into a sensitive pattern. Screen both the
+	// original payload and the resulting prose, including removed token content.
+	return screenModelMarkdown(clean, maximumBytes)
+}
+
+func screenModelMarkdown(value string, maximumBytes int) (string, error) {
 	if maximumBytes < 1 || len(value) > maximumBytes {
 		return "", interactionError(domain.FailureFinalLimit, errInvalidModelText)
 	}

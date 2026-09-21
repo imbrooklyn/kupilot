@@ -23,6 +23,15 @@ bounded size and allowed action proposals before persistence. Proposed actions
 remain unexecuted until Application creates fresh local authority. Clarification
 cannot create a Tool target or consent.
 
+After sensitive-content screening, remove complete model-emitted private-use
+inline citation tokens (`U+E200 cite U+E202 ... U+E201`) from answer Markdown.
+Use the same presentation normalization for provisional fragments and the final
+answer before persistence, so history, copy and export receive the clean answer.
+Recheck the resulting text for sensitive content after token removal.
+These tokens do not create or substitute for structured Evidence references;
+exact same-run reference validation remains mandatory. Preserve other Unicode
+and incomplete or unrelated text rather than guessing citation authority.
+
 Application derives terminal reasons, safe next actions and content-free
 preflight projections from actual lifecycle state. Preserve useful internal error
 causes but expose only safe project-owned classes and failure stages/reasons.

@@ -66,18 +66,25 @@ func (model Model) copyLatestCommittedAnswer() (Model, tea.Cmd) {
 	}
 	model.composer.Reset()
 	model.slashMenu.Close()
-	if !model.terminalClipboard {
-		model.showDialog("Clipboard unavailable", "No local clipboard or interactive terminal route is available. Use /export to save the answer.")
-		return model, nil
-	}
 	answer, ok := model.transcript.LatestCommittedAssistantFinal()
 	if !ok {
 		model.showDialog("Nothing to copy", "There is no committed assistant final answer in this Session transcript.")
 		return model, nil
 	}
+	return model.copyText(answer)
+}
+
+func (model Model) copyText(answer string) (Model, tea.Cmd) {
+	if model.pendingClipboardID != 0 {
+		return model, nil
+	}
+	if !model.terminalClipboard {
+		model.showDialog("Clipboard unavailable", "No local clipboard or interactive terminal route is available. Use /export to save the answer.")
+		return model, nil
+	}
 	answer = sanitizeExternalText(answer, 0)
 	if answer == "" || len(answer) > MaxClipboardAnswerBytes {
-		model.showDialog("Copy unavailable", "The committed answer is empty after terminal-safety normalization or exceeds the exact 65536-byte clipboard limit. Nothing was copied.")
+		model.showDialog("Copy unavailable", "The text is empty after terminal-safety normalization or exceeds the exact 65536-byte clipboard limit. Nothing was copied.")
 		return model, nil
 	}
 	if model.copyToClipboard != nil {

@@ -288,6 +288,13 @@ The wire claim does not contain a model-supplied hash. Runtime derives the
 digest from bounded normalized claim text before constructing the durable
 manifest.
 
+After sensitive-content screening, the answer presentation removes complete
+private-use inline citation tokens (`U+E200 cite U+E202 ... U+E201`). The same
+fragment-aware normalization feeds provisional text and the final answer before
+storage, history, copy and export. It does not interpret token payloads as
+Evidence or modify the structured citation manifest. Other Unicode and
+incomplete tokens remain text; no model retry or reference repair is performed.
+
 Provisional text is delivery-only. It is independently bounded, checked for
 the exact model credential when one exists and for sensitive patterns across chunk boundaries,
 normalized across split terminal controls, and rechecked against the immutable

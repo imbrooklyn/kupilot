@@ -594,7 +594,7 @@ func TestFocusResizeAndSmallTerminalPreserveKeyboardSafety(t *testing.T) {
 		t.Fatalf("small-terminal editor state = count %d, height %d", model.EditorCount(), model.composer.Height())
 	}
 	view := model.View()
-	if !view.ReportFocus || !view.AltScreen || view.MouseMode != tea.MouseModeNone ||
+	if !view.ReportFocus || !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion ||
 		containsUnsafeTerminalText(sanitizeExternalText(view.Content, 0)) {
 		t.Fatal("small-terminal View lost focus reporting, terminal ownership, or terminal safety")
 	}
