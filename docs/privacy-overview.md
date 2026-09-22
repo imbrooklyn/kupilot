@@ -386,6 +386,9 @@ model-request lifecycle fields. It excludes conversation content, capability
 arguments, resource names, cluster payloads, bodies, credentials, raw errors,
 paths, and local values.
 
+Rejected internal events may record a fixed event kind and boundary, local run
+correlation ID, sequence, and scope generation. Their payloads remain excluded.
+
 Explicit `logging.sensitive_diagnostics: true` may add the bounded provider
 failure details documented by ADR-0008. Provider text may reflect user or
 cluster data, so the setting is for short-lived local troubleshooting. Logs are

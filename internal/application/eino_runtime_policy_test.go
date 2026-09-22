@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,14 +38,56 @@ func TestToolBudgetProcessesBatchInOrderAndStopsBeforeSecondHandler(t *testing.T
 	if len(model.Requests()) != 1 || len(tool.Calls()) != 1 || tool.Calls()[0].ModelCallID() != "call-1" {
 		t.Fatalf("calls: Model = %d, Tool = %#v", len(model.Requests()), tool.Calls())
 	}
-	foundDenied := false
+	requested := 0
 	for _, event := range recorder.Events() {
-		foundDenied = foundDenied || event.Kind == agent.RunEventToolCallDenied
+		if event.Kind == agent.RunEventToolCallRequested {
+			requested++
+		}
+		if event.ToolInvocation != nil && event.ToolInvocation.Sequence != 1 {
+			t.Fatal("a call rejected before budget admission created a pending lifecycle")
+		}
 	}
-	if !foundDenied {
-		t.Fatal("Tool budget stop did not publish a denial")
+	if requested != 1 || outcome.Diagnosis.Completeness.StopReason != domain.RunTerminalBudgetExhausted {
+		t.Fatal("Tool budget stop did not preserve the admitted call and typed terminal reason")
 	}
 	assertTerminalSequence(t, recorder.Events())
+}
+
+func TestCoordinatorNativeBatchStopLeavesNoPendingTools(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("malformed=%t", malformed), func(t *testing.T) {
+			clock := newCoordinatorClock()
+			model := &recordingModel{scripts: []modelScript{scriptedChunks(toolCallChunks(
+				resourceCall("call-1", "sample-pod"), eventsCall("call-2", "sample-pod"),
+			)...)}}
+			tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
+				if malformed {
+					return domain.ToolResult{}
+				}
+				return successfulToolResult(t, call, testEvidenceID, clock.Now(), `{"ready":false}`)
+			}}
+			runtime := testAdapter(t, newTestClock(), model, tool, newTestScopeGuard())
+			runtime.now = clock.Now
+			coordinator, _, _, _ := newCoordinatorHarness(t, clock, runnerFunc(runtime.Run))
+			coordinator.budgetLimits.ToolCalls = 1
+			session := createCoordinatorSession(t, coordinator)
+			runID, err := coordinator.StartRun(t.Context(), StartRunCommand{SessionID: session.ID, Question: "Inspect the selected Pod."})
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, reason, diagnostic := domain.AgentRunStatusCompleted, domain.RunTerminalBudgetExhausted, domain.InteractionFailure("")
+			if malformed {
+				status, reason, diagnostic = domain.AgentRunStatusFailed, domain.RunTerminalFailed, domain.FailureToolResult
+			}
+			result, err := coordinator.WaitRun(t.Context(), runID)
+			if err != nil || result.Status != status || result.TerminalReason != reason || result.Diagnostic != diagnostic {
+				t.Fatalf("batch stop = %#v, %v", result, err)
+			}
+			if len(tool.Calls()) != 1 || len(model.Requests()) != 1 {
+				t.Fatalf("Tool/model calls = %d/%d", len(tool.Calls()), len(model.Requests()))
+			}
+		})
+	}
 }
 
 func TestEquivalentSafeReadReusesAcceptedResultWithoutSecondHandlerCall(t *testing.T) {

@@ -1880,6 +1880,19 @@ const (
 	RunObservationStarted             RunObservationKind = "started"
 	RunObservationTerminal            RunObservationKind = "terminal"
 	RunObservationPersistenceDegraded RunObservationKind = "persistence_degraded"
+	RunObservationEventRejected       RunObservationKind = "event_rejected"
+)
+
+// RunEventBoundary identifies the fixed check that rejected a valid event.
+type RunEventBoundary string
+
+const (
+	RunEventBoundaryIdentity    RunEventBoundary = "identity"
+	RunEventBoundaryScope       RunEventBoundary = "scope"
+	RunEventBoundaryPreflight   RunEventBoundary = "preflight"
+	RunEventBoundaryAcceptance  RunEventBoundary = "acceptance"
+	RunEventBoundaryPersistence RunEventBoundary = "persistence"
+	RunEventBoundaryDelivery    RunEventBoundary = "delivery"
 )
 
 // RunObservation contains no user, model, Tool, Evidence, or Diagnosis text.
@@ -1889,6 +1902,9 @@ type RunObservation struct {
 	ScopeGeneration     int64
 	Status              domain.AgentRunStatus
 	PersistenceDegraded bool
+	RejectedEvent       agent.RunEventKind
+	RejectedSequence    int64
+	RejectionBoundary   RunEventBoundary
 }
 
 func (observation RunObservation) valid() bool {
@@ -1902,6 +1918,17 @@ func (observation RunObservation) valid() bool {
 		return observation.Status.Terminal()
 	case RunObservationPersistenceDegraded:
 		return observation.Status == domain.AgentRunStatusRunning && observation.PersistenceDegraded
+	case RunObservationEventRejected:
+		if observation.RejectedSequence < 1 || observation.RejectedSequence > agent.MaxRunEvents {
+			return false
+		}
+		switch observation.RejectionBoundary {
+		case RunEventBoundaryIdentity, RunEventBoundaryScope, RunEventBoundaryPreflight,
+			RunEventBoundaryAcceptance, RunEventBoundaryPersistence, RunEventBoundaryDelivery:
+			return observation.RejectedEvent != ""
+		default:
+			return false
+		}
 	default:
 		return false
 	}

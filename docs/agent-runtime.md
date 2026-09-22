@@ -115,9 +115,12 @@ never reactivated after restart.
    modality or Tool calls. Commentary accompanying a Tool selection is
    discarded and cannot authorize a Tool.
 6. Complete indexed Tool calls are strictly decoded and bound as one atomic
-   batch. An admitted batch is canonicalized, budget-reserved, scope-injected,
-   and dispatched through the fixed table. If every call is known and
-   structurally safe but strict semantic binding denies any call, the whole
+   batch. An admitted batch is canonicalized and scope-injected. Calls are
+   dispatched in order through the fixed table; each call reserves its budget
+   before publishing its requested lifecycle or entering a handler. A budget
+   stop creates no pending invocation for that call or later calls in the batch,
+   and the existing local budget-stop answer retains accepted Evidence. If every
+   call is known and structurally safe but strict semantic binding denies any call, the whole
    batch instead receives fixed local policy feedback and performs no Tool
    handler or Kubernetes I/O.
 7. The handler performs bounded typed I/O, projects and sanitizes locally, and
@@ -519,6 +522,14 @@ path.
 Application accepts monotonic run events with exact run ID, generation,
 sequence, and terminal-state checks. The TUI receives project-owned UI events;
 Bubble Tea does no business I/O in `Update` or `View`.
+
+If an otherwise valid internal event is rejected, the local operational log
+records its code-owned event kind, run correlation ID, sequence, scope
+generation, and rejection boundary (identity, scope, preflight, acceptance,
+persistence, or delivery). It does not record event payloads. This distinguishes
+an Application acceptance failure from a delivery failure without collecting
+model responses or weakening either boundary. These records diagnose a failure;
+they do not authorize retry or establish its cause on their own.
 
 Pending, committing, rejected, recovered, queued, and unknown lifecycle state
 appears in a bounded working preview. One delivered Application committed

@@ -88,6 +88,30 @@ func TestFileLoggerWritesTextFreeRunLifecycleMetadata(t *testing.T) {
 	}
 }
 
+func TestFileLoggerRecordsEventRejectionWithoutPayload(t *testing.T) {
+	root := privateTempDir(t)
+	sink, err := Open(context.Background(), Options{Directory: root, Now: fixedClock(time.Now().UTC())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const canary = "synthetic-private-event-payload"
+	sink.Logger.Info(EventAgentRun, "phase", "event_rejected", "event_kind", "diagnosis_ready",
+		"event_boundary", "acceptance", "sequence", 42, "payload", canary)
+	sink.Logger.Info(EventAgentRun, "event_kind", canary, "event_boundary", canary)
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	content := readCurrentLog(t, root)
+	for _, want := range []string{`"phase":"event_rejected"`, `"event_kind":"diagnosis_ready"`, `"event_boundary":"acceptance"`, `"sequence":42`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("missing rejection metadata %s", want)
+		}
+	}
+	if strings.Contains(content, canary) || strings.Contains(content, `"payload"`) {
+		t.Fatal("event payload or unrecognized metadata entered the log")
+	}
+}
+
 func TestFileLoggerWritesBoundedSafeModelFailureDiagnostics(t *testing.T) {
 	t.Parallel()
 

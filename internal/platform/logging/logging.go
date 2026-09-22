@@ -270,7 +270,21 @@ func sanitizeAttr(attr slog.Attr) (slog.Attr, bool) {
 		}
 	case "phase":
 		attr.Value = attr.Value.Resolve()
-		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "started", "terminal", "persistence_degraded") {
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "started", "terminal", "persistence_degraded", "event_rejected") {
+			return slog.Attr{}, false
+		}
+	case "event_kind":
+		attr.Value = attr.Value.Resolve()
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(),
+			"run_started", "model_stream_started", "summary_started", "summary_ready", "text_delta",
+			"tool_call_requested", "tool_call_started", "tool_call_completed", "tool_call_failed", "tool_call_denied",
+			"evidence_collected", "diagnosis_ready", "run_completed", "run_failed", "run_cancelled",
+			"run_timed_out", "run_stale_scope", "run_interrupted") {
+			return slog.Attr{}, false
+		}
+	case "event_boundary":
+		attr.Value = attr.Value.Resolve()
+		if attr.Value.Kind() != slog.KindString || !oneOf(attr.Value.String(), "identity", "scope", "preflight", "acceptance", "persistence", "delivery") {
 			return slog.Attr{}, false
 		}
 	case "count", "duration_ms", "sequence", "scope_generation":

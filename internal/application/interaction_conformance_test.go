@@ -27,11 +27,12 @@ import (
 const interactionGreeting = `{"answer_markdown":"Hello from the fixture.","evidence_citations":[],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`
 
 type interactionStep struct {
-	tool     domain.ToolName
-	final    string
-	provider string
-	entered  chan struct{}
-	release  <-chan struct{}
+	tool      domain.ToolName
+	arguments string
+	final     string
+	provider  string
+	entered   chan struct{}
+	release   <-chan struct{}
 }
 
 // interactionModel records only synthetic traffic and has no live endpoint.
@@ -119,6 +120,9 @@ func (model *interactionModel) ServeHTTP(writer http.ResponseWriter, request *ht
 			if step.tool == domain.ToolNameListResources {
 				arguments = `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List synthetic Namespaces.","resource_type":"namespaces"}`
 			}
+			if step.arguments != "" {
+				arguments = step.arguments
+			}
 			output = fmt.Sprintf(`[{"type":"function_call","id":"fc_%d","call_id":"call-%d","name":%q,"arguments":%q,"status":"completed"}]`, index, index, step.tool, arguments)
 		}
 		_, _ = fmt.Fprintf(writer, `{"id":"resp_fixture","status":"completed","output":%s}`, output)
@@ -134,6 +138,9 @@ func (model *interactionModel) ServeHTTP(writer http.ResponseWriter, request *ht
 		arguments := `{"detail":"summary","name":"synthetic-ns","namespace":null,"purpose":"Inspect the synthetic Namespace.","resource_type":"namespaces"}`
 		if step.tool == domain.ToolNameListResources {
 			arguments = `{"filters":[],"format":"list","limit":20,"namespace":null,"purpose":"List synthetic Namespaces.","resource_type":"namespaces"}`
+		}
+		if step.arguments != "" {
+			arguments = step.arguments
 		}
 		call := fmt.Sprintf(`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-%d","type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":null}]}`, index, step.tool, arguments)
 		_, _ = fmt.Fprintf(writer, "data: %s\n\n", call)
@@ -198,6 +205,11 @@ func (tool *interactionTool) Execute(ctx context.Context, call agent.BoundToolCa
 		return result
 	}
 	if tool.mode == "empty" {
+		return result
+	}
+	if tool.mode == "deny_logs" && call.Name() == domain.ToolNameGetPodLogs {
+		result.Status = domain.ToolResultStatusDenied
+		result.Error = &domain.ToolResultError{Class: domain.SafeErrorClassPolicyDenied, SafeMessage: "The cluster-read request was blocked by the fixed policy."}
 		return result
 	}
 	if tool.mode == "unavailable" {
@@ -576,6 +588,86 @@ func interactionProtocol(native bool) domain.ModelAPIProtocol {
 		return domain.ModelAPIProtocolResponses
 	}
 	return domain.ModelAPIProtocolChatCompletions
+}
+
+func TestInteractionFollowUpWithDeniedLogs(t *testing.T) {
+	for _, responses := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", responses), func(t *testing.T) {
+			logs := interactionStep{tool: domain.ToolNameGetPodLogs, arguments: `{"container":"app","container_mode":null,"include_ephemeral":null,"include_init":null,"namespace":null,"pod_name":"sample-pod","purpose":"Inspect bounded current logs.","search":null,"since_seconds":null,"tail_lines":null}`}
+			harness := newInteractionHarness(t, interactionScenario{responses: responses, toolMode: "deny_logs", steps: []interactionStep{
+				{tool: domain.ToolNameGetResource}, logs,
+				{final: interactionFinal(interactionClaim(0, "The Namespace is Active."))},
+				{tool: domain.ToolNameListResources}, {tool: domain.ToolNameGetResource}, logs,
+				{final: interactionFinal(interactionClaim(2, "The listed Namespace is Active.") + "," + interactionClaim(3, "The inspected Namespace is Active.") + `,{"claim":"Application HTTP and caller networking are unverified.","claim_type":"uncertainty","evidence_ids":[]}`)},
+			}})
+			var lastRun domain.AgentRunID
+			for _, question := range []string{"Inspect the current state without changes.", "Explain the current evidence and unverified HTTP and network behavior without changes."} {
+				runID, result := harness.run(t, question)
+				lastRun = runID
+				if result.Diagnostic != "" || result.TerminalReason != domain.RunTerminalPolicyDenied {
+					t.Fatalf("run %s = %#v", runID, result)
+				}
+			}
+			page, err := harness.messages.ListCommittedBySession(context.Background(), sessioncontract.MessagePageRequest{SessionID: harness.session.ID, Limit: sessioncontract.MaxMessagePageSize})
+			if err != nil || len(page.Messages) != 4 {
+				t.Fatalf("committed messages = %d, %v", len(page.Messages), err)
+			}
+			calls, _ := harness.tool.snapshot()
+			if len(calls) != 5 || len(harness.model.snapshot()) != 7 {
+				t.Fatalf("Tool/model calls = %d/%d", len(calls), len(harness.model.snapshot()))
+			}
+			assertHistoricalResponseProtocol(t, harness.model.snapshot()[3], "Explain the current evidence and unverified HTTP and network behavior without changes.")
+			terminals := 0
+			for _, event := range harness.events.Events() {
+				if event.RunID != lastRun || !event.Terminal() {
+					continue
+				}
+				terminals++
+				if event.Kind != application.UIEventRunCompleted || event.Validate() != nil || len(event.EvidenceReferences) != 2 ||
+					event.AnswerProvenance == nil || event.AnswerProvenance.CheckedSourceCount != 2 || event.AnswerProvenance.UncheckedSourceCount != 1 ||
+					!event.AnswerProvenance.HasUncertainty {
+					t.Fatalf("follow-up projection = %#v", event)
+				}
+			}
+			if terminals != 1 {
+				t.Fatalf("follow-up terminal events = %d, want 1", terminals)
+			}
+		})
+	}
+}
+
+func TestInteractionDeniedLogsThenLogBudgetStopsWithoutEventFailure(t *testing.T) {
+	for _, responses := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%t", responses), func(t *testing.T) {
+			logs := interactionStep{tool: domain.ToolNameGetPodLogs, arguments: `{"container":null,"container_mode":"all","include_ephemeral":false,"include_init":false,"namespace":null,"pod_name":"sample-a","purpose":"Inspect bounded current logs.","search":null,"since_seconds":null,"tail_lines":null}`}
+			second := logs
+			second.arguments = strings.Replace(logs.arguments, "sample-a", "sample-b", 1)
+			harness := newInteractionHarness(t, interactionScenario{responses: responses, toolMode: "deny_logs", steps: []interactionStep{{tool: domain.ToolNameGetResource}, logs, second}})
+			runID, result := harness.run(t, "Inspect the available evidence and application logs without changes.")
+			if result.Status != domain.AgentRunStatusCompleted || result.TerminalReason != domain.RunTerminalBudgetExhausted || result.Diagnostic != "" {
+				t.Fatalf("budget stop = %#v", result)
+			}
+			calls, _ := harness.tool.snapshot()
+			if len(calls) != 2 || len(harness.model.snapshot()) != 3 {
+				t.Fatalf("Tool/model calls = %d/%d", len(calls), len(harness.model.snapshot()))
+			}
+			terminals := 0
+			for _, event := range harness.events.Events() {
+				if event.RunID != runID || !event.Terminal() {
+					continue
+				}
+				terminals++
+				if event.Kind != application.UIEventRunCompleted || event.Validate() != nil || event.AnswerProvenance == nil ||
+					event.AnswerProvenance.CheckedSourceCount != 1 || event.AnswerProvenance.UncheckedSourceCount != 1 {
+					t.Fatalf("budget stop lost accepted source coverage: %#v", event)
+				}
+			}
+			page, err := harness.messages.ListCommittedBySession(context.Background(), sessioncontract.MessagePageRequest{SessionID: harness.session.ID, Limit: sessioncontract.MaxMessagePageSize})
+			if terminals != 1 || err != nil || len(page.Messages) != 2 {
+				t.Fatalf("budget terminal/messages = %d/%d, error = %v", terminals, len(page.Messages), err)
+			}
+		})
+	}
 }
 
 func TestInteractionCompositionPrecommitFailureMakesZeroRuntimeCalls(t *testing.T) {

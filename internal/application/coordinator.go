@@ -2559,10 +2559,20 @@ func (coordinator *Coordinator) startRun(
 // Publish synchronously validates and coordinates one ordered neutral Agent
 // event. Persistence failure degrades the active run; identity, ordering, or UI
 // bridge failure rejects the stream.
-func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEvent) agent.EventSinkResult {
+func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEvent) (result agent.EventSinkResult) {
 	if coordinator == nil || ctx == nil || event.Validate() != nil {
 		return agent.EventSinkRejected
 	}
+	boundary := RunEventBoundaryIdentity
+	defer func() {
+		if result == agent.EventSinkAccepted || result == agent.EventSinkDegraded {
+			return
+		}
+		coordinator.observe(ctx, RunObservation{
+			Kind: RunObservationEventRejected, RunID: event.RunID, ScopeGeneration: event.ScopeGeneration,
+			RejectedEvent: event.Kind, RejectedSequence: event.Sequence, RejectionBoundary: boundary,
+		})
+	}()
 	coordinator.mu.Lock()
 	state := coordinator.active
 	if state == nil || state.publishing || state.terminal || event.RunID != state.run.ID ||
@@ -2574,6 +2584,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	if runEventRequiresCurrentScope(event.Kind) && (!coordinator.runScopeCurrentLocked(state) ||
 		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration())) {
+		boundary = RunEventBoundaryScope
 		state.rejectionDiagnostic = domain.FailureStaleGeneration
 		coordinator.mu.Unlock()
 		return agent.EventSinkStaleRejected
@@ -2595,6 +2606,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	}
 	if runEventRequiresCurrentScope(event.Kind) && (!coordinator.runScopeCurrentLocked(state) ||
 		!coordinator.runResourcePolicies.CurrentPolicyGeneration(ctx, state.input.PolicyGeneration())) {
+		boundary = RunEventBoundaryScope
 		state.rejectionDiagnostic = domain.FailureStaleGeneration
 		coordinator.mu.Unlock()
 		return agent.EventSinkStaleRejected
@@ -2602,6 +2614,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	state.publishing = true
 	state.lastAgentSequence = event.Sequence
 	if !modelAuthorized || privacyErr != nil {
+		boundary = RunEventBoundaryPreflight
 		state.rejectionDiagnostic = domain.FailureRequestPreflight
 		state.cancel()
 		coordinator.mu.Unlock()
@@ -2612,6 +2625,7 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 		coordinator.finishPublishing(state)
 		return agent.EventSinkPreflightRejected
 	}
+	boundary = RunEventBoundaryAcceptance
 	action, err := coordinator.acceptEventLocked(state, event)
 	rejection := agent.EventSinkRejected
 	if err != nil {
@@ -2677,8 +2691,10 @@ func (coordinator *Coordinator) Publish(ctx context.Context, event agent.RunEven
 	coordinator.finishPublishing(state)
 	if bridgeFailed {
 		if persistenceErr != nil {
+			boundary = RunEventBoundaryPersistence
 			return agent.EventSinkPersistenceRejected
 		}
+		boundary = RunEventBoundaryDelivery
 		return agent.EventSinkRejected
 	}
 	if retentionFailed || persistenceFailed || state.persistenceBad {

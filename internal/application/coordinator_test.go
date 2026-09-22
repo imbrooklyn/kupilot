@@ -405,6 +405,10 @@ func TestCoordinatorRejectsDiagnosisWithUnacceptedEvidenceBeforePersistence(t *t
 		return agent.RunOutcome{Status: domain.AgentRunStatusFailed, ErrorClass: &class, SafeMessage: "The final answer failed Evidence validation."}
 	})
 	coordinator, persistence, _, _ := newCoordinatorHarness(t, clock, runner)
+	observations := make(chan RunObservation, 8)
+	coordinator.observer = RunObserverFunc(func(_ context.Context, observation RunObservation) {
+		observations <- observation
+	})
 	session := createCoordinatorSession(t, coordinator)
 	runID, err := coordinator.StartRun(context.Background(), StartRunCommand{SessionID: session.ID, Question: "Inspect the selected Pod."})
 	if err != nil {
@@ -413,6 +417,21 @@ func TestCoordinatorRejectsDiagnosisWithUnacceptedEvidenceBeforePersistence(t *t
 	result, err := coordinator.WaitRun(context.Background(), runID)
 	if err != nil || result.Status != domain.AgentRunStatusFailed || <-rejected != agent.EventSinkRejected || len(persistence.diagnoses) != 0 {
 		t.Fatalf("unaccepted Diagnosis result = %#v, %v; diagnoses=%d", result, err, len(persistence.diagnoses))
+	}
+	close(observations)
+	rejections := 0
+	for observation := range observations {
+		if observation.Kind != RunObservationEventRejected {
+			continue
+		}
+		rejections++
+		if observation.RunID != runID || observation.RejectedEvent != agent.RunEventDiagnosisReady ||
+			observation.RejectedSequence != 2 || observation.RejectionBoundary != "acceptance" {
+			t.Fatalf("rejection metadata = %#v", observation)
+		}
+	}
+	if rejections != 1 {
+		t.Fatalf("rejection observations = %d, want 1", rejections)
 	}
 }
 

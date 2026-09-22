@@ -1308,6 +1308,15 @@ func (observer slogRunObserver) ObserveRun(ctx context.Context, observation appl
 	if observer.logger == nil {
 		return
 	}
+	if observation.Kind == application.RunObservationEventRejected {
+		observer.logger.InfoContext(ctx, platformlogging.EventAgentRun,
+			"component", "application", "operation", "run_lifecycle", "phase", "event_rejected", "outcome", "failure",
+			"request_id", string(observation.RunID), "scope_generation", observation.ScopeGeneration,
+			"sequence", observation.RejectedSequence, "event_kind", string(observation.RejectedEvent),
+			"event_boundary", string(observation.RejectionBoundary),
+		)
+		return
+	}
 	outcome := "success"
 	if observation.Status == domain.AgentRunStatusCancelled {
 		outcome = "cancelled"
