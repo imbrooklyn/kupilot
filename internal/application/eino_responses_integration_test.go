@@ -101,13 +101,12 @@ func TestNativeResponsesAgentLive(t *testing.T) {
 		if cfg.APIProtocol != domain.ModelAPIProtocolResponses || cfg.StreamingRequired || cfg.Temperature != nil {
 			t.Fatal("Local profile does not contain the tested native settings")
 		}
-		t.Log("PREFLIGHT ONLY: no model request")
+		t.Logf("PREFLIGHT ONLY: max_output_tokens=%d request_timeout=%s; no model request", cfg.MaxOutputTokens, cfg.RequestTimeout)
 		return
 	}
 	cfg.APIProtocol = domain.ModelAPIProtocolResponses
 	cfg.StreamingRequired = false
 	cfg.Temperature = nil
-	cfg.MaxOutputTokens = 2048
 	if cfg.ReasoningEffort == domain.ModelReasoningEffortNone {
 		t.Fatal("The reasoning conformance matrix must not disable reasoning.")
 	}

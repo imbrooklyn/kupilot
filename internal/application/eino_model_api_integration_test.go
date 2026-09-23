@@ -25,7 +25,7 @@ import (
 
 const (
 	liveModelCallCeiling        = 4
-	liveModelOutputTokenCeiling = 2048
+	liveModelOutputTokenCeiling = 32768
 	liveModelRequestByteCeiling = 1024 * 1024
 	liveModelSuiteTimeout       = 15 * time.Minute
 	livePreferredCostUSDCeiling = 3.0
@@ -103,7 +103,7 @@ func TestModelAPIIntegrationLive(t *testing.T) {
 	t.Logf(
 		"PREFLIGHT PASS model API: target=%s profile=%s model=%s origin_hash=%s credential_source=%s calls<=%d requested_output_tokens<=%d request_bytes<=%d elapsed<=%s authorized_cost_usd<=%.2f",
 		target, configuration.ProfileName, configuration.Model, domain.SHA256Hex(configuration.Origin), source,
-		liveModelCallCeiling, liveModelCallCeiling*liveModelOutputTokenCeiling, liveModelRequestByteCeiling,
+		liveModelCallCeiling, liveModelCallCeiling*configuration.MaxOutputTokens, liveModelRequestByteCeiling,
 		liveModelSuiteTimeout, maximumCost,
 	)
 	if os.Getenv("KUPILOT_INTEGRATION_PREFLIGHT_ONLY") == "1" {
@@ -293,14 +293,14 @@ func loadLiveModelProfile(t *testing.T, target string) (domain.ModelConfiguratio
 	if profile.Endpoint == "" || profile.Model == "" || loaded.Credentials.Agent.Source != projectconfig.CredentialSourceFile || !loaded.Credentials.Agent.Value.IsSet() {
 		t.Skip("BLOCKED preferred model integration: the default configuration must contain an explicit Agent endpoint, model, and file-backed opaque credential")
 	}
+	if profile.MaxOutputTokens <= 0 || profile.MaxOutputTokens > liveModelOutputTokenCeiling {
+		t.Skipf("BLOCKED preferred model integration: configure an explicit max_output_tokens between 1 and %d for this cost-bounded live test; the test does not override it", liveModelOutputTokenCeiling)
+	}
 	credential, err := loaded.Credentials.Agent.Value.Clone()
 	if err != nil {
 		t.Skipf("BLOCKED preferred model integration: the opaque Agent credential could not be cloned: %v", err)
 	}
 	timeout := time.Duration(profile.RequestTimeoutSeconds) * time.Second
-	if timeout > time.Minute {
-		timeout = time.Minute
-	}
 	configuration := domain.ModelConfiguration{
 		ProfileName: profile.Name, Role: domain.ModelRoleAgent,
 		ProviderKind:        domain.ModelProviderOpenAI,
@@ -312,7 +312,7 @@ func loadLiveModelProfile(t *testing.T, target string) (domain.ModelConfiguratio
 		ResponseFormat:      domain.ModelResponseFormat(profile.ResponseFormat),
 		APIKeySource:        domain.ModelAPIKeySourceRuntime,
 		Temperature:         profile.Temperature,
-		MaxOutputTokens:     liveModelOutputTokenCeiling,
+		MaxOutputTokens:     profile.MaxOutputTokens,
 		RequestTimeout:      timeout,
 		StreamingRequired:   profile.Streaming,
 		ToolCallingRequired: true,
