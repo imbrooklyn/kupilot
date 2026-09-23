@@ -515,7 +515,7 @@ func runConversationFixture(t testing.TB, fixture conversationFixture) scenarioR
 	if err != nil {
 		t.Fatalf("NewRunInput() error = %v", err)
 	}
-	model := &scriptedConversationModel{t: t, steps: fixture.Steps, diagnosis: fixture.Diagnosis}
+	model := &scriptedConversationModel{t: t, steps: fixture.Steps, diagnosis: fixtureModelDiagnosis(t, fixture.Diagnosis)}
 	modelServer := httptest.NewServer(model)
 	defer modelServer.Close()
 	credential, err := config.NewSecretValue("eval-model-credential-9100")
@@ -680,6 +680,39 @@ func (guard *fixtureScopeGuard) Current(ctx context.Context, scope domain.Cluste
 	defer guard.mu.Unlock()
 	guard.checks++
 	return ctx.Err() == nil && scope == guard.scope
+}
+
+// Scenario files retain canonical IDs for their evidence rubric. The model
+// fixture emits only the compact references present in Tool messages.
+func fixtureModelDiagnosis(t testing.TB, diagnosis json.RawMessage) json.RawMessage {
+	t.Helper()
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(diagnosis, &response); err != nil {
+		t.Fatal(err)
+	}
+	var citations []struct {
+		Claim       string              `json:"claim"`
+		ClaimType   domain.ClaimKind    `json:"claim_type"`
+		EvidenceIDs []domain.EvidenceID `json:"evidence_ids"`
+	}
+	if err := json.Unmarshal(response["evidence_citations"], &citations); err != nil {
+		t.Fatal(err)
+	}
+	for index := range citations {
+		for reference, id := range citations[index].EvidenceIDs {
+			citations[index].EvidenceIDs[reference] = domain.EvidenceID(agentcore.ModelEvidenceReference(id))
+		}
+	}
+	encoded, err := json.Marshal(citations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response["evidence_citations"] = encoded
+	encoded, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 type scriptedConversationModel struct {

@@ -216,6 +216,10 @@ func TestGetPodLogsPolicyScopeCancellationAndErrorsAreSafe(t *testing.T) {
 				strings.Contains(result.DataJSON, "raw forbidden canary") {
 				t.Fatalf("Execute() result/reads/policy = %#v/%d/%d", result, reader.count(), policy.count())
 			}
+			if test.policy != LogPolicyAllowed && (!strings.Contains(result.Error.SafeMessage, "/privacy") ||
+				len(result.Evidence) != 0 || result.Truncation.ReturnedBytes == 0) {
+				t.Fatal("Log privacy denial lost its actionable explanation, bounds, or zero-Evidence outcome")
+			}
 		})
 	}
 }

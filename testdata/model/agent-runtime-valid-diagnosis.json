@@ -5,7 +5,7 @@
       "claim": "The projected Pod condition is not Ready.",
       "claim_type": "current_observation",
       "evidence_ids": [
-        "00000000-0000-7000-8000-000000008006"
+        "e_c2a18577f11cb30c"
       ]
     }
   ],

@@ -64,6 +64,10 @@ another transfer.
 
 Consent permits content transfer only. It does not authorize Kubernetes RBAC,
 cross-Namespace policy, a new capability, raw persistence, approval, or a write.
+Pod-log requests explain when the container-output category is disabled or
+needs renewed consent and point to `/privacy`. This is a local sharing gate,
+before a Kubernetes log request, and applies to every Pod. Enabling the category
+still requires current consent and the normal ActionEnvelope permission checks.
 
 ## Data that may be sent
 

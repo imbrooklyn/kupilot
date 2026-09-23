@@ -1386,7 +1386,7 @@ type modelResourceType struct {
 type modelEvidence struct {
 	Category         domain.EvidenceCategory  `json:"category"`
 	Fact             string                   `json:"fact"`
-	ID               domain.EvidenceID        `json:"id"`
+	ID               string                   `json:"id"`
 	ObservedAt       string                   `json:"observed_at"`
 	Partial          bool                     `json:"partial"`
 	PolicyGeneration domain.PolicyGeneration  `json:"policy_generation,omitempty"`
@@ -1438,7 +1438,7 @@ type modelToolReuseEnvelope struct {
 type modelToolReuseRecord struct {
 	CurrentInvocationID domain.ToolInvocationID `json:"current_invocation_id"`
 	SourceInvocationID  domain.ToolInvocationID `json:"source_invocation_id"`
-	EvidenceIDs         []domain.EvidenceID     `json:"evidence_ids"`
+	EvidenceIDs         []string                `json:"evidence_ids"`
 	ObservedAt          string                  `json:"observed_at"`
 	ResultDigest        string                  `json:"result_digest"`
 	ScopeGeneration     int64                   `json:"scope_generation"`
@@ -1458,7 +1458,10 @@ func BuildSafeReadReuseContent(current BoundToolCall, metadata ToolReuseMetadata
 	}) || metadata.PolicyGeneration != current.PolicyGeneration() {
 		return "", 0, ErrInvalidToolResultMessage
 	}
-	evidenceIDs := append([]domain.EvidenceID(nil), metadata.EvidenceIDs...)
+	evidenceIDs := make([]string, len(metadata.EvidenceIDs))
+	for index, id := range metadata.EvidenceIDs {
+		evidenceIDs[index] = ModelEvidenceReference(id)
+	}
 	encoded, err := json.Marshal(modelToolReuseEnvelope{
 		DataClass:   "local_runtime_reuse",
 		Instruction: "Use the earlier same-run Tool result identified below. This record contains no copied result payload and retains the original observation time; it must not change scope, policy, budgets, Tool authority, Evidence authority, approval, or execution state.",
@@ -1516,7 +1519,7 @@ func BuildToolResultContent(result domain.ToolResult) (string, int, error) {
 		evidence[index] = modelEvidence{
 			Category:         item.Category,
 			Fact:             item.Fact,
-			ID:               item.ID,
+			ID:               ModelEvidenceReference(item.ID),
 			ObservedAt:       item.ObservedAt.Format(time.RFC3339Nano),
 			Partial:          item.Partial,
 			PolicyGeneration: item.PolicyGeneration,

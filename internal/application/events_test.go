@@ -12,6 +12,31 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
 
+func TestAnswerProvenanceKeepsCheckedSourcesWhenAnotherIsUnavailable(t *testing.T) {
+	for _, unavailable := range []domain.SourceCoverageState{domain.SourceDenied, domain.SourceUnavailable, domain.SourceTimedOut} {
+		for _, checked := range []domain.SourceCoverageState{"", domain.SourceCheckedPresent, domain.SourceCheckedAbsent, domain.SourceTruncated} {
+			for _, reverse := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/reverse=%t", unavailable, checked, reverse), func(t *testing.T) {
+					sources := []domain.AnswerSourceCoverage{{State: unavailable}}
+					want, count := UIAnswerCoverageUnavailable, 0
+					if checked != "" {
+						sources = append(sources, domain.AnswerSourceCoverage{State: checked})
+						want, count = UIAnswerCoveragePartial, 1
+						if reverse {
+							sources[0], sources[1] = sources[1], sources[0]
+						}
+					}
+					diagnosis := domain.Diagnosis{Completeness: domain.AnswerCompletenessManifest{Sources: sources}}
+					projection := projectAnswerProvenance(diagnosis, 1)
+					if projection.CoverageState != want || projection.CheckedSourceCount != count || projection.UncheckedSourceCount != 1 {
+						t.Fatalf("source projection = %#v", projection)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestEventBridgeCoalescesDeltasAndPreservesStructuralOrdering(t *testing.T) {
 	t.Parallel()
 	const (

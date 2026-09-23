@@ -209,6 +209,13 @@ func (state *runState) addStepEvidence(count int) error {
 }
 
 func (state *runState) validateDiagnosis(draft agent.DiagnosisDraft, modelDraft bool) (domain.Diagnosis, error) {
+	if modelDraft {
+		resolved, err := state.registry.ResolveModelReferences(draft)
+		if err != nil {
+			return domain.Diagnosis{}, failedAt(agent.InteractionFailureOf(err, domain.FailureClaimBinding), domain.SafeErrorClassInvalidExternalResponse, err)
+		}
+		draft = resolved
+	}
 	id, err := state.identifiers.NewDiagnosisID()
 	if err != nil || !id.Valid() {
 		return domain.Diagnosis{}, failedRuntime(domain.SafeErrorClassInternal, safeInternalFailure, err)

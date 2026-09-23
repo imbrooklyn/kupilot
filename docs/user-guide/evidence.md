@@ -115,6 +115,10 @@ count, observed-at range, frozen scope/policy generations, complete/partial/
 truncated/unavailable state, inference/uncertainty and conflict/supersession
 presence, checked/not-checked source counts, authoritative terminal reason, and
 fixed safe next action. It displays no raw Evidence payload.
+Mixed checked and denied, unavailable, or timed-out sources display `partial`;
+`unavailable` is reserved for that condition with no checked source. The
+checked/not-checked counts and individual source states remain explicit. A
+blocked optional read does not invalidate accepted observations from other reads.
 
 Source coverage distinguishes checked-and-absent, not checked, unavailable,
 denied, partial, truncated, timed out, stale, and conflicting. An absent item in

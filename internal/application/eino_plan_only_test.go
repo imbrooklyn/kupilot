@@ -27,7 +27,7 @@ func planResponseJSON(title, step string, claim string, evidenceIDs ...domain.Ev
 	if claim != "" {
 		ids := make([]string, len(evidenceIDs))
 		for index, id := range evidenceIDs {
-			ids[index] = fmt.Sprintf("%q", id)
+			ids[index] = fmt.Sprintf("%q", agent.ModelEvidenceReference(id))
 		}
 		citations = fmt.Sprintf(
 			`{"claim":%q,"claim_type":"current_observation","evidence_ids":[%s]}`,

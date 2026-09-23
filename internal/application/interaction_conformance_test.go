@@ -429,7 +429,8 @@ func interactionFinal(claims string) string {
 }
 
 func interactionClaim(number int, text string) string {
-	return fmt.Sprintf(`{"claim":%q,"claim_type":"current_observation","evidence_ids":["00000000-0000-7000-8000-%012d"]}`, text, 9500+number)
+	id := domain.EvidenceID(fmt.Sprintf("00000000-0000-7000-8000-%012d", 9500+number))
+	return fmt.Sprintf(`{"claim":%q,"claim_type":"current_observation","evidence_ids":[%q]}`, text, agent.ModelEvidenceReference(id))
 }
 
 func (harness *interactionHarness) run(t *testing.T, question string) (domain.AgentRunID, application.RunResult) {
@@ -625,6 +626,7 @@ func TestInteractionFollowUpWithDeniedLogs(t *testing.T) {
 				terminals++
 				if event.Kind != application.UIEventRunCompleted || event.Validate() != nil || len(event.EvidenceReferences) != 2 ||
 					event.AnswerProvenance == nil || event.AnswerProvenance.CheckedSourceCount != 2 || event.AnswerProvenance.UncheckedSourceCount != 1 ||
+					event.AnswerProvenance.CoverageState != application.UIAnswerCoveragePartial ||
 					!event.AnswerProvenance.HasUncertainty {
 					t.Fatalf("follow-up projection = %#v", event)
 				}

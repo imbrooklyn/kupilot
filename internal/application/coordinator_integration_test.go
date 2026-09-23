@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/imbrooklyn/kupilot/internal/agent"
 	"github.com/imbrooklyn/kupilot/internal/application"
 	auditcontract "github.com/imbrooklyn/kupilot/internal/audit"
 	"github.com/imbrooklyn/kupilot/internal/config"
@@ -882,7 +883,7 @@ func integrationDiagnosisJSON(evidenceID domain.EvidenceID) string {
 	const claim = "The Pod is not Ready."
 	return fmt.Sprintf(
 		`{"answer_markdown":"The Pod is not Ready. Review the readiness probe configuration before changing it.","evidence_citations":[{"claim":%q,"claim_type":"current_observation","evidence_ids":[%q]}],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`,
-		claim, evidenceID,
+		claim, agent.ModelEvidenceReference(evidenceID),
 	)
 }
 
@@ -890,7 +891,7 @@ func integrationSensitiveDiagnosisJSON(evidenceID domain.EvidenceID, canary stri
 	claim := "The projected condition includes token=" + canary
 	return fmt.Sprintf(
 		`{"answer_markdown":%q,"evidence_citations":[{"claim":%q,"claim_type":"current_observation","evidence_ids":[%q]}],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[],"questions":[]}`,
-		claim, claim, evidenceID,
+		claim, claim, agent.ModelEvidenceReference(evidenceID),
 	)
 }
 

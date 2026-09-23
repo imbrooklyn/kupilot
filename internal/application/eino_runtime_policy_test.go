@@ -128,12 +128,19 @@ func TestEquivalentSafeReadReusesAcceptedResultWithoutSecondHandlerCall(t *testi
 	foundMetadata := false
 	for _, message := range lastRequest.Messages {
 		foundMetadata = foundMetadata || message != nil && strings.Contains(message.Content, `"data_class":"local_runtime_reuse"`)
+		if message != nil && strings.Contains(message.Content, `"data_class":"local_runtime_reuse"`) &&
+			(!strings.Contains(message.Content, agent.ModelEvidenceReference(testEvidenceID)) || strings.Contains(message.Content, string(testEvidenceID))) {
+			t.Fatal("reuse metadata did not preserve the model-visible Evidence reference")
+		}
 		if message != nil && strings.Contains(message.Content, `"data":{"ready":false}`) && strings.Contains(message.Content, `"current_invocation_id"`) {
 			t.Fatal("reuse metadata copied the original Tool payload")
 		}
 	}
 	if !foundMetadata {
 		t.Fatal("third model request omitted bounded reuse metadata")
+	}
+	if len(outcome.Diagnosis.ConfirmedFacts) != 1 || outcome.Diagnosis.ConfirmedFacts[0].EvidenceIDs[0] != testEvidenceID {
+		t.Fatal("reused reference did not resolve to the original durable Evidence ID")
 	}
 	assertTerminalSequence(t, recorder.Events())
 }

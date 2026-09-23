@@ -281,6 +281,21 @@ func authorizeLogRead(ctx context.Context, request LogPolicyRequest, dependencie
 	return class
 }
 
+func explainLogPolicyFailure(call BoundToolCall, observed time.Time, result ToolResult) ToolResult {
+	if result.Error == nil {
+		return result
+	}
+	switch result.Error.Class {
+	case domain.SafeErrorClassPolicyDenied:
+		result.Error.SafeMessage = "Container output is disabled for model sharing. Review /privacy to enable that category and accept its consent. This applies to all Pod logs; changing Pods does not bypass it."
+	case domain.SafeErrorClassConsentRequired:
+		result.Error.SafeMessage = "Container-output sharing needs current consent. Review /privacy before submitting another request; no log content was shared."
+	default:
+		return result
+	}
+	return finalizePlannedResult(call, observed, result)
+}
+
 // LogToolDependencies are immutable stateless dependencies shared by the two
 // separately named Pod log handlers.
 type LogToolDependencies struct {
@@ -408,7 +423,7 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 		return failedResult(call, observed, domain.SafeErrorClassInternal)
 	}
 	if class := authorizeLogRead(ctx, policyRequest, dependencies); class != "" {
-		return failedResult(call, observed, class)
+		return explainLogPolicyFailure(call, observed, failedResult(call, observed, class))
 	}
 	operation := podLogActionOperation(previous, decoded.arguments.ContainerMode == "all", decoded.arguments.Search != "")
 	preflight := domain.ObservationActionPreflight{
@@ -475,7 +490,8 @@ func executePodLogTool(ctx context.Context, call BoundToolCall, previous bool, d
 		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 0, 0, 0, false, classifyFailure(readContext, readErr), dependencies.Actions)
 	}
 	if class := authorizeLogRead(readContext, policyRequest, dependencies); class != "" {
-		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, 0, observation.Content.Len(), observation.Truncated, class, dependencies.Actions)
+		result := failAfterObservationAuthority(readContext, call, observed, envelope, true, 1, 0, observation.Content.Len(), observation.Truncated, class, dependencies.Actions)
+		return explainLogPolicyFailure(call, observed, result)
 	}
 	if observation.Validate(decoded.request) != nil {
 		return failAfterObservationAuthority(readContext, call, observed, envelope, true, 0, 0, observation.Content.Len(), observation.Truncated, domain.SafeErrorClassInvalidExternalResponse, dependencies.Actions)
@@ -532,7 +548,8 @@ func executeAllPodLogs(ctx context.Context, call BoundToolCall, observed time.Ti
 		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, classifyFailure(readContext, readErr), dependencies.Actions)
 	}
 	if class := authorizeLogRead(readContext, policyRequest, dependencies); class != "" {
-		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, class, dependencies.Actions)
+		result := failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, class, dependencies.Actions)
+		return explainLogPolicyFailure(call, observed, result)
 	}
 	if observations.Validate(request) != nil {
 		return failAfterObservationAuthority(readContext, call, observed, envelope, true, len(observations.Items), 0, observations.SourceBytes, observations.Truncated, domain.SafeErrorClassInvalidExternalResponse, dependencies.Actions)

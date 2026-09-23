@@ -5,11 +5,10 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -53,7 +52,10 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 	client.responsesModel = checkoutObservedModel{AgenticModel: meteredResponsesModel{base: client.responsesModel, usage: usage}, final: &final}
 	client.structuredResponses = checkoutObservedModel{AgenticModel: meteredResponsesModel{base: client.structuredResponses, usage: usage}, final: &final}
 	clock := newTestClock()
-	var sequence atomic.Int64
+	identifiers, err := NewIdentifierGenerator(func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) })
+	if err != nil {
+		t.Fatal(err)
+	}
 	tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
 		if call.Name() == domain.ToolNameGetPodLogs || call.Name() == domain.ToolNameGetPreviousPodLogs {
 			result := emptyToolResult(t, call, clock.Now())
@@ -62,8 +64,9 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 			return result
 		}
 		var args struct {
-			ResourceType string `json:"resource_type"`
-			Name         string `json:"name"`
+			ResourceType string                      `json:"resource_type"`
+			Name         string                      `json:"name"`
+			Resource     struct{ Kind, Name string } `json:"resource"`
 		}
 		if err := json.Unmarshal([]byte(call.ArgumentsJSON()), &args); err != nil {
 			t.Fatal(err)
@@ -88,16 +91,67 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 		if name == "" {
 			name = "checkout-a"
 		}
+		facts := []string{fact}
 		if call.Name() == domain.ToolNameGetRelatedResources {
-			kind, api, name = "Service", "v1", "checkout"
-			fact = "checkout Service has two matching Pods, checkout-a and checkout-b, and zero ready endpoints in its EndpointSlice. Both Pods are not Ready."
-			data = `{"pods":["checkout-a","checkout-b"],"ready_endpoints":0,"not_ready_endpoints":2}`
+			kind, name = args.Resource.Kind, args.Resource.Name
+			switch kind {
+			case "Service":
+				facts = []string{
+					"Service checkout is ClusterIP, port 8080 targeting port 8080.",
+					"Pod checkout-a is Running, ready 0/1, ContainersNotReady.",
+					"Pod checkout-b is Running, ready 0/1, ContainersNotReady.",
+					"Service checkout matched Pod checkout-a using one selector key.",
+					"Service checkout matched Pod checkout-b using one selector key.",
+					"Service checkout has 0 ready and 2 not-ready EndpointSlice endpoints.",
+				}
+				data = `{"pods":["checkout-a","checkout-b"],"ready_endpoints":0,"not_ready_endpoints":2}`
+			case "Pod":
+				facts = []string{
+					"Pod " + name + " is Running, ready 0/1, ContainersNotReady.",
+					"ReplicaSet checkout-rs has two current replicas and zero ready replicas.",
+					"The fixed owner relationship connects Pod " + name + " to ReplicaSet checkout-rs.",
+				}
+				data = `{"owner":{"kind":"ReplicaSet","name":"checkout-rs"}}`
+			case "ReplicaSet", "Deployment":
+				api = "apps/v1"
+				facts = []string{
+					"ReplicaSet checkout-rs has two current replicas and zero ready replicas.",
+					"Deployment checkout desired/current/updated=2; ready/available=0; unavailable=2; MinimumReplicasUnavailable.",
+					"The fixed owner relationship connects ReplicaSet checkout-rs to Deployment checkout.",
+				}
+				data = `{"deployment":"checkout","replica_set":"checkout-rs","ready":0,"available":0}`
+			default:
+				t.Fatal("Unexpected synthetic relationship target kind.")
+			}
+		} else if call.Name() == domain.ToolNameGetResource && kind == "Pod" {
+			facts = []string{
+				"Pod " + name + " is Running, ready 0/1, ContainersNotReady.",
+				"Pod " + name + " condition PodScheduled=True.",
+				"Pod " + name + " condition Initialized=True.",
+				"Pod " + name + " condition ContainersReady=False, reason ContainersNotReady.",
+				"Pod " + name + " condition Ready=False, reason ContainersNotReady.",
+				"Pod " + name + " container app is running, ready=false, restart_count=0.",
+				"Pod " + name + " is owned by ReplicaSet checkout-rs.",
+				"Pod " + name + " has one ordinary container named app.",
+				"Pod " + name + " has no recorded previous container termination.",
+			}
+		} else if call.Name() == domain.ToolNameGetResource && kind == "Deployment" {
+			facts = []string{
+				fact,
+				"Deployment checkout condition Available=False, reason MinimumReplicasUnavailable.",
+				"Deployment checkout condition Progressing=True, reason NewReplicaSetAvailable.",
+				"Deployment checkout desired/current/updated replicas=2.",
+				"Deployment checkout ready/available replicas=0; unavailable replicas=2.",
+			}
 		}
 		if call.Name() == domain.ToolNameGetEvents {
-			fact = "The Pod has an Unhealthy Warning: Readiness probe failed. The event gives no specific failure details. Event results are partial."
+			kind, name = args.Resource.Kind, args.Resource.Name
+			if kind != "Pod" {
+				return emptyToolResult(t, call, clock.Now())
+			}
+			facts = []string{"Pod " + name + " has an Unhealthy Warning: Readiness probe failed. The event gives no specific failure details. Event results are partial."}
 			data = `{"events":[{"reason":"Unhealthy","message":"Readiness probe failed:"}]}`
 		}
-		id := domain.EvidenceID(fmt.Sprintf("019965f4-a739-7ce5-b39a-%012x", 0x619c09725ad0+sequence.Add(1)))
 		var canonical map[string]any
 		if err := json.Unmarshal([]byte(data), &canonical); err != nil {
 			t.Fatal(err)
@@ -107,16 +161,25 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		data = string(encoded)
-		result := successfulToolResult(t, call, id, clock.Now(), data)
-		result.Evidence[0].Resource = domain.ResourceRef{APIVersion: api, Kind: kind, Name: name, Namespace: call.Scope().Namespace, UID: "99679a4c-9dc5-4bfe-bd90-62448c29a865"}
-		result.Evidence[0].Fact = fact
+		result := emptyToolResult(t, call, clock.Now())
+		result.DataJSON = data
+		for _, observedFact := range facts {
+			id, idErr := identifiers.NewEvidenceID()
+			if idErr != nil {
+				t.Fatal(idErr)
+			}
+			item := successfulToolResult(t, call, id, clock.Now(), data).Evidence[0]
+			item.Resource = domain.ResourceRef{APIVersion: api, Kind: kind, Name: name, Namespace: call.Scope().Namespace, UID: "99679a4c-9dc5-4bfe-bd90-62448c29a865"}
+			item.Fact = observedFact
+			result.Evidence = append(result.Evidence, item)
+		}
 		if call.Name() == domain.ToolNameGetEvents {
 			result.Status = domain.ToolResultStatusPartial
 			result.Evidence[0].Partial = true
 		}
 		return result
 	}}
-	runtime, err := newEinoRuntime(runtimeConfig{tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: &testIdentifiers{}, now: clock.Now}, client)
+	runtime, err := newEinoRuntime(runtimeConfig{tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: identifiers, now: clock.Now}, client)
 	if err != nil {
 		client.close()
 		t.Fatal(err)
@@ -143,37 +206,7 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 	defer cancel()
 	events := newEventRecorder()
 	outcome := runtime.Run(ctx, input, events)
-	draft, decodeErr := agent.DecodeDiagnosticResponse(final)
-	t.Logf("decoded_claims=%d decode_failure=%s", len(draft.ClaimCoverage), agent.InteractionFailureOf(decodeErr, ""))
-	var wire struct {
-		Citations []struct {
-			Kind domain.ClaimKind    `json:"claim_type"`
-			IDs  []domain.EvidenceID `json:"evidence_ids"`
-		} `json:"evidence_citations"`
-	}
-	if json.Unmarshal([]byte(final), &wire) == nil {
-		accepted := map[domain.EvidenceID]bool{}
-		for _, event := range events.Events() {
-			if event.Evidence != nil {
-				accepted[event.Evidence.ID] = true
-			}
-		}
-		for index, citation := range wire.Citations {
-			kind := "invalid"
-			switch citation.Kind {
-			case domain.ClaimCurrentObservation, domain.ClaimInference, domain.ClaimRecommendation,
-				domain.ClaimUncertainty, domain.ClaimUnsupportedObservation:
-				kind = string(citation.Kind)
-			}
-			unknown := 0
-			for _, id := range citation.IDs {
-				if !accepted[id] {
-					unknown++
-				}
-			}
-			t.Logf("claim_index=%d kind=%s refs=%d unknown_refs=%d", index, kind, len(citation.IDs), unknown)
-		}
-	}
+	checkoutReferenceDiagnostics(t, final, events.Events())
 	estimate := float64(usage.input)*0.20/1e6 + float64(usage.output)*1.20/1e6
 	t.Logf("model_calls=%d tool_calls=%d input_tokens=%d output_tokens=%d estimated_usd=%.6f status=%s reason=%s", transport.calls.Load(), len(tool.Calls()), usage.input, usage.output, estimate, outcome.Status, outcome.Diagnostic)
 	if estimate > 3 {
@@ -214,7 +247,9 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeInput, beforeOutput := usage.input, usage.output
-	outcome = runtime.Run(ctx, input, newEventRecorder())
+	followUpEvents := newEventRecorder()
+	outcome = runtime.Run(ctx, input, followUpEvents)
+	checkoutReferenceDiagnostics(t, final, followUpEvents.Events())
 	estimate = float64(usage.input)*0.20/1e6 + float64(usage.output)*1.20/1e6
 	t.Logf("follow_up_input_tokens=%d follow_up_output_tokens=%d total_model_calls=%d total_tool_calls=%d total_estimated_usd=%.6f status=%s reason=%s", usage.input-beforeInput, usage.output-beforeOutput, transport.calls.Load(), len(tool.Calls()), estimate, outcome.Status, outcome.Diagnostic)
 	if estimate > 3 {
@@ -231,5 +266,50 @@ func TestCheckoutEvidenceLive(t *testing.T) {
 	}
 	if !uncertain {
 		t.Fatal("The follow-up omitted explicit uncertainty for unverified probe details, HTTP or caller networking.")
+	}
+}
+
+// Report only cardinalities and identifier mismatch classes, never model text,
+// arguments, identifiers or source content.
+func checkoutReferenceDiagnostics(t *testing.T, final string, events []agent.RunEvent) {
+	t.Helper()
+	draft, err := agent.DecodeDiagnosticResponse(final)
+	if err != nil {
+		t.Logf("Reference diagnostics: decode_failure=%s", agent.InteractionFailureOf(err, ""))
+		return
+	}
+	accepted := make(map[domain.EvidenceID]bool)
+	invocations := make(map[domain.EvidenceID]bool)
+	uids := make(map[domain.EvidenceID]bool)
+	for _, event := range events {
+		if event.Evidence != nil {
+			accepted[domain.EvidenceID(agent.ModelEvidenceReference(event.Evidence.ID))] = true
+			uids[domain.EvidenceID(event.Evidence.Resource.UID)] = true
+		}
+		if event.ToolInvocation != nil {
+			invocations[domain.EvidenceID(event.ToolInvocation.ID)] = true
+		}
+	}
+	t.Logf("Reference diagnostics: accepted=%d claims=%d", len(accepted), len(draft.ClaimCoverage))
+	for index, claim := range draft.ClaimCoverage {
+		for _, id := range claim.EvidenceIDs {
+			if accepted[id] {
+				continue
+			}
+			distance := len(id)
+			for known := range accepted {
+				if len(id) != len(known) {
+					continue
+				}
+				differences := 0
+				for i := range len(id) {
+					if id[i] != known[i] {
+						differences++
+					}
+				}
+				distance = min(distance, differences)
+			}
+			t.Logf("Unknown reference: claim=%d invocation=%t resource_uid=%t nearest_id_differing_characters=%d", index, invocations[id], uids[id], distance)
+		}
 	}
 }

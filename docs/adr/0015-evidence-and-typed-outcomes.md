@@ -12,6 +12,16 @@ The model supplies bounded claim text/type and exact Evidence references, not
 claim hashes, sequence, coverage state or terminal authority. Runtime derives
 normalized claim hashes, order and structural coverage from accepted Evidence.
 
+Keep canonical Evidence UUIDs for runtime, persistence and Evidence inspection. The
+model-facing `result.evidence[].id` and `reuse.evidence_ids` use compact opaque
+references (`e_` plus 16 hexadecimal digest characters) derived from those IDs.
+Before ordinary validation, resolve each reference by exact lookup in the
+current run's accepted Evidence only. Reject unknown or ambiguous references;
+never accept a UUID as an alternate wire spelling, guess a suffix, repair a
+reference, or use historical Evidence. The reference index is derived in memory,
+not a new store or authority. This keeps storage identity out of model copying
+without weakening full run, invocation, scope and policy checks.
+
 Only deterministic Tool handling creates Evidence. Bind accepted items to the
 same run, invocation, complete scope, policy generation, source, safe projection
 and observation time. Historical Evidence is display-only. References and

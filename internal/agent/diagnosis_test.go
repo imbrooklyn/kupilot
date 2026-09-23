@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +10,84 @@ import (
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestModelReferencesResolveOnlyExactAcceptedEvidence(t *testing.T) {
+	input := testRunInput(t, "Explain the observed readiness.")
+	call := testBoundCall(t, input, testInvocationID, "sample-pod")
+	result := testToolResult(t, call, testEvidenceID, time.UnixMilli(1_000).UTC())
+	result.Evidence[0].PolicyVersion = domain.ResourcePolicyVersion
+	result.Evidence[0].PolicyGeneration = input.PolicyGeneration()
+	content, _, err := BuildToolResultContent(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope modelToolEnvelope
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	ref := envelope.Result.Evidence[0].ID
+	if len(ref) != 18 || !strings.HasPrefix(ref, "e_") || strings.Contains(content, string(testEvidenceID)) {
+		t.Fatal("Model result exposed a durable Evidence UUID instead of a compact reference")
+	}
+	changed := ref[:len(ref)-1] + "0"
+	if changed == ref {
+		changed = ref[:len(ref)-1] + "1"
+	}
+	for _, test := range []struct {
+		name, reference string
+		register        bool
+		duplicate       bool
+		want            domain.InteractionFailure
+	}{
+		{name: "exact", reference: ref, register: true},
+		{name: "unaccepted", reference: ref, want: domain.FailureEvidenceUnknown},
+		{name: "UUID is not an alternate spelling", reference: string(testEvidenceID), register: true, want: domain.FailureEvidenceUnknown},
+		{name: "unknown", reference: "e_0000000000000000", register: true, want: domain.FailureEvidenceUnknown},
+		{name: "one character changed", reference: changed, register: true, want: domain.FailureEvidenceUnknown},
+		{name: "whitespace is not repaired", reference: ref + " ", register: true, want: domain.FailureEvidenceUnknown},
+		{name: "duplicate", reference: ref, register: true, duplicate: true, want: domain.FailureEvidenceDuplicate},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry, err := NewEvidenceRegistry(input.RunID(), input.Scope(), input.PolicyGeneration())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.register {
+				if _, err := registry.AcceptToolResult(call, result); err != nil {
+					t.Fatal(err)
+				}
+			}
+			refs := []domain.EvidenceID{domain.EvidenceID(test.reference)}
+			if test.duplicate {
+				refs = append(refs, refs[0])
+			}
+			draft := DiagnosisDraft{
+				ResponseSchemaVersion: 1, AnswerMarkdown: "The Pod is not Ready.",
+				ConfirmedFacts: []domain.ConfirmedFact{{Statement: "The Pod is not Ready.", EvidenceIDs: refs}},
+				Hypotheses: []domain.Hypothesis{{Statement: "The application may still be starting.", SupportingEvidenceIDs: refs,
+					Confidence: domain.DiagnosisConfidenceLow, Falsifier: "A later observation reports the Pod Ready."}},
+				ClaimCoverage: []ClaimCoverageDraft{{Sequence: 1, Kind: domain.ClaimCurrentObservation, Text: "The Pod is not Ready.", EvidenceIDs: refs, State: domain.ClaimCoverageVerified}},
+			}
+			resolved, err := registry.ResolveModelReferences(draft)
+			var diagnosis domain.Diagnosis
+			if err == nil {
+				diagnosis, err = ValidateDiagnosis(resolved, DiagnosisMetadata{ID: testDiagnosisID, CreatedAt: time.UnixMilli(1_001).UTC(), PolicyGeneration: input.PolicyGeneration()}, registry)
+			}
+			if test.want != "" {
+				if InteractionFailureOf(err, "") != test.want {
+					t.Fatalf("reference failure = %v, want %s", err, test.want)
+				}
+				return
+			}
+			if err != nil || len(diagnosis.ConfirmedFacts) != 1 || diagnosis.ConfirmedFacts[0].EvidenceIDs[0] != testEvidenceID ||
+				len(diagnosis.Hypotheses) != 1 || diagnosis.Hypotheses[0].SupportingEvidenceIDs[0] != testEvidenceID ||
+				diagnosis.ClaimCoverage[0].EvidenceIDs[0] != testEvidenceID || string(draft.ConfirmedFacts[0].EvidenceIDs[0]) != ref ||
+				string(draft.Hypotheses[0].SupportingEvidenceIDs[0]) != ref || string(draft.ClaimCoverage[0].EvidenceIDs[0]) != ref {
+				t.Fatal("Exact reference did not preserve durable identity or mutated the draft")
+			}
+		})
+	}
+}
 
 func TestDiagnosisValidatorRequiresCurrentResponseSchema(t *testing.T) {
 	for _, version := range []int{0, 2} {

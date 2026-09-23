@@ -2243,6 +2243,11 @@ func projectAnswerProvenance(diagnosis domain.Diagnosis, policy domain.PolicyGen
 			}
 		}
 	}
+	// A denied or unavailable source limits the answer; it does not invalidate
+	// the observations that were actually checked.
+	if projection.CoverageState == UIAnswerCoverageUnavailable && projection.CheckedSourceCount > 0 {
+		projection.CoverageState = UIAnswerCoveragePartial
+	}
 	return projection
 }
 

@@ -130,6 +130,62 @@ type evidenceSnapshot struct {
 	sources   []evidenceSourceCheck
 }
 
+// ModelEvidenceReference is an opaque wire reference, never a durable ID or
+// authority. Only an exact match in the current accepted registry resolves it.
+func ModelEvidenceReference(id domain.EvidenceID) string {
+	return "e_" + domain.SHA256Hex(string(id))[:16]
+}
+
+// ResolveModelReferences translates only structured citation fields. It never
+// reads prose, guesses an ID, accepts a UUID fallback, or changes the registry.
+func (registry *EvidenceRegistry) ResolveModelReferences(draft DiagnosisDraft) (DiagnosisDraft, error) {
+	snapshot, err := registry.snapshot()
+	if err != nil {
+		return DiagnosisDraft{}, interactionError(domain.FailureEvidenceAcceptance, err)
+	}
+	references := make(map[string]domain.EvidenceID, len(snapshot.items))
+	for id := range snapshot.items {
+		ref := ModelEvidenceReference(id)
+		if _, duplicate := references[ref]; duplicate {
+			return DiagnosisDraft{}, interactionError(domain.FailureEvidenceAcceptance, ErrInvalidEvidenceRegistry)
+		}
+		references[ref] = id
+	}
+	resolve := func(ids []domain.EvidenceID) ([]domain.EvidenceID, error) {
+		result := make([]domain.EvidenceID, len(ids))
+		for index, ref := range ids {
+			id, found := references[string(ref)]
+			if !found {
+				return nil, interactionError(domain.FailureEvidenceUnknown, ErrInvalidDiagnosisDraft)
+			}
+			result[index] = id
+		}
+		return result, nil
+	}
+	draft.ConfirmedFacts = append([]domain.ConfirmedFact(nil), draft.ConfirmedFacts...)
+	for index := range draft.ConfirmedFacts {
+		draft.ConfirmedFacts[index].EvidenceIDs, err = resolve(draft.ConfirmedFacts[index].EvidenceIDs)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+	}
+	draft.Hypotheses = append([]domain.Hypothesis(nil), draft.Hypotheses...)
+	for index := range draft.Hypotheses {
+		draft.Hypotheses[index].SupportingEvidenceIDs, err = resolve(draft.Hypotheses[index].SupportingEvidenceIDs)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+	}
+	draft.ClaimCoverage = append([]ClaimCoverageDraft(nil), draft.ClaimCoverage...)
+	for index := range draft.ClaimCoverage {
+		draft.ClaimCoverage[index].EvidenceIDs, err = resolve(draft.ClaimCoverage[index].EvidenceIDs)
+		if err != nil {
+			return DiagnosisDraft{}, err
+		}
+	}
+	return draft, nil
+}
+
 func (registry *EvidenceRegistry) snapshot() (evidenceSnapshot, error) {
 	if registry == nil {
 		return evidenceSnapshot{}, ErrInvalidEvidenceRegistry
@@ -224,7 +280,9 @@ func cloneEvidence(evidence domain.Evidence) domain.Evidence {
 
 // DiagnosisDraft is the model-decoded, untrusted terminal content. The visible
 // answer is free-form Markdown; ConfirmedFacts carry independent citation
-// metadata and RecommendedActions carry typed proposals.
+// metadata and RecommendedActions carry typed proposals. Model-decoded Evidence
+// fields contain opaque references until ResolveModelReferences succeeds;
+// locally constructed drafts already use canonical IDs.
 type DiagnosisDraft struct {
 	AnswerMarkdown        string
 	ResponseSchemaVersion int
