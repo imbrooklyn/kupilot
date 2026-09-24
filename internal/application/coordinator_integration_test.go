@@ -289,6 +289,9 @@ func TestNewSessionQuestionPersistsToolEvidenceAndDiagnosis(t *testing.T) {
 		}
 		if event.Terminal() {
 			terminalCount++
+			if event.TerminalOutcome.WorkedFor == nil || *event.TerminalOutcome.WorkedFor != persistedRun.FinishedAt.Sub(*persistedRun.StartedAt) {
+				t.Fatal("live completion timing differs from the durable run timestamps")
+			}
 			if event.Kind != application.UIEventRunCompleted {
 				t.Fatalf("terminal UI event = %#v", event)
 			}

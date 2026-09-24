@@ -66,6 +66,14 @@ func TestCoordinatorCancelsOneRunAndRejectsLateEvents(t *testing.T) {
 		t.Fatal("scope remained bound after cancellation")
 	}
 	assertOneUITerminal(t, ui.events(), UIEventRunCancelled)
+	for _, event := range ui.events() {
+		if event.Kind == UIEventRunCancelled {
+			run := persistence.lastFinished()
+			if event.TerminalOutcome.WorkedFor == nil || *event.TerminalOutcome.WorkedFor != run.FinishedAt.Sub(*run.StartedAt) {
+				t.Fatal("terminal timing differs from the persisted Application lifecycle")
+			}
+		}
+	}
 	late := agent.RunEvent{
 		RunID: runID, ScopeGeneration: 7, Sequence: 3, OccurredAt: clock.Now(),
 		Kind:    agent.RunEventRunFailed,

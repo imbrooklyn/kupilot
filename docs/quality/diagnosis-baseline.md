@@ -148,3 +148,35 @@ inputs. They do not prove live model compliance, current cluster state,
 causality, complete incident coverage, natural-language quality in every
 language, or a percentage accuracy claim. Live evaluation may supplement this
 baseline but cannot replace it or become CI proof.
+
+## Opt-in model conclusion checks
+
+`TestDiagnosticClaimScopeLive` tests the configured model with synthetic Tool
+observations and an explicit verdict question. No real Kubernetes request is
+made. The cases distinguish a blocker from untested layers, a progress condition
+from rollout completion, readiness recovery from end-to-end recovery, and a
+user-reported HTTP failure from Tool observations. A positive readiness case
+also requires a supported `VERIFIED` verdict rather than blanket uncertainty.
+
+After authorizing use of the configured model and the three-dollar estimate:
+
+```sh
+KUPILOT_INTEGRATION_LIVE=authorized KUPILOT_INTEGRATION_MAX_COST_USD=3 \
+  GOTOOLCHAIN=go1.27.0 go test -tags integration ./internal/application \
+  -run '^(TestCheckoutEvidenceLive|TestDiagnosticClaimScopeLive)$' \
+  -count=1 -v -timeout 16m
+```
+
+The live price fixture is limited to the configured Luna Responses profile.
+Tests report token totals, cost estimates and safe failure classes without
+logging model text or source content. Each case has one attempt. This command
+is separate from deterministic CI and does not change runtime answer validation.
+
+The automated oracle checks the requested verdict plus final-response and
+same-run citation validity. It does not prove every sentence in the explanation
+or arbitrary free-form wording. For manual case-01 review, the answer must keep
+these distinctions: an observed readiness blocker does not clear caller
+networking or HTTP behavior; `Progressing=True` alone is not completion; ready
+endpoints after recovery do not establish application success; a user-reported
+HTTP result remains attributed to the user. A disagreement is a model-quality
+failure, not a reason to add runtime prose repair, another Agent, or retries.

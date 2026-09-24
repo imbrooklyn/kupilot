@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -777,6 +778,7 @@ func (adapter *applicationSessionAdapter) ResumeByID(
 	}
 	return application.ResumedSessionRecord{
 		Session: history.Session, Messages: append([]domain.Message(nil), history.Messages...),
+		RunDurations: maps.Clone(history.RunDurations),
 	}, nil
 }
 

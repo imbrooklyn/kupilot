@@ -134,8 +134,9 @@ type ResumeSessionRecord struct {
 // ResumedSessionRecord contains only a validated standard Session and bounded
 // committed safe history. Historic values never carry live authority.
 type ResumedSessionRecord struct {
-	Session  domain.Session
-	Messages []domain.Message
+	Session      domain.Session
+	Messages     []domain.Message
+	RunDurations map[domain.AgentRunID]time.Duration
 }
 
 // SessionResumeStore owns the three explicit history reads admitted by the
@@ -464,6 +465,7 @@ type UIHistoryMessage struct {
 	Format             domain.MessageFormat
 	Content            string
 	RunID              domain.AgentRunID
+	WorkedFor          *time.Duration
 	EvidenceReferences []UIEvidenceReference
 }
 
@@ -478,6 +480,9 @@ func (message UIHistoryMessage) valid() bool {
 		return false
 	}
 	if message.RunID != "" && !message.RunID.Valid() || len(message.EvidenceReferences) > 0 && message.Role != domain.MessageRoleAssistant {
+		return false
+	}
+	if message.WorkedFor != nil && (*message.WorkedFor < 0 || message.Role != domain.MessageRoleAssistant || !message.RunID.Valid()) {
 		return false
 	}
 	for _, reference := range message.EvidenceReferences {

@@ -137,6 +137,13 @@ Resume acceptance loads only allowlisted safe history and Session metadata:
   when compaction has occurred.
 - Safe Session metadata.
 
+Completed assistant turns retain their `Worked for` marker after resume. The
+duration comes from the run's existing start and finish timestamps, using the
+same timing as the live terminal result; time spent outside Kupilot is not
+included. If valid completed-run timing is unavailable, history still opens
+without inventing a duration. This display metadata does not restart a timer,
+restore a run, or enter model memory.
+
 The picker may display an unverified historic Context and Namespace candidate
 before acceptance. Choosing it is a separate explicit scope activation that
 must complete first. Resume acceptance itself keeps the currently verified

@@ -103,6 +103,41 @@ func TestSessionApplicationAdapterUsesRealSQLiteResumeEligibility(t *testing.T) 
 	}
 }
 
+func TestResumeDurationSurvivesDatabaseReopen(t *testing.T) {
+	ctx := t.Context()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := sqlite.OpenOptions{StateDir: filepath.Join(root, "state"), ApplicationVersion: "v0.1.0", CorrelationID: "resume-duration"}
+	database, err := sqlite.Open(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	sessions, messages, runs := sqlite.NewSessionRepository(database), sqlite.NewMessageRepository(database), sqlite.NewAgentRunRepository(database)
+	now := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	seedIntegrationResumeHistory(t, ctx, sessions, messages, now)
+	seedIntegrationCompletedTurn(t, ctx, runs, now, domain.ScopeCandidate{Context: "example-context", Namespace: "example-namespace"})
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sqlite.Open(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	adapter := sessionServiceForIntegration(sqlite.NewSessionRepository(reopened), sqlite.NewMessageRepository(reopened), sqlite.NewAgentRunRepository(reopened), reopened)
+	history, err := adapter.ResumeByID(ctx, integrationSessionID)
+	if err != nil || len(history.RunDurations) != 1 || len(history.Messages) != 3 {
+		t.Fatalf("resumed messages=%d durations=%d error=%v", len(history.Messages), len(history.RunDurations), err)
+	}
+	assistant := history.Messages[2]
+	if assistant.Role != domain.MessageRoleAssistant || assistant.RunID == nil || history.RunDurations[*assistant.RunID] != time.Millisecond {
+		t.Fatal("the stored run duration was not restored with its assistant answer")
+	}
+}
+
 func TestResumeIntegrationSeparatesExplicitScopeActivationFromZeroIOAcceptance(t *testing.T) {
 	tests := []struct {
 		name                   string

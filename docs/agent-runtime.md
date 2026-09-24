@@ -264,6 +264,16 @@ and verification boundaries.
 
 ## Evidence and answer validation
 
+The existing System Prompt asks the model to keep conclusions within the
+observed layer. Finding one blocker does not clear untested layers or prove a
+unique root cause. Conditions must be interpreted with their reason, time and
+current counts; a positive progress condition alone does not establish rollout
+completion or present availability. Recovery answers distinguish observed
+readiness, application behavior and end-to-end reachability. User-reported
+checks remain attributed to the user rather than Tool-verified Evidence.
+These are model-quality instructions, not deterministic semantic guarantees;
+the runtime does not rewrite conclusions, retry the answer or call a critic.
+
 Only accepted deterministic Tool results create Evidence. Every Evidence item
 binds the run, invocation, scope generation, exact API group/version/resource,
 Kind and scope, exact ResourceRef, category, applicable resource or

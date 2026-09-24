@@ -58,6 +58,16 @@ func TestTerminalDiagnosticsCannotChangeNextActionsOrLabelSuccessAsFailure(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	duration := time.Duration(0)
+	outcome.WorkedFor = &duration
+	if !outcome.valid() {
+		t.Fatal("known zero duration was rejected")
+	}
+	duration = -time.Millisecond
+	if outcome.valid() {
+		t.Fatal("negative terminal duration was accepted")
+	}
+	outcome.WorkedFor = nil
 	before := append([]UINextAction(nil), outcome.NextActions...)
 	outcome.Diagnostic = domain.FailureFinalJSON
 	if !outcome.valid() || !reflect.DeepEqual(before, outcome.NextActions) {

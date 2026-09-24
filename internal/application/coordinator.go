@@ -2038,6 +2038,9 @@ func projectResumedSession(requestID uint64, record ResumedSessionRecord) UIResu
 		}
 		if message.RunID != nil {
 			projected.RunID = *message.RunID
+			if duration, ok := record.RunDurations[*message.RunID]; ok && duration >= 0 && message.Role == domain.MessageRoleAssistant {
+				projected.WorkedFor = &duration
+			}
 		}
 		result.History = append(result.History, projected)
 		if message.Scope != nil {
@@ -3424,6 +3427,10 @@ func (coordinator *Coordinator) persistTerminal(
 	run.TerminationReason = terminationReason(event)
 	if run.Validate() != nil {
 		return ErrPersistenceUnavailable
+	}
+	if state.bridge != nil {
+		workedFor := run.FinishedAt.Sub(*run.StartedAt)
+		state.bridge.workedFor = &workedFor
 	}
 	audit, err := coordinator.newRunAudit(state, auditSpecification)
 	if err != nil {

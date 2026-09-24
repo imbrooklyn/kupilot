@@ -3,9 +3,46 @@ package application
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestResumedTimingRemainsOptionalAssistantDisplayMetadata(t *testing.T) {
+	runID := domain.AgentRunID("00000000-0000-7000-8000-000000000001")
+	record := ResumedSessionRecord{
+		Messages: []domain.Message{
+			{Role: domain.MessageRoleUser, Format: domain.MessageFormatPlain, Content: "Question", RunID: &runID},
+			{Role: domain.MessageRoleAssistant, Format: domain.MessageFormatMarkdown, Content: "Answer", RunID: &runID},
+		},
+		RunDurations: map[domain.AgentRunID]time.Duration{runID: 38 * time.Second},
+	}
+	resumed := projectResumedSession(1, record)
+	if resumed.History[0].WorkedFor != nil || resumed.History[1].WorkedFor == nil || *resumed.History[1].WorkedFor != 38*time.Second {
+		t.Fatal("run timing was lost or attached to the user Message")
+	}
+	message := resumed.History[1]
+	if !message.valid() {
+		t.Fatal("valid display timing was rejected")
+	}
+	*message.WorkedFor = -time.Second
+	if message.valid() {
+		t.Fatal("negative display timing was accepted")
+	}
+	message.WorkedFor = nil
+	if !message.valid() {
+		t.Fatal("missing optional timing blocked safe history")
+	}
+	zero := time.Duration(0)
+	message.WorkedFor = &zero
+	if !message.valid() {
+		t.Fatal("known zero duration was rejected")
+	}
+	message.Role = domain.MessageRoleUser
+	if message.valid() {
+		t.Fatal("user Message acquired run timing")
+	}
+}
 
 func TestUIHistoryMessagesUseRoleSpecificContentLimits(t *testing.T) {
 	t.Parallel()

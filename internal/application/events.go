@@ -1175,6 +1175,7 @@ type UITerminalOutcome struct {
 	Reason      domain.RunTerminalReason
 	NextActions []UINextAction
 	Budget      []UIBudgetMeasure
+	WorkedFor   *time.Duration
 }
 
 // UIAnswerCoverageState is the fixed top-level declared source condition.
@@ -1234,6 +1235,9 @@ func ProjectTerminalOutcome(reason domain.RunTerminalReason) (UITerminalOutcome,
 }
 
 func (outcome UITerminalOutcome) valid() bool {
+	if outcome.WorkedFor != nil && *outcome.WorkedFor < 0 {
+		return false
+	}
 	want, err := ProjectTerminalOutcome(outcome.Reason)
 	if err != nil || outcome.Diagnostic != "" && (!outcome.Diagnostic.Valid() || outcome.Reason == domain.RunTerminalCompleted) || len(want.NextActions) != len(outcome.NextActions) || !validFineGrainedBudget(outcome.Budget) {
 		return false
@@ -1962,6 +1966,7 @@ type eventBridge struct {
 	egressBase        *modelEgressBase
 	persistenceBad    bool
 	terminalBudget    []UIBudgetMeasure
+	workedFor         *time.Duration
 	startedAt         time.Time
 	lastOccurredAt    time.Time
 	modelAttempts     int64
@@ -2290,6 +2295,10 @@ func (bridge *eventBridge) projectTerminal(reason domain.RunTerminalReason, diag
 	outcome, err := ProjectTerminalOutcome(reason)
 	if err != nil {
 		return UITerminalOutcome{}, err
+	}
+	if bridge.workedFor != nil {
+		duration := *bridge.workedFor
+		outcome.WorkedFor = &duration
 	}
 	if validFineGrainedBudget(bridge.terminalBudget) {
 		if !bridge.startedAt.IsZero() && !bridge.lastOccurredAt.Before(bridge.startedAt) {

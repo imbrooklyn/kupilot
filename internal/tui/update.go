@@ -2589,7 +2589,11 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 			model.composer.RecordSubmission(text)
 		case domain.MessageRoleAssistant:
 			model.transcript.StartAgent()
-			model.transcript.FinishCommittedAgent(text)
+			if message.WorkedFor != nil {
+				model.transcript.FinishCommittedAgentWithDuration(text, *message.WorkedFor)
+			} else {
+				model.transcript.FinishCommittedAgent(text)
+			}
 			model.transcript.SetAgentLandmark(components.TranscriptLandmarkAssistantFinal)
 			model.appendEvidenceReferences(message.EvidenceReferences)
 		default:
@@ -3330,10 +3334,14 @@ func (model *Model) acceptApplicationEvent(event application.UIEvent) tea.Cmd {
 		default:
 			model.run.Status = "failed"
 		}
+		workedFor := model.currentRunElapsed()
+		if event.TerminalOutcome.WorkedFor != nil {
+			workedFor = *event.TerminalOutcome.WorkedFor
+		}
 		if event.Kind == application.UIEventRunCompleted && !model.run.PersistenceDegraded {
-			model.transcript.FinishCommittedAgentWithDuration(text, model.currentRunElapsed())
+			model.transcript.FinishCommittedAgentWithDuration(text, workedFor)
 		} else {
-			model.transcript.FinishAgentWithDuration(text, model.currentRunElapsed())
+			model.transcript.FinishAgentWithDuration(text, workedFor)
 		}
 		if event.Kind == application.UIEventRunCompleted {
 			model.appendEvidenceReferences(event.EvidenceReferences)

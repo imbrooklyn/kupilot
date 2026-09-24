@@ -166,7 +166,8 @@ type RecoveryResult struct {
 
 // History is the bounded safe data reconstructed by an explicit resume intent.
 type History struct {
-	Session  domain.Session
-	Messages []domain.Message
-	Next     *MessageCursor
+	Session      domain.Session
+	Messages     []domain.Message
+	Next         *MessageCursor
+	RunDurations map[domain.AgentRunID]time.Duration
 }

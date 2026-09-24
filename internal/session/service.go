@@ -164,5 +164,28 @@ func (service *Service) ResumeByID(ctx context.Context, id domain.SessionID) (Hi
 	if len(page.Messages) == 0 {
 		return History{}, ErrSessionUnavailable
 	}
-	return History{Session: value, Messages: page.Messages, Next: page.Next}, nil
+	history := History{Session: value, Messages: page.Messages, Next: page.Next}
+	for _, message := range page.Messages {
+		if err := ctx.Err(); err != nil {
+			return History{}, err
+		}
+		if message.Role != domain.MessageRoleAssistant || message.RunID == nil {
+			continue
+		}
+		run, readErr := service.runs.GetByID(ctx, *message.RunID)
+		if err := ctx.Err(); err != nil {
+			return History{}, err
+		}
+		// Timing is optional display metadata. Missing or invalid metadata must
+		// not hide committed history or include time spent offline after a crash.
+		if readErr != nil || run.Validate() != nil || run.ID != *message.RunID ||
+			run.SessionID != value.ID || run.Status != domain.AgentRunStatusCompleted {
+			continue
+		}
+		if history.RunDurations == nil {
+			history.RunDurations = make(map[domain.AgentRunID]time.Duration)
+		}
+		history.RunDurations[run.ID] = run.FinishedAt.Sub(*run.StartedAt)
+	}
+	return history, nil
 }

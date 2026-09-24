@@ -95,6 +95,93 @@ func TestResumeByIDReturnsOnlyBoundedCommittedHistory(t *testing.T) {
 	}
 }
 
+func TestResumeDerivesOptionalDurationOnlyFromCompletedOwnedRuns(t *testing.T) {
+	now := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	finished := now.Add(38 * time.Second)
+	id := domain.SessionID("00000000-0000-7000-8000-000000000011")
+	run := domain.AgentRun{
+		ID: "00000000-0000-7000-8000-000000000012", SessionID: id,
+		RequestMessageID: "00000000-0000-7000-8000-000000000013",
+		Status:           domain.AgentRunStatusCompleted, StartedAt: &now, FinishedAt: &finished,
+		Scope:         domain.ScopeSnapshot{Context: "example-context", Namespace: "example-namespace", Generation: 1},
+		PromptVersion: "1", ToolCatalogVersion: "1",
+	}
+	if err := run.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*domain.AgentRun)
+		err    error
+		want   bool
+	}{
+		{name: "completed", want: true},
+		{name: "missing", err: ErrAgentRunNotFound},
+		{name: "unavailable optional metadata", err: errors.New("synthetic read failure")},
+		{name: "foreign Session", mutate: func(run *domain.AgentRun) { run.SessionID = "00000000-0000-7000-8000-000000000021" }},
+		{name: "foreign run", mutate: func(run *domain.AgentRun) { run.ID = "00000000-0000-7000-8000-000000000022" }},
+		{name: "running", mutate: func(run *domain.AgentRun) { run.Status, run.FinishedAt = domain.AgentRunStatusRunning, nil }},
+		{name: "recovered after restart", mutate: func(run *domain.AgentRun) { run.Status = domain.AgentRunStatusInterrupted }},
+		{name: "missing start", mutate: func(run *domain.AgentRun) { run.StartedAt = nil }},
+		{name: "negative duration", mutate: func(run *domain.AgentRun) { run.StartedAt, run.FinishedAt = &finished, &now }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := run
+			if test.mutate != nil {
+				test.mutate(&value)
+			}
+			sessions := &fakeSessionStore{session: domain.Session{
+				ID: id, Title: "Example Session", Status: domain.SessionStatusActive,
+				PrivacyMode: domain.PrivacyModeStandard, Version: 1,
+				CreatedAt: now, LastActivityAt: now, UpdatedAt: now,
+			}}
+			messages := &fakeMessageStore{page: MessagePage{Messages: []domain.Message{
+				{Role: domain.MessageRoleUser, RunID: &run.ID},
+				{Role: domain.MessageRoleAssistant, RunID: &run.ID},
+				{Role: domain.MessageRoleAssistant},
+			}}}
+			reads := 0
+			runs := resumeRunStore{read: func(context.Context, domain.AgentRunID) (domain.AgentRun, error) {
+				reads++
+				return value, test.err
+			}}
+			service := NewService(sessions, fakeResumeReader{}, messages, runs, fakeRecovery{})
+			history, err := service.ResumeByID(t.Context(), id)
+			if err != nil || len(history.Messages) != 3 || reads != 1 {
+				t.Fatalf("history=%d reads=%d error=%v", len(history.Messages), reads, err)
+			}
+			duration, found := history.RunDurations[run.ID]
+			if found != test.want || found && duration != 38*time.Second {
+				t.Fatalf("duration=%s found=%t, want found=%t", duration, found, test.want)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			runs.read = func(context.Context, domain.AgentRunID) (domain.AgentRun, error) {
+				cancel()
+				return run, nil
+			}
+			service.runs = runs
+			if history, err := service.ResumeByID(ctx, id); !errors.Is(err, context.Canceled) || len(history.Messages) != 0 {
+				t.Fatalf("cancelled timing read restored history: %v", err)
+			}
+			expired, stop := context.WithDeadline(t.Context(), time.Unix(0, 0))
+			defer stop()
+			if history, err := service.ResumeByID(expired, id); !errors.Is(err, context.DeadlineExceeded) || len(history.Messages) != 0 {
+				t.Fatalf("expired resume restored history: %v", err)
+			}
+		})
+	}
+}
+
+type resumeRunStore struct {
+	fakeRunStore
+	read func(context.Context, domain.AgentRunID) (domain.AgentRun, error)
+}
+
+func (store resumeRunStore) GetByID(ctx context.Context, id domain.AgentRunID) (domain.AgentRun, error) {
+	return store.read(ctx, id)
+}
+
 type fakeSessionStore struct {
 	session  domain.Session
 	getErr   error

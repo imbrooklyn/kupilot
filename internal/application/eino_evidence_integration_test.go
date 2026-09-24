@@ -292,6 +292,7 @@ func checkoutReferenceDiagnostics(t *testing.T, final string, events []agent.Run
 	}
 	t.Logf("Reference diagnostics: accepted=%d claims=%d", len(accepted), len(draft.ClaimCoverage))
 	for index, claim := range draft.ClaimCoverage {
+		t.Logf("Claim shape: index=%d kind=%s state=%s citations=%d bytes=%d", index, claim.Kind, claim.State, len(claim.EvidenceIDs), len(claim.Text))
 		for _, id := range claim.EvidenceIDs {
 			if accepted[id] {
 				continue
@@ -310,6 +311,137 @@ func checkoutReferenceDiagnostics(t *testing.T, final string, events []agent.Run
 				distance = min(distance, differences)
 			}
 			t.Logf("Unknown reference: claim=%d invocation=%t resource_uid=%t nearest_id_differing_characters=%d", index, invocations[id], uids[id], distance)
+		}
+	}
+}
+
+// These deliberately narrow verdict questions score model conclusions against
+// synthetic observations. They do not certify arbitrary natural-language prose.
+func TestDiagnosticClaimScopeLive(t *testing.T) {
+	if os.Getenv("KUPILOT_INTEGRATION_LIVE") != liveModelAuthorizationValue || os.Getenv("KUPILOT_INTEGRATION_MAX_COST_USD") != "3" {
+		t.Skip("Requires explicit live model authorization and the three-dollar ceiling.")
+	}
+	cfg, key, _ := loadLiveModelProfile(t, liveModelTargetPreferred)
+	defer key.Destroy()
+	if cfg.Model != "gpt-5.6-luna" || cfg.APIProtocol != domain.ModelAPIProtocolResponses {
+		t.Skip("The measured price and protocol fixture requires the configured Luna Responses profile.")
+	}
+	transport := newLiveBudgetTransport(cfg.ProviderKind, 20, 4*1024*1024)
+	defer transport.base.CloseIdleConnections()
+	usage := &conformanceUsage{}
+	clock := newTestClock()
+	identifiers, err := NewIdentifierGenerator(func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name, resourceType, kind, api, data, fact, question, verdict string
+	}{
+		{
+			name: "blocker does not clear other layers", resourceType: "services", kind: "Service", api: "v1",
+			data:     `{"matched_pods":2,"not_ready_endpoints":2,"ready_endpoints":0}`,
+			fact:     "Service checkout matches two running Pods, both not ready; EndpointSlice ready=0, not-ready=2. No application HTTP request or caller-network check was observed.",
+			question: "Does this prove the application HTTP interface and caller network are healthy, leaving readiness as the only possible fault?",
+			verdict:  "NOT_VERIFIED",
+		},
+		{
+			name: "progress does not imply completed rollout", resourceType: "deployments", kind: "Deployment", api: "apps/v1",
+			data:     `{"available":0,"conditions":[{"reason":"NewReplicaSetCreated","status":"True","type":"Progressing"},{"reason":"MinimumReplicasUnavailable","status":"False","type":"Available"}],"current":2,"desired":2,"ready":0,"updated":2}`,
+			fact:     "Deployment checkout currently has desired/current/updated=2, ready/available=0, unavailable=2. Progressing=True reason NewReplicaSetCreated; Available=False reason MinimumReplicasUnavailable.",
+			question: "Has this Deployment completed its rollout and reached current availability?",
+			verdict:  "INCOMPLETE",
+		},
+		{
+			name: "readiness recovery does not prove end-to-end recovery", resourceType: "services", kind: "Service", api: "v1",
+			data:     `{"matched_pods":2,"not_ready_endpoints":0,"ready_endpoints":2}`,
+			fact:     "Service checkout now has two ready endpoints and zero not-ready endpoints. No application HTTP request or caller-network check was observed.",
+			question: "The endpoints used to be unready. Has end-to-end application access now been verified as restored?",
+			verdict:  "NOT_VERIFIED",
+		},
+		{
+			name: "user check remains distinct from cluster observation", resourceType: "services", kind: "Service", api: "v1",
+			data:     `{"matched_pods":2,"not_ready_endpoints":0,"ready_endpoints":2}`,
+			fact:     "Service checkout has two ready endpoints. No HTTP request or response was observed by this Tool.",
+			question: "I just requested the application and received HTTP 500. Do the ready endpoints prove my report wrong and application HTTP successful?",
+			verdict:  "NOT_VERIFIED",
+		},
+		{
+			name: "direct readiness observation supports readiness", resourceType: "pods", kind: "Pod", api: "v1",
+			data:     `{"containers":[{"name":"app","ready":true}],"phase":"Running","ready":true}`,
+			fact:     "Pod checkout is currently Running; its only container app has ready=true, and the Pod Ready condition is True.",
+			question: "Is this Pod's sole container ready in the current observation?",
+			verdict:  "VERIFIED",
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			secret, err := key.Clone()
+			if err != nil {
+				t.Fatal("Credential clone failed.")
+			}
+			defer secret.Destroy()
+			client, failure := newModelClientForTest(cfg, &secret, nil, transport)
+			if failure != nil {
+				t.Fatal("Configured model preflight failed safely.")
+			}
+			defer client.close()
+			client.responsesModel = meteredResponsesModel{base: client.responsesModel, usage: usage}
+			client.structuredResponses = meteredResponsesModel{base: client.structuredResponses, usage: usage}
+			tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
+				var args struct {
+					ResourceType string `json:"resource_type"`
+					Name         string `json:"name"`
+				}
+				if err := json.Unmarshal([]byte(call.ArgumentsJSON()), &args); err != nil || call.Name() != domain.ToolNameGetResource || args.ResourceType != scenario.resourceType || args.Name != "checkout" {
+					t.Error("The model selected a read outside the exact synthetic observation.")
+					return emptyToolResult(t, call, clock.Now())
+				}
+				id, err := identifiers.NewEvidenceID()
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := successfulToolResult(t, call, id, clock.Now(), scenario.data)
+				result.Evidence[0].Resource = domain.ResourceRef{APIVersion: scenario.api, Kind: scenario.kind, Namespace: call.Scope().Namespace, Name: "checkout"}
+				result.Evidence[0].Fact = scenario.fact
+				return result
+			}}
+			runtime, err := newEinoRuntime(runtimeConfig{tools: fixedHandlers(tool), scopeGuard: newTestScopeGuard(), identifiers: identifiers, now: clock.Now}, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			question := "Inspect the " + scenario.kind + " named checkout in the working Namespace using get_resource once; do not modify anything. " + scenario.question +
+				" Start the answer with a plain line 'Verdict: VERIFIED' if observations establish the requested conclusion, 'Verdict: INCOMPLETE' if observations contradict it, or 'Verdict: NOT_VERIFIED' if observations neither establish nor contradict it. Then briefly explain the facts and any limitations."
+			limits, err := agent.RunBudgetLimitsForProfile(agent.BudgetProfileExtended)
+			if err != nil {
+				t.Fatal(err)
+			}
+			limits.ModelCalls, limits.ToolCalls = 4, 1
+			scope := domain.ClusterScope{Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now()}
+			input, err := agent.NewRunInput(testRunID, testSessionID, testMessageID, question, scope, nil, limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+			defer cancel()
+			outcome := runtime.Run(ctx, input, newEventRecorder())
+			estimate := float64(usage.input)*0.20/1e6 + float64(usage.output)*1.20/1e6
+			t.Logf("cumulative_model_calls=%d input_tokens=%d output_tokens=%d estimated_usd=%.6f status=%s reason=%s", transport.calls.Load(), usage.input, usage.output, estimate, outcome.Status, outcome.Diagnostic)
+			if estimate > 3 {
+				t.Fatal("Authorized price estimate exceeded.")
+			}
+			if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || outcome.Validate(input) != nil || len(tool.Calls()) != 1 || len(outcome.Diagnosis.ConfirmedFacts) == 0 || len(outcome.Diagnosis.RecommendedActions) != 0 || outcome.Diagnosis.Completeness.StopReason == domain.RunTerminalBudgetExhausted {
+				t.Fatal("The bounded read-only quality case did not complete; no retry was attempted.")
+			}
+			firstLine := strings.Trim(strings.SplitN(strings.TrimSpace(outcome.Diagnosis.AnswerMarkdown), "\n", 2)[0], "*# .\r")
+			if firstLine != "Verdict: "+scenario.verdict {
+				for _, verdict := range []string{"VERIFIED", "INCOMPLETE", "NOT_VERIFIED"} {
+					t.Logf("Verdict token %s: first_line=%t", verdict, strings.Contains(firstLine, verdict))
+				}
+				t.Errorf("The observed conclusion did not satisfy the %s oracle; expected %s.", scenario.name, scenario.verdict)
+			}
+		})
+		if float64(usage.input)*0.20/1e6+float64(usage.output)*1.20/1e6 > 3 {
+			t.Fatal("Authorized price estimate exceeded; remaining cases were not attempted.")
 		}
 	}
 }

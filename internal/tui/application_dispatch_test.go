@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -11,6 +12,47 @@ import (
 	"github.com/imbrooklyn/kupilot/internal/application"
 	"github.com/imbrooklyn/kupilot/internal/domain"
 )
+
+func TestAcceptedResumeRestoresEachAnswerDurationWithoutRestartingTimers(t *testing.T) {
+	model := newTestModel()
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 60})
+	first, second := 38*time.Second, 62*time.Second
+	model.applyAcceptedResume(application.UIResumedSession{
+		Session: application.UISessionCandidate{ID: testSessionID, PrivacyMode: domain.PrivacyModeStandard},
+		History: []application.UIHistoryMessage{
+			{Role: domain.MessageRoleUser, Content: "First question."},
+			{Role: domain.MessageRoleAssistant, Content: "First answer.", WorkedFor: &first},
+			{Role: domain.MessageRoleUser, Content: "Follow-up question."},
+			{Role: domain.MessageRoleAssistant, Content: "Second answer.", WorkedFor: &second},
+			{Role: domain.MessageRoleAssistant, Content: "Answer without timing."},
+		},
+	})
+	entries := model.transcript.Entries()
+	if len(entries) != 6 || !entries[1].ShowWorkedFor || entries[1].WorkedFor != first ||
+		!entries[3].ShowWorkedFor || entries[3].WorkedFor != second || entries[4].ShowWorkedFor || model.run.Active {
+		t.Fatalf("resumed duration state = %#v", entries)
+	}
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 120, Height: 60})
+	model.transcript.ScrollUp(1000)
+	view := sanitizeExternalText(model.View().Content, 0)
+	if strings.Count(view, "Worked for 38s") != 1 || strings.Count(view, "Worked for 1m 02s") != 1 {
+		t.Fatalf("missing or duplicated resumed duration markers: %s", view)
+	}
+}
+
+func TestLiveTimingUsesApplicationDurationDespiteDeliveryDelay(t *testing.T) {
+	model := newTestModel()
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: runStartedEvent(1)})
+	model.run.StartedAt = time.Now().Add(-time.Hour)
+	workedFor := 38 * time.Second
+	event := runTerminalEvent(application.UIEventRunCompleted, 2, "Final answer.")
+	event.TerminalOutcome.WorkedFor = &workedFor
+	model, _ = updateModel(t, model, ApplicationEventMsg{Event: event})
+	entries := model.transcript.Entries()
+	if len(entries) != 1 || !entries[0].ShowWorkedFor || entries[0].WorkedFor != workedFor {
+		t.Fatalf("delivery delay changed the Application duration: %#v", entries)
+	}
+}
 
 func TestDispatchApplicationMapsTypedRequestsWithoutAdapterLeakage(t *testing.T) {
 	t.Parallel()

@@ -51,6 +51,12 @@ Normalize external Unicode and strip or visibly replace unsafe terminal,
 device and bidirectional controls. Do not depend on color alone. Optional
 presentation failures preserve the business result and cause no external retry.
 
+Project completed-turn elapsed time from Application's existing run start and
+finish timestamps for both live results and explicit resume. Historic timing
+is optional display metadata; omit missing or invalid timing without hiding
+committed answers. Do not persist a second duration, count offline time, or
+restore a run or timer from history.
+
 ## Consequences and validation
 One editor and one supervision surface avoid duplicated UI state and resource
 management workflows. Native platform behavior still requires tests. Exercise
