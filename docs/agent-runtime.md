@@ -271,8 +271,31 @@ current counts; a positive progress condition alone does not establish rollout
 completion or present availability. Recovery answers distinguish observed
 readiness, application behavior and end-to-end reachability. User-reported
 checks remain attributed to the user rather than Tool-verified Evidence.
+Unavailable logs limit log-derived conclusions; they do not erase observed
+Pod state, restart counts, Kubernetes-reported termination reasons or exit
+codes, or Events. Exit code alone does not establish an OOM or its cause.
 These are model-quality instructions, not deterministic semantic guarantees;
 the runtime does not rewrite conclusions, retry the answer or call a critic.
+
+The prompt preserves user-supplied resource names literally. An exact read or
+bounded candidate list may resolve identity, but a similar name, including a
+single candidate, does not confirm the user's intent. On a name mismatch or
+ambiguous target, the model must stop detailed investigation, show the checked
+identity gap and available candidates, and request confirmation. An absent old
+Pod must not be replaced silently with a new Pod or a similar workload; absence,
+forbidden access and incomplete lists remain distinct. Exact names and verified
+owner or selector relationships need no extra identity confirmation.
+
+Typed `needs_user_input` remains a pre-read outcome. After any read, an identity
+question belongs in a normal `answer` with explicit limitations and empty typed
+`questions`. A later user confirmation supplies conversational intent only:
+current observations still require fresh same-run Evidence. No fuzzy-name
+resolver, new authority state or schema change enforces prose semantics.
+An empty query, NotFound or denied read without Evidence is reported as a
+checked limitation. If it is also classified as a claim, it uses
+`unsupported_observation` with no citations, never an unsupported
+`current_observation` or another resource's citation. Absence remains bounded
+by the checked scope, predicates and completeness.
 
 Only accepted deterministic Tool results create Evidence. Every Evidence item
 binds the run, invocation, scope generation, exact API group/version/resource,

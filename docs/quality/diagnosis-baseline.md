@@ -180,3 +180,49 @@ networking or HTTP behavior; `Progressing=True` alone is not completion; ready
 endpoints after recovery do not establish application success; a user-reported
 HTTP result remains attributed to the user. A disagreement is a model-quality
 failure, not a reason to add runtime prose repair, another Agent, or retries.
+
+## Resource identity and source-gap checks
+
+`TestCandidateConfirmationUsesFreshEvidence` deterministically checks a normal
+post-read answer that asks for identity confirmation, followed by a new user
+turn and a fresh observation. It also rejects the old candidate citation in
+that new run. The existing post-read typed-clarification rejection stays in
+force. Scripted responses prove these protocol and history boundaries, not a
+model's ability to recognize a misspelling.
+`TestEmptyCandidateLookupAnswersWithLimitations` accepts a checked identity gap
+without Evidence and rejects promotion to an unsupported current observation.
+
+`TestResourceIdentityLive` uses natural questions without Tool instructions or
+a prescribed verdict. Synthetic observations cover:
+
+- a misspelled name with one candidate, then explicit user confirmation;
+- another misspelling with multiple candidates;
+- an absent old Pod and a differently named new Pod;
+- an exact target that must proceed without extra identity clarification;
+- an unusual but valid exact name alongside a more familiar spelling; and
+- denied logs with independently observed `OOMKilled` and exit code 137.
+
+```sh
+GOTOOLCHAIN=go1.27.0 go test ./internal/application -count=1 \
+  -run '^(TestCandidateConfirmationUsesFreshEvidence|TestEmptyCandidateLookupAnswersWithLimitations|TestCoordinatorRejectsClarificationAfterToolLifecycle)$'
+
+KUPILOT_INTEGRATION_LIVE=authorized KUPILOT_INTEGRATION_MAX_COST_USD=3 \
+  GOTOOLCHAIN=go1.27.0 go test -tags integration ./internal/application \
+  -run '^TestResourceIdentityLive$' -count=1 -v -timeout 30m
+```
+
+The live test uses the same configured profile and price restriction as the
+conclusion checks above. It checks actual Tool targets, zero detailed reads of
+unconfirmed candidates, literal-name retention, an explicit identity gap and
+confirmation request, fresh reads after confirmation, valid same-run citations,
+and retained termination observations despite log denial. Name filters in the
+synthetic list cannot return candidates excluded by an exact predicate.
+
+Each case runs once without retry. Repeated invocations are independent samples;
+report every failure rather than rerunning until a pass. The prose checks are
+narrow checks for the named distinctions, not semantic proof of every sentence.
+Manual review must still check that the answer does not diagnose a candidate as
+the requested object, convert absence to denial, or erase status/Event facts
+because logs are unavailable. A new Pod's current zero restart count cannot
+establish what happened to a removed Pod. These quality checks neither change
+authority nor introduce automatic name matching or answer repair.

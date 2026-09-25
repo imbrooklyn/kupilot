@@ -7,7 +7,8 @@ conversational supervision screen.
 
 - Native OpenAI Chat Completions and Responses through one Eino Agent/Runner.
 - Explicit Session resume, safe SQLite history and bounded Eino summarization.
-- Typed resource, Event, log and metric reads with Evidence-backed answers.
+- Typed resource, Event, log and metric reads with Evidence-backed answers,
+  explicit source gaps and resource-name confirmation guidance.
 - Exact optional data sources and default-off remote/local diagnostics.
 - Deterministic permission profiles, optional Reviewer and digest-bound
   supervised remediation with durable audit and at-most-once attempts.
