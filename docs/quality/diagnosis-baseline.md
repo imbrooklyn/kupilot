@@ -191,6 +191,19 @@ force. Scripted responses prove these protocol and history boundaries, not a
 model's ability to recognize a misspelling.
 `TestEmptyCandidateLookupAnswersWithLimitations` accepts a checked identity gap
 without Evidence and rejects promotion to an unsupported current observation.
+`TestTerminationAnswerSeparatesObservedStateFromExplanation` accepts cited
+termination fields with separately classified technical explanations and
+uncertainty. An empty reference array on a current observation still rejects
+the answer without a retry or reference repair.
+`TestGetResourcePreservesReportedTerminationReasonAndExitCode` checks that the
+Tool preserves both `Error` and `OOMKilled` with exit code 137 as distinct
+observations rather than deriving a reason from the code.
+
+`TestNativeOutputSchemasRemainBoundToInvocation` records both native OpenAI
+protocols. It verifies the exact answer, plan and Reviewer schema, unchanged
+sampling settings, plain-text summaries, one-attempt request rejection and
+continued local rejection when an endpoint returns an empty current-observation
+reference array despite the requested strict schema.
 
 `TestResourceIdentityLive` uses natural questions without Tool instructions or
 a prescribed verdict. Synthetic observations cover:
@@ -199,12 +212,19 @@ a prescribed verdict. Synthetic observations cover:
 - another misspelling with multiple candidates;
 - an absent old Pod and a differently named new Pod;
 - an exact target that must proceed without extra identity clarification;
-- an unusual but valid exact name alongside a more familiar spelling; and
-- denied logs with independently observed `OOMKilled` and exit code 137.
+- an unusual but valid exact name alongside a more familiar spelling;
+- denied logs with independently observed `OOMKilled` and exit code 137; and
+- a user-reported OOM log phrase with observed reason `Error` and exit code 137.
 
 ```sh
 GOTOOLCHAIN=go1.27.0 go test ./internal/application -count=1 \
-  -run '^(TestCandidateConfirmationUsesFreshEvidence|TestEmptyCandidateLookupAnswersWithLimitations|TestCoordinatorRejectsClarificationAfterToolLifecycle)$'
+  -run '^(TestCandidateConfirmationUsesFreshEvidence|TestEmptyCandidateLookupAnswersWithLimitations|TestCoordinatorRejectsClarificationAfterToolLifecycle|TestTerminationAnswerSeparatesObservedStateFromExplanation)$'
+
+GOTOOLCHAIN=go1.27.0 go test ./internal/tools -count=1 \
+  -run '^TestGetResourcePreservesReportedTerminationReasonAndExitCode$'
+
+GOTOOLCHAIN=go1.27.0 go test ./internal/application -count=1 \
+  -run '^TestNativeOutputSchemasRemainBoundToInvocation$'
 
 KUPILOT_INTEGRATION_LIVE=authorized KUPILOT_INTEGRATION_MAX_COST_USD=3 \
   GOTOOLCHAIN=go1.27.0 go test -tags integration ./internal/application \
@@ -215,8 +235,17 @@ The live test uses the same configured profile and price restriction as the
 conclusion checks above. It checks actual Tool targets, zero detailed reads of
 unconfirmed candidates, literal-name retention, an explicit identity gap and
 confirmation request, fresh reads after confirmation, valid same-run citations,
-and retained termination observations despite log denial. Name filters in the
-synthetic list cannot return candidates excluded by an exact predicate.
+and retained termination reason and exit code, including despite log denial.
+Name filters in the synthetic list cannot return candidates excluded by an
+exact predicate.
+
+`TestNativeClaimSchemaLive` separately checks whether the configured Responses
+endpoint enforces a native non-empty reference constraint on one synthetic
+request. It neither changes saved settings nor enables runtime probing. A
+profile may explicitly select `response_format: json_schema` after compatibility
+is established; JSON mode alone cannot enforce claim-specific array constraints.
+Run the natural-question matrix against that exact saved profile as well: a
+small schema check does not establish full answer/plan compatibility or semantics.
 
 Each case runs once without retry. Repeated invocations are independent samples;
 report every failure rather than rerunning until a pass. The prose checks are
@@ -224,5 +253,8 @@ narrow checks for the named distinctions, not semantic proof of every sentence.
 Manual review must still check that the answer does not diagnose a candidate as
 the requested object, convert absence to denial, or erase status/Event facts
 because logs are unavailable. A new Pod's current zero restart count cannot
-establish what happened to a removed Pod. These quality checks neither change
-authority nor introduce automatic name matching or answer repair.
+establish what happened to a removed Pod. Reason `Error`, exit code 137, and a
+user-reported OOM phrase do not confirm that Kubernetes recorded `OOMKilled`.
+The automated reason/code checks do not prove this last semantic distinction;
+manual review must verify it. These quality checks neither change authority nor
+introduce automatic name matching or answer repair.

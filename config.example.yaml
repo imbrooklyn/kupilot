@@ -21,8 +21,9 @@ models:
     endpoint: https://model.example.invalid/v1
     model: diagnostic-model
     # reasoning_effort: medium # omit to preserve the endpoint default
-    # prompt keeps prompt-only JSON guidance. json_object may be selected only
-    # after the exact endpoint is known to support that Chat Completions field.
+    # prompt uses JSON guidance only. json_object enforces JSON syntax;
+    # json_schema enforces the code-owned strict output schema. Select either
+    # native constraint only after verifying the exact endpoint supports it.
     response_format: prompt
     # Omit temperature for OpenAI endpoints that require native sampling defaults.
     # temperature: 0.1

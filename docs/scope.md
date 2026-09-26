@@ -73,8 +73,8 @@ capability may be inferred from it.
   category-level budget explanation, and a unified no-blind-retry recovery
   matrix.
 - Current-schema retained assistant envelopes and an explicit per-profile
-  `prompt` or endpoint-proved `json_object` response constraint, with no
-  capability probe, downgrade, fallback, or resend.
+  `prompt`, endpoint-proved `json_object` or strict `json_schema` response
+  constraint, with no capability probe, downgrade, fallback, or resend.
 - macOS and Linux support on `amd64` and `arm64`; Windows remains experimental.
 
 ## Capability contract

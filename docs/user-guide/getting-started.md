@@ -68,8 +68,11 @@ kubernetes:
 
 The endpoint and names are deliberately non-working placeholders. Replace them
 with approved values. Keep `response_format: prompt` unless the exact endpoint
-has proved support for the standard Chat Completions `json_object` constraint;
-Kupilot never probes, downgrades, or retries this selection.
+has proved support for native `json_object` (JSON syntax) or `json_schema`
+(the strict output schema, including required observation references). Both
+Chat Completions and Responses use their native format options. Kupilot never
+probes, downgrades, or retries this selection; local Evidence validation remains
+mandatory.
 `max_output_tokens` remains omitted until exact evidence
 for that selected endpoint supports a positive configured value; independent
 byte, call, time, stream, and cost-unit limits remain active. The default file

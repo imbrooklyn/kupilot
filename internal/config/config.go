@@ -13,6 +13,7 @@ const (
 	ModelReasoningEffortNone          = "none"
 	ModelResponseFormatPrompt         = "prompt"
 	ModelResponseFormatJSONObject     = "json_object"
+	ModelResponseFormatJSONSchema     = "json_schema"
 	BudgetProfileCompact              = "compact"
 	BudgetProfileBalanced             = "balanced"
 	BudgetProfileExtended             = "extended"

@@ -45,4 +45,7 @@ func TestInteractionFailuresAreClosedContentFreeBoundaryValues(t *testing.T) {
 	if !strings.Contains(FailureEvidenceUnknown.SafeMessage(), "The model cited Evidence not accepted in this run") {
 		t.Fatal("unknown reference failure does not explain the model citation error")
 	}
+	if !strings.Contains(FailureClaimUnsupported.SafeMessage(), "current observation without an Evidence reference") {
+		t.Fatal("missing reference failure does not explain the model citation error")
+	}
 }

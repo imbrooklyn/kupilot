@@ -31,6 +31,12 @@ Build ToolInfo with Eino's public NewParamsOneOfByJSONSchema constructor. Preser
 the exact closed schema and defensive snapshots. Retain narrow consumer-owned
 interfaces only where an actual isolation or test seam requires them.
 
+An explicit `response_format: json_schema` profile uses native OpenAI strict
+Structured Outputs for the code-owned answer, plan or Reviewer schema. Pass the
+format through Eino's native options; never rewrite HTTP bodies or add a final
+repair call. Summary requests remain free text. Endpoint rejection fails closed
+without switching format, model or reasoning settings.
+
 ## Consequences and alternatives
 Native messages retain protocol capabilities without a neutral provider facade.
 Responses provisional text remains unavailable until a stable native component

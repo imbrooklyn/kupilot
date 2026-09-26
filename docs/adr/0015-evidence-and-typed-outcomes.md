@@ -33,6 +33,14 @@ bounded size and allowed action proposals before persistence. Proposed actions
 remain unexecuted until Application creates fresh local authority. Clarification
 cannot create a Tool target or consent.
 
+When the profile explicitly selects native strict JSON Schema, constrain
+current-observation references to a non-empty array at generation time. Keep
+inference, recommendation, uncertainty and unsupported-observation alternatives
+distinct. This schema is a representation constraint, not proof of truth or
+same-run ownership. All local validation remains mandatory, including for an
+endpoint that ignores the requested schema. No reference is fabricated or
+repaired, and no observed fact is locally reclassified to make an answer pass.
+
 After sensitive-content screening, remove complete model-emitted private-use
 inline citation tokens (`U+E200 cite U+E202 ... U+E201`) from answer Markdown.
 Use the same presentation normalization for provisional fragments and the final

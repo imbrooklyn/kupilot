@@ -236,3 +236,48 @@ func TestEmptyCandidateLookupAnswersWithLimitations(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminationAnswerSeparatesObservedStateFromExplanation(t *testing.T) {
+	for _, explanationKind := range []domain.ClaimKind{domain.ClaimInference, domain.ClaimCurrentObservation} {
+		t.Run(string(explanationKind), func(t *testing.T) {
+			clock := newTestClock()
+			model := &recordingModel{scripts: []modelScript{
+				scriptedChunks(toolCallChunks(resourceCall("inspect-termination", "exit-137"))...),
+				scriptedChunks(diagnosisChunks(fmt.Sprintf(`{"answer_markdown":"Kubernetes records Error and exit code 137 for the previous app instance. This does not confirm OOMKilled. The reported log wording is not a Kubernetes termination reason.","evidence_citations":[{"claim":"The previous app instance terminated with reason Error and exit code 137.","claim_type":"current_observation","evidence_ids":[%q]},{"claim":"Exit code 137 alone does not establish OOMKilled.","claim_type":%q,"evidence_ids":[]},{"claim":"The underlying cause remains unconfirmed.","claim_type":"uncertainty","evidence_ids":[]}],"proposed_actions":[],"response_schema_version":1,"outcome":"answer","limitations":[{"kind":"absent","detail":"No underlying cause was observed.","impact":"A memory cause cannot be confirmed from the exit code or user-reported log wording."}],"questions":[]}`, agent.ModelEvidenceReference(testEvidenceID), explanationKind))...),
+			}}
+			tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
+				result := successfulToolResult(t, call, testEvidenceID, clock.Now(), `{"containers":[{"last":{"exit_code":137,"reason":"Error","state":"terminated"},"name":"app"}]}`)
+				result.Evidence[0].Resource.Name = "exit-137"
+				result.Evidence[0].Category = domain.EvidenceCategoryContainerState
+				result.Evidence[0].Fact = "Container app previous state terminated, reason Error, exit_code=137."
+				return result
+			}}
+			input := testInput(t, clock, agent.DefaultRunBudgetLimits())
+			recorder := newEventRecorder()
+			outcome := testAdapter(t, clock, model, tool, newTestScopeGuard()).Run(t.Context(), input, recorder)
+			if outcome.Validate(input) != nil || len(model.Requests()) != 2 || len(tool.Calls()) != 1 {
+				t.Fatal("Final claim validation retried, repeated the read, or returned an invalid outcome.")
+			}
+			if explanationKind == domain.ClaimCurrentObservation {
+				if outcome.Status != domain.AgentRunStatusFailed || outcome.Diagnosis != nil || outcome.Diagnostic != domain.FailureClaimUnsupported {
+					t.Fatal("An empty current-observation reference was accepted or repaired using another claim's Evidence.")
+				}
+			} else {
+				if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil {
+					t.Fatalf("Observed state with a separate explanation and uncertainty was rejected: %s", outcome.Diagnostic)
+				}
+				diagnosis := outcome.Diagnosis
+				if len(diagnosis.RecommendedActions) != 0 || len(diagnosis.ConfirmedFacts) != 1 || len(diagnosis.ClaimCoverage) != 3 || len(diagnosis.MissingInformation) != 1 {
+					t.Fatal("The read-only answer lost its source gap or promoted an explanation to an observation.")
+				}
+				coverage := diagnosis.ClaimCoverage
+				if len(coverage[0].EvidenceIDs) != 1 || coverage[0].EvidenceIDs[0] != testEvidenceID || coverage[0].State != domain.ClaimCoverageVerified ||
+					len(coverage[1].EvidenceIDs) != 0 || coverage[1].State != domain.ClaimCoverageLimited ||
+					len(coverage[2].EvidenceIDs) != 0 || coverage[2].State != domain.ClaimCoverageLimited {
+					t.Fatal("Claim provenance changed across the model, Evidence, or final-validation boundary.")
+				}
+			}
+			assertTerminalSequence(t, recorder.Events())
+		})
+	}
+}

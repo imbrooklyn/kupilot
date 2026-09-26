@@ -23,7 +23,7 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	defer secret.Destroy()
 	base := Defaults()
 	base.Models.Agent.ReasoningEffort = ModelReasoningEffortNone
-	base.Models.Agent.ResponseFormat = ModelResponseFormatJSONObject
+	base.Models.Agent.ResponseFormat = ModelResponseFormatJSONSchema
 	base.Logging.SensitiveDiagnostics = true
 	if err := SaveModelProfile(context.Background(), paths, base, ModelProfile{
 		Endpoint: "https://model.example.test/v1", Model: "diagnostic-model",
@@ -40,7 +40,7 @@ func TestSaveModelProfileCreatesPrivateHomeConfigAndLoadExtractsCredential(t *te
 	}
 	defer loaded.Credentials.Destroy()
 	if loaded.Models.Agent.Endpoint != "https://model.example.test/v1" || loaded.Models.Agent.Model != "diagnostic-model" ||
-		loaded.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || loaded.Models.Agent.ResponseFormat != ModelResponseFormatJSONObject ||
+		loaded.Models.Agent.ReasoningEffort != ModelReasoningEffortNone || loaded.Models.Agent.ResponseFormat != ModelResponseFormatJSONSchema ||
 		loaded.Credentials.Agent.Source != CredentialSourceFile ||
 		!loaded.Credentials.Agent.Value.IsSet() || !loaded.Logging.SensitiveDiagnostics {
 		t.Fatalf("loaded model profile = %#v source=%q credential=%v", loaded.Models.Agent, loaded.Credentials.Agent.Source, loaded.Credentials.Agent.Value.IsSet())

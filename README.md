@@ -96,8 +96,10 @@ remain the durable source through a thin ordered bridge.
 
 Retained assistant answers are reconstructed with the complete current strict
 response grammar and empty historic authority arrays. Profiles default to
-prompt-only structured output and may explicitly select `json_object` only for
-an endpoint proved to support the selected native JSON constraint. Kupilot performs
+prompt-only structured output and may explicitly select `json_object` or
+strict `json_schema` for an endpoint proved to support the selected native
+constraint. Strict schemas require references on current observations; local
+Evidence ownership validation remains mandatory. Kupilot performs
 no capability probe, automatic downgrade, fallback, or retry.
 
 Every question after the first in a Session receives one ordered, bounded

@@ -31,12 +31,20 @@ Omitted `reasoning_effort` and `temperature` preserve endpoint defaults.
 Explicit values are transmitted unchanged. Kupilot never disables reasoning,
 changes protocol or sampling after an error, retries, or infers capabilities
 from a model name. `response_format: prompt` is the default;
-`json_object` is an explicit endpoint capability requirement.
+`json_object` and `json_schema` are explicit endpoint capability requirements.
+JSON mode guarantees JSON syntax only. Strict `json_schema` constrains the
+code-owned answer, plan or Reviewer envelope, including non-empty reference
+arrays for current observations. It does not prove claim semantics or Evidence
+ownership; local validation remains authoritative. Summary requests carry no
+structured final-output format. An unsupported format fails without fallback.
+See [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 Chat Completions passes temperature through the native component's fixed
 ExtraFields serialization field because its typed Temperature field is float32
 while the public configuration is float64. This preserves precision and explicit
-zero; it is not a model-name workaround or an HTTP request rewrite.
+zero. Native per-invocation strict schemas use the same component's fixed
+`response_format` option through ExtraFields and preserve that temperature.
+Neither field is a model-name workaround or an HTTP request rewrite.
 
 ## Runtime boundaries
 
@@ -76,19 +84,23 @@ bounded conversation `messages`, fourteen function `tools`, `stream: true`,
 `stream_options.include_usage: true`, and an explicitly configured `temperature` when present.
 When the exact profile selects `json_object`, the request also contains
 `response_format: {"type":"json_object"}`. Prompt-only profiles omit that
-field. The selection is frozen configuration rather than endpoint inference.
+field. A `json_schema` profile instead sends `type: "json_schema"`, `strict: true`
+and the code-owned schema for that invocation. Responses uses the equivalent
+native `text.format`. The selection is frozen configuration rather than endpoint
+inference.
 `max_tokens` is present only when typed configuration explicitly sets
 `models.agent.max_output_tokens` from endpoint evidence. When configuration sets
 `models.agent.reasoning_effort: none`, Eino also emits
 the configured reasoning-effort field; omission leaves it absent. Application never
 infers it from a model name or retries based on endpoint error text. Temperature
-is the one fixed, Application-owned Eino `ExtraFields` entry: its value is the
+is a fixed, Application-owned Eino `ExtraFields` entry: its value is the
 validated configuration scalar, not user-provided extension data. This avoids
 the pinned downstream client applying OpenAI-specific restrictions based only
 on a `gpt-5` identifier before an OpenAI-compatible endpoint can evaluate the
-request. Eino still serializes the body, and Kupilot does not rewrite it. Tool
-definitions use `type: "function"`, a fixed name and description, and the
-code-owned closed JSON object schema. The pinned Eino API does not emit the
+request. Strict-schema profiles additionally supply the fixed `response_format`
+entry described above. Eino still serializes the body, and Kupilot does not
+rewrite it. Tool definitions use `type: "function"`, a fixed name and description,
+and the code-owned closed JSON object schema. The pinned Eino API does not emit the
 provider-specific `strict` member, and compatibility does not depend on it.
 Every property at each object level is included in `required`, and every object
 sets `additionalProperties: false`. Model-visible fields that have local
@@ -351,7 +363,7 @@ synthetic English content and loopback `httptest` servers.
 | `reasoning-content.sse` | Bounded Eino reasoning metadata checked and discarded before final text assembly |
 | `no-usage-eof.sse` | Optional usage and terminal EOF after finish reason |
 | `reasoning-none` route | Explicit `reasoning_effort: "none"` admission before a valid stream |
-| Response-format request recorder | Explicit `json_object` serialization for structured output, omission for `prompt` and Agent-summary requests, and one request with no fallback |
+| Response-format request recorder | Explicit `json_object` or strict `json_schema` serialization; invocation-specific answer, plan and Reviewer schemas; omission for `prompt` and Agent-summary requests; local rejection of schema-violating output; one request with no fallback |
 | `error-400.json` | Unsupported compatibility classification and generic-SDK status fallback |
 | `error-401.json` | Authentication classification and error-body confinement |
 | `error-429.json` | Rate-limit classification and bounded retry metadata |

@@ -135,6 +135,49 @@ func TestGetResourceOmitsSensitiveIdentityFromDataAndEvidence(t *testing.T) {
 	}
 }
 
+func TestGetResourcePreservesReportedTerminationReasonAndExitCode(t *testing.T) {
+	for _, reason := range []string{"Error", "OOMKilled"} {
+		t.Run(reason, func(t *testing.T) {
+			observation := resourceObservation(domain.ResourceKindPod, "exit-137")
+			observation.Containers = []ContainerObservation{{
+				Name: ExternalText{Value: "app"}, RestartCount: 4,
+				Current: ContainerStateObservation{State: ExternalText{Value: "waiting"}, Reason: ExternalText{Value: "CrashLoopBackOff"}},
+				Last:    ContainerStateObservation{State: ExternalText{Value: "terminated"}, Reason: ExternalText{Value: reason}, ExitCode: domain.Count(137)},
+			}}
+			reader := &fakeResourceReader{getFn: func(_ context.Context, request ResourceReadRequest) (ResourceObservation, error) {
+				if request.Reference.Name != "exit-137" || request.Detail != ResourceDetailDiagnostic {
+					t.Fatal("The diagnostic read did not preserve the exact Pod target and detail.")
+				}
+				return observation, nil
+			}}
+			tool, err := NewGetResourceTool(testDependencies(reader, &sequenceScopeGuard{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := boundGetCall(t, testRunInput(t, 0), `{"detail":"describe","name":"exit-137","namespace":null,"purpose":"Inspect the Kubernetes termination reason.","resource_type":"pods"}`)
+			result := tool.Execute(t.Context(), call)
+			if result.Validate() != nil || result.Status != domain.ToolResultStatusSuccess || !strings.Contains(result.DataJSON, `"exit_code":137`) || !strings.Contains(result.DataJSON, `"reason":"`+reason+`"`) {
+				t.Fatal("The Tool projection lost the observed reason or exit code.")
+			}
+			containerFacts := 0
+			for _, item := range result.Evidence {
+				if item.Category != domain.EvidenceCategoryContainerState {
+					continue
+				}
+				containerFacts++
+				if item.Resource.Name != "exit-137" || item.RunID != call.RunID() || item.InvocationID != call.InvocationID() || item.Partial || item.Truncated ||
+					!strings.Contains(item.Fact, "previous state terminated, reason "+reason+", exit_code=137") {
+					t.Fatal("Termination Evidence changed the reported state or lost its complete same-read provenance.")
+				}
+			}
+			getCalls, listCalls := reader.counts()
+			if containerFacts != 1 || getCalls != 1 || listCalls != 0 {
+				t.Fatal("A single read did not produce exactly one container-state Evidence item.")
+			}
+		})
+	}
+}
+
 func TestGetResourceSummaryDetailExcludesDiagnosticCollections(t *testing.T) {
 	observation := resourceObservation(domain.ResourceKindPod, "sample-pod")
 	observation.Conditions = []ConditionObservation{{

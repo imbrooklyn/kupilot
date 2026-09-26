@@ -23,6 +23,10 @@ func TestModelConfigurationRequiresOneExplicitResponseFormat(t *testing.T) {
 	if err := configuration.Validate(); err != nil {
 		t.Fatalf("Validate(json_object) error = %v", err)
 	}
+	configuration.ResponseFormat = ModelResponseFormatJSONSchema
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate(json_schema) error = %v", err)
+	}
 	for _, provider := range []ModelProviderKind{"", "ollama", "openai_compatible", "unknown"} {
 		candidate := configuration
 		candidate.ProviderKind = provider

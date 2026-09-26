@@ -331,7 +331,11 @@ func (state *runState) runChatAgent(runCtx context.Context, initialMessages []*s
 		return nil, normalizeFrameworkError(err)
 	}
 	runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: productionAgent, EnableStreaming: true})
-	iterator := runner.Run(runCtx, initialMessages[1:])
+	outputOptions, err := nativeOutputOptions(state.client.configuration, state.input.Mode())
+	if err != nil {
+		return nil, normalizeFrameworkError(err)
+	}
+	iterator := runner.Run(runCtx, initialMessages[1:], adk.WithChatModelOptions(outputOptions))
 	var finalMessage *schema.Message
 	for {
 		event, available := iterator.Next()

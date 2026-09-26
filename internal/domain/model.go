@@ -139,11 +139,12 @@ type ModelResponseFormat string
 const (
 	ModelResponseFormatPrompt     ModelResponseFormat = "prompt"
 	ModelResponseFormatJSONObject ModelResponseFormat = "json_object"
+	ModelResponseFormatJSONSchema ModelResponseFormat = "json_schema"
 )
 
 // Valid reports whether the format is one admitted fixed profile value.
 func (format ModelResponseFormat) Valid() bool {
-	return format == ModelResponseFormatPrompt || format == ModelResponseFormatJSONObject
+	return format == ModelResponseFormatPrompt || format == ModelResponseFormatJSONObject || format == ModelResponseFormatJSONSchema
 }
 
 // ModelConfiguration contains only validated, serializable, non-sensitive

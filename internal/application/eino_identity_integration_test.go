@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -26,7 +27,7 @@ func TestResourceIdentityLive(t *testing.T) {
 	if cfg.Model != "gpt-5.6-luna" || cfg.APIProtocol != domain.ModelAPIProtocolResponses {
 		t.Skip("The measured price and protocol fixture requires the configured Luna Responses profile.")
 	}
-	transport := newLiveBudgetTransport(cfg.ProviderKind, 56, 4*1024*1024)
+	transport := newLiveBudgetTransport(cfg.ProviderKind, 64, 4*1024*1024)
 	defer transport.base.CloseIdleConnections()
 	usage := &conformanceUsage{}
 	clock := newTestClock()
@@ -36,6 +37,7 @@ func TestResourceIdentityLive(t *testing.T) {
 	}
 	for _, scenario := range []struct {
 		name, question, requested, followUp string
+		terminationReason                   string
 		candidates                          []string
 		ambiguous, logsDenied               bool
 	}{
@@ -61,8 +63,12 @@ func TestResourceIdentityLive(t *testing.T) {
 			question: "How many restarts does Pod chekout have?",
 		},
 		{
-			name: "blocked logs preserve termination evidence", requested: "billing", candidates: []string{"billing"}, logsDenied: true,
+			name: "blocked logs preserve termination evidence", requested: "billing", candidates: []string{"billing"}, logsDenied: true, terminationReason: "OOMKilled",
 			question: "Check why Pod billing is restarting, including its previous logs. Do not change anything.",
+		},
+		{
+			name: "exit code does not confirm OOM", requested: "exit-137", candidates: []string{"exit-137"}, terminationReason: "Error",
+			question: "\u8bf7\u68c0\u67e5 shop-test \u7684 Pod exit-137\u3001\u5bb9\u5668 app\uff1a\u65e5\u5fd7\u63d0\u5230 OOM\uff0c\u4e0a\u4e00\u5b9e\u4f8b\u9000\u51fa\u7801\u662f 137\u3002\u8bf7\u6838\u5bf9 Kubernetes \u8bb0\u5f55\u7684\u7ec8\u6b62 reason\uff0c\u8fd9\u80fd\u786e\u8ba4 OOMKilled \u5417\uff1f\u4e0d\u8981\u4fee\u6539\u3002",
 		},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -76,8 +82,9 @@ func TestResourceIdentityLive(t *testing.T) {
 				t.Fatal("Configured model preflight failed safely.")
 			}
 			defer client.close()
-			client.responsesModel = meteredResponsesModel{base: client.responsesModel, usage: usage}
-			client.structuredResponses = meteredResponsesModel{base: client.structuredResponses, usage: usage}
+			var final string
+			client.responsesModel = checkoutObservedModel{AgenticModel: meteredResponsesModel{base: client.responsesModel, usage: usage}, final: &final}
+			client.structuredResponses = checkoutObservedModel{AgenticModel: meteredResponsesModel{base: client.structuredResponses, usage: usage}, final: &final}
 			confirmed, detailReads, logReads := false, 0, 0
 			returnedCandidates := make(map[string]bool)
 			tool := &recordingTool{execute: func(_ context.Context, call agent.BoundToolCall) domain.ToolResult {
@@ -151,9 +158,9 @@ func TestResourceIdentityLive(t *testing.T) {
 						return result
 					}
 					detailReads++
-					if scenario.logsDenied {
-						result.DataJSON = `{"containers":[{"last_termination_exit_code":137,"last_termination_reason":"OOMKilled","name":"app","restart_count":4,"state":"waiting"}]}`
-						addFact(target, "Pod "+target+" container app has restart_count=4; Kubernetes reports last termination reason OOMKilled and exit code 137. The underlying memory cause is not observed.")
+					if scenario.terminationReason != "" {
+						result.DataJSON = fmt.Sprintf(`{"containers":[{"current":{"reason":"CrashLoopBackOff","state":"waiting"},"last":{"exit_code":137,"reason":%q,"state":"terminated"},"name":"app","ready":false,"restart_count":4}]}`, scenario.terminationReason)
+						addFact(target, "Container app is waiting, ready=false, restarts=4, reason CrashLoopBackOff; previous state terminated, reason "+scenario.terminationReason+", exit_code=137.")
 					} else {
 						result.DataJSON = `{"containers":[{"name":"app","ready":true,"restart_count":0,"state":"running"}]}`
 						addFact(target, "Pod "+target+" container app is running and ready with restart_count=0.")
@@ -196,7 +203,7 @@ func TestResourceIdentityLive(t *testing.T) {
 			}
 			limits.ModelCalls, limits.ToolCalls = 8, 10
 			limits.ModelRequestTimeout = cfg.RequestTimeout
-			scope := domain.ClusterScope{Context: "test-context", Namespace: "test-namespace", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now()}
+			scope := domain.ClusterScope{Context: "test-context", Namespace: "shop-test", NamespaceAccess: domain.NamespaceAccessCurrent, Generation: 7, ActivatedAt: clock.Now()}
 			input, err := agent.NewRunInput(testRunID, testSessionID, testMessageID, scenario.question, scope, nil, limits)
 			if err != nil {
 				t.Fatal(err)
@@ -212,6 +219,21 @@ func TestResourceIdentityLive(t *testing.T) {
 				}
 				t.Logf("Tool kinds: %v", names)
 				t.Logf("cumulative_model_calls=%d tool_calls=%d detail_reads=%d log_reads=%d input_tokens=%d output_tokens=%d estimated_usd=%.6f status=%s reason=%s", transport.calls.Load(), len(tool.Calls()), detailReads, logReads, usage.input, usage.output, estimate, outcome.Status, outcome.Diagnostic)
+				if outcome.Diagnostic == domain.FailureClaimUnsupported {
+					var wire struct {
+						Citations []struct {
+							Kind string   `json:"claim_type"`
+							IDs  []string `json:"evidence_ids"`
+						} `json:"evidence_citations"`
+					}
+					if json.Unmarshal([]byte(final), &wire) == nil {
+						for index, citation := range wire.Citations {
+							if citation.Kind == string(domain.ClaimCurrentObservation) && len(citation.IDs) == 0 {
+								t.Logf("Final current observation %d has no Evidence references; model content is not logged.", index+1)
+							}
+						}
+					}
+				}
 				if estimate > 3 || outcome.Status != domain.AgentRunStatusCompleted || outcome.Validate(input) != nil || outcome.Diagnosis == nil || len(outcome.Diagnosis.RecommendedActions) != 0 || outcome.Diagnosis.Completeness.StopReason == domain.RunTerminalBudgetExhausted {
 					t.Fatal("The read-only quality case did not complete within its budget; no retry was attempted.")
 				}
@@ -239,13 +261,16 @@ func TestResourceIdentityLive(t *testing.T) {
 			} else if diagnosis.Clarification != nil || detailReads == 0 || len(diagnosis.ConfirmedFacts) == 0 {
 				t.Error("An exact target did not proceed to a current observation.")
 			}
-			if scenario.logsDenied {
+			if scenario.terminationReason != "" {
 				facts := ""
 				for _, fact := range diagnosis.ConfirmedFacts {
 					facts += fact.Statement + "\n"
 				}
-				if logReads == 0 || !strings.Contains(facts, "OOMKilled") || !strings.Contains(facts, "137") || !strings.Contains(diagnosis.AnswerMarkdown, "OOMKilled") || !strings.Contains(diagnosis.AnswerMarkdown, "137") || len(diagnosis.MissingInformation) == 0 {
-					t.Error("Blocked logs erased observed termination state or the source gap was hidden.")
+				if !strings.Contains(facts, scenario.terminationReason) || !strings.Contains(facts, "137") || !strings.Contains(diagnosis.AnswerMarkdown, scenario.terminationReason) || !strings.Contains(diagnosis.AnswerMarkdown, "137") {
+					t.Error("The answer did not preserve the observed termination reason and exit code with same-run citations.")
+				}
+				if scenario.logsDenied && (logReads == 0 || len(diagnosis.MissingInformation) == 0) {
+					t.Error("Requested logs were not checked or their denial was hidden.")
 				}
 			}
 			if scenario.followUp != "" {

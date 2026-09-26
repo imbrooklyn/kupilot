@@ -6,6 +6,8 @@ Kupilot is a local, single-user Kubernetes operations Agent with one
 conversational supervision screen.
 
 - Native OpenAI Chat Completions and Responses through one Eino Agent/Runner.
+- Explicit native strict output schemas with required observation references
+  and independent local Evidence validation.
 - Explicit Session resume, safe SQLite history and bounded Eino summarization.
 - Typed resource, Event, log and metric reads with Evidence-backed answers,
   explicit source gaps and resource-name confirmation guidance.

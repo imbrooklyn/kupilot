@@ -448,6 +448,13 @@ func (client *modelClient) generateNonStreaming(
 		einoopenai.WithRequestPayloadModifier(client.observeRequestPayload(reservation.RequestBytes)),
 		einoopenai.WithResponseMessageModifier(validateResponseMessage),
 	}
+	if invocation == domain.ModelInvocationReview && client.responsesModel == nil {
+		outputOptions, err := nativeOutputOptions(client.configuration, agent.RunModeOrdinary)
+		if err != nil {
+			return nil, client.finishWithError(requestID, mapModelRequestError(requestContext, err, state), domain.ModelOperationRequest, err, state)
+		}
+		options = append(options, outputOptions...)
+	}
 	var message *schema.Message
 	var err error
 	if client.responsesModel != nil {

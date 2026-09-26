@@ -518,11 +518,16 @@ The durable Message remains the safe Markdown answer, not raw model traffic.
 This role-preserving representation preserves the strict response grammar
 without restoring historic Evidence or action authority.
 
-The fixed profile response format is `prompt` or `json_object`. The latter is
-used only when explicitly configured from exact endpoint evidence and constrains
-structured Agent/plan or Reviewer output through the pinned Eino serializer.
-Agent-summary requests stay plain text. An unsupported constraint fails its one
-request; it never causes detection traffic, downgrade, fallback, or retry.
+The fixed profile response format is `prompt`, `json_object` or `json_schema`.
+The latter two require explicit configuration from exact endpoint evidence.
+JSON mode constrains syntax; strict JSON Schema constrains the code-owned
+Agent, plan or Reviewer envelope through native Eino options. Current
+observations require non-empty reference arrays; inference and recommendation
+may cite Evidence, while uncertainty and unsupported observations use empty
+arrays. Local validation still enforces exact same-run references and all
+authority and integrity rules, even if an endpoint ignores its requested schema.
+Agent-summary requests stay plain text. An unsupported constraint fails its
+one request; it never causes detection traffic, downgrade, fallback or retry.
 
 Eino summarization middleware produces a bounded safe summary plus a complete
 eligible recent tail. Project-owned coverage records the first/last covered

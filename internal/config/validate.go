@@ -170,8 +170,8 @@ func validateModelProfile(profile *ModelProfileConfig, expectedRole ModelRole, a
 	if !domain.ModelAPIProtocol(profile.APIProtocol).Valid() {
 		return newSafeError(ClassConfigurationInvalid, "config_api_protocol_invalid", "validate_configuration", "OpenAI api_protocol must be chat_completions or responses.")
 	}
-	if profile.ResponseFormat != ModelResponseFormatPrompt && profile.ResponseFormat != ModelResponseFormatJSONObject {
-		return newSafeError(ClassConfigurationInvalid, "config_response_format_invalid", "validate_configuration", "Model profile response_format must be prompt or json_object.")
+	if !domain.ModelResponseFormat(profile.ResponseFormat).Valid() {
+		return newSafeError(ClassConfigurationInvalid, "config_response_format_invalid", "validate_configuration", "Model profile response_format must be prompt, json_object or json_schema.")
 	}
 	if profile.Temperature != nil && (math.IsNaN(*profile.Temperature) || math.IsInf(*profile.Temperature, 0) || *profile.Temperature < 0 || *profile.Temperature > 0.2) {
 		return newSafeError(ClassConfigurationInvalid, "config_temperature_invalid", "validate_configuration", "Model profile temperature must be between 0 and 0.2.")

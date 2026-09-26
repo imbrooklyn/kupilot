@@ -229,15 +229,17 @@ func TestLoadDefaultsAndParsesExplicitModelResponseFormat(t *testing.T) {
 	}
 	loaded.Credentials.Destroy()
 
-	document := strings.Replace(version1Config("", ""), "    model: agent-model", "    model: agent-model\n    response_format: json_object", 1)
-	writePrivateFile(t, paths.ConfigFile, []byte(document))
-	loaded, err = Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
-	if err != nil {
-		t.Fatalf("Load(explicit response format) error = %v", err)
-	}
-	defer loaded.Credentials.Destroy()
-	if loaded.Models.Agent.ResponseFormat != ModelResponseFormatJSONObject {
-		t.Fatalf("explicit response format = %q", loaded.Models.Agent.ResponseFormat)
+	for _, format := range []string{ModelResponseFormatJSONObject, ModelResponseFormatJSONSchema} {
+		document := strings.Replace(version1Config("", ""), "    model: agent-model", "    model: agent-model\n    response_format: "+format, 1)
+		writePrivateFile(t, paths.ConfigFile, []byte(document))
+		loaded, err = Load(context.Background(), LoadOptions{Paths: paths, LookupEnv: lookupMap(nil)})
+		if err != nil {
+			t.Fatalf("Load(explicit response format) error = %v", err)
+		}
+		loaded.Credentials.Destroy()
+		if loaded.Models.Agent.ResponseFormat != format {
+			t.Fatalf("explicit response format = %q", loaded.Models.Agent.ResponseFormat)
+		}
 	}
 }
 

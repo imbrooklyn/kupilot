@@ -155,10 +155,16 @@ func responsesFinal(message *schema.AgenticMessage, maximum int) (string, []agen
 
 func (client *modelClient) generateResponses(ctx context.Context, messages []*schema.Message, invocation domain.ModelInvocation, maximum int) (*schema.Message, error) {
 	model := client.responsesModel
+	var options []einomodel.Option
 	if invocation == domain.ModelInvocationReview {
 		model = client.structuredResponses
+		var err error
+		options, err = nativeOutputOptions(client.configuration, agent.RunModeOrdinary)
+		if err != nil {
+			return nil, err
+		}
 	}
-	message, err := model.Generate(ctx, responsesHistory(messages))
+	message, err := model.Generate(ctx, responsesHistory(messages), options...)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +326,11 @@ func (state *runState) runResponsesAgent(ctx context.Context, initial []*schema.
 		return nil, normalizeFrameworkError(err)
 	}
 	runner := adk.NewTypedRunner(adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: production, EnableStreaming: false})
-	iterator := runner.Run(ctx, responsesHistory(initial[1:]))
+	outputOptions, err := nativeOutputOptions(state.client.configuration, state.input.Mode())
+	if err != nil {
+		return nil, normalizeFrameworkError(err)
+	}
+	iterator := runner.Run(ctx, responsesHistory(initial[1:]), adk.WithChatModelOptions(outputOptions))
 	var final *schema.AgenticMessage
 	for {
 		event, ok := iterator.Next()
