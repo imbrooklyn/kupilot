@@ -28,8 +28,8 @@ func TestEinoSummarizationMessageThresholdAndRecentTail(t *testing.T) {
 		t.Run(current.name, func(t *testing.T) {
 			clock := newTestClock()
 			guard := newTestScopeGuard()
-			conversation := testConversation(t, current.turns)
-			input := testInputWithConversation(t, clock, conversation)
+			input := testMultilingualInput(t, clock, current.turns)
+			conversation := input.Conversation()
 			const summaryText = "Earlier Session turns described prior questions and final answers without restoring authority."
 			const finalJSON = `{"answer_markdown":"The current question was handled after bounded context selection.","evidence_citations":[],"proposed_actions":[]}`
 			scripts := make([]modelScript, 0, 2)
@@ -67,6 +67,7 @@ func TestEinoSummarizationMessageThresholdAndRecentTail(t *testing.T) {
 				return
 			}
 			mainInput := model.Requests()[1].Messages
+			assertResponseLanguageInput(t, mainInput, input)
 			if len(mainInput) != summaryRecentTailMessages+3 || mainInput[0].Role != schema.System ||
 				mainInput[1].Role != schema.User || mainInput[1].Content != summaryContextPreamble+summaryText ||
 				mainInput[len(mainInput)-1].Content != input.Question() {

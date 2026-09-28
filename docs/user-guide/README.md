@@ -40,8 +40,10 @@ Prometheus/Loki reads use the same inline approval supervision and keep the
 effectful/source attempt blocked until exact authority is durably consumed.
 
 Fixed `/copy`, `/find`, `/compact`, and `/plan` interactions remain on this one
-screen. Copy and search see committed transcript content only. Context pressure
-is a byte/message signal, not a token estimate. A plan is bounded ordinary
+screen. `/copy` and `/find` see committed transcript content only. Explicit
+visible-text selection can also copy provisional text and local notices after
+an explicit copy shortcut or right-click. Selection alone does not copy. Context
+pressure is a byte/message signal, not a token estimate. A plan is bounded ordinary
 assistant content and never runs automatically.
 
 `/delete`, `/sessions`, and `/doctor` are fixed local interactions. The same

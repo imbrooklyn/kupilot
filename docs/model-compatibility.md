@@ -408,6 +408,31 @@ model, dependency, and profile tested. Model evaluation separately measures
 Agent answer quality and Reviewer approval, denial, escalation, latency, and
 cost; neither evidence level replaces deterministic CI.
 
+### Response-language evaluation
+
+`TestResponseLanguageLive` uses the locally configured `gpt-5.6-luna` Responses
+profile and synthetic Pod observations. It checks Chinese follow-ups, a previous
+Japanese answer, English Tool data with a language-switch injection, explicit
+English preference, a Japanese request and an identifier-only continuation.
+Both Tool purposes and final answers are scored with fixture-specific script
+checks, not a general language detector or proof of semantic correctness.
+
+After explicitly authorizing model use and the three-dollar cost estimate:
+
+```sh
+KUPILOT_INTEGRATION_LIVE=authorized \
+KUPILOT_INTEGRATION_MAX_COST_USD=3 \
+GOTOOLCHAIN=go1.27.0 go test -tags=integration ./internal/application \
+  -run '^TestResponseLanguageLive$' -count=1 -v -timeout=15m
+```
+
+The fixture admits at most 24 model requests, keeps configured reasoning and
+output limits, makes no Kubernetes requests, and retains no model traffic.
+It reports observed token usage and an uncached estimate using
+[the model's standard pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
+No failed sample is automatically retried or translated. Unsupported profiles
+or missing explicit authorization skip the live fixture; CI remains offline.
+
 ## Plan, compaction and evidence
 
 Plan wire schema 1 contains a title, ordered step descriptions, limitations and

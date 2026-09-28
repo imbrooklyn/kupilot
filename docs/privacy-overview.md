@@ -407,8 +407,14 @@ Search queries and match state, clipboard state, plan authority, compaction
 intent, and terminal title state are not logged, exported, or persisted.
 `/copy` may send one sanitized committed assistant answer (at most 65,536 UTF-8
 bytes) to macOS's fixed `/usr/bin/pbcopy` helper or the terminal's OSC 52 sink
-after explicit user action. The helper receives only the answer on stdin and
-locale variables, has a two-second deadline, and does not expose its output.
+after explicit user action. An explicit selection-copy key or right-click may
+send selected safe display text through the same bounded route. Selection can include provisional
+text and local notices; it does not make that text committed or persistent.
+Selecting text or releasing the mouse never initiates a clipboard write on any
+platform. No model update or hover initiates a copy. If a terminal consumes
+Command+C, Kupilot receives no copy request and leaves the clipboard alone.
+The helper receives only the selected text on stdin and locale variables, has a
+two-second deadline, and does not expose its output.
 SSH uses the attached terminal; tmux also forwards to its attached terminal.
 OSC 52 delivery is unconfirmed. The terminal and clipboard control retention.
 No clipboard reads are requested. Fixed title states contain no Session, input,

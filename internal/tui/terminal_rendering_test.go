@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -106,6 +107,108 @@ func TestTerminalMouseProtocolSeparatesWheelFromKeyboardHistory(t *testing.T) {
 	if result.wheels != 2 || !result.scrolled || result.changedDraft || result.composer.Value() != "keyboard history" {
 		t.Fatalf("mouse/keyboard separation failed: wheels=%d scrolled=%t changed draft=%t final=%q",
 			result.wheels, result.scrolled, result.changedDraft, result.composer.Value())
+	}
+}
+
+type selectionInputHarness struct {
+	Model
+	copiedOnRelease bool
+}
+
+func (h selectionInputHarness) Init() tea.Cmd { return nil }
+
+func (h selectionInputHarness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if event, ok := msg.(tea.KeyPressMsg); ok && event.Code == tea.KeyF12 {
+		return h, tea.Quit
+	}
+	next, cmd := h.Model.Update(msg)
+	h.Model = next.(Model)
+	switch msg.(type) {
+	case tea.MouseReleaseMsg:
+		h.copiedOnRelease = h.copiedOnRelease || cmd != nil
+	case ClipboardResultMsg, tea.PasteMsg:
+		return h, tea.Quit
+	}
+	return h, cmd
+}
+
+func TestTerminalProtocolDoubleClickRequiresExplicitPlatformCopyKey(t *testing.T) {
+	for _, test := range []struct {
+		name, goos, input string
+		native, copy      bool
+	}{
+		{"mac-native-command", "darwin", "\x1b[99;9u", true, true},
+		{"mac-terminal-command", "darwin", "\x1b[99;9u", false, true},
+		{"linux-control-shift", "linux", "\x1b[99;6u", false, true},
+		{"linux-control", "linux", "\x03", false, true},
+		{"mac-command-consumed-by-terminal", "darwin", "\x1b[24~", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model, x, y := selectionTestModel(t)
+			model.keymap.Copy = transcriptCopyBinding(test.goos)
+			model.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+			model.composer.SetValue("preserved draft")
+			if test.native {
+				model.terminalCapabilities.NativeClipboard = TerminalCapabilityAvailable
+			}
+			var copies []string
+			model.copyToClipboard = func(id uint64, text string) tea.Cmd {
+				copies = append(copies, text)
+				return func() tea.Msg { return ClipboardResultMsg{RequestID: id, Copied: true} }
+			}
+			// Actual SGR mouse reports use one-based cells. If the terminal eats
+			// Command+C, only the harness's final F12 arrives: zero copy writes.
+			click := fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x+3, y+1, x+3, y+1)
+			input := click + click + test.input
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			program := tea.NewProgram(selectionInputHarness{Model: model}, tea.WithContext(ctx),
+				tea.WithInput(strings.NewReader(input)), tea.WithOutput(io.Discard),
+				tea.WithWindowSize(80, 24), tea.WithEnvironment([]string{"TERM=xterm-256color"}),
+				tea.WithoutSignalHandler())
+			final, err := program.Run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := final.(selectionInputHarness)
+			if result.copiedOnRelease || result.selectedTranscriptText() != "Select" || result.composer.Value() != "preserved draft" {
+				t.Fatalf("terminal selection/copy failed: writes=%q selection=%q status=%q",
+					copies, result.selectedTranscriptText(), result.selectionCopyHint())
+			}
+			if test.copy {
+				if len(copies) != 1 || copies[0] != "Select" || result.selectionCopyHint() != "Selection copied" {
+					t.Fatal("the explicit platform shortcut did not copy exactly once")
+				}
+			} else if len(copies) != 0 || result.selectionCopyHint() != "Command+C copy" {
+				t.Fatal("selection copied without a forwarded key")
+			}
+		})
+	}
+}
+
+func TestTerminalProtocolBracketedPasteEditsDraftWithoutSubmittingOrCopying(t *testing.T) {
+	model, x, y := selectionTestModel(t)
+	model.terminalCapabilities.NativeClipboard = TerminalCapabilityAvailable
+	model.composer.SetValue("draft ")
+	model.copyToClipboard = func(uint64, string) tea.Cmd {
+		t.Error("selection or paste wrote to the clipboard")
+		return nil
+	}
+	// Paste content is delivered by the terminal, not a clipboard read request.
+	input := fmt.Sprintf("\x1b[<0;%d;%dM\x1b[<0;%d;%dm\x1b[200~first\nsecond\x1b[201~", x+1, y+1, x+7, y+1)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	program := tea.NewProgram(selectionInputHarness{Model: model}, tea.WithContext(ctx),
+		tea.WithInput(strings.NewReader(input)), tea.WithOutput(io.Discard),
+		tea.WithWindowSize(80, 24), tea.WithEnvironment([]string{"TERM=xterm-256color"}), tea.WithoutSignalHandler())
+	final, err := program.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := final.(selectionInputHarness)
+	if result.copiedOnRelease || result.pendingClipboardID != 0 || result.selectedTranscriptText() != "" ||
+		result.composer.Value() != "draft first\nsecond" || result.pendingSubmitID != 0 || result.run.Active {
+		t.Fatal("bracketed paste copied, submitted, or failed to edit the draft and clear selection")
 	}
 }
 

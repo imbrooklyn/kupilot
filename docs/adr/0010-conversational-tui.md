@@ -36,11 +36,26 @@ Use one alternate-screen renderer and the existing transcript viewport for
 conversation, dialogs and review. Capture mouse wheel and drag events: wheel
 input scrolls the conversation or open dialog, even over the composer, and never
 enters input history or edits the draft. Dragging in the visible transcript
-selects display text; Ctrl+C or right-click copies that selection through the
-same bounded clipboard route. Escape clears selection. Scrolling, resizing or
-replacement of the selected display clears it; selection never includes the
-composer or authorizes an action. Ordinary keyboard editing and history retain
-their existing bindings. Page Up/Page Down also navigate the viewport
+selects display text; a second stationary click within 500 ms selects a Unicode
+word. Selection alone never writes to the clipboard. Use Command+C on macOS,
+Ctrl+Shift+C on Linux, or right-click to copy the selection through the same
+bounded clipboard route. Linux also accepts Ctrl+C with a non-empty selection;
+a forwarded Command+C remains accepted over SSH. On macOS, Ctrl+C clears an
+active selection without copying and otherwise keeps its existing interrupt
+behavior. Help and selection hints use the operating platform's primary copy
+shortcut. The terminal must forward an application copy shortcut; Kupilot must
+not infer a copy when a terminal consumes the key or alter terminal preferences.
+Terminal-native text paste remains bracketed input, never a clipboard read.
+Selection-copy completion must not append a conversation row or move the
+selected text. Serialize writes and retain only the latest still-valid explicit
+copy intent while a write is pending; stale completions cannot mark a different
+selection as copied. Clipboard content remains externally retained.
+
+Escape, ordinary editing, viewport movement, an actual resize or replacement of
+the selected display clears selection. Focus changes, modifier-only keys and
+wheel events that do not move the viewport preserve it. Selection never includes the composer
+or authorizes an action. Ordinary keyboard editing and history retain their
+existing bindings. Page Up/Page Down also navigate the viewport
 (Fn+Up/Fn+Down on a Mac keyboard). On clean exit,
 restore the original terminal and print only the completed safe transcript once.
 Never transfer live rows to unmanaged

@@ -215,6 +215,7 @@ type Model struct {
 	copyToClipboard          func(uint64, string) tea.Cmd
 	pendingClipboardID       uint64
 	pendingClipboardSession  domain.SessionID
+	copyingSelection         bool
 	textSelection            transcriptTextSelection
 	terminalCapabilities     TerminalCapabilityProfile
 	pendingPrivacyID         uint64

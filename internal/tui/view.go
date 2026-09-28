@@ -402,13 +402,24 @@ func (model Model) footerView() string {
 			model.run.ModelEgress.CallKind, model.run.ModelEgress.MessageCount,
 			model.run.ModelEgress.MessageBytes, model.run.ModelEgress.SummaryState)
 	}
-	return model.footer.View(model.contentWidth(), components.FooterStatus{
+	footer := model.footer.View(model.contentWidth(), components.FooterStatus{
 		Context: model.scope.Context, Namespace: model.scope.Namespace,
 		ReadOnly: model.scope.ReadOnly, ScopeSwitching: model.scope.Switching,
 		Permission: permission, Supervision: supervision,
 		Approval:        approvalStatus,
 		ContextPressure: pressure, Plan: plan, Egress: egress,
 	})
+	// Add optional feedback only in existing space. Moving the transcript to
+	// make room for a clipboard notice would invalidate the selection itself.
+	if hint := model.selectionCopyHint(); hint != "" {
+		lines := strings.Split(footer, "\n")
+		last := len(lines) - 1
+		if lipgloss.Width(lines[last])+lipgloss.Width(hint)+3 <= model.contentWidth() {
+			lines[last] += model.styles.footer.Separator.Render(" · ") + model.styles.footer.State.Render(hint)
+			footer = strings.Join(lines, "\n")
+		}
+	}
+	return footer
 }
 
 func permissionSupervision(profile domain.PermissionProfile) string {

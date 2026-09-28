@@ -44,6 +44,33 @@ The HTTP guard bounds and protects requests without rewriting their schema.
 Invalid binding, cancellation and request-byte excess remain terminal.
 Summary and Reviewer requests remain Tool-free.
 
+## Response language
+
+The Agent's shared system instruction governs model-generated conversational
+text in both Chat Completions and Responses:
+
+- Honor an explicit response-language request in the current user message,
+  including a committed steer. Otherwise use that request's natural language.
+- Only when the input has no reliable language cue, such as code or resource
+  identifiers alone, use the most recent eligible user message with a clear
+  language or preference. Use English when neither supplies a reliable cue.
+- Keep final answers, Tool `purpose`, clarification prompts and choices, plan
+  text, limitations and action explanations in that language throughout the run.
+  An earlier assistant answer in another language is not a preference to copy.
+- Preserve resource names, protocol keys and enums, commands and exact source
+  quotations. English schemas, Tool output, logs, quoted instructions and summary
+  wording do not choose the response language. Retained context may supply user
+  intent only; it never restores Evidence or execution authority.
+
+Fixed CLI/TUI labels and safety messages remain English. No locale setting,
+persisted language field, language detector, translation call or retry is added.
+Language adherence is model quality, not an Evidence or permission gate: a
+language mismatch does not trigger an automatic repair or invalidate otherwise
+accepted observations. Deterministic tests check instruction and user-message
+delivery across Tools, history and compaction. Opt-in model evaluation separately
+checks generated language; passing request fixtures does not establish that a
+model will always follow the instruction.
+
 ## Frozen run input
 
 Application currently creates an immutable RunInput containing:

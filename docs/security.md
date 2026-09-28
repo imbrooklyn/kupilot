@@ -266,9 +266,12 @@ uses one alternate-screen renderer and a bounded transcript viewport. Dialogs,
 progress and completed turns remain in that managed screen. On clean exit the
 terminal is restored and only the completed safe transcript is printed once.
 There is no timed live-to-scrollback insertion or inline frame handoff. Mouse
-reporting stays disabled so native terminal selection works. Keyboard paging
-moves only the read-only viewport or dialog. Model-selected styling, clipboard
-controls and device controls cannot enter the shutdown transcript. The composer exposes
+reporting routes wheel input only to the transcript or dialog and supports
+bounded display-text selection. Clipboard writes require an explicit copy key,
+right-click or `/copy`; selecting text or releasing the mouse does not copy.
+Keyboard paging moves only the read-only viewport or dialog. Model-selected
+styling, clipboard controls and device controls cannot enter the shutdown
+transcript. The composer exposes
 one real cursor for operating-system input-method positioning; its placeholder is never editable
 state. Working animation messages are local, bounded, correlated to the active
 run and scope generation, and rejected after terminal or stale state. They
@@ -620,8 +623,10 @@ barriers, and temporary databases. Required proof includes:
 - A Kubernetes mutation can have workload impact even after correct approval.
 - Kubeconfig exec programs and the configured model provider have behavior
   outside Kupilot's full control.
-- A clipboard and terminal emulator are external retention surfaces. Copy is
-  explicit and committed-answer-only; title output is fixed and content-free.
+- A clipboard and terminal emulator are external retention surfaces. `/copy`
+  is committed-answer-only; explicit display selection may also copy provisional
+  text or local notices after a copy shortcut or right-click. Selection alone
+  leaves the clipboard unchanged. Title output is fixed and content-free.
 - Deterministic claim coverage proves reference integrity, not that an
   inference, recommendation, or answer is semantically correct.
 - Session deletion is logical rather than forensic erasure; exports, terminal

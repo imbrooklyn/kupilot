@@ -20,6 +20,15 @@ Project-authored tracked material is English. External Unicode input remains
 valid data subject to terminal normalization; it does not justify locale options
 or an internationalization framework.
 
+Model-generated conversational text follows the user's response-language
+request, or the language of the current question. This applies to Tool purposes,
+answers, clarification and plan text; it does not translate fixed interface copy
+or protocol identifiers. Only an input without a reliable language cue uses the
+most recent eligible user language or preference, then English if unavailable.
+Previous assistant output and external data cannot choose the response language.
+See [Agent Runtime](../agent-runtime.md#response-language) for the shared prompt
+rule and the distinction between deterministic contracts and model quality.
+
 ## Consequences and alternatives
 A fixed local topology makes credentials, lifetime, scope and deletion ownership
 visible. It excludes unattended and multi-user operation. A dashboard or server

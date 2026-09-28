@@ -1,6 +1,11 @@
 package tui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"runtime"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
 
 // KeyMap defines the fixed keyboard priority surface for the root reducer.
 type KeyMap struct {
@@ -27,6 +32,7 @@ type KeyMap struct {
 	PreviousApproval key.Binding
 	NextApproval     key.Binding
 	Close            key.Binding
+	Copy             key.Binding
 	TranscriptUp     key.Binding
 	TranscriptDown   key.Binding
 	Cancel           key.Binding
@@ -59,9 +65,31 @@ func DefaultKeyMap() KeyMap {
 		PreviousApproval: key.NewBinding(key.WithKeys("alt+p")),
 		NextApproval:     key.NewBinding(key.WithKeys("alt+shift+p")),
 		Close:            key.NewBinding(key.WithKeys("esc")),
+		Copy:             transcriptCopyBinding(runtime.GOOS),
 		TranscriptUp:     key.NewBinding(key.WithKeys("pgup")),
 		TranscriptDown:   key.NewBinding(key.WithKeys("pgdown")),
 		Cancel:           key.NewBinding(key.WithKeys("ctrl+x")),
 		Quit:             key.NewBinding(key.WithKeys("ctrl+c")),
 	}
+}
+
+func transcriptCopyBinding(goos string) key.Binding {
+	if goos == "darwin" {
+		return key.NewBinding(key.WithKeys("super+c"), key.WithHelp("Command+C", "copy selection"))
+	}
+	// Accept Command+C from a Mac terminal connected over SSH as well.
+	return key.NewBinding(key.WithKeys("ctrl+shift+c", "ctrl+c", "super+c"), key.WithHelp("Ctrl+Shift+C", "copy selection"))
+}
+
+func copyKeystroke(message tea.KeyPressMsg) string {
+	// Associated text and Caps Lock must not hide a modified copy key. Some
+	// terminals encode Ctrl+Shift+C as an uppercase C with only Ctrl set.
+	event := tea.Key(message)
+	if event.Code == 'C' {
+		event.Code = 'c'
+	}
+	if event.BaseCode == 'C' {
+		event.BaseCode = 'c'
+	}
+	return event.Keystroke()
 }

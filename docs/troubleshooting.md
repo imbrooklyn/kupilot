@@ -81,21 +81,63 @@ an Agent failure. `Protocol continuation unavailable` means a disconnected
 stream remains unknown/recovered and requires a new explicit input; it is not a
 request to retry automatically.
 
-`/copy` uses the macOS system clipboard locally and otherwise attempts OSC 52
-on an interactive terminal. A terminal request has no delivery acknowledgement;
-if it is reported as unconfirmed, check the terminal's clipboard permissions
-and multiplexer passthrough settings, or use terminal selection or `/export`.
-Clipboard helpers have a two-second deadline and their output is not displayed.
 Conversation and dialogs share one managed screen. Use Page Up/Page Down
 (Fn+Up/Fn+Down on Mac) for conversation history, and Up/Down or paging in long
 dialogs. Wheel/trackpad input scrolls content without editing the composer or
-recalling submitted history. Drag transcript text and press Ctrl+C or right-click
-to copy the highlighted selection. Escape clears it; scrolling, resizing or
-replacing the selected display also clears it. Use `/copy` for the full latest
-completed answer. On Mac, Command+C belongs to the terminal, not the application's
-selection. Mouse reporting stays enabled so the terminal does not translate
-wheel gestures into composer Up/Down keys.
+recalling submitted history. Mouse reporting stays enabled so the terminal does
+not translate wheel gestures into composer Up/Down keys.
 Completed safe conversation is printed to primary scrollback on clean exit.
+
+## Copy and paste shortcuts
+
+Drag transcript text or double-click a word, then press **Command+C on macOS**
+or **Ctrl+Shift+C on Linux**. Right-click also copies the active selection.
+Selecting or releasing the mouse never writes to the clipboard. Linux also
+accepts Ctrl+C with a non-empty selection and a forwarded Command+C over SSH.
+On macOS, Ctrl+C clears an active selection without copying; otherwise it keeps
+the usual draft-clear, interrupt, or quit behavior.
+
+The footer shows the platform shortcut and copy status when space allows; a
+failed write opens a local dialog. Copying does not move the transcript or
+clear its highlight. Focus changes and scrolling at a viewport boundary preserve
+selection; Escape, editing, actual viewport movement, resizing or replacing the
+selected display clears it. Use `/copy` for the full latest committed answer.
+
+The terminal owns its shortcuts before Kupilot receives input. If Command+C or
+Ctrl+Shift+C does nothing while Kupilot highlights a selection, the terminal may
+be consuming that key for its own selection. Kupilot cannot copy on a key it
+never receives, and does not change terminal settings or copy on selection to
+work around that boundary. Options depend on the terminal:
+
+- **Kitty:** its default `cmd+c copy_or_noop` binding copies terminal-native
+  selection when present and forwards the key when there is none. A custom
+  unconditional copy binding can prevent forwarding. See
+  [Kitty's copy actions](https://sw.kovidgoyal.net/kitty/actions/).
+- **Ghostty:** a `performable` binding lets a key reach the application when
+  there is no terminal-native selection. For example,
+  `keybind = performable:super+c=copy_to_clipboard`. See the
+  [keybinding reference](https://ghostty.org/docs/config/reference#keybind).
+- **iTerm2:** if Command+C is consumed, use a dedicated Kupilot profile. In
+  **Settings > Profiles > Keys > Key Mappings**, bind Command+C to **Send Escape
+  Sequence**, with `[99;9u` as the value. iTerm2 adds the Escape prefix; the
+  result is the standard Super+C key sequence Kupilot understands. This changes
+  Command+C inside that profile, including at the shell, so leave general-purpose
+  profiles unchanged. See
+  [iTerm2 key mappings](https://iterm2.com/documentation-preferences-profiles-keys.html).
+- **Other terminals, including Apple Terminal:** use right-click on Kupilot's
+  selection or `/copy` if the shortcut is not forwarded. Alternatively use the
+  terminal's native selection mode and its normal copy command; that selection
+  belongs to the terminal, not Kupilot.
+
+Local macOS writes use the system clipboard. Other interactive routes attempt
+OSC 52, whose delivery is unconfirmed; check the terminal's clipboard permissions
+and multiplexer passthrough settings if needed. Clipboard helpers have a
+two-second deadline and their output is not displayed.
+
+Paste with the terminal's normal shortcut, typically **Command+V on macOS** or
+**Ctrl+Shift+V on Linux**. Bracketed paste enters the composer, clears the old
+transcript selection, and never submits the question automatically. Review the
+draft, then press Enter. Kupilot does not read the clipboard itself.
 
 ## A diagnostic answer stops at claim_binding
 

@@ -157,6 +157,35 @@ func TestFooterNarrowWidthPrioritizesActiveApprovalAfterScope(t *testing.T) {
 	}
 }
 
+func TestSelectionCopyFeedbackPreservesFooterPriorityAndTranscriptGeometry(t *testing.T) {
+	for _, width := range []int{16, 24, 40, 80, 160} {
+		for _, approval := range []bool{false, true} {
+			model := newTestModel()
+			model.width = width
+			if approval {
+				model.pendingApproval = &application.UIApprovalRequest{}
+			}
+			model.reflow()
+			before := strings.Split(model.footerView(), "\n")
+			transcript := model.selectableTranscript()
+			model.textSelection.copyResult = ClipboardResultMsg{RequestID: 1, Copied: true}
+			model.reflow()
+			after := strings.Split(model.footerView(), "\n")
+			if len(after) != len(before) || model.selectableTranscript() != transcript {
+				t.Fatal("clipboard feedback moved the transcript or added a footer row")
+			}
+			for i, line := range after {
+				if !strings.HasPrefix(line, before[i]) || lipgloss.Width(line) > model.contentWidth() {
+					t.Fatal("clipboard feedback replaced required footer state or exceeded available columns")
+				}
+			}
+			if width == 160 && !strings.Contains(model.footerView(), "Selection copied") {
+				t.Fatal("clipboard feedback was absent despite sufficient room")
+			}
+		}
+	}
+}
+
 func TestFooterAndPickerExposeNoSensitiveFieldSurface(t *testing.T) {
 	t.Parallel()
 

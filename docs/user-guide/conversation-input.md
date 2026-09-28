@@ -104,12 +104,32 @@ blocked. No terminal-brand allowlist is required.
 
 Wheel/trackpad gestures scroll conversation or dialog content, even above the
 composer; they never edit input or recall submitted history. Drag visible
-transcript text to highlight it, then Ctrl+C or right-click copies that display
-selection through the same bounded clipboard route. Escape clears it; scrolling,
-resizing or a changed transcript display invalidates it. This explicit selection
-may include provisional text and local notices; `/copy` still selects only a
-committed successful final. Command+C on Mac is a terminal shortcut and does not
-copy the application's selection. A stationary click does not select or copy.
+transcript text to highlight it, or double-click a word. Double-click and drag
+extends the selection by whole words, including Unicode text.
+
+Selection alone does not change the clipboard. Use Command+C on macOS or
+Ctrl+Shift+C on Linux to copy highlighted text; right-click also copies.
+Linux accepts Ctrl+C with a non-empty selection, and a forwarded Command+C
+works over SSH. On macOS, Ctrl+C clears the active selection without copying;
+without a selection it retains the normal interrupt behavior.
+The footer reports the platform copy shortcut and delivery status when space
+allows; an OSC 52 request remains unconfirmed. Copying keeps the highlight and
+does not add a transcript row.
+
+The terminal must forward the shortcut for Kupilot's selection to receive it.
+If Command+C is consumed by the terminal, see the exact setup options in
+[Troubleshooting](../troubleshooting.md#copy-and-paste-shortcuts).
+Paste text with the terminal's usual Command+V on macOS or Ctrl+Shift+V on Linux.
+Kupilot accepts the terminal's bracketed paste as a composer edit, clears the
+display selection and never submits pasted text automatically. It does not
+read the system clipboard or install terminal key mappings.
+
+Escape, editing, an actual resize, viewport movement or changed transcript
+display clears selection. Switching focus, pressing a modifier alone or
+scrolling at the viewport boundary without moving it keeps the selection.
+This explicit selection may include provisional text and local notices;
+`/copy` still selects only a committed successful final. Hovering, left-clicking,
+double-clicking and dragging never copy anything automatically.
 
 `/find` or `Alt+S` reuses the
 composer to search the current committed transcript; fixed next/previous keys

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -9,17 +10,23 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+const transcriptDoubleClickInterval = 500 * time.Millisecond
+
 // Selection refers only to the displayed transcript revision. A changed view
 // invalidates its cell coordinates instead of copying different or hidden text.
 type transcriptTextSelection struct {
 	content                    string
 	startX, startY, endX, endY int
 	dragging                   bool
+	clickedAt                  time.Time
+	wordStart, wordEnd         int
+	copyQueued                 bool
+	copyResult                 ClipboardResultMsg
 }
 
 func (model Model) selectableTranscript() string {
 	if model.dialog.Open() || model.approvalDialog.Open() || model.evidenceDialog.Open() ||
-		model.transcript.EvidenceSelecting() || !model.terminalFocused {
+		model.transcript.EvidenceSelecting() {
 		return ""
 	}
 	content := constrainLayoutWidth(model.transcript.View(), model.contentWidth())
@@ -38,6 +45,9 @@ func (model *Model) clearStaleTextSelection() {
 
 func (model Model) updateTranscriptMouse(message tea.Msg) (Model, tea.Cmd) {
 	model.clearStaleTextSelection()
+	if !model.terminalFocused {
+		return model, nil
+	}
 	switch event := message.(type) {
 	case tea.MouseClickMsg:
 		if event.Button == tea.MouseRight {
@@ -46,21 +56,31 @@ func (model Model) updateTranscriptMouse(message tea.Msg) (Model, tea.Cmd) {
 		if event.Button != tea.MouseLeft {
 			return model, nil
 		}
-		model.textSelection = transcriptTextSelection{}
 		content := model.selectableTranscript()
 		if content == "" || event.Y < 0 || event.Y >= lipgloss.Height(content) || event.X < 0 || event.X >= model.contentWidth() {
+			model.textSelection = transcriptTextSelection{}
 			return model, nil
 		}
+		previous, now := model.textSelection, model.now()
+		doubleClick := previous.content == content && !previous.dragging &&
+			!previous.clickedAt.IsZero() && now.Sub(previous.clickedAt) >= 0 && now.Sub(previous.clickedAt) <= transcriptDoubleClickInterval &&
+			previous.startX == event.X && previous.endX == event.X && previous.startY == event.Y && previous.endY == event.Y
 		model.textSelection = transcriptTextSelection{
 			content: content, startX: event.X, endX: event.X,
-			startY: event.Y, endY: event.Y, dragging: true,
+			startY: event.Y, endY: event.Y, dragging: true, clickedAt: now,
+		}
+		if doubleClick {
+			line := strings.Split(content, "\n")[event.Y]
+			left, right := selectionWordColumns(line, event.X)
+			model.textSelection.wordStart, model.textSelection.wordEnd = left, right
+			model.textSelection.startX, model.textSelection.endX = left, right
 		}
 	case tea.MouseMotionMsg:
 		if event.Button == tea.MouseLeft && model.textSelection.dragging {
 			model.extendTranscriptSelection(event.X, event.Y)
 		}
 	case tea.MouseReleaseMsg:
-		if event.Button == tea.MouseLeft && model.textSelection.dragging {
+		if (event.Button == tea.MouseLeft || event.Button == tea.MouseNone) && model.textSelection.dragging {
 			model.extendTranscriptSelection(event.X, event.Y)
 			model.textSelection.dragging = false
 		}
@@ -69,8 +89,41 @@ func (model Model) updateTranscriptMouse(message tea.Msg) (Model, tea.Cmd) {
 }
 
 func (model *Model) extendTranscriptSelection(x, y int) {
-	model.textSelection.endX = max(0, min(x, model.contentWidth()))
-	model.textSelection.endY = max(0, min(y, lipgloss.Height(model.textSelection.content)-1))
+	selection := &model.textSelection
+	previousStartX, previousEndX, previousEndY := selection.startX, selection.endX, selection.endY
+	x = max(0, min(x, model.contentWidth()))
+	y = max(0, min(y, lipgloss.Height(selection.content)-1))
+	if x != selection.startX || y != selection.startY {
+		selection.clickedAt = time.Time{}
+	}
+	selection.endX, selection.endY = x, y
+	if selection.wordEnd > selection.wordStart {
+		left, right := selectionWordColumns(strings.Split(selection.content, "\n")[y], x)
+		if y < selection.startY || y == selection.startY && left < selection.wordStart {
+			selection.startX, selection.endX = selection.wordEnd, left
+		} else {
+			selection.startX, selection.endX = selection.wordStart, right
+		}
+	}
+	if selection.startX != previousStartX || selection.endX != previousEndX || selection.endY != previousEndY {
+		selection.copyQueued = false
+		selection.copyResult = ClipboardResultMsg{}
+	}
+}
+
+// Reuse the pinned Unicode word segmenter; coordinates remain terminal cells.
+func selectionWordColumns(line string, x int) (int, int) {
+	remaining, state, left := ansi.Strip(line), -1, 0
+	for remaining != "" {
+		var word string
+		word, remaining, state = uniseg.FirstWordInString(remaining, state)
+		right := left + ansi.StringWidth(word)
+		if x >= left && x < right {
+			return left, right
+		}
+		left = right
+	}
+	return left, left
 }
 
 // selectionColumns includes whole graphemes when a terminal cell falls inside
@@ -129,12 +182,47 @@ func (model Model) selectedTranscriptText() string {
 }
 
 func (model Model) copyTranscriptSelection() (Model, tea.Cmd) {
+	model.clearStaleTextSelection()
 	text := model.selectedTranscriptText()
 	if text == "" {
 		return model, nil
 	}
-	model.textSelection = transcriptTextSelection{}
-	return model.copyText(text)
+	if model.pendingClipboardID != 0 {
+		// One current selection is the entire pending intent; never enqueue text
+		// snapshots or allow an older write to finish after a newer write.
+		model.textSelection.copyQueued = model.textSelection.copyResult.RequestID != model.pendingClipboardID
+		return model, nil
+	}
+	model.textSelection.copyQueued = false
+	model, command := model.copyText(text)
+	if model.pendingClipboardID != 0 {
+		model.copyingSelection = true
+		model.textSelection.copyResult = ClipboardResultMsg{RequestID: model.pendingClipboardID}
+	}
+	return model, command
+}
+
+func (model Model) selectionCopyHint() string {
+	if model.textSelection.copyQueued {
+		return "Selection copy queued"
+	}
+	result := model.textSelection.copyResult
+	if result.RequestID == 0 {
+		if model.selectedTranscriptText() != "" {
+			return model.keymap.Copy.Help().Key + " copy"
+		}
+		return ""
+	}
+	if result.RequestID == model.pendingClipboardID {
+		return "Copying selection"
+	}
+	if result.Copied {
+		return "Selection copied"
+	}
+	if result.Requested {
+		return "Selection copy unconfirmed"
+	}
+	return "Selection copy failed"
 }
 
 func (model Model) highlightTranscriptSelection(content string) string {

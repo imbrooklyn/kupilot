@@ -41,7 +41,8 @@ Alt+Up retrieves the newest editable queued, rejected, or recovered follow-up wh
 Shift+Enter or Alt+Enter inserts a newline; Ctrl+J also works when distinguishable. Idle Tab completes a command.
 Up and Down recall submitted input at composer boundaries. Page Up and Page Down review the retained transcript.
 Wheel/trackpad scroll conversation or dialogs, never the composer. Page Up/Page Down also scroll (Fn+Up/Fn+Down on Mac).
-Drag transcript text, then Ctrl+C or right-click to copy; Esc clears selection. /copy copies the latest completed answer.
+Drag transcript text or double-click a word, then use the platform copy shortcut or right-click. Selection alone never copies.
+The terminal must forward the shortcut. Esc clears selection. /copy copies the latest completed answer.
 Alt+E opens supporting observation details. Ctrl+A/E moves to the line start/end. Esc interrupts an active run when no local interaction owns it.
 Alt+S reuses the composer for bounded committed-transcript search; Enter and Shift+Tab move between matches.
 Ctrl+B/F moves by character; Alt+B/F and Alt/Ctrl+Left/Right move by word.
@@ -76,7 +77,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case tea.WindowSizeMsg:
-		model.textSelection = transcriptTextSelection{}
+		if model.width != max(1, message.Width) || model.height != max(1, message.Height) {
+			model.textSelection = transcriptTextSelection{}
+		}
 		model.width = max(1, message.Width)
 		model.height = max(1, message.Height)
 		model.reflow()
@@ -178,7 +181,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.reflow()
 		return model, nil
 	case tea.BlurMsg:
-		model.textSelection = transcriptTextSelection{}
+		model.textSelection.dragging = false
 		model.terminalFocused = false
 		model.composer.Blur()
 		return model, nil
@@ -191,7 +194,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case tea.MouseWheelMsg:
-		model.textSelection = transcriptTextSelection{}
+		before := model.transcript.ScrollOffset()
 		delta := 3
 		if message.Button == tea.MouseWheelUp {
 			delta = -3
@@ -211,6 +214,9 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			model.transcript.ScrollDown(delta)
 		}
+		if model.transcript.ScrollOffset() != before {
+			model.textSelection = transcriptTextSelection{}
+		}
 		return model, nil
 	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg:
 		return model.updateTranscriptMouse(message)
@@ -221,8 +227,22 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if message.RequestID == 0 || message.RequestID != model.pendingClipboardID {
 			return model, nil
 		}
+		selectionCopy := model.copyingSelection
+		sameSession := model.pendingClipboardSession == model.session.ID
 		model.pendingClipboardID = 0
-		if model.pendingClipboardSession != model.session.ID {
+		model.copyingSelection = false
+		if sameSession && selectionCopy && model.textSelection.copyResult.RequestID == message.RequestID {
+			model.textSelection.copyResult = message
+			if !message.Copied && !message.Requested {
+				model.showDialog("Copy failed", "The clipboard write failed. Select the text again or use /copy.")
+			}
+		}
+		if model.textSelection.copyQueued {
+			return model.copyTranscriptSelection()
+		}
+		if selectionCopy || !sameSession {
+			// Clipboard acknowledgements are presentation state, not transcript
+			// entries that scroll the selected text out from under the pointer.
 			return model, nil
 		}
 		switch {
@@ -240,6 +260,7 @@ func (model Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			model.pendingSubmitID != 0 {
 			return model, nil
 		}
+		model.textSelection = transcriptTextSelection{}
 		if model.historySearchMode {
 			return model.updateSubmittedHistorySearchPaste(message)
 		}
@@ -701,12 +722,21 @@ func (model Model) updateKey(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !model.terminalFocused {
 		return model, nil
 	}
-	if model.textSelection.content != "" {
-		if message.String() == "ctrl+c" && model.selectedTranscriptText() != "" {
+	copyKey := copyKeystroke(message)
+	for _, binding := range model.keymap.Copy.Keys() {
+		if copyKey == binding && (copyKey != "ctrl+c" || model.selectedTranscriptText() != "") {
 			return model.copyTranscriptSelection()
 		}
+	}
+	if model.textSelection.content != "" {
+		switch message.Code {
+		case tea.KeyLeftShift, tea.KeyRightShift, tea.KeyLeftCtrl, tea.KeyRightCtrl,
+			tea.KeyLeftAlt, tea.KeyRightAlt, tea.KeyLeftSuper, tea.KeyRightSuper,
+			tea.KeyLeftHyper, tea.KeyRightHyper, tea.KeyLeftMeta, tea.KeyRightMeta:
+			return model, nil
+		}
 		model.textSelection = transcriptTextSelection{}
-		if message.Code == tea.KeyEscape {
+		if message.Code == tea.KeyEscape || copyKey == "ctrl+c" {
 			return model, nil
 		}
 	}
@@ -1366,7 +1396,7 @@ func (model Model) executeSlash(command SlashCommand, argument string) (tea.Mode
 	case slashHelp:
 		model.composer.Reset()
 		model.slashMenu.Close()
-		model.showDialog("Help", helpText)
+		model.showDialog("Help", helpText+"\n"+model.keymap.Copy.Help().Key+" copies the selected transcript text. Paste with your terminal's paste shortcut; review the draft before sending.")
 		return model, nil
 	case slashModel:
 		model.beginModelSetup()
@@ -2608,6 +2638,7 @@ func (model *Model) applyAcceptedResume(resumed application.UIResumedSession) {
 }
 
 func (model *Model) resetTranscript() {
+	model.textSelection = transcriptTextSelection{}
 	model.pendingEvidence = application.UIEvidenceDetailQuery{}
 	model.evidenceGeneration = 0
 	model.evidenceDialog.Close()

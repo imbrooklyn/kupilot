@@ -215,7 +215,8 @@ latency, and cost. Neither replaces deterministic CI or generalizes to an
 untested target.
 
 The single-screen TUI also supports exact editable-queue cancellation and
-confirmed clear, committed-answer copy, bounded local transcript search,
+confirmed clear, committed-answer copy, Unicode word and drag selection,
+explicit platform copy shortcuts, bounded local transcript search,
 content-free context pressure, explicit safe-history compaction, fixed terminal
 status titles, and a one-shot plan-only run. Plans do not execute
 automatically. Final claim/Evidence manifests are checked for same-run

@@ -46,6 +46,11 @@ recovery. It is not a resource browser with an assistant attached. The primary
 interaction remains one low-chrome conversation, not a resource tree,
 dashboard, command palette, YAML editor, action menu, or shell console.
 
+Model-generated conversation follows the user's requested language or the
+current question's language, including Tool purpose explanations. Fixed interface
+copy remains English. See [Response Language](agent-runtime.md#response-language)
+for ambiguous inputs, retained context and model-quality limits.
+
 ## Product principles
 
 1. **Agent-first interaction.** The user states intent and supervises visible
@@ -288,8 +293,9 @@ an explicit policy and category; credentials remain a hard denial.
 ## Bounded supervision utilities
 
 The one conversational screen includes exact cancellation and confirmed clear
-for editable follow-ups, committed-answer-only copy, bounded local committed
-transcript search, content-free context pressure, explicit compaction, and
+for editable follow-ups, committed-answer-only `/copy`, explicit visible-text
+selection and copy, bounded local committed transcript search, content-free
+context pressure, explicit compaction, and
 fixed content-free terminal status titles. These are delivery and Application
 operations, not new model capabilities or data sources.
 

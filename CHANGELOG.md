@@ -15,6 +15,10 @@ conversational supervision screen.
 - Deterministic permission profiles, optional Reviewer and digest-bound
   supervised remediation with durable audit and at-most-once attempts.
 - Scope and policy isolation, explicit model consent and sensitive-data controls.
+- A shared response-language rule for answers, Tool purposes and other generated
+  explanations, with explicit user preferences and bounded-history fallback.
+- Unicode word and drag selection, explicit platform copy shortcuts and
+  terminal paste, with transcript-only wheel scrolling and stable highlighting.
 - Go 1.27.0, CGO-free macOS/Linux amd64/arm64 builds and version-1 project formats.
 
 No release has been published. Responses uses native non-streaming generation;

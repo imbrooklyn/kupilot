@@ -203,8 +203,10 @@ func TestInteractionCompositionExplicitResumeThenTool(t *testing.T) {
 }
 
 func testInteractionExplicitResumeThenTool(t *testing.T, native bool) {
-	harness := newInteractionHarness(t, interactionScenario{responses: native, resume: true, steps: []interactionStep{{final: interactionGreeting}, {tool: domain.ToolNameListResources}, {final: interactionFinal(interactionClaim(0, "The resumed Namespace is Active."))}}})
-	_, first := harness.run(t, "Hello.")
+	const priorAnswer = "\u3053\u3093\u306b\u3061\u306f\u3002"
+	greeting := strings.Replace(interactionGreeting, "Hello from the fixture.", priorAnswer, 1)
+	harness := newInteractionHarness(t, interactionScenario{responses: native, resume: true, steps: []interactionStep{{final: greeting}, {tool: domain.ToolNameListResources}, {final: interactionFinal(interactionClaim(0, "The resumed Namespace is Active."))}}})
+	_, first := harness.run(t, "\u4f60\u597d\u3002")
 	if first.TerminalReason != domain.RunTerminalCompleted {
 		t.Fatalf("first = %#v", first)
 	}
@@ -227,7 +229,8 @@ func testInteractionExplicitResumeThenTool(t *testing.T, native bool) {
 	if len(harness.model.snapshot()) != before || len(calls) != 0 || len(evidence) != 0 {
 		t.Fatal("resume performed external I/O")
 	}
-	runID, result := harness.run(t, "List the synthetic Namespaces.")
+	const question = "\u8bf7\u5217\u51fa\u5f53\u524d\u7684 Namespace\u3002"
+	runID, result := harness.run(t, question)
 	if result.TerminalReason != domain.RunTerminalCompleted || result.Diagnostic != "" {
 		t.Fatalf("resumed run = %#v", result)
 	}
@@ -237,7 +240,25 @@ func testInteractionExplicitResumeThenTool(t *testing.T, native bool) {
 	if len(requests) != 3 || len(calls) != 1 || len(evidence) != 1 || evidence[0].RunID != runID || evidence[0].Scope.Generation != scope.Generation || evidence[0].PolicyGeneration != 1 {
 		t.Fatal("resumed run call or Evidence binding mismatch")
 	}
-	assertHistoricalResponseProtocol(t, requests[1], "List the synthetic Namespaces.")
+	assertHistoricalResponseProtocol(t, requests[1], question)
+	for _, request := range requests[1:] {
+		if len(request.Messages) == 0 || request.Messages[0].Role != "system" ||
+			!strings.Contains(request.Messages[0].Content, "Never infer the user's preference from a previous assistant answer") {
+			t.Fatal("Resume or a Tool turn lost the response-language instruction")
+		}
+		current, retained := 0, 0
+		for _, message := range request.Messages {
+			if message.Role == "user" && message.Content == question {
+				current++
+			}
+			if message.Role == "assistant" && strings.Contains(message.Content, priorAnswer) {
+				retained++
+			}
+		}
+		if current != 1 || retained != 1 {
+			t.Fatal("Resume changed or omitted the Chinese request or Japanese historical answer")
+		}
+	}
 	harness.assertRows(t, 4)
 }
 

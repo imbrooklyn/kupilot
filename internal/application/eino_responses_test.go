@@ -28,6 +28,7 @@ func responsesEvent(kind, fields string) string {
 
 func TestNativeResponsesAgentToolAndFinal(t *testing.T) {
 	clock := newTestClock()
+	input := testMultilingualInput(t, clock, 2)
 	credential, err := config.NewSecretValue("synthetic-responses-credential")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +77,6 @@ func TestNativeResponsesAgentToolAndFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	input := testInput(t, clock, agent.DefaultRunBudgetLimits())
 	events := newEventRecorder()
 	outcome := runtime.Run(context.Background(), input, events)
 	if outcome.Status != domain.AgentRunStatusCompleted || outcome.Diagnosis == nil || outcome.Validate(input) != nil || calls != 2 || len(tool.Calls()) != 1 {
@@ -85,6 +85,7 @@ func TestNativeResponsesAgentToolAndFinal(t *testing.T) {
 	}
 	assertTerminalSequence(t, events.Events())
 	for _, body := range requestBodies {
+		assertResponseLanguageNativeRequest(t, body, input)
 		for _, required := range []string{`"store":false`, `"truncation":"disabled"`, `"effort":"medium"`, `"type":"json_object"`} {
 			if !strings.Contains(body, required) {
 				t.Fatalf("missing request field %s", required)
@@ -214,6 +215,7 @@ func TestNativeResponsesSummaryAndCommitBarrier(t *testing.T) {
 	for _, mode := range []string{"success", "transport", "sensitive", "persistence"} {
 		t.Run(mode, func(t *testing.T) {
 			clock := newTestClock()
+			input := testMultilingualInput(t, clock, 160)
 			key, _ := config.NewSecretValue("synthetic-summary-key")
 			cfg := fixtureConfiguration("https://model.example.test/v1", time.Second)
 			cfg.APIProtocol = domain.ModelAPIProtocolResponses
@@ -244,6 +246,7 @@ func TestNativeResponsesSummaryAndCommitBarrier(t *testing.T) {
 						text = "-----BEGIN PRIVATE KEY----- blocked -----END PRIVATE KEY-----"
 					}
 				} else {
+					assertResponseLanguageNativeRequest(t, string(body), input)
 					if len(wire.Tools) != len(agent.ToolSpecifications()) || !strings.Contains(string(body), "Earlier completed questions and answers were summarized safely.") || len(wire.Input) != summaryRecentTailMessages+3 {
 						t.Fatalf("Native summary structure: tools=%d input=%d prefix=%t", len(wire.Tools), len(wire.Input), strings.Contains(string(body), summaryContextPreamble))
 					}
@@ -270,7 +273,6 @@ func TestNativeResponsesSummaryAndCommitBarrier(t *testing.T) {
 				}
 				return result
 			})
-			input := testInputWithConversation(t, clock, testConversation(t, 160))
 			outcome := runtime.Run(context.Background(), input, sink)
 			expected := domain.InteractionFailure("")
 			wantCalls := 2

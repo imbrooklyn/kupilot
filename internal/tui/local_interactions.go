@@ -90,6 +90,7 @@ func (model Model) copyText(answer string) (Model, tea.Cmd) {
 	if model.copyToClipboard != nil {
 		model.pendingClipboardID = model.nextUIRequestID()
 		model.pendingClipboardSession = model.session.ID
+		model.copyingSelection = false
 		return model, model.copyToClipboard(model.pendingClipboardID, answer)
 	}
 	model.transcript.AppendNotice("Copy requested from the terminal; delivery is unconfirmed.")
